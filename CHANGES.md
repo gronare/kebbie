@@ -5,6 +5,11 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- A task that meets an obstacle in its way stops and raises it, and an investigator decides: a workaround, a preparatory step, a task first, or a question to you.
+- The lead has review findings about scope or intent investigated, so only what stays uncertain reaches you.
+- A task asks a trade-off that is yours before it builds it, and tells the lead each change to its plan with its reason.
+- A sign-off card has three parts, Built, Decisions with who took each, and Also noticed, and asks you nothing to confirm.
+- With the vault, a task searches the backlog before it files what it noticed, and adds itself to an item already there.
 - A step holds one or more small commits: a task marks it ready with kebbie steps done, and you review, accept and push it whole; update the hub first.
 - The board shows the rules check on its own line under a task: checking, the project rules it breaks by name, or that you or the lead pushed past it; a passed check shows nothing.
 - From your phone you push a task through one of its steps, and the later steps stay in the task; update the hub first.

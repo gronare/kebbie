@@ -112,7 +112,7 @@ Sometimes the code is right if you meant it, and the reviewer cannot tell from t
 - Confirm passes the review on the code it read, with your words kept in the verdict. The task hears them and changes nothing.
 - Change it sends your comment to the task, which reworks it and goes back to the reviewer.
 
-`kebbie review --confirm <task> "<your words>"` does the same as Confirm from your terminal. The lead cannot answer it for you: it can only point you to the question.
+`kebbie review --confirm <task> "<your words>"` does the same as Confirm from your terminal. The lead cannot answer it for you: it has the finding [investigated](obstacles-and-findings.md#review-findings-are-resolved-not-passed-along) and brings you what it found, such as your own words on it in the task's note, beside the question.
 
 ## Only you take a task out of review
 

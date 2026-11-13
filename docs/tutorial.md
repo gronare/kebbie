@@ -180,7 +180,7 @@ If the folder is one you already trust, the first line is `✓ Started` and Clau
 
 1. With `greet` selected, press `p`.
 
-   The push window opens. At the top is the task's sign-off card: what changed, where to look, and anything to confirm. Below it are the commits that will land. `↑` `↓` show each commit's full message.
+   The push window opens. At the top is the task's sign-off card: what you can do now, where to look, and what was decided on the way. Below it are the commits that will land. `↑` `↓` show each commit's full message.
 
 2. Press `y`.
 

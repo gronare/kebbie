@@ -288,9 +288,9 @@ pub fn lead_keeps_note(note: Option<&str>, kebbie: &str, template: Option<&crate
 
 // The {noticed} section of roles/task.md; vault is whether the task's Claude has the vault plugin's tools.
 pub fn noticed_section(choice: AlsoNoticed, vault: bool, kebbie: &str) -> String {
-    let intro = "As you work you will notice things outside this task: a bug nearby, a stale doc, a refactor worth doing.";
+    let intro = "As you work you will notice things outside this task: a bug nearby, a stale doc, a refactor worth doing. Something on your own path is an obstacle, raised as Questions says, and not one of these.";
     let file = if vault {
-        format!("file it in the vault's backlog as a task note written out by the skill `{}`, with this task as its Source", crate::backlog_file::SKILL)
+        format!("search the backlog for it first, and when it is filed already add this task to its Source; else file it in the vault's backlog as a task note written out by the skill `{}`, with this task as its Source", crate::backlog_file::SKILL)
     } else {
         format!("write it out by the skill `{}`, with this task as its Source, and file it with `{kebbie} backlog add --priority <priority> --repo <repo> \"<Title>\" -`, the item's sections on stdin", crate::backlog_file::SKILL)
     };
@@ -327,7 +327,7 @@ pub fn steps_section(on: bool, kebbie: &str) -> String {
          A step is a slice of the work, one sub-problem or one part of it in order, holding one or more small commits, each deployable on its own: make the change easy, then make the easy change. \
          Your commits go to the step in progress. When its slice is finished, run `{kebbie} steps done`: the step is ready for the user, and your next commits go to the next step. \
          The user may accept each ready step and push it while you build the next, or push them together later, so keep building without waiting for them. \
-         The list is living: when the work turns out another shape, or the user says the split is wrong, run `{kebbie} steps` again with the new list before your next commit; every step not pushed yet is yours to reshape. \
+         The list is living: when the work turns out another shape, or the user says the split is wrong, run `{kebbie} steps` again with the new list before your next commit, and tell the lead why as Questions says; every step not pushed yet is yours to reshape. \
          A step can go out on its own the moment the user pushes it: make each one finished and pushable on its own.\n"
     )
 }
@@ -658,7 +658,7 @@ mod tests {
             for choice in AlsoNoticed::ALL {
                 let role = role(choice, vault);
                 assert!(role.contains("## What you notice outside your task\n\nAs you work you will notice things outside this task") && !role.contains("{noticed}"), "{role}");
-                assert!(role.contains("under **Also noticed** on your sign-off card") && role.contains("the **Also noticed** list when you noticed anything outside the task"), "{role}");
+                assert!(role.contains("under **Also noticed** on your sign-off card") && role.contains("**Also noticed** (only what lies outside the task)"), "{role}");
                 assert!(role.contains("`not filed` when filing fails, so the lead files it"), "{role}");
                 assert!(role.contains("written out by the skill `kebbie:write-backlog-item`") || role.contains("write it out by the skill `kebbie:write-backlog-item`"), "{role}");
                 let filed_in_vault = role.contains("file it in the vault's backlog as a task note");

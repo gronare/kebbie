@@ -59,7 +59,7 @@ A turn that kebbie's messages started and that needs nothing from you ends on on
 
 Questions about what you want go to you: scope, behaviour, a trade-off that is yours, a plan for wide or risky work. A task asks with `kebbie ask`, one question at a time. It opens with a plain sentence on what it is doing, gives options that each say what you get, and the question waits on the board until you answer it there.
 
-Questions about how (method, structure, how to split the work, the order of steps) are not put to you. A task decides them, or asks the lead with `kebbie tell lead`, and the lead answers whether or not you are here. A small, well-defined task builds without asking you to approve a plan.
+Questions about how (method, structure, how to split the work, the order of steps) are not put to you. A task decides them, or asks the lead with `kebbie tell lead`, and the lead answers whether or not you are here. A small, well-defined task builds without asking you to approve a plan. An obstacle in a task's way is not a question of method: the lead has it [investigated](obstacles-and-findings.md), here or away, and only a question that is yours waits for you.
 
 ## Your answer reaches the task as yours
 

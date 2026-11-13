@@ -655,7 +655,7 @@ It is yours, or the lead's on your explicit choice. The lead's settings do not a
 
 `<state>` is `needs-you`, `ready`, `working` or `blocked`.
 
-- With `ready`, `--card <file>` is the sign-off card the push window shows, with an Also noticed list when the task found things outside its task.
+- With `ready`, `--card <file>` is the sign-off card the push window shows: a headline, then `Built:`, `Decisions:` with who took each, and `Also noticed:` when the task found things outside its task. See [Obstacles and findings](../explanation/obstacles-and-findings.md#the-card-asks-you-nothing).
 - With `ready`, `--after <task[@repo]>` names a task to push before this one, such as the other half of a task across repos; repeat it for several. A bare name is a task in the same repo. Next's push group puts that task first and this one says `after <task>` until it is pushed. The lead's push of this task waits in the push line until that task has landed, letting the pushes behind it go first; your own push goes out and its notice warns that it went first.
 - With `ready`, `--after-push "<check>"` names what the task verifies once the push lands, such as `the old key gets 401` after a deploy on push. The task stays open through the push and CI; once CI is green (or the push landed, without CI to watch), kebbie sends the task the check to run, and the row reads `checking after push: <check>`. The task's next report is the outcome: `ready` with nothing left to push closes it as done, `needs-you` puts it under Needs you with what failed as its next step. The check is kept until the task ends; a later `--after-push` replaces it.
 - A routine's task also lists its findings on a card with `needs-you`.

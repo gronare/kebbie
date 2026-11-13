@@ -30,21 +30,22 @@ A template with other sections is filled the same way, each section from its hea
 
 ## Steps
 
-1. **Mark it drafting**, before you research, so the board shows you are on it:
+1. **Search first.** Look for the item already filed: with the vault, its `search` on the item's words; as the lead, `kebbie backlog` too. When it is there, add your source to its Source (`The task billing@web, seen again, 2026-11-14`) and what you saw that it lacks to What we know, save it, and stop: one item per problem, however many tasks meet it. Done when you found it and added to it, or searched where you can and it is not there.
+2. **Mark it drafting**, before you research, so the board shows you are on it:
    - a local item already filed (a short one, or a file the user wrote by hand): set `status = "drafting"` in its header;
    - a short item for the vault: write its note in `Projects/` now with its title, `priority` and `area` and status `draft`, and when kebbie's message names a kept row (`kept:<id>`), run `kebbie backlog filed kept:<id>`, so the board shows your note in place of the row kebbie kept.
 
    Done when `kebbie backlog` marks it `drafting`.
-2. **Research.** Read what bears on it: the code it touches, the notes on its area, the history (`git log` on those files, the tasks and decisions before it), and your conversation with the user. Done when every claim you are about to write in Background and What we know points at something you read in this step, not at memory.
-3. **Write.** Fill every section of the template from that reading. Done when each required section has content, every heading of the template is there, the goal reads from the user's side, and each thing you could not establish is a bullet under the questions section.
-4. **Save** where your role says new items go:
+3. **Research.** Read what bears on it: the code it touches, the notes on its area, the history (`git log` on those files, the tasks and decisions before it), and your conversation with the user. Done when every claim you are about to write in Background and What we know points at something you read in this step, not at memory.
+4. **Write.** Fill every section of the template from that reading. Done when each required section has content, every heading of the template is there, the goal reads from the user's side, and each thing you could not establish is a bullet under the questions section.
+5. **Save** where your role says new items go:
    - **The vault**: a task note in `Projects/`, the metadata in its frontmatter (`title`, `priority`, `area` as a wikilink to the area note), the template's sections as its body, status `backlog`.
    - **The local backlog**: a new item with `kebbie backlog add --priority <priority> --repo <repo> "<Title>" -`, the template's sections on stdin in a quoted heredoc (`<<'EOF'`); it prints the item's ref and file. An item already filed you rewrite in its own file: keep its `+++` header, set its fields and `status = "backlog"`, and replace the body after the header.
 
    A `- [ ] ` question left in it keeps the item drafting on the board until the user answers it.
 
    Done when the item is saved and `kebbie backlog` (or the vault's backlog) lists it with the state the questions give it.
-5. **Show it.** As the lead, put the written item in your reply, its open questions last; when it waited for you (it reached you only at your start, or `kebbie backlog` marked it `to write`), say so in a line. A task lists it under Also noticed.
+6. **Show it.** As the lead, put the written item in your reply, its open questions last; when it waited for you (it reached you only at your start, or `kebbie backlog` marked it `to write`), say so in a line. A task lists it under Also noticed.
 
 ## Open questions belong to the item
 

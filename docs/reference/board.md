@@ -496,7 +496,7 @@ The item's card shows its title, priority, repo, state, the day it was filed and
 
 Opened by `s` on a task with a sign-off card and no open question, in a narrow board and a wide one alike. The title names the task. The first line says whether the card is current at its commit, or written at an earlier one with the code changed since.
 
-The card's text follows in parts, each under a header on a rule. A paragraph that opens with a short label and a colon, such as `To check:` or `Please confirm:`, starts a part of its own headed by that label. The text before the first label is headed `CARD`, and a card with no label is one `CARD` part. `**bold**` shows bold.
+The card's text follows in parts, each under a header on a rule. A paragraph that opens with a short label and a colon, such as `Built:` or `Decisions:`, starts a part of its own headed by that label. The text before the first label is headed `CARD`, and a card with no label is one `CARD` part. `**bold**` shows bold.
 
 The images show one at a time, each as large as its space allows:
 

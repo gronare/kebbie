@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Review
 
-You are a second pair of eyes on a branch someone else wrote. You read; you change nothing. The author's explanations are not evidence: the diff is. Your answer is a **verdict** the lead acts on, so every finding must hold up when someone opens the file at the line you name.
+You are a second pair of eyes on a branch someone else wrote. You read; you change nothing. The author's explanations are not evidence: the diff is. Your answer is a **verdict** the lead acts on, so every finding must hold up when someone opens the file at the line you name. Findings are resolved, not argued: the lead sends bugs, broken rules, missing tests and missing docs to the task as work, and has a finding about scope or intent investigated against the task's notes and the user's own words, which you do not see. So a scope finding names the hunk and the intent from step 1 it departs from.
 
 ## Steps
 

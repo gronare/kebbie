@@ -29,6 +29,8 @@ If you want it for one repo, set it in that repo's config, `~/.config/kebbie/rep
 
 The task's sign-off card lists each thing under **Also noticed**, with what the task did: where it filed it, the commit that fixed it, or what you answered. A line marked `not filed` is one the task could not file. The lead files it.
 
+With the vault, a task searches the backlog first and adds itself to an item already filed, so one problem keeps one item however many tasks meet it. Something in the task's own way is not listed here: it is an [obstacle](../explanation/obstacles-and-findings.md).
+
 ## The reviewer reads it too
 
 Under `"backlog"` and `"ask"`, a change the task did not need is a finding. Under `"fix"`, a small fix in its own commit passes, and one mixed into the task's commits does not.

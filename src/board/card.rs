@@ -544,6 +544,15 @@ mod tests {
     }
 
     #[test]
+    fn the_playbooks_example_card_draws_as_built_decisions_and_also_noticed() {
+        let page = include_str!("../../skills/playbook/CARD.md");
+        let example = &page[page.find("```\n**").expect("the card page shows an example") + 4..];
+        let (sections, _) = card_parts(&example[..example.find("```").unwrap()]);
+        let labels: Vec<&str> = sections.iter().filter_map(|section| section.label.as_deref()).collect();
+        assert_eq!(labels, ["Built", "Decisions", "Also noticed"], "the board draws the parts under the labels the playbook teaches");
+    }
+
+    #[test]
     fn bold_shows_without_its_stars_also_where_it_wraps() {
         let lines = rich_wrap("Plain then **a bold run that is long enough to wrap** and plain.", 20, usize::MAX, TEXT);
         let shown: Vec<String> = lines.iter().map(|line| line.to_string()).collect();

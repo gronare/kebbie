@@ -44,6 +44,8 @@ mod notify;
 mod peers;
 mod phase;
 mod permit;
+#[cfg(test)]
+mod procedure_scenarios;
 mod profile_wizard;
 mod profiles;
 mod push_block;

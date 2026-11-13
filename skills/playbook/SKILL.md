@@ -1,6 +1,6 @@
 ---
 name: playbook
-description: The lead's recipes for how a task gets done, from its start to its push. Use when you plan or start a task and name its recipe, and when a task's work turns out another shape than its recipe.
+description: How a task gets done, from its start to its push: the lead's recipes and the task's procedures on the way. Use when you plan or start a task and name its recipe, when a task's work turns out another shape than its recipe, when work meets an obstacle on its own path, when a task's plan changes, and when a task writes its sign-off card.
 ---
 
 # Playbook
@@ -14,6 +14,14 @@ Every recipe ends at the user's push, or yours under a push permission they gave
 1. **Match.** Read the work against the recipes' **When** below. A recipe about how this task meets other work (task after task, follow-up, across repos, waiting on outside, same files) wins over one about the change's own shape (small fix, feature with UI, rollout in stages, research), and borrows that shape's phases: a feature with UI queued after another task still starts with its mockup. Done when one recipe fits and you can say in one line which of its signals holds.
 2. **Name it.** Start the task with `--recipe "<recipe>: <why>"`, the why in the user's words: `--recipe "small-fix: the VAT rounding in one function, with its test"`. Write the prompt for the recipe's phases: what the task does first and where it stops for the user. Done when the start carries the recipe and the prompt names the first phase.
 3. **Follow it.** When the work turns out another shape (a small fix that needs a screen, a feature that must land in stages), run `kebbie recipe <task> "<recipe>: <why>"` with what changed: kebbie tells the task its new recipe, and you tell it what that changes in its phases. Done when the recipe on the board is the shape the task is in.
+
+## On the way
+
+Three pages hold what happens between the start and the push. Read the one your moment calls for:
+
+- [OBSTACLE.md](OBSTACLE.md): when a task meets an **obstacle** on its own path, or a review finding questions scope or intent. The task's side and the lead's, with the investigator's four decisions.
+- [PLAN.md](PLAN.md): when a task's plan changes: the loop of plan, build, finding and revision, and when a revision is the user's question.
+- [CARD.md](CARD.md): when a task writes its sign-off card.
 
 ## Review by assessment
 
@@ -37,7 +45,7 @@ The task's note is where the why lives: kebbie writes the recipe and the assesso
 - **Phases**:
   1. **Mockup.** The task publishes a mockup and puts it to the user as a plan holding its link, with `kebbie ask --plan`. Their yes is the only gate on what is built: it revises the mockup until they say yes.
   2. **Plan.** The task researches the code and lists its steps with `kebbie steps`. The plan is the task's own; it goes on without the user's approval.
-  3. **Build.** Steps in order, each a slice of the work in small deployable commits, preparatory commits first, trunk-based; `kebbie steps done` hands each finished step to review. When the code contradicts the plan, the task rewrites its steps with `kebbie steps` and says why in the commit that changes course, and in its vault note when it has one.
+  3. **Build.** Steps in order, each a slice of the work in small deployable commits, preparatory commits first, trunk-based; `kebbie steps done` hands each finished step to review. When the code contradicts the plan, the task revises it by [PLAN.md](PLAN.md): it rewrites its steps with `kebbie steps`, tells the lead why, and writes the reason in its vault note when it has one.
 - **The user**: the mockup's yes, then the push.
 
 ### `task-after-task`

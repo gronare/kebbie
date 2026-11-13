@@ -85,6 +85,7 @@ Working on kebbie
 - [Trunk-based by design](explanation/trunk-based.md): why tasks land on the default branch with no pull request.
 - [The review gate](explanation/review-gate.md): the rules check, the read-only reviewer and what keeps a pass.
 - [Recipes](explanation/recipes.md): the shape the lead names for every task, and where its why is kept.
+- [Obstacles and findings](explanation/obstacles-and-findings.md): what happens when a task meets something in its way or a review finds something, and why the card asks you nothing.
 - [The worktree pool](explanation/worktree-pool.md): why worktrees are kept and reused.
 - [The lead and away mode](explanation/lead-and-away-mode.md): what the lead holds, where it stops, and how it restarts.
 - [Routines](explanation/routines.md): scheduled checks that report, plan or fix.
