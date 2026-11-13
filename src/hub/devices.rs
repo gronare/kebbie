@@ -493,6 +493,36 @@ mod tests {
     }
 
     #[test]
+    fn a_config_that_does_not_parse_lets_no_device_in_by_time_or_by_account() {
+        let dir = crate::sh::test_dir("hub-gates-broken");
+        let file = dir.join("config.toml");
+        let waiting = || Devices { devices: [device("iPhone 16", at(11, 1, 9, 0), at(11, 1, 9, 0), State::Waiting, at(11, 1, 9, 0))].into_iter().collect() };
+        let policy_in = |text: &str| {
+            std::fs::write(&file, text).unwrap();
+            let (gates, error) = crate::config::hub_gates_in(&file);
+            (Policy { trust: gates.trust, auto: gates.auto }, gates, error)
+        };
+        let (policy, gates, error) = policy_in("[hub]
+trust = \"account\"
+auto_approve = \"24h\"
+[restart]
+idle_minutes = \"soon\"
+");
+        assert!(error.is_some_and(|error| error.contains("idle_minutes")), "the error says why the gates are closed");
+        assert_eq!(gates, crate::config::CLOSED_GATES);
+        assert!(super::super::commands::accepted(gates.commands, gates.from).is_empty(), "no command kind and no device decision from a phone");
+        assert!(waiting().settle(policy, at(11, 3, 9, 0)).is_empty(), "a device two days in waits on");
+        let (id, device) = waiting().devices.into_iter().next().unwrap();
+        assert_eq!(Devices { devices: [(id.clone(), device.clone())].into_iter().collect() }.trust_of(policy, &id, &device.signing.0, at(11, 3, 9, 0)), Trust::Waiting, "trust = \"account\" in a broken file lets nothing in");
+        let (policy, _, error) = policy_in("[hub]
+auto_approve = \"24h\"
+");
+        assert!(error.is_none());
+        assert_eq!(waiting().settle(policy, at(11, 3, 9, 0)).len(), 1, "the same device is approved once the file parses");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn kebbie_hub_devices_lists_the_trust_then_each_device_waiting_first_with_its_standing() {
         let shown = list(&three(), DEVICE, at(11, 11, 14, 10), &|_| 0);
         println!("{shown}");

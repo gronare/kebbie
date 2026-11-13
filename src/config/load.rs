@@ -48,17 +48,40 @@ pub fn report_settings() -> Result<Report> {
     Ok(load_machine(&path())?.report)
 }
 
-// The command thread reads this each round, so a change takes effect on the next command.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HubGates {
+    pub commands: HubCommands,
+    pub trust: HubTrust,
+    pub auto: AutoApprove,
+    pub from: ApproveFrom,
+}
+
+// What the hub's gates fall back to while config.toml does not parse: no commands, no device approved by time or by account, approvals only at the machine.
+pub const CLOSED_GATES: HubGates = HubGates { commands: HubCommands::OFF, trust: HubTrust::Device, auto: AutoApprove::Never, from: ApproveFrom::Machine };
+
+// The command thread reads this each round, so a change takes effect on the next command; the error is why the gates are closed.
+pub fn hub_gates_in(path: &Path) -> (HubGates, Option<String>) {
+    match load_machine(path) {
+        Ok(machine) => (HubGates { commands: machine.hub_commands.unwrap_or_default(), trust: machine.hub_trust.unwrap_or_default(), auto: machine.hub_auto_approve.unwrap_or_default(), from: machine.hub_approve_from.unwrap_or_default() }, None),
+        Err(error) => (CLOSED_GATES, Some(error)),
+    }
+}
+
+pub fn hub_gates() -> (HubGates, Option<String>) {
+    hub_gates_in(&path())
+}
+
 pub fn hub_commands() -> HubCommands {
-    load_machine(&path()).ok().and_then(|machine| machine.hub_commands).unwrap_or_default()
+    hub_gates().0.commands
 }
 
 pub fn hub_trust() -> (HubTrust, AutoApprove) {
-    load_machine(&path()).ok().map_or_else(Default::default, |machine| (machine.hub_trust.unwrap_or_default(), machine.hub_auto_approve.unwrap_or_default()))
+    let gates = hub_gates().0;
+    (gates.trust, gates.auto)
 }
 
 pub fn hub_approve_from() -> ApproveFrom {
-    load_machine(&path()).ok().and_then(|machine| machine.hub_approve_from).unwrap_or_default()
+    hub_gates().0.from
 }
 
 pub fn agent_updates_in(path: &Path) -> AgentUpdates {

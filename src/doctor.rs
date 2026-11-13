@@ -335,7 +335,7 @@ pub fn config_file(path: &Path) -> (Check, Option<Machine>) {
         Ok((config, unknown)) if !unknown.is_empty() => (warn("config", unknown.join("; "), one(config::UNKNOWN_FIX)), Some(config)),
         Ok((config, _)) if path.exists() => (ok("config", format!("{} parses", path.display())).brief("config"), Some(config)),
         Ok((config, _)) => (ok("config", format!("{} not found; every machine setting is its default", path.display())).brief("default config"), Some(config)),
-        Err(error) => (fail("config", error, one("fix that key; kebbie config shows the result")), None),
+        Err(error) => (fail("config", format!("{error}; until it parses, the hub takes no commands and approves devices only at this machine"), one("fix that key; kebbie config shows the result")), None),
     }
 }
 
@@ -1278,7 +1278,9 @@ mod tests {
         assert_eq!(check.fix, ["a newer kebbie may know it; kebbie update"]);
         assert_eq!(config.and_then(|config| config.channel), Some(crate::config::Channel::Main), "the rest of the file still applies");
         std::fs::write(&file, "[restart]\nidle_minutes = \"soon\"\n").unwrap();
-        assert_eq!(config_file(&file).0.level, Level::Fail, "a known key with the wrong type still fails");
+        let (check, _) = config_file(&file);
+        assert_eq!(check.level, Level::Fail, "a known key with the wrong type still fails");
+        assert!(check.fact.contains("the hub takes no commands and approves devices only at this machine"), "{}", check.fact);
         let repos = dir.join("repos");
         std::fs::create_dir_all(&repos).unwrap();
         let own = repos.join("app.toml");

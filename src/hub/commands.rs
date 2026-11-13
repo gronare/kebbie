@@ -427,6 +427,7 @@ fn serve(state: &Path, dir: &Path) {
     keeper_hands(state, |hands| {
         let mut failures = 0;
         let mut checked: Option<(bool, u64)> = None;
+        let mut closed: Option<String> = None;
         while !crate::keeper::stopping() {
             let now = crate::messages::now();
             let Some(identity) = identity::load_at(dir).ok().flatten().filter(|identity| identity.account.is_some()) else {
@@ -440,7 +441,12 @@ fn serve(state: &Path, dir: &Path) {
                 pause(IDLE);
                 continue;
             }
-            match round(dir, WAIT, &accepted(crate::config::hub_commands(), crate::config::hub_approve_from()), Policy::current(), hands, &crate::messages::now) {
+            let (gates, broken) = crate::config::hub_gates();
+            if broken != closed {
+                log(&closed_line(broken.as_deref()));
+                closed = broken;
+            }
+            match round(dir, WAIT, &accepted(gates.commands, gates.from), Policy { trust: gates.trust, auto: gates.auto }, hands, &crate::messages::now) {
                 Ok(notes) => {
                     failures = 0;
                     notes.iter().for_each(|note| log(note));
@@ -454,6 +460,14 @@ fn serve(state: &Path, dir: &Path) {
         }
     });
 }
+
+fn closed_line(error: Option<&str>) -> String {
+    match error {
+        Some(error) => format!("commands: {error}; until config.toml parses, the hub's gates are closed: no commands are taken and devices are approved only at this machine"),
+        None => "commands: config.toml parses again; the hub's gates follow it".to_string(),
+    }
+}
+
 fn modified(file: &Path) -> Option<std::time::SystemTime> {
     std::fs::metadata(file).and_then(|metadata| metadata.modified()).ok()
 }
@@ -490,7 +504,8 @@ pub fn released(dir: &Path, hands: &Hands) -> Result<Vec<String>> {
     }
     let client = Client::new(&identity.url, Some(identity.token()), CALL);
     let mut notes = Vec::new();
-    for (envelope, handled) in release(dir, &identity, &account, &accepted(crate::config::hub_commands(), crate::config::hub_approve_from()), Policy::current(), hands, crate::messages::now())? {
+    let gates = crate::config::hub_gates().0;
+    for (envelope, handled) in release(dir, &identity, &account, &accepted(gates.commands, gates.from), Policy { trust: gates.trust, auto: gates.auto }, hands, crate::messages::now())? {
         if let Some(result) = handled.result() {
             deliver(&client, &identity, &account, result)?;
         }

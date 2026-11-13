@@ -319,7 +319,10 @@ pub fn status_text(state: &Path, configured: Option<&str>, now: u64) -> Result<S
         }
         None => format!("account:  none, so {UNREAD}; connect it from the link: {RECONNECT}"),
     });
-    lines.push(commands_line(crate::config::hub_commands()));
+    lines.push(match crate::config::hub_gates() {
+        (_, Some(error)) => format!("commands: off, and devices are approved only here, until config.toml parses ({error})"),
+        (gates, None) => commands_line(gates.commands),
+    });
     lines.push(match relay.posted_at {
         Some(at) => format!("board:    rev {} posted {}", relay.rev, ago(Some(at), now)),
         None => "board:    not posted yet".to_string(),
