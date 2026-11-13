@@ -27,7 +27,7 @@ A task rebases onto the default branch kebbie already fetched, so nothing kebbie
 
 ## Only you and the lead push
 
-`kebbie push` reads who runs it from the process tree, not from the folder. The lead pushes only tasks you gave it permission for, and only while a rules approval, the reviewer's or its own, matches the commits.
+`kebbie push` reads who runs it from the process tree, not from the folder. The lead pushes only tasks you gave it permission for, and only while the reviewer's passed rules check, or its own `kebbie approve`, matches the commits.
 
 A push that waits for the task's Claude to run tests:
 

@@ -690,7 +690,7 @@ fn save(state: &Path, address: &str, recorded: &str, read_rules: bool, fingerpri
     let verdict = parse_verdict(recorded).ok_or_else(|| crate::signals::internal("review.verdict", crate::report_wire::SignalKind::InternalError, "the recorded verdict does not parse"))?;
     crate::state::write(&verdict_file(state, address), recorded)?;
     if verdict.ok && read_rules {
-        tasks::record_approval(state, address, &fingerprint()?)?;
+        tasks::record_approval(state, address, &fingerprint()?, tasks::ApprovedBy::Reviewer)?;
     }
     Ok(verdict)
 }

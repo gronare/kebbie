@@ -13,9 +13,9 @@ use crate::sh::Result;
 use crate::tasks::{self, slots};
 
 pub const LEAD_LABEL: &str = "lead";
-pub const UNCHECKED: &str = "rules not checked";
-pub const CHECKING: &str = "lead checking rules";
-pub const REVIEWER_CHECKING: &str = "reviewer checking rules";
+pub const UNCHECKED: &str = "project rules not checked";
+pub const CHECKING: &str = "lead checking project rules";
+pub const REVIEWER_CHECKING: &str = "checking project rules";
 pub const STAGED: &str = "on local main · waiting for your push";
 pub const GIT_UNREAD: &str = "git cannot read its worktree";
 
@@ -71,6 +71,48 @@ pub struct Agent {
     pub kind: crate::agent::Agent,
 }
 
+// The rules check as the board shows it; a pass of the reviewer's is Ok, and only the user's own word is ever called approved.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RulesShown {
+    Ok,
+    Checking { lead: bool },
+    Breaks { count: usize, names: Vec<String> },
+    Overridden { by: tasks::ApprovedBy, breaks: Option<(usize, Vec<String>)> },
+    Unchecked,
+}
+
+impl RulesShown {
+    pub fn key(&self) -> &'static str {
+        match self {
+            RulesShown::Ok => "ok",
+            RulesShown::Checking { .. } => "checking",
+            RulesShown::Breaks { .. } => "breaks",
+            RulesShown::Overridden { by: tasks::ApprovedBy::Lead, .. } => "past-by-lead",
+            RulesShown::Overridden { .. } => "past-by-user",
+            RulesShown::Unchecked => "unchecked",
+        }
+    }
+
+    pub fn note(&self) -> Option<String> {
+        Some(match self {
+            RulesShown::Ok => return None,
+            RulesShown::Checking { lead: false } => REVIEWER_CHECKING.to_string(),
+            RulesShown::Checking { lead: true } => CHECKING.to_string(),
+            RulesShown::Breaks { count, .. } => breaks(*count),
+            RulesShown::Overridden { by, .. } => past_the_check(*by),
+            RulesShown::Unchecked => UNCHECKED.to_string(),
+        })
+    }
+}
+
+pub fn breaks(count: usize) -> String {
+    format!("breaks {}", plural(count, "project rule"))
+}
+
+pub fn past_the_check(by: tasks::ApprovedBy) -> String {
+    format!("pushed past the rules check by {}", if by == tasks::ApprovedBy::Lead { "the lead" } else { "you" })
+}
+
 #[derive(Clone)]
 pub struct Git {
     pub upstream: String,
@@ -79,6 +121,7 @@ pub struct Git {
     pub changed: usize,
     pub uncommitted: usize,
     pub approved: bool,
+    pub approved_by: Option<tasks::ApprovedBy>,
     pub head: Option<String>,
     pub error: Option<String>,
     pub uncommitted_files: Vec<String>,
@@ -207,20 +250,34 @@ impl Item {
         self.committed() && self.git.as_ref().is_some_and(|git| git.approved)
     }
 
-    // A task that reported ready has its rules checked by the reviewer, or by the lead once kebbie asked it; one that has not, has not.
-    pub fn rules_note(&self) -> Option<String> {
-        let unchecked = self.git.as_ref().is_some_and(|git| git.ahead > 0 && !git.approved) && self.group() != Group::Working && self.push_waits.is_none();
-        if !unchecked {
+    // A task that reported ready has its rules checked by the reviewer, or by the lead once kebbie asked it; kebbie approve by the user or the lead pushes past the check.
+    pub fn rules_shown(&self) -> Option<RulesShown> {
+        use crate::rules_check::Shown;
+        let git = self.git.as_ref().filter(|git| git.ahead > 0)?;
+        let breaks = match &self.rules {
+            Some(Shown::Broken(count, names)) => Some((*count, names.clone())),
+            _ => None,
+        };
+        if git.approved {
+            return Some(match git.approved_by.unwrap_or(tasks::ApprovedBy::Reviewer) {
+                tasks::ApprovedBy::Reviewer => RulesShown::Ok,
+                by => RulesShown::Overridden { by, breaks },
+            });
+        }
+        if self.group() == Group::Working || self.push_waits.is_some() {
             return None;
         }
         Some(match &self.rules {
-            Some(crate::rules_check::Shown::Checking) => REVIEWER_CHECKING.to_string(),
-            Some(crate::rules_check::Shown::Broken(1)) => "rules: 1 break".to_string(),
-            Some(crate::rules_check::Shown::Broken(count)) => format!("rules: {count} breaks"),
-            Some(crate::rules_check::Shown::Lead) => CHECKING.to_string(),
+            Some(Shown::Checking) => RulesShown::Checking { lead: false },
+            Some(Shown::Lead) => RulesShown::Checking { lead: true },
+            Some(Shown::Broken(count, names)) => RulesShown::Breaks { count: *count, names: names.clone() },
             None if self.reviewed_now() => return None,
-            None => UNCHECKED.to_string(),
+            None => RulesShown::Unchecked,
         })
+    }
+
+    pub fn rules_note(&self) -> Option<String> {
+        self.rules_shown()?.note()
     }
 
     // The reviewer checks the rules too, so a review under way or one of this code covers them.
@@ -606,7 +663,7 @@ impl Item {
             return format!("{} · {STAGED}", plural(git.ahead, "commit"));
         }
         if self.group() == Group::ReadyToPush {
-            let review: String = self.rules_note().into_iter().chain(self.review_note_on(surface)).chain(self.unrecorded.clone()).map(|note| format!(" · {note}")).collect();
+            let review: String = self.rules_note().filter(|_| surface == Surface::Board).into_iter().chain(self.review_note_on(surface)).chain(self.unrecorded.clone()).map(|note| format!(" · {note}")).collect();
             let behind = if git.behind > 0 { format!(" · {} behind {}", git.behind, git.upstream.trim_start_matches("origin/")) } else { String::new() };
             let turn = if self.turn_under_way() { format!(" · its {} is taking a turn", self.agent_name()) } else { String::new() };
             let dirty = if git.uncommitted > 0 { format!(" · {}", plural(git.uncommitted, "uncommitted file")) } else { String::new() };
@@ -628,7 +685,7 @@ impl Item {
         if git.behind > 0 {
             parts.push(format!("{} behind {}", git.behind, git.upstream.trim_start_matches("origin/")));
         }
-        parts.extend(self.rules_note());
+        parts.extend(self.rules_note().filter(|_| surface == Surface::Board));
         parts.extend(self.review_note_on(surface));
         parts.extend(self.unrecorded.clone());
         if parts.is_empty() { "nothing yet".to_string() } else { parts.join(" · ") }
@@ -689,7 +746,7 @@ impl Item {
             "url": self.url,
             "worker": self.worker,
             "git": self.git.as_ref().map(|git| json!({
-                "upstream": git.upstream, "ahead": git.ahead, "behind": git.behind, "changed": git.changed, "uncommitted": git.uncommitted, "approved": git.approved,
+                "upstream": git.upstream, "ahead": git.ahead, "behind": git.behind, "changed": git.changed, "uncommitted": git.uncommitted, "rules": self.rules_shown().map(|rules| rules.key()),
             })),
         })
     }
@@ -1033,7 +1090,8 @@ fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>,
             };
             let shas = shas.ok();
             let uncommitted = uncommitted_files.len();
-            let approved = ahead > 0 && shas.as_ref().is_some_and(|shas| tasks::approved_at(&slot.path, &shas.tips, &address));
+            let approved_by = if ahead > 0 { shas.as_ref().and_then(|shas| tasks::approved_at(&slot.path, &shas.tips, &address)) } else { None };
+            let approved = approved_by.is_some();
             let head = shas.as_ref().map(|shas| shas.tips.head.clone());
             let tokens = workspace.as_ref().and_then(|id| herdr::workspace_tokens(id).ok()).unwrap_or_default();
             let server = tokens["server"].is_string();
@@ -1058,7 +1116,7 @@ fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>,
                 path: Some(slot.path.clone()),
                 workspace,
                 agent,
-                git: Some(Git { upstream: upstream.clone(), ahead, behind, changed, uncommitted, approved, head, error, uncommitted_files }),
+                git: Some(Git { upstream: upstream.clone(), ahead, behind, changed, uncommitted, approved, approved_by, head, error, uncommitted_files }),
                 report: reports.get(&address).map(|report| messages::shown_report(&log, report)),
                 question: questions.iter().find(|question| question.from == address).or_else(|| questions.iter().find(|question| question.about.as_deref() == Some(&crate::review::question_about(&address)))).map(|question| (*question).clone()),
                 ci: state.as_deref().and_then(|state| crate::ci::load(state, &address)),
@@ -1201,7 +1259,7 @@ pub(crate) mod tests {
         let mut item = Item {
             review: None, verdict: None, second: None, rules: None, permit: None, follows: false, bypass: false, profile: Some(crate::profiles::TASK.to_string()), server: false, worker: false, url: None, name: "billing".to_string(), title: None, place: "web".to_string(), repo: None, path: None, workspace: None,
             agent: status.map(|status| Agent { pane: "w1:p1".to_string(), status: status.to_string(), title: String::new(), context: None, answer: answer_in_space(crate::agent::Agent::Claude), kind: crate::agent::Agent::Claude }),
-            git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0, uncommitted: 0, approved: true, head: None, error: None, uncommitted_files: Vec::new() }),
+            git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0, uncommitted: 0, approved: true, approved_by: None, head: None, error: None, uncommitted_files: Vec::new() }),
             report: report.map(|state| Message {
                 id: "1".to_string(), at: 0, from: "billing@web".to_string(), to: LEAD_LABEL.to_string(), text: "plan written".to_string(), held: false,
                 report: Some(Report { state: state.to_string(), next: "nothing".to_string(), head: None, after: Vec::new() }), ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false, fyi: false,
@@ -1330,7 +1388,7 @@ pub(crate) mod tests {
         ready.git.as_mut().unwrap().approved = false;
         ready.rules = Some(crate::rules_check::Shown::Lead);
         assert!(ready.group() == Group::ReadyToPush, "a finished task waiting only on the lead is no question for the user");
-        assert_eq!(ready.summary(), "2 commits · ready to push · lead checking rules");
+        assert_eq!(ready.summary(), "2 commits · ready to push · lead checking project rules");
         let mut quiet = task(Some("idle"), None, 2);
         quiet.git.as_mut().unwrap().approved = false;
         rederive(&mut quiet);
@@ -1342,7 +1400,7 @@ pub(crate) mod tests {
         working.git.as_mut().unwrap().approved = false;
         assert!(!working.summary().contains(CHECKING), "the lead checks only once it was asked: {}", working.summary());
         let approved = task(Some("idle"), Some("ready"), 2);
-        assert!(approved.group() == Group::ReadyToPush && !approved.summary().contains("rules not checked"));
+        assert!(approved.group() == Group::ReadyToPush && !approved.summary().contains(UNCHECKED));
     }
 
     #[test]
@@ -1440,17 +1498,33 @@ pub(crate) mod tests {
         item.git.as_mut().unwrap().approved = false;
         item.rules = Some(crate::rules_check::Shown::Checking);
         assert!(item.group() == Group::ReadyToPush, "the check is no question for the user");
-        assert_eq!(item.summary(), "2 commits · ready to push · reviewer checking rules");
-        item.rules = Some(crate::rules_check::Shown::Broken(2));
-        assert_eq!(item.summary(), "2 commits · ready to push · rules: 2 breaks");
-        item.rules = Some(crate::rules_check::Shown::Broken(1));
-        assert!(item.summary().ends_with("rules: 1 break"));
+        assert_eq!(item.summary(), "2 commits · ready to push · checking project rules");
+        item.rules = Some(crate::rules_check::Shown::Broken(2, Vec::new()));
+        assert_eq!(item.summary(), "2 commits · ready to push · breaks 2 project rules");
+        assert_eq!(item.summary_on(Surface::Phone), "2 commits · ready to push", "the phone has the rules check as its own field");
+        item.rules = Some(crate::rules_check::Shown::Broken(1, Vec::new()));
+        assert!(item.summary().ends_with("breaks 1 project rule"));
         item.rules = Some(crate::rules_check::Shown::Lead);
         assert!(item.summary().ends_with(CHECKING), "the lead asked after the reviewer gave no verdict");
         item.rules = None;
         assert!(item.summary().ends_with(UNCHECKED), "the lead checks only once it was asked: {}", item.summary());
         item.git.as_mut().unwrap().approved = true;
-        assert_eq!(item.summary(), "2 commits · ready to push", "an approved row stays quiet");
+        assert_eq!(item.summary(), "2 commits · ready to push", "a pass of the reviewer's stays quiet");
+        assert_eq!(item.rules_shown(), Some(RulesShown::Ok));
+    }
+
+    #[test]
+    fn kebbie_approve_by_the_user_or_the_lead_shows_as_pushing_past_the_rules_check_with_the_breaks_that_stand() {
+        let mut item = task(Some("idle"), Some("ready"), 2);
+        item.rules = Some(crate::rules_check::Shown::Broken(2, vec!["Subject, blank line, body".to_string()]));
+        item.git.as_mut().unwrap().approved_by = Some(tasks::ApprovedBy::Lead);
+        assert_eq!(item.rules_shown(), Some(RulesShown::Overridden { by: tasks::ApprovedBy::Lead, breaks: Some((2, vec!["Subject, blank line, body".to_string()])) }));
+        assert_eq!(item.summary(), "2 commits · ready to push · pushed past the rules check by the lead");
+        item.git.as_mut().unwrap().approved_by = Some(tasks::ApprovedBy::User);
+        item.rules = None;
+        assert_eq!(item.rules_shown(), Some(RulesShown::Overridden { by: tasks::ApprovedBy::User, breaks: None }));
+        assert!(item.summary().ends_with("pushed past the rules check by you"));
+        assert!(!item.summary().contains("approved"));
     }
 
     fn watched(state: crate::ci::State, close: bool) -> crate::ci::Watch {
@@ -1658,7 +1732,7 @@ pub(crate) mod tests {
         assert_eq!(at(&mut item, Some("working")), Group::ReadyToPush, "the lead's word or the user's");
         item.git.as_mut().unwrap().head = Some("def".to_string());
         assert_eq!(item.group(), Group::ReadyToPush, "a new commit in that turn moves it only with the report that says so");
-        assert!(item.summary().ends_with("ready to push · lead checking rules · its Claude is taking a turn"), "{}", item.summary());
+        assert!(item.summary().ends_with("ready to push · lead checking project rules · its Claude is taking a turn"), "{}", item.summary());
         reported(&mut item, "working", 70);
         moved(&mut item, &Event::Reported { state: "working", head: Some("def"), committed: true, pushing: false });
         assert_eq!(at(&mut item, Some("idle")), Group::Working);
@@ -2233,7 +2307,7 @@ pub(crate) mod tests {
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         let state = state_of(&dir);
         let (kept, address) = (crate::lead::state_location().unwrap(), peers::address("billing", &name_of(&dir)));
-        tasks::record_approval(&kept, &address, &tasks::fingerprint_at(&slot.path, &upstream, "HEAD").unwrap()).unwrap();
+        tasks::record_approval(&kept, &address, &tasks::fingerprint_at(&slot.path, &upstream, "HEAD").unwrap(), tasks::ApprovedBy::Reviewer).unwrap();
         crate::state::write(&crate::review::verdict_file(&kept, &address), crate::review::record("verdict: ok", &git(&dir, &["rev-parse", "HEAD"]).unwrap()).unwrap()).unwrap();
         let reads_commits = |gits: &[String]| gits.iter().filter(|run| ["merge-base", "rev-list", "log", "rev-parse", "show-ref", "diff -U0"].iter().any(|commits| run.starts_with(commits))).cloned().collect::<Vec<_>>();
         let shown = |items: &[Item]| items.iter().find(|item| item.name == "billing").map(|item| (item.git.as_ref().map(|git| (git.ahead, git.behind, git.changed)), item.built.files.clone(), item.review)).unwrap();

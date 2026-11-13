@@ -362,13 +362,21 @@ pub(crate) enum DevicePush {
     Conflict { files: Vec<String>, main: String },
     Tests { files: Vec<String>, main: String },
     Settled(String),
+    HeadMoved(String),
     Refused(String),
     UnknownTask(String),
     Failed(String),
 }
 
-// The same push kebbie push runs, the whole branch, for the hub on the user's behalf; it refuses only by the gates every push of the user's passes, never because HEAD or main moved since the user saw the task.
-pub(crate) fn push_as(caller: &Caller, address: &str) -> DevicePush {
+// A push through one step, as the phone sends it: the step's number and the commit it showed for that step.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ThroughStep<'a> {
+    pub number: u32,
+    pub head: &'a str,
+}
+
+// The same push kebbie push runs for the hub on the user's behalf: the whole branch, or the first steps through the one named, as the push window's p takes them; the whole branch is refused only by the gates every push of the user's passes, never because HEAD or main moved since the user saw the task.
+pub(crate) fn push_as(caller: &Caller, address: &str, step: Option<ThroughStep>) -> DevicePush {
     let (task, place) = address.split_once('@').unwrap_or((address, ""));
     let Some(repo) = crate::repo::pooled_checkouts().into_iter().find(|repo| name_of(repo) == place) else {
         return DevicePush::UnknownTask(format!("No repo {place} on this machine"));
@@ -381,10 +389,31 @@ pub(crate) fn push_as(caller: &Caller, address: &str) -> DevicePush {
         Ok(state) => state,
         Err(error) => return DevicePush::Failed(error),
     };
-    device_push(&state, caller, &repo, &slot, &super::line::live_read(), &mut live_push(&state))
+    device_push(&state, caller, &repo, &slot, step, &super::line::live_read(), &mut live_push(&state))
 }
 
-pub(super) fn device_push(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, read: super::line::Read, push: super::line::Push) -> DevicePush {
+// The open commits up to and including step N's, while its commit is still the one the phone showed; a step on the default branch already is settled.
+fn through_step(state: &Path, slot: &Slot, address: &str, upstream: &str, step: ThroughStep) -> std::result::Result<Through, DevicePush> {
+    let task = task_of(slot);
+    let steps = super::plan::read_now(state, &slot.path, upstream, address);
+    let index = usize::try_from(step.number).unwrap_or(usize::MAX).saturating_sub(1);
+    let short = &step.head[..7.min(step.head.len())];
+    let landed = crate::sh::succeeds("git", &["merge-base", "--is-ancestor", step.head, &crate::repo::tracking(upstream)], Some(&slot.path));
+    if index < steps.pushed || landed {
+        return Err(DevicePush::Settled(Notice::new(Tone::NotNow, format!("Nothing to push: step {} is on {} already", step.number, main_of(upstream))).detail("task", task).detail("commit", short).to_string()));
+    }
+    let open = open_shas(&slot.path, upstream).map_err(DevicePush::Failed)?;
+    let current = steps.items.iter().find(|listed| listed.index == index).and_then(|listed| match &listed.state {
+        super::plan::State::Committed { sha, .. } => Some(sha.as_str()),
+        _ => None,
+    });
+    match open.iter().position(|sha| Some(sha.as_str()) == current && sha == step.head) {
+        Some(at) => Ok(Through::First { count: at + 1, of: open.len() }),
+        None => Err(DevicePush::HeadMoved(Notice::new(Tone::You, format!("Not pushed: step {} is not the commit you saw", step.number)).you("Look at its steps again and push from there.").detail("task", task).detail("commit", short).to_string())),
+    }
+}
+
+pub(super) fn device_push(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, step: Option<ThroughStep>, read: super::line::Read, push: super::line::Push) -> DevicePush {
     let task = task_of(slot);
     let address = peers::address(task, &name_of(repo));
     let upstream = match default_branch(repo) {
@@ -397,7 +426,12 @@ pub(super) fn device_push(state: &Path, caller: &Caller, repo: &Path, slot: &Slo
         Ok(_) => {}
         Err(error) => return DevicePush::Failed(error),
     }
-    if let Err(refused) = join(state, caller, repo, slot, Through::All) {
+    let through = match step.map(|step| through_step(state, slot, &address, &upstream, step)) {
+        None => Through::All,
+        Some(Ok(through)) => through,
+        Some(Err(refused)) => return refused,
+    };
+    if let Err(refused) = join(state, caller, repo, slot, through) {
         return DevicePush::Refused(refused);
     }
     let driven = super::line::drive(state, repo, Some(&address), &messages::load(), messages::now(), read, push);
@@ -1536,7 +1570,7 @@ mod tests {
         shared_file(&dir, &slot, &upstream);
         upstream_commit(&dir, "m", "1\n2\n3\n4\n5\n6\n7\n8\n9\nten\n", "last line of m");
         let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
-        record_approval(&pushing.state, &pushing.address, &fingerprint(&slot.path, &upstream).unwrap()).unwrap();
+        record_approval(&pushing.state, &pushing.address, &fingerprint(&slot.path, &upstream).unwrap(), crate::tasks::ApprovedBy::Reviewer).unwrap();
         let (texts, hand) = handed();
         for caller in [Caller::Agent, Caller::Task(pushing.address.clone()), Caller::Lead] {
             let refused = prepare(&pushing.state, &caller, &dir, &slot, Through::All, None, &hand).unwrap_err();
@@ -1555,7 +1589,7 @@ mod tests {
         shared_file(&dir, &slot, &upstream);
         upstream_commit(&dir, "m", "1\n2\n3\n4\n5\n6\n7\n8\n9\nten\n", "last line of m");
         crate::permit::set_task_in(&pushing.state, &pushing.address, true).unwrap();
-        record_approval(&pushing.state, &pushing.address, &fingerprint(&slot.path, &upstream).unwrap()).unwrap();
+        record_approval(&pushing.state, &pushing.address, &fingerprint(&slot.path, &upstream).unwrap(), crate::tasks::ApprovedBy::Reviewer).unwrap();
         let (texts, hand) = handed();
         let Prepared::Handed(said) = prepare(&pushing.state, &Caller::Lead, &dir, &slot, Through::All, Some(7), &hand).unwrap() else { panic!("main changed m too") };
         assert!(said.contains("files: m") && said.contains("for the lead"), "{said}");
@@ -1590,13 +1624,41 @@ mod tests {
         upstream_commit(&dir, "elsewhere", "x", "landed after the phone showed the task");
         let (_, hand) = handed();
         let phone = Caller::hub("acc_01");
-        let pushed = device_push(&pushing.state, &phone, &dir, &slot, &|_, _| None, &mut device_pushes(&pushing.state, &hand));
+        let pushed = device_push(&pushing.state, &phone, &dir, &slot, None, &|_, _| None, &mut device_pushes(&pushing.state, &hand));
         let main = main_of(&upstream).to_string();
         let short = git(&origin, &["rev-parse", "--short=7", &main]).unwrap();
         assert_eq!(pushed, DevicePush::Pushed { short, main: main.clone() }, "HEAD and main both moved since the phone saw {seen}, and it is pushed all the same");
         let landed = git(&origin, &["log", "--format=%s", &main]).unwrap();
         assert!(landed.starts_with("fourth\nlanded after the phone showed the task\n"), "the task's commit on top of what landed: {landed}");
         assert!(intent::load(&pushing.state, &pushing.address).is_none());
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_device_push_through_a_step_pushes_the_steps_up_to_it_and_leaves_the_later_ones_in_the_task() {
+        use crate::permit::Caller;
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let pushing = Pushing::new(&dir);
+        let first = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        commit(&slot.path, "e", "fifth");
+        let second = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        super::super::plan::list_at(&pushing.state, &slot.path, &upstream, &pushing.address, &["Model", "Command"]).unwrap();
+        let (_, hand) = handed();
+        let phone = Caller::hub("acc_01");
+        let through = |number: u32, head: &str| device_push(&pushing.state, &phone, &dir, &slot, Some(ThroughStep { number, head }), &|_, _| None, &mut device_pushes(&pushing.state, &hand));
+        let moved = through(1, &second);
+        assert!(matches!(&moved, DevicePush::HeadMoved(said) if said.contains("step 1 is not the commit you saw")), "step 1 is not the second commit: {moved:?}");
+        assert!(matches!(through(3, &second), DevicePush::HeadMoved(_)), "there is no step 3");
+        let main = main_of(&upstream).to_string();
+        super::super::plan::listed_at(&pushing.state, &slot.path, &upstream, &pushing.address);
+        assert_eq!(through(1, &first), DevicePush::Pushed { short: first[..7].to_string(), main: main.clone() });
+        assert_eq!(git(&origin, &["rev-parse", &main]).unwrap(), first, "only the first step went out");
+        assert_eq!(git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), second, "the later step stays in the task");
+        let settled = through(1, &first);
+        assert!(matches!(&settled, DevicePush::Settled(said) if said.contains("step 1 is on")), "{settled:?}");
+        let steps = super::super::plan::read_now(&pushing.state, &slot.path, &upstream, &pushing.address);
+        assert_eq!((steps.pushed, steps.items.len(), steps.items[0].index), (1, 1, 1), "the board shows the next step as it stands");
+        assert!(matches!(&steps.items[0].state, super::super::plan::State::Committed { sha, .. } if *sha == second));
         cleanup(dir, origin, &slot);
     }
 
@@ -1608,7 +1670,7 @@ mod tests {
         upstream_commit(&dir, "d", "theirs", "d on main");
         let (texts, hand) = handed();
         let phone = Caller::hub("acc_01");
-        let pushed = device_push(&pushing.state, &phone, &dir, &slot, &|_, _| None, &mut device_pushes(&pushing.state, &hand));
+        let pushed = device_push(&pushing.state, &phone, &dir, &slot, None, &|_, _| None, &mut device_pushes(&pushing.state, &hand));
         let DevicePush::Conflict { files, .. } = &pushed else { panic!("the rebase conflicts: {pushed:?}") };
         assert_eq!(files, &["d".to_string()]);
         assert_eq!(texts.borrow().len(), 1, "its Claude got the rebase");

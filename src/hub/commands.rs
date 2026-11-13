@@ -459,6 +459,7 @@ pub fn pushed(outcome: crate::tasks::DevicePush) -> Done {
         DevicePush::Conflict { files, main } => (Outcome::Failed, format!("Not pushed yet: conflicts with {main} in {}; its Claude resolves it, then kebbie pushes it", files.join(", "))),
         DevicePush::Tests { files, main } => (Outcome::Failed, format!("Not pushed yet: {main} changed {} too; its Claude runs their tests, then kebbie pushes it", files.join(", "))),
         DevicePush::Settled(text) => (Outcome::Refused { reason: Reason::AlreadySettled }, plain(&text)),
+        DevicePush::HeadMoved(text) => (Outcome::Refused { reason: Reason::HeadMoved }, plain(&text)),
         DevicePush::Refused(text) => (Outcome::Refused { reason: Reason::NotAllowed }, plain(&text)),
         DevicePush::UnknownTask(text) => (Outcome::Refused { reason: Reason::UnknownRepo }, plain(&text)),
         DevicePush::Failed(text) => (Outcome::Failed, plain(&text)),
@@ -493,7 +494,7 @@ fn keeper_hands<T>(state: &Path, run: impl FnOnce(&Hands) -> T) -> T {
     };
     run(&Hands {
         answer: &answered,
-        push: &|caller, push| pushed(crate::tasks::push_as(caller, &push.address)),
+        push: &|caller, push| pushed(crate::tasks::push_as(caller, &push.address, push.through_step.map(|number| crate::tasks::ThroughStep { number, head: &push.head }))),
         prompt: &prompt,
         idea: &super::backlog::idea,
         item_answer: &super::backlog::item_answer,
@@ -721,7 +722,7 @@ mod tests {
     }
 
     fn push() -> Payload {
-        Payload::Push(PushApproval { address: "refunds@shop".to_string(), head: "a".repeat(40), card_sha: None })
+        Payload::Push(PushApproval { address: "refunds@shop".to_string(), head: "a".repeat(40), card_sha: None, through_step: None })
     }
 
     fn prompt_answer(key: &str) -> Payload {
@@ -1382,6 +1383,9 @@ mod tests {
         let refused = crate::notice::Notice::new(crate::notice::Tone::NotNow, "Not pushed: the review is still running").next("Push it once it is done.").to_string();
         assert_eq!(pushed(DevicePush::Refused(refused)), (Outcome::Refused { reason: Reason::NotAllowed }, "Not pushed: the review is still running. Push it once it is done.".to_string()));
         assert_eq!(pushed(DevicePush::UnknownTask("No task \"x\" in shop's worktrees".to_string())).0, Outcome::Refused { reason: Reason::UnknownRepo });
+        let moved = crate::notice::Notice::new(crate::notice::Tone::You, "Not pushed: step 2 is not the commit you saw").to_string();
+        assert_eq!(pushed(DevicePush::HeadMoved(moved)), (Outcome::Refused { reason: Reason::HeadMoved }, "Not pushed: step 2 is not the commit you saw".to_string()), "a push through a step whose commit changed");
+        assert_eq!(pushed(DevicePush::Settled("Nothing to push".to_string())).0, Outcome::Refused { reason: Reason::AlreadySettled });
         let elsewhere = Answer { address: "refunds@shop".to_string(), question: "no-such-question".to_string(), choice: Some(0), comment: String::new() };
         assert_eq!(answered(&Caller::hub("acc_01"), &elsewhere).0, Outcome::Refused { reason: Reason::AlreadySettled });
     }

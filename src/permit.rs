@@ -73,7 +73,7 @@ pub fn toggle_task(address: &str) -> Result<String> {
     let on = !task_file(&state, address).exists();
     set_task_in(&state, address, on)?;
     let (told, shown) = if on {
-        (format!("The user gave you push permission for {address}: you may push it with kebbie push once it is rules-approved and through any review it is in."), crate::notice::Notice::new(crate::notice::Tone::Done, "The lead may push it now").next("Done, drop and reset take the permission back.").detail("task", address).to_string())
+        (format!("The user gave you push permission for {address}: you may push it with kebbie push once its rules check passed, the reviewer's or your own kebbie approve, and it is through any review it is in."), crate::notice::Notice::new(crate::notice::Tone::Done, "The lead may push it now").next("Done, drop and reset take the permission back.").detail("task", address).to_string())
     } else {
         (format!("The user took back push permission for {address}: route it to them again."), crate::notice::Notice::new(crate::notice::Tone::Done, "Only you push it now").detail("task", address).to_string())
     };

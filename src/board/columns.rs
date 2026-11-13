@@ -92,7 +92,6 @@ pub(super) fn row_facts(item: &Item) -> String {
     if git.behind > 0 {
         parts.push(format!("{} behind", git.behind));
     }
-    parts.extend(item.rules_note());
     parts.extend(item.review_note());
     parts.extend(item.unrecorded.clone());
     if item.permit == Some(Permit::Task) {
@@ -183,6 +182,25 @@ pub(super) fn how_lines(item: &Item, highlighted: bool, width: usize) -> Vec<Lin
     shown.into_iter().map(|text| {
         let line = Line::from(vec![Span::raw("   "), Span::styled(text, style(MUTED))]);
         if highlighted { line.style(Style::new().bg(SURFACE)) } else { line }
+    }).collect()
+}
+
+// The rules check under the row, each its own line: breaks with the rules the reviewer named, a check under way muted, a push past it by whom; a check that passed says nothing.
+pub(super) fn rules_lines(item: &Item, highlighted: bool, width: usize) -> Vec<Line<'static>> {
+    use crate::status::RulesShown;
+    let breaks = |count: usize, names: &[String]| if names.is_empty() { crate::status::breaks(count) } else { format!("{}: {}", crate::status::breaks(count), names.join(" · ")) };
+    let shown: Vec<(String, Color)> = match item.rules_shown() {
+        None | Some(RulesShown::Ok) => Vec::new(),
+        Some(RulesShown::Breaks { count, names }) => vec![(breaks(count, &names), YELLOW)],
+        Some(RulesShown::Overridden { by, breaks: found }) => found.map(|(count, names)| (breaks(count, &names), MUTED)).into_iter().chain([(crate::status::past_the_check(by), MUTED)]).collect(),
+        Some(rules) => rules.note().map(|note| (note, MUTED)).into_iter().collect(),
+    };
+    shown.into_iter().flat_map(|(text, color)| {
+        let texts = if highlighted { wrap(&text, width.saturating_sub(4), 4) } else { vec![cut(&text, width.saturating_sub(4))] };
+        texts.into_iter().map(move |text| {
+            let line = Line::from(vec![Span::raw("   "), Span::styled(text, style(color))]);
+            if highlighted { line.style(Style::new().bg(SURFACE)) } else { line }
+        })
     }).collect()
 }
 
@@ -303,6 +321,7 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
         }
         lines.push(line);
         lines.extend(how_lines(item, selected && on_task && unfold, width));
+        lines.extend(rules_lines(item, selected && on_task && unfold, width));
         lines.extend(step_lines(item, selected && on_task && unfold, width));
         if let Some(wanted) = item.wanted(&keys::key(Act::Go).to_string()).or_else(|| item.verdict_wanted()).or_else(|| accept_wanted(item)) {
             lines.extend(wanted_lines(&wanted, PEACH, selected && on_task && unfold, width));
@@ -494,6 +513,41 @@ mod tests {
         let mut app = test_app(vec![item]);
         let (rows, _) = render(&mut app, 120, 30);
         assert!(!rows.join("\n").contains("review: "), "{}", rows.join("\n"));
+    }
+
+    #[test]
+    fn the_rules_check_shows_on_its_own_line_under_the_row_and_a_pass_shows_nothing() {
+        let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 2);
+        let shown = |item: &Item| {
+            let mut app = test_app(vec![item.clone()]);
+            app.work_selected = 9;
+            let (rows, buffer) = render(&mut app, 120, 30);
+            let at = find(&rows, "billing")[0].1;
+            let below = rows[at + 1].trim().to_string();
+            let color = find(&rows, &below).first().map(|(x, y)| buffer[(*x as u16, *y as u16)].fg);
+            (rows.join("\n"), below, color)
+        };
+        let (screen, _, _) = shown(&item);
+        assert!(!screen.contains("rules") && !screen.contains("approved"), "the reviewer's pass says nothing: {screen}");
+        item.git.as_mut().unwrap().approved = false;
+        item.rules = Some(crate::rules_check::Shown::Checking);
+        let (screen, below, color) = shown(&item);
+        assert_eq!((below.as_str(), color), ("checking project rules", Some(MUTED)), "{screen}");
+        assert!(!row_facts(&item).contains("rules"), "the row's facts leave it to its line: {}", row_facts(&item));
+        item.rules = Some(crate::rules_check::Shown::Broken(2, vec!["Body says why".to_string(), "One change".to_string()]));
+        let (screen, below, color) = shown(&item);
+        assert_eq!((below.as_str(), color), ("breaks 2 project rules: Body says why · One change", Some(YELLOW)), "{screen}");
+        item.rules = Some(crate::rules_check::Shown::Broken(1, Vec::new()));
+        assert_eq!(shown(&item).1, "breaks 1 project rule", "the reviewer named no rule");
+        item.git.as_mut().unwrap().approved = true;
+        item.git.as_mut().unwrap().approved_by = Some(crate::tasks::ApprovedBy::Lead);
+        let (screen, below, _) = shown(&item);
+        assert_eq!(below, "breaks 1 project rule", "{screen}");
+        assert!(screen.contains("pushed past the rules check by the lead") && !screen.contains("approved"), "{screen}");
+        item.rules = None;
+        item.git.as_mut().unwrap().approved_by = Some(crate::tasks::ApprovedBy::User);
+        let (screen, below, color) = shown(&item);
+        assert_eq!((below.as_str(), color), ("pushed past the rules check by you", Some(MUTED)), "{screen}");
     }
 
     #[test]

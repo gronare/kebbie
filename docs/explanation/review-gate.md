@@ -10,7 +10,7 @@ The rules check is about how the work is shaped.
 
 1. kebbie checks each commit's form itself: with `kebbie:work-rules`, a ready report is refused while a commit lacks a subject, a blank line and a body.
 2. The keeper (or the board while the keeper is off) starts the reviewer from its own environment, never the task's, with a brief of the rules alone. It reads each commit against your rules skill, and in a repo with `docs.required` against the docs too.
-3. A pass is the task's rules approval, and the lead hears nothing. A break goes to the task with the commit and the rule, and to the lead as one line.
+3. A pass clears the task's rules check, and the lead hears nothing. A break goes to the task with the commit and the rule, and to the lead as one line.
 
 ## The lead checks when the reviewer cannot
 
@@ -22,7 +22,7 @@ Each code is checked once. A ready report on code the reviewer found breaks in g
 
 A task in review, sent by you (`v` on the board, or `kebbie review`), by the lead, or by kebbie under [`review.auto`](#an-assessor-judges-whether-the-work-needs-a-review), waits under In review until a separate Claude has read it and given `verdict: ok` on the code its HEAD makes. Until then the board offers no push for it.
 
-A full review reads the rules too, so its pass is the task's rules approval, and no separate rules check runs while a task is in review. A task in review shows under Ready to push once the reviewer has passed its current code.
+A full review reads the rules too, so its pass clears the rules check too, and no separate rules check runs while a task is in review. A task in review shows under Ready to push once the reviewer has passed its current code.
 
 ## A separate Claude reads it like a colleague
 

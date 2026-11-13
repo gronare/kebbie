@@ -82,7 +82,7 @@ Above the groups, Next lists what needs you in the order `N` on the board and `k
 
 A prompt on a task's agent's screen, such as Codex asking to run a command, shows under Questions and counts in its badge: the question, the command apart from it, and each option with the key it takes. With changes allowed on the device, you choose a plain option there; an option that takes your own words is answered at the machine.
 
-The open task shows its agent, profile and recipe, its steps, and a review section: the assessment, the reviewer's verdict, whether the push waits for it, and a second opinion's points, which never hold the push.
+The open task shows its agent, profile and recipe, its steps, its rules check as on the board, and a review section: the assessment, the reviewer's verdict, whether the push waits for it, and a second opinion's points, which never hold the push.
 
 A task that works in [steps](work-in-steps.md) lists them under its row as on the board: the pushed ones as a count, then each step with its number, title and state, planned, in progress, committed or accepted. With [`task.require_accept`](work-in-steps.md#require-every-step-accepted) on, the row says how many commits wait for your accept and which one is next, and the top of the board counts them across tasks as `◆ N to accept`; without it, the phone says accepting each step is optional and push takes what is committed. You accept on the machine, with `kebbie accept` or in the review split; the phone only shows it.
 
@@ -108,6 +108,7 @@ The task shows the answer as sent, then the machine's own reply once it applied 
 What reaches a machine is its own choice, set by [`hub.commands`](../reference/configuration.md#keys) in its config.toml. **Machines** says it under each one: `takes answers and pushes`, `takes answers, not pushes` or `takes nothing from the hub`.
 
 - If a machine takes answers but not pushes, its task says `Not pushed: devbox takes no pushes from the hub. Push at the machine, or allow pushes in its kebbie settings.`
+- A task in [steps](work-in-steps.md) pushes through one of its committed steps: the steps up to it go out, as `p` in the board's push window takes them, and the later ones stay in the task. If that step's commit changed since your phone showed it, the push is refused; a step on the default branch already says there is nothing to push.
 - If you turn the switch off, the device sends nothing; the setting stays in that browser alone.
 - If the hub has not enabled answering for your account, the task says so instead.
 

@@ -154,7 +154,7 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   with ready, --card <file> is the sign-off card the push dialog shows above the commits;
                                   ready is refused while a commit lacks a subject, a blank line and a body (with
                                   kebbie:work-rules), and the keeper then starts a read-only reviewer that checks the
-                                  commits against the rules skill: a pass approves them, a break goes to the task and a
+                                  commits against the rules skill: a pass clears the check, a break goes to the task and a
                                   line to the lead, no verdict in 15 minutes leaves the check to the lead
   kebbie steps \"<step>\" …         run by a task's Claude in its worktree, with task.steps on: its work as
                                   ordered steps, one commit each; a rewrite keeps the pushed ones first.
@@ -221,8 +221,8 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
   kebbie tidy <name> [note]       ask the task's Claude to reshape its commits by the rules skill (task.rules_skill)
   kebbie review [name]            send the task to review: a separate, read-only Claude reviews its commits in the
                                   background, by the skill kebbie:review and the rules skill; the task waits under To
-                                  review, and push with it, until a verdict ok on its current code, which is its
-                                  rules approval too, so no separate rules check runs (--withdraw
+                                  review, and push with it, until a verdict ok on its current code, which clears its
+                                  rules check too, so no separate rules check runs (--withdraw
                                   takes it out of review, yours only: the reviewer stops, its verdict goes, push is
                                   offered again; --confirm <name> [\"<your words>\"], yours only, passes a review whose
                                   findings only ask for your confirmation, as Confirm under Needs you does); the
@@ -231,9 +231,9 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   which never holds the push: its points go to the lead
   kebbie evidence [name] [--json] the test runs kebbie recorded for the task, newest first: the command, its result, the
                                   commit it ran on and whether the code changed since (task.test_commands adds commands)
-  kebbie approve <name>           yours or the lead's word that a task's commits hold to the rules skill, an override:
-                                  the reviewer gives it by itself when a task reports ready; until a commit changes,
-                                  the board shows it ready to push
+  kebbie approve <name>           yours or the lead's word that a task's commits hold to the rules skill, an override of
+                                  the reviewer's rules check; until a commit changes, the board shows it ready to push,
+                                  pushed past the rules check by you or the lead
   kebbie accept <name> <sha>      yours alone: accept one of a task's commits, by its code, so a clean rebase or a
                                   reworded message keeps it and a changed line takes it back; --withdraw takes it back
   kebbie accepted [name] [--json] a task's unpushed commits and which are accepted, anyone's to read, a task's too

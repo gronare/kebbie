@@ -420,7 +420,7 @@ mod tests {
         unchecked.rules = Some(crate::rules_check::Shown::Lead);
         assert!(unchecked.group() == crate::status::Group::ReadyToPush);
         assert!(task_choices(Some(&unchecked), None, None).iter().any(|choice| choice.key == 'p'));
-        assert_eq!(row_facts(&unchecked), "1 commit · lead checking rules");
+        assert_eq!(row_facts(&unchecked), "1 commit", "the rules check has a line of its own under the row");
     }
 
     #[test]

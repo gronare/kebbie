@@ -28,7 +28,7 @@ On a ready report, an assessor judges whether the work needs a review, and the r
 
    On findings, the lead passes the ones that matter to the task, which fixes them and reports ready. kebbie then reviews the changed code again.
 
-3. Press `p` once the task shows under Ready to push. The reviewer's pass on the current code is its rules approval too.
+3. Press `p` once the task shows under Ready to push. The reviewer's pass on the current code clears its rules check too.
 
 ## Choose who reviews
 

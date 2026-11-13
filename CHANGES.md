@@ -5,6 +5,8 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- The board shows the rules check on its own line under a task: checking, the project rules it breaks by name, or that you or the lead pushed past it; a passed check shows nothing.
+- From your phone you push a task through one of its steps, and the later steps stay in the task; update the hub first.
 - A task names a check to run after its push with kebbie report --after-push; once CI is green it runs the check itself and closes when it holds, or waits under Needs you with what failed.
 - When a hub refuses the board, kebbie says the hub has not enabled answering for your account, with the hub's link.
 - The phone answers an agent's prompt on a task's screen with one tap, while that prompt still shows; update the hub first.

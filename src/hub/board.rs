@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Mutex;
 
-use kebbie_hub_protocol::{Agent, AgentStatus, Board, Checkout, Ci, CiState, Counts, Git, Group, Item, Later, LaterState, NextPart, NextRow, Prompt, PromptOption, PushPermission, Question, QuestionOption, Recover, Report, RoutineSummary, SecondOpinion, Step, StepState, Steps, Verdict, VerdictOutcome};
+use kebbie_hub_protocol::{Agent, AgentStatus, Board, Checkout, Ci, CiState, Counts, Git, Group, Item, Later, LaterState, MAX_RULE_NAMES, NextPart, NextRow, OverrideBy, Prompt, PromptOption, PushPermission, Question, QuestionOption, Recover, Report, RoutineSummary, Rules, RulesOverride, RulesState, SecondOpinion, Step, StepState, Steps, Verdict, VerdictOutcome};
 
 use super::blobs::{Attachment, PLAN_LIMIT};
 use crate::menu::Menu;
@@ -99,7 +99,33 @@ fn prompt(item: &status::Item, address: &str, seen: &Seen) -> Option<Prompt> {
 
 fn git(item: &status::Item) -> Option<Git> {
     let git = item.git.as_ref()?;
-    Some(Git { upstream: git.upstream.trim_start_matches("origin/").to_string(), ahead: count(git.ahead), behind: count(git.behind), uncommitted: count(git.uncommitted), approved: git.approved })
+    Some(Git { upstream: git.upstream.trim_start_matches("origin/").to_string(), ahead: count(git.ahead), behind: count(git.behind), uncommitted: count(git.uncommitted), rules: rules(item) })
+}
+
+// The rules check as the phone shows it: a pass of the reviewer's is ok, kebbie approve by the user or the lead is an override of a check that broke or never finished.
+fn rules(item: &status::Item) -> Option<Rules> {
+    use status::RulesShown;
+    let broke = |found: usize, names: Vec<String>| (RulesState::Breaks, Some(count(found.max(1))), names.into_iter().take(found.clamp(1, MAX_RULE_NAMES)).collect());
+    let (state, breaks, names, by) = match item.rules_shown()? {
+        RulesShown::Ok => (RulesState::Ok, None, Vec::new(), None),
+        RulesShown::Checking { .. } => (RulesState::Checking, None, Vec::new(), None),
+        RulesShown::Breaks { count: found, names } => {
+            let (state, breaks, names) = broke(found, names);
+            (state, breaks, names, None)
+        }
+        RulesShown::Overridden { by, breaks: found } => {
+            let by = Some(if by == crate::tasks::ApprovedBy::Lead { OverrideBy::Lead } else { OverrideBy::User });
+            match found {
+                Some((found, names)) => {
+                    let (state, breaks, names) = broke(found, names);
+                    (state, breaks, names, by)
+                }
+                None => (RulesState::Checking, None, Vec::new(), by),
+            }
+        }
+        RulesShown::Unchecked => return None,
+    };
+    Some(Rules { state, breaks, names, overridden: by.map(|by| RulesOverride { by }) })
 }
 
 fn verdict(item: &status::Item) -> Option<Verdict> {
@@ -127,6 +153,7 @@ fn steps(item: &status::Item, seen: &Seen) -> Option<Steps> {
     if !steps.listed() {
         return None;
     }
+    let rules = rules(item);
     let items = steps.items.iter().map(|step| {
         let (state, sha) = match &step.state {
             crate::tasks::StepState::Planned => (StepState::Planned, None),
@@ -134,7 +161,8 @@ fn steps(item: &status::Item, seen: &Seen) -> Option<Steps> {
             crate::tasks::StepState::Committed { sha, accepted: false, .. } => (StepState::Committed, Some(sha.clone())),
             crate::tasks::StepState::Committed { sha, accepted: true, .. } => (StepState::Accepted, Some(sha.clone())),
         };
-        Step { number: count(step.index + 1), title: step.title.clone(), state, sha }
+        let rules = sha.as_ref().and(rules.clone());
+        Step { number: count(step.index + 1), title: step.title.clone(), state, sha, rules }
     }).collect();
     Some(Steps { pushed: count(steps.pushed), items, required: Some(seen.accepting.contains(&item.place)) })
 }
@@ -345,6 +373,43 @@ pub(crate) mod tests {
         for local in ["/Users/someone", "w_secret_space", "localhost:3003", "w1:p9"] {
             assert!(!text.contains(local), "{local} leaked: {text}");
         }
+    }
+
+    #[test]
+    fn the_rules_check_reaches_the_phone_as_its_state_on_the_task_and_each_committed_step_and_never_as_approved() {
+        use crate::tasks::{Step as Listed, StepState as Listing, Steps as Listings};
+        let mut item = task(Some("idle"), Some("ready"), 2);
+        item.steps = Listings { pushed: 0, items: vec![
+            Listed { index: 0, title: "Model".to_string(), state: Listing::Committed { sha: "a".repeat(40), subject: "s".to_string(), accepted: true }, extra: false },
+            Listed { index: 1, title: "Docs".to_string(), state: Listing::Planned, extra: false },
+        ] };
+        let sent = |item: &status::Item| {
+            let board = build(std::slice::from_ref(item), &[], Vec::new(), None, &Seen::default());
+            board.check().unwrap();
+            let shown = &board.items[0];
+            let steps = shown.steps.as_ref().unwrap();
+            assert_eq!(steps.items[0].rules, shown.git.as_ref().unwrap().rules, "a committed step carries the task's check");
+            assert_eq!(steps.items[1].rules, None, "a step with no commit has nothing checked");
+            assert!(!serde_json::to_string(&board).unwrap().contains("approved"));
+            shown.git.as_ref().unwrap().rules.clone()
+        };
+        let rules = |state, breaks: Option<u32>, names: &[&str], by: Option<OverrideBy>| Some(Rules { state, breaks, names: names.iter().map(|name| name.to_string()).collect(), overridden: by.map(|by| RulesOverride { by }) });
+        assert_eq!(sent(&item), rules(RulesState::Ok, None, &[], None), "the reviewer's pass");
+        item.git.as_mut().unwrap().approved = false;
+        item.rules = Some(crate::rules_check::Shown::Checking);
+        assert_eq!(sent(&item), rules(RulesState::Checking, None, &[], None));
+        item.rules = Some(crate::rules_check::Shown::Lead);
+        assert_eq!(sent(&item), rules(RulesState::Checking, None, &[], None), "the lead checks it");
+        item.rules = Some(crate::rules_check::Shown::Broken(1, vec!["Body says why".to_string(), "One change".to_string()]));
+        assert_eq!(sent(&item), rules(RulesState::Breaks, Some(1), &["Body says why"], None), "never more names than breaks");
+        item.git.as_mut().unwrap().approved = true;
+        item.git.as_mut().unwrap().approved_by = Some(crate::tasks::ApprovedBy::Lead);
+        assert_eq!(sent(&item), rules(RulesState::Breaks, Some(1), &["Body says why"], Some(OverrideBy::Lead)));
+        item.rules = None;
+        item.git.as_mut().unwrap().approved_by = Some(crate::tasks::ApprovedBy::User);
+        assert_eq!(sent(&item), rules(RulesState::Checking, None, &[], Some(OverrideBy::User)), "past a check that gave no breaks");
+        item.git.as_mut().unwrap().approved = false;
+        assert_eq!(sent(&item), None, "a check not asked for sends nothing");
     }
 
     #[test]

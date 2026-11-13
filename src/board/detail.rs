@@ -266,7 +266,6 @@ fn state_spans(app: &App, item: &Item) -> Vec<Span<'static>> {
     if !halves.is_empty() {
         facts.push((format!("same task in {}", halves.join(", ")), TEAL));
     }
-    facts.extend(item.rules_note().map(|note| (note.to_string(), YELLOW)));
     facts.extend(permit_chip(item.permit));
     facts.extend(follow_chip(item));
     facts.extend(bypass_chip(item));

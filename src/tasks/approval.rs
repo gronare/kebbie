@@ -98,12 +98,51 @@ pub(super) fn approval_file(state: &Path, address: &str) -> PathBuf {
     state.join("approved").join(address)
 }
 
-pub(crate) fn record_approval(state: &Path, address: &str, fingerprint: &str) -> Result<()> {
-    crate::state::write(&approval_file(state, address), fingerprint)
+// Who gave a task's rules approval: the reviewer's check passed, or the user or the lead pushed past it with kebbie approve.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ApprovedBy {
+    Reviewer,
+    User,
+    Lead,
+}
+
+impl ApprovedBy {
+    fn key(self) -> &'static str {
+        match self {
+            ApprovedBy::Reviewer => "reviewer",
+            ApprovedBy::User => "user",
+            ApprovedBy::Lead => "lead",
+        }
+    }
+
+    fn of(key: &str) -> Option<ApprovedBy> {
+        [ApprovedBy::Reviewer, ApprovedBy::User, ApprovedBy::Lead].into_iter().find(|by| by.key() == key)
+    }
+}
+
+const BY: &str = "by: ";
+
+pub(crate) fn record_approval(state: &Path, address: &str, fingerprint: &str, by: ApprovedBy) -> Result<()> {
+    crate::state::write(&approval_file(state, address), format!("{BY}{}\n{fingerprint}", by.key()))
+}
+
+// A file without its by line was written before kebbie recorded who approved, when only the reviewer's check wrote one unasked.
+fn read_approval(stored: &str) -> (ApprovedBy, &str) {
+    match stored.split_once('\n') {
+        Some((first, rest)) if first.starts_with(BY) => (ApprovedBy::of(first[BY.len()..].trim()).unwrap_or(ApprovedBy::Reviewer), rest),
+        None if stored.starts_with(BY) => (ApprovedBy::of(stored[BY.len()..].trim()).unwrap_or(ApprovedBy::Reviewer), ""),
+        _ => (ApprovedBy::Reviewer, stored),
+    }
+}
+
+pub(crate) fn approval_by(state: &Path, address: &str, fingerprint: &str) -> Option<ApprovedBy> {
+    let stored = std::fs::read_to_string(approval_file(state, address)).ok()?;
+    let (by, approved) = read_approval(&stored);
+    covers(approved, fingerprint).then_some(by)
 }
 
 pub(crate) fn approval_holds(state: &Path, address: &str, fingerprint: &str) -> bool {
-    std::fs::read_to_string(approval_file(state, address)).is_ok_and(|stored| covers(&stored, fingerprint))
+    approval_by(state, address, fingerprint).is_some()
 }
 
 fn forget_approval_in(state: &Path, address: &str) {
@@ -135,13 +174,14 @@ fn approve_as(caller: &crate::permit::Caller, cwd: &Path, name: Option<&str>) ->
         return Err(format!("{task} has no commits to approve"));
     }
     let address = peers::address(task, &name_of(&repo));
-    record_approval(&state_dir()?, &address, &fingerprint(&slot.path, &upstream)?)?;
+    let by = if matches!(caller, Caller::Lead) { ApprovedBy::Lead } else { ApprovedBy::User };
+    record_approval(&state_dir()?, &address, &fingerprint(&slot.path, &upstream)?, by)?;
     Ok(approved_said(&address, &crate::repo::uncommitted(&slot.path)?))
 }
 
 // The approval is of the commits alone, so files left uncommitted never take it back; they keep a push of everything from going out, which the user hears of here.
 fn approved_said(address: &str, dirty: &[String]) -> String {
-    let approved = format!("Approved {address}'s commits against the rules; a new or changed commit takes the approval back.");
+    let approved = format!("{address}'s commits pass the rules check on your word; a new or changed commit takes that back.");
     if dirty.is_empty() {
         return approved;
     }
@@ -192,9 +232,12 @@ pub fn approved(path: &Path, upstream: &str, address: &str) -> bool {
     approval_file(&state, address).exists() && fingerprint(path, upstream).is_ok_and(|current| approval_holds(&state, address, &current))
 }
 
-pub fn approved_at(path: &Path, tips: &super::StepTips, address: &str) -> bool {
-    let Ok(state) = state_dir() else { return false };
-    approval_file(&state, address).exists() && fingerprint_at(path, &tips.upstream, &tips.head).is_ok_and(|current| approval_holds(&state, address, &current))
+pub fn approved_at(path: &Path, tips: &super::StepTips, address: &str) -> Option<ApprovedBy> {
+    let state = state_dir().ok()?;
+    if !approval_file(&state, address).exists() {
+        return None;
+    }
+    approval_by(&state, address, &fingerprint_at(path, &tips.upstream, &tips.head).ok()?)
 }
 
 #[cfg(test)]
@@ -213,7 +256,7 @@ mod tests {
         std::fs::write(slot.path.join("d"), "a draft that waits on someone else").unwrap();
         assert_eq!(fingerprint(&slot.path, &upstream).unwrap(), approved, "the approval is of the commits, so the draft never takes it back");
         let said = approved_said("billing@app", &crate::repo::uncommitted(&slot.path).unwrap());
-        assert!(said.starts_with("Approved billing@app's commits") && said.contains("uncommitted file (d) still keep it from Ready to push") && said.contains("push the commits alone"), "{said}");
+        assert!(said.starts_with("billing@app's commits pass the rules check on your word") && said.contains("uncommitted file (d) still keep it from Ready to push") && said.contains("push the commits alone"), "{said}");
         assert!(!approved_said("billing@app", &[]).contains("uncommitted"));
         cleanup(dir, origin, &slot);
     }
@@ -294,7 +337,7 @@ mod tests {
         commit(&slot.path, "e", "fifth");
         let state = std::env::temp_dir().join(format!("kebbie-approvals-absorbed-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&state);
-        record_approval(&state, "billing@app", &fingerprint(&slot.path, &upstream).unwrap()).unwrap();
+        record_approval(&state, "billing@app", &fingerprint(&slot.path, &upstream).unwrap(), ApprovedBy::Reviewer).unwrap();
         git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), &below]).unwrap();
         assert_eq!(ahead_behind(&slot.path, &upstream).unwrap(), (1, 0));
         assert!(approval_holds(&state, "billing@app", &fingerprint(&slot.path, &upstream).unwrap()), "the task's own commit is unchanged; only its range shrank");
@@ -311,12 +354,27 @@ mod tests {
         let state = std::env::temp_dir().join(format!("kebbie-approvals-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&state);
         assert!(!approval_holds(&state, "billing@app", "abc"));
-        record_approval(&state, "billing@app", "abc").unwrap();
+        record_approval(&state, "billing@app", "abc", ApprovedBy::Reviewer).unwrap();
         assert!(approval_holds(&state, "billing@app", "abc"));
         assert!(!approval_holds(&state, "billing@app", "abd"));
         assert!(!approval_holds(&state, "billing@web", "abc"));
         forget_approval_in(&state, "billing@app");
         assert!(!approval_holds(&state, "billing@app", "abc"));
+        std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn an_approval_names_who_gave_it_and_a_file_without_the_name_is_the_reviewers() {
+        let state = std::env::temp_dir().join(format!("kebbie-approvals-by-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&state);
+        for by in [ApprovedBy::Reviewer, ApprovedBy::User, ApprovedBy::Lead] {
+            record_approval(&state, "billing@app", "a\nb", by).unwrap();
+            assert_eq!(approval_by(&state, "billing@app", "a\nb"), Some(by));
+            assert_eq!(approval_by(&state, "billing@app", "b"), Some(by), "the default branch took in the first commit");
+            assert_eq!(approval_by(&state, "billing@app", "a\nb\nc"), None);
+        }
+        crate::state::write(&approval_file(&state, "billing@app"), "a\nb").unwrap();
+        assert_eq!(approval_by(&state, "billing@app", "a\nb"), Some(ApprovedBy::Reviewer), "a file kebbie wrote before it named who approved");
         std::fs::remove_dir_all(state).unwrap();
     }
 

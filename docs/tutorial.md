@@ -174,7 +174,7 @@ If the folder is one you already trust, the first line is `✓ Started` and Clau
 
 3. Wait for `greet` to move under **Ready to push**.
 
-   When the task reports ready, kebbie checks that each commit has a subject, a blank line and a body. A read-only reviewer then checks the commits against the rules skill in the background, and the row is marked `reviewer checking rules` until it passes them. You can push before the check is done too.
+   When the task reports ready, kebbie checks that each commit has a subject, a blank line and a body. A read-only reviewer then checks the commits against the rules skill in the background, and the line under the row says `checking project rules` until it passes them. You can push before the check is done too.
 
 ## 9. Push it
 

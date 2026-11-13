@@ -542,9 +542,9 @@ fn a_task_reports_asks_and_messages_through_the_log_and_the_fake_herdr_sees_only
     assert_eq!(task["report"]["state"], "ready");
     assert_eq!(task["report"]["next"], "push and close");
     assert_eq!(task["git"]["ahead"], 1);
-    assert_eq!(task["git"]["approved"], false, "a fake claude on the task's PATH approves nothing");
+    assert_eq!(task["git"]["rules"], "checking", "a fake claude on the task's PATH passes nothing");
     assert_eq!(task["group"], "READY TO PUSH");
-    assert!(task["summary"].as_str().unwrap().contains("reviewer checking rules"), "{}", task["summary"]);
+    assert!(task["summary"].as_str().unwrap().contains("checking project rules"), "{}", task["summary"]);
 
     let told = lab.run(&["-C", slot_str, "tell", "lead", "payload renamed to amount"]);
     assert!(told.status.success(), "{}", stderr(&told));

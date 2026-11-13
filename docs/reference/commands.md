@@ -37,7 +37,7 @@ Without a name, `land`, `follow`, `review`, `evidence`, `push`, `stage`, `unstag
 | [`kebbie tidy`](#kebbie-tidy-name-note) | Ask a task's Claude to reshape its commits. |
 | [`kebbie review`](#kebbie-review-name) | Send a task to the reviewer. |
 | [`kebbie evidence`](#kebbie-evidence-name---json) | The test runs kebbie recorded for a task. |
-| [`kebbie approve`](#kebbie-approve-name) | Approve a task's commits against the rules. |
+| [`kebbie approve`](#kebbie-approve-name) | Push a task's commits past the rules check. |
 | [`kebbie accept`](#kebbie-accept-name-sha) | Accept one of a task's commits. |
 | [`kebbie accepted`](#kebbie-accepted-name) | Which of a task's commits are accepted. |
 | [`kebbie steps`](#kebbie-steps-name-step-) | A task's steps and the state of each. |
@@ -235,7 +235,7 @@ How far the task is behind the default branch does not matter. The rebase at its
 - After the tests, when the task reports ready with the same commits, kebbie pushes for whoever asked: you, or the lead under its permission, with the same checks. When its commits changed, their rules are checked again and the push is asked for again.
 - After a conflict, the resolved commits need a rules check before the next push.
 - While its Claude runs the tests or resolves the conflict, the task keeps the head of the line and the pushes behind it wait.
-- It leaves the line for Needs you, marked `out of the push line: <why>`, when its Claude reports needs-you, or when 30 minutes pass without a ready report (or, after one, without a rules approval of the changed commits). The next push in line goes on then.
+- It leaves the line for Needs you, marked `out of the push line: <why>`, when its Claude reports needs-you, or when 30 minutes pass without a ready report (or, after one, without a passed rules check of the changed commits). The next push in line goes on then.
 
 When origin is on GitHub and `gh` is logged in, the task stays open under CI running instead, and closes as `done` once every workflow run for the pushed commit is green and the check the task named with `report --after-push` holds. See `kebbie ci`. Otherwise the push result ends with `CI not watched:` and the reason.
 
@@ -261,7 +261,7 @@ A staged task:
 - It never goes through the push line: `kebbie push` refuses it with `it is on local main; push main`.
 - It stays staged only while one of its copies is on local main ahead of origin, so once main is pushed a task whose branch moved on goes through the push line again.
 
-Push main yourself, with `git push` or `p` on the Areas page, and everything staged goes out together. The keeper then closes each task once its commits are on origin, as with any task that landed outside kebbie's push (see [`kebbie done`](#kebbie-done-name)). While local main is ahead, the push line, the rules approval and the landed check all compare against origin's default branch, and a push of another task rebases what is staged onto it.
+Push main yourself, with `git push` or `p` on the Areas page, and everything staged goes out together. The keeper then closes each task once its commits are on origin, as with any task that landed outside kebbie's push (see [`kebbie done`](#kebbie-done-name)). While local main is ahead, the push line, the rules check and the landed check all compare against origin's default branch, and a push of another task rebases what is staged onto it.
 
 kebbie never rewrites commits of your own:
 
@@ -402,7 +402,7 @@ Ask the task's Claude to reshape its commits by the rules skill (`task.rules_ski
 
 ### `kebbie review [name]`
 
-Send the task to the reviewer: a separate, read-only Claude reviews its commits in the background. The task waits under In review, and its push with it, until a `verdict: ok` on its current code. The reviewer reads the rules skill too, so that pass is also the task's rules approval and no separate rules check runs.
+Send the task to the reviewer: a separate, read-only Claude reviews its commits in the background. The task waits under In review, and its push with it, until a `verdict: ok` on its current code. The reviewer reads the rules skill too, so that pass clears the rules check too and no separate rules check runs.
 
 | Option | What it does |
 | --- | --- |
@@ -435,7 +435,7 @@ A run recorded in a task with [`task.sandbox = false`](configuration.md#keys) en
 
 ### `kebbie approve <name>`
 
-Your word or the lead's that a task's commits hold to the rules skill. It overrides the reviewer's rules check, which gives the same approval by itself when a task reports ready. Until a commit changes, the board shows the task ready to push. Files left uncommitted never take the approval back, but they keep the task from Ready to push: approve names them and how to push the commits alone. Tasks cannot run it.
+Your word or the lead's that a task's commits hold to the rules skill. It overrides the reviewer's rules check, which passes the commits by itself when a task reports ready. Until a commit changes, the board shows the task ready to push, marked `pushed past the rules check by you` or `by the lead`. Files left uncommitted never take the approval back, but they keep the task from Ready to push: approve names them and how to push the commits alone. Tasks cannot run it.
 
 ### `kebbie accept <name> <sha>`
 

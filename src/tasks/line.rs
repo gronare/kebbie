@@ -337,7 +337,7 @@ mod tests {
         complete_in(&state, &ready("r2"), 300, &|_, _| None, &mut |intent, _| { pushed.push(intent.by.clone()); Ok(Sent::Pushed(String::new())) });
         assert_eq!(pushed.len(), 1, "changed commits are never pushed on the old commits' word");
         assert!(load(&state, &address).is_some(), "the push stays under way while the fix is checked");
-        crate::tasks::approval::record_approval(&state, &address, &fingerprint(&slot.path, &upstream).unwrap()).unwrap();
+        crate::tasks::approval::record_approval(&state, &address, &fingerprint(&slot.path, &upstream).unwrap(), crate::tasks::ApprovedBy::Reviewer).unwrap();
         complete_in(&state, &ready("r2"), 300, &|_, _| None, &mut |intent, _| { pushed.push(intent.by.clone()); Ok(Sent::Pushed(String::new())) });
         assert_eq!(pushed, [By::Lead, By::User], "the lead's approval of the fix lets the user's push go out");
         assert!(load(&state, &address).is_none());
@@ -693,7 +693,7 @@ mod tests {
         let mut pushed = 0;
         complete_in(&state, std::slice::from_ref(&ready), 1000, &|_, _| None, &mut |_, _| { pushed += 1; Ok(Sent::Pushed(String::new())) });
         assert_eq!(pushed, 0, "the fix waits for the lead's check");
-        crate::tasks::approval::record_approval(&state, &address, &fingerprint(&slot.path, &upstream).unwrap()).unwrap();
+        crate::tasks::approval::record_approval(&state, &address, &fingerprint(&slot.path, &upstream).unwrap(), crate::tasks::ApprovedBy::Reviewer).unwrap();
         complete_in(&state, &[ready], 1000, &|_, _| None, &mut |intent, _| { assert_eq!((intent.work, intent.queued), (Work::Turn, Some(1000))); pushed += 1; Ok(Sent::Pushed(String::new())) });
         assert!(pushed == 1 && load(&state, &address).is_none());
         cleanup(dir, origin, &slot);

@@ -51,21 +51,18 @@ fn state_word(state: &StepState) -> &'static str {
     }
 }
 
-// The rules part of a committed step's label, longest first; the task's row above says it in full.
+// The rules part of a committed step's label, longest first; the lines under the task's row say it in full, and a check that passed says nothing.
 fn rules_forms(item: &Item, state: &StepState) -> Vec<String> {
+    use crate::status::RulesShown;
     if !matches!(state, StepState::Committed { accepted: false, .. }) {
         return Vec::new();
     }
-    if item.git.as_ref().is_some_and(|git| git.approved) {
-        return vec!["rules ✓".to_string()];
-    }
-    if item.rules_note().is_none() {
-        return Vec::new();
-    }
-    match &item.rules {
-        Some(crate::rules_check::Shown::Broken(count)) => vec![format!("rules: {}", plural(*count, "break")), plural(*count, "break")],
-        Some(crate::rules_check::Shown::Checking | crate::rules_check::Shown::Lead) => vec!["checking rules".to_string(), "checking".to_string()],
-        None => vec!["rules ?".to_string()],
+    match item.rules_shown() {
+        None | Some(RulesShown::Ok) => Vec::new(),
+        Some(RulesShown::Checking { .. }) => vec!["checking project rules".to_string(), "checking".to_string()],
+        Some(RulesShown::Breaks { count, .. }) => vec![crate::status::breaks(count), plural(count, "break")],
+        Some(RulesShown::Overridden { by, .. }) => vec![crate::status::past_the_check(by), "past the rules".to_string()],
+        Some(RulesShown::Unchecked) => vec![crate::status::UNCHECKED.to_string(), "not checked".to_string()],
     }
 }
 
@@ -185,7 +182,7 @@ pub(crate) mod tests {
         let block: Vec<String> = rows[at..at + 6].iter().map(|row| row.trim().to_string()).collect();
         assert!(block[0].ends_with("billing · 1 to accept"), "the commits count gives way to what waits for you: {screen}");
         assert_eq!(block[1], "↑ 1 pushed", "{screen}");
-        assert!(block[2].starts_with("● 2 Charge through a PaymentGateway ") && block[2].ends_with(" committed · rules ✓"), "{screen}");
+        assert!(block[2].starts_with("● 2 Charge through a PaymentGateway ") && block[2].ends_with(" committed"), "{screen}");
         assert!(block[3].starts_with("◐ 3 Add Stripe as the gateway ") && block[3].ends_with(" in progress"), "{screen}");
         assert_eq!(block[4], "○ 4 Remove the old payment client", "a planned step has nothing on the right: {screen}");
         assert_eq!(block[5], "accept 2 · r review", "{screen}");
@@ -195,7 +192,8 @@ pub(crate) mod tests {
         assert_eq!(cell_fg(&rows, &buffer, "1 to accept"), Some(YELLOW));
         assert_eq!(cell_fg(&rows, &buffer, "↑ 1 pushed"), Some(MUTED));
         assert_eq!(cell_fg(&rows, &buffer, "● 2"), Some(YELLOW));
-        assert_eq!(cell_fg(&rows, &buffer, "committed · rules ✓"), Some(YELLOW));
+        assert_eq!(cell_fg(&rows, &buffer, "committed"), Some(YELLOW));
+        assert!(!screen.contains("rules"), "a check that passed says nothing: {screen}");
         assert_eq!(cell_fg(&rows, &buffer, "◐ 3"), Some(BLUE));
         assert_eq!(cell_fg(&rows, &buffer, "○ 4"), Some(MUTED));
         assert_eq!(cell_fg(&rows, &buffer, "Remove the old"), Some(MUTED), "a planned step is muted whole");
@@ -287,15 +285,15 @@ pub(crate) mod tests {
         app.work_selected = 9;
         let (rows, _) = render(&mut app, 100, 30);
         let lines = step_rows(&rows);
-        assert_eq!(lines, ["● 1 Round VAT once per…      committed · rules ✓", "◐ 2 Round VAT once per invoice and…  in progress", "○ 3 Round VAT once per invoice and rate instead…"], "{}", rows.join("\n"));
+        assert_eq!(lines, ["● 1 Round VAT once per invoice and…    committed", "◐ 2 Round VAT once per invoice and…  in progress", "○ 3 Round VAT once per invoice and rate instead…"], "{}", rows.join("\n"));
         let (rows, _) = render(&mut app, 60, 30);
-        assert_eq!(step_rows(&rows), ["● 1 Round VAT once per invoice…  committed · rules ✓", "◐ 2 Round VAT once per invoice and…      in progress", "○ 3 Round VAT once per invoice and rate instead of…"], "{}", rows.join("\n"));
+        assert_eq!(step_rows(&rows), ["● 1 Round VAT once per invoice and rate…   committed", "◐ 2 Round VAT once per invoice and…      in progress", "○ 3 Round VAT once per invoice and rate instead of…"], "{}", rows.join("\n"));
         for width in [100u16, 80, 60, 45] {
             let (rows, _) = render(&mut app, width, 30);
             let screen = rows.join("\n");
             let lines = step_rows(&rows);
             assert_eq!(lines.len(), 3, "{width}: {screen}");
-            assert!(lines[0].ends_with("committed · rules ✓") || lines[0].ends_with(" committed"), "{width}: the state word stands: {screen}");
+            assert!(lines[0].ends_with(" committed"), "{width}: the state word stands: {screen}");
             assert!(lines[1].ends_with(" in progress"), "{width}: {screen}");
             for line in &lines {
                 let title = line.chars().skip(4).collect::<String>().split("  ").next().unwrap_or_default().to_string();
@@ -308,11 +306,11 @@ pub(crate) mod tests {
 
     #[test]
     fn the_title_is_cut_before_the_state_and_the_rules_part_shortens_first() {
-        let breaks = vec!["rules: 2 breaks".to_string(), "2 breaks".to_string()];
+        let breaks = vec!["breaks 2 project rules".to_string(), "2 breaks".to_string()];
         let fit = |room| fitted("Charge through a PaymentGateway", "committed", &breaks, room);
-        assert_eq!(fit(60), ("Charge through a PaymentGateway".to_string(), "committed · rules: 2 breaks".to_string()), "room for both, nothing cut");
-        assert_eq!(fit(52), ("Charge through a…".to_string(), "committed · rules: 2 breaks".to_string()), "the title is cut before the label changes");
-        assert_eq!(fit(40), ("Charge through a…".to_string(), "committed · 2 breaks".to_string()), "the rules part shortens before the title goes below its floor");
+        assert_eq!(fit(70), ("Charge through a PaymentGateway".to_string(), "committed · breaks 2 project rules".to_string()), "room for both, nothing cut");
+        assert_eq!(fit(60), ("Charge through a…".to_string(), "committed · breaks 2 project rules".to_string()), "the title is cut before the label changes");
+        assert_eq!(fit(45), ("Charge through a…".to_string(), "committed · 2 breaks".to_string()), "the rules part shortens before the title goes below its floor");
         assert_eq!(fit(30), ("Charge through a…".to_string(), "committed".to_string()), "then it goes, the state word stays");
         assert_eq!(fit(20), ("Charge…".to_string(), "committed".to_string()));
         assert_eq!(fit(13), ("C…".to_string(), "committed".to_string()), "a word too long for the room is cut inside it");
@@ -326,17 +324,20 @@ pub(crate) mod tests {
     fn a_committed_step_says_its_rules_in_the_task_rows_words_shortened() {
         let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 2);
         let state = committed("2222222bbbb", false);
-        assert_eq!(rules_forms(&item, &state), vec!["rules ✓"], "approved");
+        assert!(rules_forms(&item, &state).is_empty(), "a check that passed says nothing");
         item.git.as_mut().unwrap().approved = false;
-        assert_eq!(rules_forms(&item, &state), vec!["rules ?"], "not checked yet");
-        item.rules = Some(crate::rules_check::Shown::Broken(1));
-        assert_eq!(rules_forms(&item, &state), vec!["rules: 1 break", "1 break"]);
-        item.rules = Some(crate::rules_check::Shown::Broken(3));
-        assert_eq!(rules_forms(&item, &state), vec!["rules: 3 breaks", "3 breaks"]);
+        assert_eq!(rules_forms(&item, &state), vec!["project rules not checked", "not checked"]);
+        item.rules = Some(crate::rules_check::Shown::Broken(1, Vec::new()));
+        assert_eq!(rules_forms(&item, &state), vec!["breaks 1 project rule", "1 break"]);
+        item.rules = Some(crate::rules_check::Shown::Broken(3, Vec::new()));
+        assert_eq!(rules_forms(&item, &state), vec!["breaks 3 project rules", "3 breaks"]);
         item.rules = Some(crate::rules_check::Shown::Checking);
-        assert_eq!(rules_forms(&item, &state), vec!["checking rules", "checking"]);
+        assert_eq!(rules_forms(&item, &state), vec!["checking project rules", "checking"]);
         item.rules = Some(crate::rules_check::Shown::Lead);
-        assert_eq!(rules_forms(&item, &state), vec!["checking rules", "checking"]);
+        assert_eq!(rules_forms(&item, &state), vec!["checking project rules", "checking"]);
+        item.git.as_mut().unwrap().approved = true;
+        item.git.as_mut().unwrap().approved_by = Some(crate::tasks::ApprovedBy::User);
+        assert_eq!(rules_forms(&item, &state), vec!["pushed past the rules check by you", "past the rules"]);
         assert!(rules_forms(&item, &committed("2222222bbbb", true)).is_empty() && rules_forms(&item, &StepState::InProgress).is_empty());
         let mut working = stepped(stripe());
         working.git.as_mut().unwrap().approved = false;

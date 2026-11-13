@@ -106,7 +106,7 @@ With [`task.steps`](configuration.md) on and steps listed, the task's steps not 
 ```
 ◐ Switch the payment provider to Stripe        billing · 1 to accept
     ↑ 1 pushed
-    ● 2 Charge through a PaymentGateway        committed · rules ✓
+    ● 2 Charge through a PaymentGateway        committed
     ◐ 3 Add Stripe as the gateway              in progress
     ○ 4 Remove the old payment client
    accept 2 · r review
@@ -118,12 +118,12 @@ With [`task.steps`](configuration.md) on and steps listed, the task's steps not 
 | `↑ N pushed`, muted | N steps are on the default branch already. |
 | `○`, muted | Planned. |
 | `◐ … in progress`, blue | Its Claude is at work on it. |
-| `● … committed`, yellow | Committed, waiting for you to accept it, followed by the task's rules check in short: `· rules ✓` passed, `· rules ?` not checked yet, `· checking rules` while the reviewer or the lead checks, `· rules: N breaks` when it found some. |
+| `● … committed`, yellow | Committed, waiting for you to accept it, followed by the task's rules check in short while it is not passed: `· project rules not checked`, `· checking project rules` while the reviewer or the lead checks, `· breaks N project rules` when it found some, `· pushed past the rules check by you` (or `by the lead`) after `kebbie approve`. A passed check adds nothing. |
 | `✓ … accepted`, green | Committed, and you accepted it. |
 | `accept N · r review` | Under the steps: the first step waiting for you. `r` opens the review, and [`kebbie accept`](commands.md#kebbie-accept-name-sha) accepts it. |
 | `accept step N · r review` | With [`task.require_accept`](configuration.md) on, a ready task with a step to accept waits under Needs you with this line: it cannot be pushed until step N is accepted. |
 
-A step to accept leaves the task in the group its phase gives it, under Working while it builds the next step. The state word always shows: a long title is shortened at a word with `…` to make room, and only when the title would drop below 12 columns does the rules part shorten (`· 2 breaks`, `· checking`) and then go. Without steps, the row is as above. See [Work in steps](../how-to/work-in-steps.md).
+A step to accept leaves the task in the group its phase gives it, under Working while it builds the next step. The state word always shows: a long title is shortened at a word with `…` to make room, and only when the title would drop below 12 columns does the rules part shorten (`· 2 breaks`, `· checking`, `· not checked`, `· past the rules`) and then go. Without steps, the row is as above. See [Work in steps](../how-to/work-in-steps.md).
 
 While Claude waits on a prompt of its own, such as a permission or trust question, the `you:` line says `answer Claude's prompt in its Space or through the lead`. `g` takes you to its Space, and the lead has the question and its options in its chat. A Codex task on a start-up question says what Codex asks, as `answer Codex in its Space: it asks whether you trust its folder`. See [Claude's own prompts in a task](../explanation/lead-and-away-mode.md#claudes-own-prompts-in-a-task).
 
@@ -190,12 +190,15 @@ kebbie keeps one phase per task, and only what changes it writes it: its start, 
 
 ### Ready to push
 
-A ready row is marked by its rules check:
+A ready task's rules check has its own line under the row:
 
-- `reviewer checking rules` while the reviewer checks its commits against the rules skill;
-- `rules: N breaks` when it found some;
-- `lead checking rules` when the reviewer gave no verdict and the lead checks them;
-- nothing of the rules once approved, and the count of uncommitted files when you edited after the report.
+- `checking project rules`, muted, while the reviewer checks its commits against the rules skill; `lead checking project rules` when the reviewer gave no verdict and the lead checks them;
+- `breaks N project rules: <rule> · <rule>`, yellow, when the check found some, naming the rules the reviewer named;
+- `pushed past the rules check by you` or `by the lead`, muted, after [`kebbie approve`](commands.md#kebbie-approve-name), under the breaks line when the check found some;
+- `project rules not checked`, muted, when no check was asked for;
+- nothing once the check passed.
+
+The row itself counts uncommitted files when you edited after the report.
 
 How far it is behind the default branch does not matter. A push under way stays here, marked `pushing for you · <what it waits for>`:
 

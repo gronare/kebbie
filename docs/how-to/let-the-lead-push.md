@@ -7,7 +7,7 @@ Let the lead push tasks without you, under a permission you can take back at any
 1. Select the task on the board.
 2. Press `a`.
 
-The lead may now push the task once its commits are rules-approved, by the read-only reviewer that checks them when the task reports ready, and through any review the task is in.
+The lead may now push the task once its commits pass the rules check of the read-only reviewer that checks them when the task reports ready, and through any review the task is in.
 
 - If you want the permission back, press `a` again. `done`, `drop` and `reset` take it back too.
 - If a fix routine has `push = true`, each of its runs' tasks gets this permission when the run starts. See [Routines](../explanation/routines.md#the-push-exception).
@@ -26,7 +26,7 @@ The lead may now push any task in that repo once its reviewer has passed its cur
 
 ## What still holds
 
-- A rules approval, the reviewer's or the lead's, must match the commits it pushes, and the lead reads the diff itself before its push.
+- The reviewer's passed rules check, or the lead's `kebbie approve`, must match the commits it pushes, and the lead reads the diff itself before its push.
 - A ready task without a permission waits for you under Ready to push.
 - After every push the lead is told which commits landed.
 - The same permission lets the lead [stage](try-a-task-before-pushing.md) a task on local main in a repo that turns on `worktree.stage_on_main`.

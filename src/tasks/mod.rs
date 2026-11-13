@@ -21,10 +21,10 @@ pub(crate) mod test_support;
 pub(crate) use accept::{Unaccepted, accept, accept_from_device, accept_required, accepted_in, unaccepted_at, last_of_run, listing_at as accepted_listing_at, open_commits_at, rest_base, shown as accepted_shown};
 pub(crate) use after::{EVERY as AFTER_EVERY, Asked as QueueAsked, and_list, after as after_command, at as start_at, drop as drop_wait, now as start_now, queue, refuse_queued_name, Shown as WaitShown, shown as waits_shown, tick as after_tick};
 #[cfg(test)]
-pub(crate) use approval::approval_holds;
+pub(crate) use approval::{approval_by, approval_holds};
 #[cfg(test)]
 pub(crate) use accept::open_commits;
-pub(crate) use approval::{approve, approved, approved_at, awaits_check, fingerprint_at, record_approval, rules_check, rules_check_subject, rules_check_task, same_code, same_commits};
+pub(crate) use approval::{ApprovedBy, approve, approved, approved_at, awaits_check, fingerprint_at, record_approval, rules_check, rules_check_subject, rules_check_task, same_code, same_commits};
 pub(crate) use crate::agent::{Started, wait_for_prompt};
 pub(crate) use finish::{FORCE, done, drop, drop_routine_ok, reset};
 pub(crate) use follow::{follow, follows, tick as follow_tick, toggle as toggle_follow};
@@ -38,7 +38,7 @@ pub(crate) use launch::{Begun, Session, Start, awaits_first_prompt, begin, codex
 pub(crate) use plan::{noted_after as steps_noted_after, seen_in as steps_seen_in, steps};
 pub(crate) use plan::{Step, Steps, State as StepState, Tips as StepTips, read_at as steps_read, shown_at as steps_shown_at, for_path as steps_for, mark as step_mark};
 pub(crate) use pool::{Slot, find_task, list, move_work, slots, task_of, task_slots};
-pub(crate) use push::{DevicePush, after_ci, cancel as cancel_push, land, place_in_line, push, push_as, rebase, tidy};
+pub(crate) use push::{DevicePush, ThroughStep, after_ci, cancel as cancel_push, land, place_in_line, push, push_as, rebase, tidy};
 pub(crate) use stage::{WAIT_CEILING as STAGE_WAIT, stage, staged, tick as stage_tick, unstage};
 pub(crate) use started::{link, started_items, started_links};
 
