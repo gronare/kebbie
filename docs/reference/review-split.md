@@ -1,6 +1,6 @@
 # Review split
 
-A herdr split next to Claude for reading the work under review: kebbie's own view on top, with the task's steps, the selected step's commits or the selected commit's message, its files, and the selected file's diff in `nvim` below. It opens with `r` on the board or `/kebbie:review-split [base or what to review]` in Claude.
+A herdr split next to Claude for reading the work under review: kebbie's own view on top, with the task's subtasks, the selected subtask's commits or the selected commit's message, its files, and the selected file's diff in `nvim` below. It opens with `r` on the board or `/kebbie:review-split [base or what to review]` in Claude.
 
 ## Scope and base
 
@@ -26,12 +26,12 @@ The view, top to bottom:
 | Part | Shows |
 | --- | --- |
 | Header | `review <task> · since <default branch>`, then `N accepted` in green and `N to accept` in yellow for a task's commits. |
-| Tabs | `all`, `↑ N pushed`, then each step with `task.steps` on, or each unpushed commit without, numbered, with its mark. The selected step's commits follow it as tabs of their own, by short sha. |
-| Message | On a step, its title and its commits, each short sha and subject. On a commit, its message: subject and short sha, then the body. On `all`, which steps or commits the diff covers. `m` hides it. |
-| Files | `+N -N path` for the selected step, from its first commit's parent to its last commit, for the selected commit alone, or for the whole branch on `all`. `✓ read` marks a read file. |
+| Tabs | `all`, `↑ N pushed`, then each subtask with `task.steps` on, or each unpushed commit without, numbered, with its mark. The selected subtask's commits follow it as tabs of their own, by short sha. |
+| Message | On a subtask, its title and its commits, each short sha and subject. On a commit, its message: subject and short sha, then the body. On `all`, which subtasks or commits the diff covers. `m` hides it. |
+| Files | `+N -N path` for the selected subtask, from its first commit's parent to its last commit, for the selected commit alone, or for the whole branch on `all`. `✓ read` marks a read file. |
 | Keys | The keys for the panel in focus, or the result of the last action. |
 
-| Mark | Step or commit |
+| Mark | Subtask or commit |
 | --- | --- |
 | `○` | Planned, muted. It has no commit to select. |
 | `◐` | In progress, with the commits it holds so far; without one, muted and not selectable. |
@@ -44,10 +44,10 @@ The panel in focus has a blue border. `tab` moves the focus from the tabs to the
 
 | Where | Key | Action |
 | --- | --- | --- |
-| view | `←` `→`, `h` `l` | The previous or next tab: a step, then its commits when it is selected. Steps without a commit are skipped; before the first is `all`. |
+| view | `←` `→`, `h` `l` | The previous or next tab: a subtask, then its commits when it is selected. Subtasks without a commit are skipped; before the first is `all`. |
 | view | `↑` `↓`, `j` `k` | The previous or next file. nvim shows it at once. |
-| view | click | A tab selects that step, a file shows that file. The wheel scrolls the files. |
-| view | `a` | Accept the selected step, every commit in it, or the selected commit, then go to the next step waiting; on an accepted one, withdraw the acceptance. |
+| view | click | A tab selects that subtask, a file shows that file. The wheel scrolls the files. |
+| view | `a` | Accept the selected subtask, every commit in it, or the selected commit, then go to the next subtask waiting; on an accepted one, withdraw the acceptance. |
 | view | `r` | Mark the file read, or unread, and go to the next file. |
 | view | `/` | Filter the files: words to keep, `!word` to hide. `Enter` keeps the filter, `Esc` clears it. |
 | view | `m` | Hide or show the commit message, leaving the tabs. The review remembers it until it closes. |
@@ -72,22 +72,22 @@ The panel in focus has a blue border. `tab` moves the focus from the tabs to the
 | Selection | Files and diff |
 | --- | --- |
 | `all` | Every change since the base, uncommitted ones included. |
-| One step | The step's files, and one diff from its first commit's parent to its last commit. |
+| One subtask | The subtask's files, and one diff from its first commit's parent to its last commit, while no other subtask's commit lies between them. A subtask whose commits lie apart in the branch is read one commit at a time. |
 | One commit | Only that commit's files, and its own diff against its parent (`sha^..sha`). |
 
-`a` on a step runs `kebbie accept <task> --step <n>`, on a commit `kebbie accept <task> <sha>`, each with `--withdraw` when it is accepted already. Accepting is yours alone: kebbie accepts it from the review pane because the pane runs under your own shell, and refuses it to a Claude. The marks are kebbie's own, the same as `kebbie steps --json` with steps and `kebbie accepted <task> --json` without. The view checks every two seconds and reads them again, with the files, once HEAD, the default branch, `git status`, a changed file or kebbie's marks moved, so an acceptance given or withdrawn elsewhere shows here too. Outside a task, the tabs are the unpushed commits and `a` accepts nothing.
+`a` on a subtask runs `kebbie accept <task> --subtask <id>`, on a commit `kebbie accept <task> <sha>`, each with `--withdraw` when it is accepted already. Accepting is yours alone: kebbie accepts it from the review pane because the pane runs under your own shell, and refuses it to a Claude. The marks are kebbie's own, the same as `kebbie subtasks --json` with subtasks and `kebbie accepted <task> --json` without. The view checks every two seconds and reads them again, with the files, once HEAD, the default branch, `git status`, a changed file or kebbie's marks moved, so an acceptance given or withdrawn elsewhere shows here too. Outside a task, the tabs are the unpushed commits and `a` accepts nothing.
 
 ## Behaviour
 
 | Event | Result |
 | --- | --- |
-| The review opens | On the first step waiting for your accept, else on `all`. |
-| A comment | Typed into Claude's input box as `path:line — text`, not submitted. Several pile up until you press Enter there. In a step's or a commit's diff, the line is that version's: `path:line in abc1234 — text`, with the step's last commit for a step. |
+| The review opens | On the first subtask waiting for your accept, else on `all`. |
+| A comment | Typed into Claude's input box as `path:line — text`, not submitted. Several pile up until you press Enter there. In a subtask's or a commit's diff, the line is that version's: `path:line in abc1234 — text`, with the subtask's last commit for a subtask. |
 | Saving a file opened with `o` or `-` | Reported to Claude as `path:lines — edited by me during the review` when you go back to the diff. Unsaved edits ask to be saved or discarded first. |
 | Files change on disk | The view's list follows within two seconds. An open diff of the whole branch marks itself `changed on disk`; `u` reloads it. |
 | A read file changes | It loses its `✓ read`. |
-| A file read in one commit or step | Read there, and in later steps and `all` while no later change touched it. |
-| A selected step or commit is rebased or amended away | The view goes back to `all`. |
+| A file read in one commit or subtask | Read there, and in later subtasks and `all` while no later change touched it. |
+| A selected subtask or commit is rebased or amended away | The view goes back to `all`. |
 | A copy over SSH | With no clipboard tool where nvim runs, `y` copies through OSC 52: herdr passes it to the terminal it runs in, which puts it on that machine's clipboard. Your terminal must allow OSC 52 writes; Ghostty does by default. |
 | The view's pane closes from herdr | nvim closes with it. |
 | Claude's pane closes | The review's state goes when the next review opens. |

@@ -323,12 +323,12 @@ pub fn steps_section(on: bool, kebbie: &str) -> String {
         return String::new();
     }
     format!(
-        "## Steps\n\nBefore your first line of code, list your steps with `{kebbie} steps \"<step>\" \"<step>\" …`: this task's work in the order it must go out, preparatory steps first and a migration as a step of its own; put `--` before the steps when one starts with `-`. \
-         A step is a slice of the work, one sub-problem or one part of it in order, holding one or more small commits, each deployable on its own: make the change easy, then make the easy change. \
-         Your commits go to the step in progress. When its slice is finished, run `{kebbie} steps done`: the step is ready for the user, and your next commits go to the next step. \
-         The user may accept each ready step and push it while you build the next, or push them together later, so keep building without waiting for them. \
-         The list is living: when the work turns out another shape, or the user says the split is wrong, run `{kebbie} steps` again with the new list before your next commit, and tell the lead why as Questions says; every step not pushed yet is yours to reshape. \
-         A step can go out on its own the moment the user pushes it: make each one finished and pushable on its own.\n"
+        "## Subtasks\n\nBefore your first line of code, list your subtasks with `{kebbie} subtasks \"<subtask>\" \"<subtask>\" …`: this task's work as titled subtasks in the order they must go out, preparatory ones first and a migration as a subtask of its own; put `--` before the titles when one starts with `-`. \
+         A subtask is a slice of the work, one sub-problem or one part of it, holding one or more small commits, each deployable on its own: make the change easy, then make the easy change. `{kebbie} subtasks` shows each with its id in brackets, its state and its commits. \
+         Your commits go to the first subtask not done, or to the one you named with `{kebbie} subtasks on <id>`. When a subtask's slice is finished, run `{kebbie} subtasks done <id>`: it is ready for the user. \
+         A subtask's commits need not lie together in the branch: a commit keeps its subtask through a rebase, a reword or a reorder. \
+         The plan is living: when the work needs a subtask you did not list, run `{kebbie} subtasks add \"<subtask>\" --because \"<why>\"`, with `--prepares <id>` to put it before the subtask it prepares, then `{kebbie} subtasks on <id>` before its first commit; the user sees each added subtask with its reason beside the plan they read. When the split itself is wrong, list the subtasks again with `--because \"<why>\"`; a subtask keeps its id and commits under the same title. \
+         The user accepts ready subtasks and pushes the accepted run from the top of the branch while you build on, so keep building without waiting for them, and make each subtask finished and pushable on its own.\n"
     )
 }
 
@@ -610,9 +610,9 @@ mod tests {
     #[test]
     fn the_steps_section_shows_only_with_task_steps_on() {
         let off = fill(include_str!("../roles/task.md"), &[("steps", &steps_section(false, "/bin/kebbie"))]);
-        assert!(!off.contains("## Steps") && !off.contains("kebbie steps") && !off.contains("{steps}"), "off, a task commits its own way");
+        assert!(!off.contains("## Subtasks") && !off.contains("kebbie subtasks") && !off.contains("{steps}"), "off, a task commits its own way");
         let on = fill(include_str!("../roles/task.md"), &[("steps", &steps_section(true, "/bin/kebbie"))]);
-        for needed in ["## Steps\n\nBefore your first line of code, list your steps with `/bin/kebbie steps \"<step>\"", "A step is a slice of the work", "run `/bin/kebbie steps done`: the step is ready for the user", "every step not pushed yet is yours to reshape", "make each one finished and pushable on its own.\n\n## What you notice outside your task"] {
+        for needed in ["## Subtasks\n\nBefore your first line of code, list your subtasks with `/bin/kebbie subtasks \"<subtask>\"", "preparatory ones first", "A subtask is a slice of the work", "`/bin/kebbie subtasks on <id>`", "run `/bin/kebbie subtasks done <id>`: it is ready for the user", "A subtask's commits need not lie together", "`/bin/kebbie subtasks add \"<subtask>\" --because \"<why>\"`", "the user sees each added subtask with its reason", "pushes the accepted run from the top of the branch while you build on", "make each subtask finished and pushable on its own.\n\n## What you notice outside your task"] {
             assert!(on.contains(needed), "{needed}: {on}");
         }
         let source = include_str!("peers.rs");

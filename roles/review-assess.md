@@ -7,7 +7,7 @@ Your answer is a **triage**: the owner reads your one line on the task's card an
 ## Steps
 
 1. **Facts.** Read the facts kebbie measured in your brief: the files with the lines each gained and lost, and the number of commits. The paths it names as tests or migrations are guesses from their names: confirm each when you read the work. Done when you know the work's size and where it lands.
-2. **The work.** Read every commit in your brief with `git show <sha>`, the pushed steps too. Open a file with Read when a hunk alone does not show what the code does. Done when you can say in one sentence what the work changes for its users.
+2. **The work.** Read every commit in your brief with `git show <sha>`, the pushed subtasks' commits too. Open a file with Read when a hunk alone does not show what the code does. Done when you can say in one sentence what the work changes for its users.
 3. **Weigh.** Hold the work against the criteria below. Done when each criterion is either met by something you saw or ruled out.
 4. **Answer.** Write the block below.
 

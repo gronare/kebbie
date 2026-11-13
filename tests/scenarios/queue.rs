@@ -44,38 +44,38 @@ fn a_parked_task_leaves_its_group_until_it_is_unparked_and_only_the_user_or_lead
 }
 
 #[test]
-fn a_task_in_steps_pushes_each_accepted_step_while_it_builds_the_next_and_without_steps_it_pushes_whole() {
+fn a_task_in_subtasks_pushes_the_accepted_run_while_it_builds_the_next_and_without_subtasks_it_pushes_whole() {
     let lab = Lab::new("steps");
     let billing = lab.start("billing", "Add refunds", &[]);
     let slot = billing.to_str().unwrap();
-    let planned = lab.run_as("billing@app", &["-C", slot, "steps", "Add refunds", "Document refunds"]);
+    let planned = lab.run_as("billing@app", &["-C", slot, "subtasks", "Add refunds", "Document refunds"]);
     assert!(planned.status.success(), "{}", stderr(&planned));
     let first = lab.work(&billing, "refunds.rb", "Add refunds");
-    assert!(lab.run_as("billing@app", &["-C", slot, "steps", "done"]).status.success(), "the first step is ready");
+    assert!(lab.run_as("billing@app", &["-C", slot, "subtasks", "done"]).status.success(), "the first subtask is ready");
     let second = lab.work(&billing, "refunds.md", "Document refunds");
     let refused = lab.run_as("lead", &["-C", lab.app(), "accept", "billing", &first]);
     assert!(!refused.status.success() && stderr(&refused).contains("accepting a commit is the user's call"), "{}", stderr(&refused));
     let accepted = lab.run_as_user(&["-C", lab.app(), "accept", "billing", &first]);
     assert!(accepted.status.success(), "{}", stderr(&accepted));
-    let steps: serde_json::Value = serde_json::from_str(&lab.ok(&["-C", lab.app(), "steps", "billing", "--json"])).unwrap();
-    assert_eq!((steps["steps"][0]["state"].as_str(), steps["steps"][1]["commits"][0]["accepted"].as_bool(), steps["last_accepted"].as_str()), (Some("accepted"), Some(false), Some(first.as_str())), "{steps}");
+    let subtasks: serde_json::Value = serde_json::from_str(&lab.ok(&["-C", lab.app(), "subtasks", "billing", "--json"])).unwrap();
+    assert_eq!((subtasks["subtasks"][0]["state"].as_str(), subtasks["subtasks"][1]["commits"][0]["accepted"].as_bool(), subtasks["pushable"]["through"].as_str()), (Some("accepted"), Some(false), Some(first.as_str())), "{subtasks}");
     let through = lab.run_as_user(&["-C", lab.app(), "push", "billing", "--through", &first]);
     assert!(through.status.success(), "{}\n{}", stdout(&through), stderr(&through));
-    assert_eq!(git(&lab.root.join("origin.git"), &["log", "-1", "--format=%s", "main"]), "Add refunds", "only the accepted step went out");
+    assert_eq!(git(&lab.root.join("origin.git"), &["log", "-1", "--format=%s", "main"]), "Add refunds", "only the accepted run went out");
     assert_eq!(git(&billing, &["rev-parse", "HEAD"]), second, "the task's worktree stays as it was");
     assert!(lab.on_board("billing"), "and the task stays open");
 
     lab.config("[task]\nsteps = false\n");
     let search = lab.start("search", "Add the search page", &[]);
-    let off = lab.run_as("search@app", &["-C", search.to_str().unwrap(), "steps", "Add search"]);
+    let off = lab.run_as("search@app", &["-C", search.to_str().unwrap(), "subtasks", "Add search"]);
     assert!(!off.status.success() && stderr(&off).contains("set task.steps = true"), "{}", stderr(&off));
     lab.work(&search, "search.rb", "Add the search page");
     let whole = lab.run_as_user(&["-C", lab.app(), "push", "search"]);
-    assert!(whole.status.success() && stdout(&whole).contains("closed the task"), "no acceptance is asked for without steps: {}\n{}", stdout(&whole), stderr(&whole));
+    assert!(whole.status.success() && stdout(&whole).contains("closed the task"), "no acceptance is asked for without subtasks: {}\n{}", stdout(&whole), stderr(&whole));
 }
 
 #[test]
-fn with_require_accept_a_push_takes_only_accepted_steps_and_the_task_waits_on_you_for_the_next() {
+fn with_require_accept_a_push_takes_only_accepted_subtasks_and_the_task_waits_on_you_for_the_next() {
     let lab = Lab::new("require-accept");
     let free = lab.start("free", "Add the footer", &[]);
     lab.work(&free, "footer.rb", "Add the footer");
@@ -85,9 +85,9 @@ fn with_require_accept_a_push_takes_only_accepted_steps_and_the_task_waits_on_yo
     lab.config("[task]\nrequire_accept = true\n");
     let billing = lab.start("billing", "Add refunds", &[]);
     let slot = billing.to_str().unwrap();
-    assert!(lab.run_as("billing@app", &["-C", slot, "steps", "Add refunds", "Document refunds"]).status.success());
+    assert!(lab.run_as("billing@app", &["-C", slot, "subtasks", "Add refunds", "Document refunds"]).status.success());
     let first = lab.work(&billing, "refunds.rb", "Add refunds");
-    assert!(lab.run_as("billing@app", &["-C", slot, "steps", "done"]).status.success(), "the first step is ready");
+    assert!(lab.run_as("billing@app", &["-C", slot, "subtasks", "done"]).status.success(), "the first subtask is ready");
     let second = lab.work(&billing, "refunds.md", "Document refunds");
     lab.ok(&["-C", slot, "report", "--state", "ready", "--next", "push", "refunds done"]);
     let item = lab.item("billing");
@@ -95,18 +95,18 @@ fn with_require_accept_a_push_takes_only_accepted_steps_and_the_task_waits_on_yo
     assert!(item["summary"].as_str().unwrap().contains("2 to accept"), "{item}");
     let next = lab.ok(&["next"]);
     let row = next.lines().find(|line| line.contains(" billing ")).unwrap_or_else(|| panic!("{next}"));
-    assert!(!row.contains('↑') && row.contains("accept step 1"), "it is stopped on you, not to push: {next}");
+    assert!(!row.contains('↑') && row.contains("accept subtask 1"), "it is stopped on you, not to push: {next}");
 
     let held = lab.run_as_user(&["-C", lab.app(), "push", "billing"]);
-    assert!(!held.status.success() && stderr(&held).contains("Not pushed: step 1 is not accepted"), "{}\n{}", stdout(&held), stderr(&held));
+    assert!(!held.status.success() && stderr(&held).contains("Not pushed: subtask 1 is not accepted"), "{}\n{}", stdout(&held), stderr(&held));
     assert_eq!(git(&lab.root.join("origin.git"), &["log", "-1", "--format=%s", "main"]), "Add the footer");
 
     assert!(lab.run_as_user(&["-C", lab.app(), "accept", "billing", &first]).status.success());
     let through = lab.run_as_user(&["-C", lab.app(), "push", "billing", "--through", &first]);
     assert!(through.status.success(), "{}\n{}", stdout(&through), stderr(&through));
-    assert_eq!(git(&lab.root.join("origin.git"), &["log", "-1", "--format=%s", "main"]), "Add refunds", "the accepted step goes");
+    assert_eq!(git(&lab.root.join("origin.git"), &["log", "-1", "--format=%s", "main"]), "Add refunds", "the accepted subtask goes");
     let rest = lab.run_as_user(&["-C", lab.app(), "push", "billing"]);
-    assert!(!rest.status.success() && stderr(&rest).contains("is not accepted"), "the next step waits for its accept: {}", stderr(&rest));
+    assert!(!rest.status.success() && stderr(&rest).contains("is not accepted"), "the next subtask waits for its accept: {}", stderr(&rest));
 
     assert!(lab.run_as_user(&["-C", lab.app(), "accept", "billing", &second]).status.success());
     let all = lab.run_as_user(&["-C", lab.app(), "push", "billing"]);

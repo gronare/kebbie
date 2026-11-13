@@ -47,8 +47,8 @@ CARD
     kebbie report --state working --next "nothing yet" "Saving carts in the database" >/dev/null
     say "● Keeping carts in the database. Two steps: the store, then loading it at sign-in."
     sleep 1
-    kebbie steps "Keep a signed-in shopper's cart in the database" "Load the saved cart when the shopper signs in" >/dev/null
-    say "● Bash(kebbie steps \"Keep a signed-in shopper's cart in the database\" \"Load the saved cart when the shopper signs in\")" "  ⎿  2 steps listed"
+    kebbie subtasks "Keep a signed-in shopper's cart in the database" "Load the saved cart when the shopper signs in" >/dev/null
+    say "● Bash(kebbie subtasks \"Keep a signed-in shopper's cart in the database\" \"Load the saved cart when the shopper signs in\")" "  ⎿  2 subtasks listed"
     sleep 1.5
     mkdir -p src/cart
     cat > src/cart/store.ts <<'TS'

@@ -70,7 +70,7 @@ pub(super) fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_wo
             _ => choice(Act::Done, "Done", "already pushed elsewhere: close it and free the worktree"),
         });
     } else if let Some(accepted) = item.map(super::steps::accepted_run).filter(|accepted| *accepted > 0) {
-        choices.push(choice(Act::Push, &format!("Push {}", if accepted == 1 { "the accepted step".to_string() } else { format!("the {accepted} accepted steps") }), "they go out while its Claude keeps working; the rest waits until you accept it"));
+        choices.push(choice(Act::Push, &format!("Push the accepted run, {}", if accepted == 1 { "1 commit".to_string() } else { format!("{accepted} commits") }), "the commits from the top whose subtasks you accepted go out while its Claude keeps working; the rest waits until you accept it"));
     }
     if item.is_some_and(reruns_ci) {
         choices.push(choice(Act::RerunCi, "Re-run CI", "gh runs its failed or cancelled runs again; kebbie watches them and closes the task once they are green"));
@@ -353,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn a_working_task_in_steps_offers_to_push_the_accepted_steps_at_the_front() {
+    fn a_working_task_in_subtasks_offers_to_push_the_accepted_run_at_the_top() {
         use crate::board::steps::tests::{holds, stepped, stripe};
         let keys = |item: &Item| task_choices(Some(item), None, None).iter().map(|choice| choice.key).collect::<String>();
         let mut steps = stripe();
@@ -362,10 +362,11 @@ mod tests {
         let item = stepped(steps.clone());
         assert!(busy(&item));
         let push = task_choices(Some(&item), None, None).into_iter().find(|choice| choice.act == Some(Act::Push)).expect("push offered while it works");
-        assert_eq!(push.label, "Push the accepted step");
+        assert_eq!(push.label, "Push the accepted run, 1 commit");
         assert_eq!(keys(&item), "gcrpauZzx", "only push: tidy, done, review and rebase still wait for its turn");
+        holds(&mut steps.items[1], &["3333333cccc"], false);
         steps.items.swap(0, 1);
-        assert!(!task_choices(Some(&stepped(steps)), None, None).iter().any(|choice| choice.act == Some(Act::Push)), "an accepted step behind one that is not cannot go out on its own");
+        assert!(!task_choices(Some(&stepped(steps)), None, None).iter().any(|choice| choice.act == Some(Act::Push)), "an accepted subtask behind one that is not cannot go out on its own");
     }
 
     #[test]

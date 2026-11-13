@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use kebbie_hub_protocol::{BacklogBody, BacklogRow, BacklogState, BodySection, Home, HomeKind, Id, Idea, ItemAnswer, ItemEdit, ItemKey, OpenQuestion, Outcome, Priority, Reason, StartItem, text_hash};
+use kebbie_hub_protocol::{BacklogBody, BacklogRow, BacklogState, BodySection, Home, HomeKind, Id, Idea, ItemAnswer, ItemEdit, ItemKey, MAX_FOUND_SOURCES, OpenQuestion, Outcome, Payload, Priority, Reason, StartItem, text_hash};
 
 use super::blobs::{Attachment, PLAN_LIMIT};
 use super::commands::{Done, plain};
@@ -92,6 +92,7 @@ fn home(entry: &Entry, key: &ItemKey) -> Home {
             Home { kind: HomeKind::Local, label: label.unwrap_or_else(|| "backlog".to_string()) }
         }
         HomeKind::Kept => Home { kind: HomeKind::Kept, label: KEPT_LABEL.to_string() },
+        HomeKind::Found => Home { kind: HomeKind::Found, label: FOUND_LABEL.to_string() },
     }
 }
 
@@ -140,6 +141,7 @@ pub fn rows(items: &[(Entry, Option<String>)], state: &Path, root: Option<&Path>
             blocking: count(waiting(&questions)),
             goal,
             body: None,
+            found: None,
         });
         if let Some(body) = body {
             let written = body_of_item(body, template, questions);
@@ -161,7 +163,64 @@ fn body_of(entry: &Entry, index: Option<&crate::vault::Index>, state: &Path) -> 
 }
 
 pub fn gather(state: &Path) -> (Vec<BacklogRow>, Vec<Attachment>) {
-    rows(&crate::backlog::with_bodies(), state, crate::vault::root().as_deref(), crate::backlog::today(), &Templates::now())
+    let (mut rows, bodies) = rows(&crate::backlog::with_bodies(), state, crate::vault::root().as_deref(), crate::backlog::today(), &Templates::now());
+    rows.extend(found_rows(&crate::found::open_in(state)));
+    (rows, bodies)
+}
+
+const FOUND_LABEL: &str = "found by tasks";
+
+// What tasks found outside their own work, open ones only, each with the tasks that found it; an id the protocol cannot carry stays on the machine.
+pub fn found_rows(items: &[crate::found::Item]) -> Vec<BacklogRow> {
+    items.iter().filter_map(|found| {
+        let item = ItemKey::parse(&format!("found:{}", found.id)).ok()?;
+        let sources: Vec<String> = found.sources.iter().take(MAX_FOUND_SOURCES).cloned().collect();
+        let count = u32::try_from(sources.len()).unwrap_or(u32::MAX).max(found.count);
+        Some(BacklogRow {
+            item,
+            title: found.line.clone(),
+            priority: Priority::None,
+            repo: Some(found.repo.clone()).filter(|repo| !repo.is_empty()),
+            state: BacklogState::Ready,
+            filed: found.first_at,
+            home: Home { kind: HomeKind::Found, label: FOUND_LABEL.to_string() },
+            questions: 0,
+            blocking: 0,
+            goal: None,
+            body: None,
+            found: Some(kebbie_hub_protocol::Found { sources, count }),
+        })
+    }).collect()
+}
+
+// The phone's start, add or dismiss of a found item, as kebbie found does it from the user.
+pub fn found_on(state: &Path, caller: &Caller, payload: &Payload, start: impl FnOnce(&str, Option<&str>) -> Result<String>, add: impl FnOnce(&str, &str) -> Result<String>) -> Done {
+    let item = match payload {
+        Payload::FoundStart(found) => &found.item,
+        Payload::FoundAdd(found) => &found.item,
+        Payload::FoundDismiss(found) => &found.item,
+        _ => return refused(Reason::BadRequest, "Not a found item's command"),
+    };
+    let id = item.as_str().trim_start_matches("found:").to_string();
+    if !crate::found::open_in(state).iter().any(|open| open.id == id) {
+        return refused(Reason::AlreadySettled, "That item was started, added or dismissed already");
+    }
+    let outcome = match payload {
+        Payload::FoundStart(found) => start(&id, found.name.as_deref()),
+        Payload::FoundAdd(found) => add(&id, &found.task),
+        _ => crate::found::dismiss_in(state, caller, &id),
+    };
+    match outcome {
+        Ok(said) => (Outcome::Done, plain(&said)),
+        Err(error) => (Outcome::Failed, plain(&error)),
+    }
+}
+
+pub fn found(caller: &Caller, payload: &Payload) -> Done {
+    match crate::lead::state_dir() {
+        Ok(state) => found_on(&state, caller, payload, |id, name| crate::found::start(&state, caller, id, name), |id, task| crate::found::add(&state, caller, id, task)),
+        Err(error) => (Outcome::Failed, error),
+    }
 }
 
 // An item the phone named, as this machine's backlog has it now.
@@ -453,6 +512,7 @@ pub fn item_edit(_: &Caller, edit: &ItemEdit) -> Done {
     let unknown = || refused(Reason::UnknownItem, "That item is no longer in this machine's backlog");
     match edit.item.home() {
         HomeKind::Kept => refused(Reason::BadRequest, "Not saved: the lead has yet to write it out and file it in the vault"),
+        HomeKind::Found => refused(Reason::BadRequest, "Not saved: a found item is the tasks' own words; start it, add it to a task or dismiss it"),
         HomeKind::Local => {
             let root = crate::vault::root();
             let entry = crate::backlog::load().entries.into_iter().find(|entry| key_of(entry, root.as_deref()).as_ref() == Some(&edit.item));
@@ -757,5 +817,35 @@ mod tests {
         let broken = Store::holding(&format!("---\ntitle: [unclosed\n---\n{BODY}"));
         assert_eq!(edit_note(&broken, "Projects/retry.md", &template, &editing(None, "New", "")).0, Outcome::Failed);
         assert!(broken.written.borrow().is_empty(), "nothing is written over a frontmatter that does not read");
+    }
+
+    #[test]
+    fn what_tasks_found_reaches_the_phone_as_rows_of_its_own_and_the_phone_starts_adds_or_dismisses_them() {
+        use kebbie_hub_protocol::{FoundAdd, FoundDismiss, FoundStart};
+        let state = crate::sh::test_dir("hub-found");
+        crate::found::file_card(&state, "billing@app", "Also noticed:\n- The VAT rounding test is flaky on main\n- The README names an old flag\n", 100).unwrap();
+        crate::found::file_card(&state, "search@app", "Also noticed:\n- The VAT rounding test is flaky on main\n", 200).unwrap();
+        let rows = found_rows(&crate::found::open_in(&state));
+        let shown: Vec<(&str, &str, Option<&str>, u64, HomeKind)> = rows.iter().map(|row| (row.item.as_str(), row.title.as_str(), row.repo.as_deref(), row.filed, row.home.kind)).collect();
+        assert_eq!(shown, [("found:f1", "The VAT rounding test is flaky on main", Some("app"), 100, HomeKind::Found), ("found:f2", "The README names an old flag", Some("app"), 100, HomeKind::Found)]);
+        let found: Vec<Option<(Vec<String>, u32)>> = rows.iter().map(|row| row.found.as_ref().map(|found| (found.sources.clone(), found.count))).collect();
+        assert_eq!(found, [Some((vec!["billing@app".to_string(), "search@app".to_string()], 2)), Some((vec!["billing@app".to_string()], 1))], "each with the tasks that found it and how often");
+        let board = serde_json::json!({ "rev": 1, "kebbie": "1", "away_since": null, "checkouts": [], "routines": [], "items": [], "sessions_outside_tasks": 0, "backlog": rows });
+        assert!(serde_json::from_value::<Board>(board).is_ok(), "the hub reads them");
+        let key = |id: &str| ItemKey::parse(&format!("found:{id}")).unwrap();
+        let caller = hub();
+        let never = |_: &str, _: Option<&str>| -> Result<String> { panic!("not started") };
+        let no_add = |_: &str, _: &str| -> Result<String> { panic!("not added") };
+        let started = std::cell::RefCell::new(None);
+        let (outcome, _) = found_on(&state, &caller, &Payload::FoundStart(FoundStart { item: key("f2"), name: Some("readme-flag".to_string()) }), |id, name| { *started.borrow_mut() = Some((id.to_string(), name.map(str::to_string))); Ok("Started".to_string()) }, no_add);
+        assert_eq!((outcome, started.into_inner()), (Outcome::Done, Some(("f2".to_string(), Some("readme-flag".to_string())))));
+        let added = std::cell::RefCell::new(None);
+        found_on(&state, &caller, &Payload::FoundAdd(FoundAdd { item: key("f1"), task: "search@app".to_string() }), never, |id, task| { *added.borrow_mut() = Some((id.to_string(), task.to_string())); Ok("Added".to_string()) });
+        assert_eq!(added.into_inner(), Some(("f1".to_string(), "search@app".to_string())));
+        assert_eq!(found_on(&state, &caller, &Payload::FoundDismiss(FoundDismiss { item: key("f1") }), never, no_add).0, Outcome::Done);
+        assert_eq!(found_on(&state, &caller, &Payload::FoundDismiss(FoundDismiss { item: key("f1") }), never, no_add).0, Outcome::Refused { reason: Reason::AlreadySettled }, "settled once");
+        assert_eq!(found_on(&state, &caller, &Payload::FoundDismiss(FoundDismiss { item: key("f9") }), never, no_add).0, Outcome::Refused { reason: Reason::AlreadySettled });
+        assert!(found_rows(&crate::found::open_in(&state)).iter().all(|row| row.item.as_str() != "found:f1"), "a dismissed item leaves the phone");
+        let _ = std::fs::remove_dir_all(&state);
     }
 }

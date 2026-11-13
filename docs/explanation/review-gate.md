@@ -93,7 +93,7 @@ Like a pass, a run belongs to the code, so a clean rebase or a squash keeps it c
 
 A full review costs a Claude run and some waiting, so not every task gets one. Whether one pays is a judgement of the work, not of its file names, so on a ready report a short, read-only assessor makes it. It is a fresh Claude, started by the keeper from its own environment, that never wrote the code.
 
-It reads the task's whole work since it started, the steps already pushed included, with what kebbie measured: the files and lines changed, the test files, migration and schema files, and the number of commits. Its instructions, `roles/review-assess.md`, name what makes work worth a second reading: its size, its complexity, many tests changed, the database, business logic such as money or permissions, security, and agent instructions.
+It reads the task's whole work since it started, the subtasks already pushed included, with what kebbie measured: the files and lines changed, the test files, migration and schema files, and the number of commits. Its instructions, `roles/review-assess.md`, name what makes work worth a second reading: its size, its complexity, many tests changed, the database, business logic such as money or permissions, security, and agent instructions.
 
 Its answer is one line on the task's row, in your terms: `review suggested: changes how VAT is rounded and its tests` or `no review: wording in two templates`. An assessor that gives no answer leaves `review not assessed`, which counts as a suggestion, never as no review.
 

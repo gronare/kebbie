@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use kebbie_hub_api::{HubInfo, Inbox, ResultStored, ResultUpload};
-use kebbie_hub_protocol::{AcceptStep, AccountKey, Answer, AppliedCommands, BLOB_OVERHEAD, BlobRef, CommandResult, DeviceDecision, Dropped, Envelope, Header, Id, Idea, ItemAnswer, ItemEdit, Kind, MAX_BLOB_BYTES, Machine, Outcome, Payload, PromptAnswer, PushApproval, REVIEW_MEDIA_TYPE, Reason, Refusal, ReviewComments, ReviewOpen, ReviewRead, StartItem, Trust, VerifiedDevice, authorize, seal};
+use kebbie_hub_protocol::{AcceptSubtask, AccountKey, Answer, AppliedCommands, BLOB_OVERHEAD, BlobRef, CommandResult, DeviceDecision, Dropped, Envelope, Header, Id, Idea, ItemAnswer, ItemEdit, Kind, MAX_BLOB_BYTES, Machine, Outcome, Payload, PromptAnswer, PushApproval, REVIEW_MEDIA_TYPE, Reason, Refusal, ReviewComments, ReviewOpen, ReviewRead, StartItem, Trust, VerifiedDevice, authorize, seal};
 use serde::{Deserialize, Serialize};
 
 use super::devices::{self, Asked, Decision, Locked, Policy};
@@ -84,7 +84,8 @@ pub struct Hands<'a> {
     pub review_open: &'a dyn Fn(&Caller, &ReviewOpen) -> Opened,
     pub review_comments: &'a dyn Fn(&Caller, &ReviewComments) -> Done,
     pub review_read: &'a dyn Fn(&Caller, &ReviewRead) -> Done,
-    pub accept_step: &'a dyn Fn(&Caller, &AcceptStep) -> Done,
+    pub accept_subtask: &'a dyn Fn(&Caller, &AcceptSubtask) -> Done,
+    pub found: &'a dyn Fn(&Caller, &Payload) -> Done,
     pub relay: &'a dyn Fn(),
     pub notify: &'a dyn Fn(&str),
 }
@@ -140,9 +141,9 @@ pub fn accepts(policy: HubCommands) -> Vec<Kind> {
         HubCommand::Push => vec![Kind::Push],
         HubCommand::Prompt => vec![Kind::PromptAnswer],
         HubCommand::Idea => vec![Kind::Idea],
-        HubCommand::Start => vec![Kind::StartItem],
-        HubCommand::Edit => vec![Kind::ItemEdit],
-        HubCommand::Review => vec![Kind::ReviewOpen, Kind::ReviewComments, Kind::ReviewRead, Kind::AcceptStep],
+        HubCommand::Start => vec![Kind::StartItem, Kind::FoundStart, Kind::FoundAdd],
+        HubCommand::Edit => vec![Kind::ItemEdit, Kind::FoundDismiss],
+        HubCommand::Review => vec![Kind::ReviewOpen, Kind::ReviewComments, Kind::ReviewRead, Kind::AcceptStep, Kind::AcceptSubtask],
     }).collect()
 }
 
@@ -190,9 +191,9 @@ fn not_taken(kind: Kind, machine: &str, accepts: &[Kind]) -> String {
         Kind::PromptAnswer => ("Not chosen", "Choose", "prompt choices"),
         Kind::Answer | Kind::ItemAnswer => ("Not answered", "Answer", "answers"),
         Kind::Idea => ("Not added", "Add it", "ideas"),
-        Kind::StartItem => ("Not started", "Start it", "starts"),
-        Kind::ItemEdit => ("Not saved", "Edit it", "edits"),
-        Kind::ReviewOpen | Kind::ReviewComments | Kind::ReviewRead | Kind::AcceptStep => ("Not done", "Review it", "reviews"),
+        Kind::StartItem | Kind::FoundStart | Kind::FoundAdd => ("Not started", "Start it", "starts"),
+        Kind::ItemEdit | Kind::FoundDismiss => ("Not saved", "Edit it", "edits"),
+        Kind::ReviewOpen | Kind::ReviewComments | Kind::ReviewRead | Kind::AcceptStep | Kind::AcceptSubtask => ("Not done", "Review it", "reviews"),
         Kind::DeviceDecision if accepts.is_empty() => return format!("Not decided: {machine} takes nothing from the hub. Approve or deny it at the machine: N on the board, or kebbie hub devices."),
         Kind::DeviceDecision => return format!("Not decided: {machine} takes device approvals only at the machine. Approve or deny it there: N on the board, or kebbie hub devices."),
         other => return format!("Not done: {machine} takes no {} from the hub", other.name()),
@@ -292,7 +293,9 @@ pub fn handle(dir: &Path, identity: &Identity, account: &AccountKey, accepts: &[
                 },
                 Payload::ReviewComments(comments) => (hands.review_comments)(&caller, comments),
                 Payload::ReviewRead(read) => (hands.review_read)(&caller, read),
-                Payload::AcceptStep(accept) => (hands.accept_step)(&caller, accept),
+                Payload::AcceptStep(accept) => (hands.accept_subtask)(&caller, &AcceptSubtask { address: accept.address.clone(), subtask: accept.step.to_string(), head: accept.head.clone() }),
+                Payload::AcceptSubtask(accept) => (hands.accept_subtask)(&caller, accept),
+                Payload::FoundStart(_) | Payload::FoundAdd(_) | Payload::FoundDismiss(_) => (hands.found)(&caller, &verified.payload),
                 Payload::DeviceDecision(decision) => device_decision(dir, &identity.name, policy, decision, now),
                 _ => (Outcome::Refused { reason: Reason::NotAllowed }, not_taken(header.kind, &identity.name, accepts)),
             });
@@ -494,7 +497,7 @@ fn keeper_hands<T>(state: &Path, run: impl FnOnce(&Hands) -> T) -> T {
     };
     run(&Hands {
         answer: &answered,
-        push: &|caller, push| pushed(crate::tasks::push_as(caller, &push.address, push.through_step.map(|number| crate::tasks::ThroughStep { number, head: &push.head }))),
+        push: &|caller, push| pushed(crate::tasks::push_as(caller, &push.address, Some(&push.head))),
         prompt: &prompt,
         idea: &super::backlog::idea,
         item_answer: &super::backlog::item_answer,
@@ -503,7 +506,8 @@ fn keeper_hands<T>(state: &Path, run: impl FnOnce(&Hands) -> T) -> T {
         review_open: &super::review::open,
         review_comments: &super::review::comments,
         review_read: &super::review::read,
-        accept_step: &super::review::accept,
+        accept_subtask: &super::review::accept,
+        found: &super::backlog::found,
         relay: &relay,
         notify: &notify,
     })
@@ -704,17 +708,21 @@ mod tests {
             seen.backlog.borrow_mut().push((caller.clone(), Payload::ReviewRead(read.clone())));
             (Outcome::Done, "Marked it read".to_string())
         };
-        let accept_step = |caller: &Caller, accept: &AcceptStep| {
-            seen.backlog.borrow_mut().push((caller.clone(), Payload::AcceptStep(accept.clone())));
-            (Outcome::Done, "Accepted step 1".to_string())
+        let accept_subtask = |caller: &Caller, accept: &AcceptSubtask| {
+            seen.backlog.borrow_mut().push((caller.clone(), Payload::AcceptSubtask(accept.clone())));
+            (Outcome::Done, "Accepted Model".to_string())
+        };
+        let found = |caller: &Caller, payload: &Payload| {
+            seen.backlog.borrow_mut().push((caller.clone(), payload.clone()));
+            (Outcome::Done, "Dismissed".to_string())
         };
         let relay = || seen.relays.set(seen.relays.get() + 1);
         let notify = |text: &str| seen.told.borrow_mut().push(text.to_string());
-        run(&Hands { answer: &answer, push: &push, prompt: &prompt, idea: &idea, item_answer: &item_answer, start_item: &start_item, item_edit: &item_edit, review_open: &review_open, review_comments: &review_comments, review_read: &review_read, accept_step: &accept_step, relay: &relay, notify: &notify })
+        run(&Hands { answer: &answer, push: &push, prompt: &prompt, idea: &idea, item_answer: &item_answer, start_item: &start_item, item_edit: &item_edit, review_open: &review_open, review_comments: &review_comments, review_read: &review_read, accept_subtask: &accept_subtask, found: &found, relay: &relay, notify: &notify })
     }
 
     fn review_of(address: &str) -> kebbie_hub_protocol::Review {
-        kebbie_hub_protocol::Review { address: address.to_string(), since: "main".to_string(), head: "a".repeat(40), step: None, guide: Vec::new(), left_out: None, files: Vec::new() }
+        kebbie_hub_protocol::Review { address: address.to_string(), since: "main".to_string(), head: "a".repeat(40), subtask: None, guide: Vec::new(), left_out: None, files: Vec::new() }
     }
 
     fn answer() -> Payload {
@@ -722,7 +730,7 @@ mod tests {
     }
 
     fn push() -> Payload {
-        Payload::Push(PushApproval { address: "refunds@shop".to_string(), head: "a".repeat(40), card_sha: None, through_step: None })
+        Payload::Push(PushApproval { address: "refunds@shop".to_string(), head: "a".repeat(40), card_sha: None })
     }
 
     fn prompt_answer(key: &str) -> Payload {
@@ -805,7 +813,7 @@ mod tests {
     fn a_review_goes_up_sealed_before_the_result_that_names_it_and_nothing_waiting_names_none() {
         let mut account = Account::connected();
         let seen = Seen::new();
-        let sent = account.send(&Payload::ReviewOpen(ReviewOpen { address: "retry@shop".to_string(), step: None }));
+        let sent = account.send(&Payload::ReviewOpen(ReviewOpen { address: "retry@shop".to_string(), subtask: None }));
         account.round(&seen, HubCommands::default());
         let result = account.result(&sent);
         assert_eq!((result.outcome, result.text.as_str()), (Outcome::Done, "The review of retry@shop is ready"));
@@ -814,7 +822,7 @@ mod tests {
         let ciphertext = account.hub.runtime.block_on(account.browser.blob(&blob.id)).unwrap();
         let review: kebbie_hub_protocol::Review = serde_json::from_slice(&kebbie_hub_protocol::open_blob(&blob, &ciphertext).unwrap()).unwrap();
         assert_eq!(review, review_of("retry@shop"));
-        let gone = account.send(&Payload::ReviewOpen(ReviewOpen { address: "gone@shop".to_string(), step: None }));
+        let gone = account.send(&Payload::ReviewOpen(ReviewOpen { address: "gone@shop".to_string(), subtask: None }));
         account.round(&seen, HubCommands::default());
         let settled = account.result(&gone);
         assert_eq!((settled.outcome, settled.blob), (Outcome::Refused { reason: Reason::AlreadySettled }, None));
@@ -824,7 +832,7 @@ mod tests {
     }
 
     fn opened(account: &mut Account, seen: &Seen) -> BlobRef {
-        let sent = account.send(&Payload::ReviewOpen(ReviewOpen { address: "retry@shop".to_string(), step: None }));
+        let sent = account.send(&Payload::ReviewOpen(ReviewOpen { address: "retry@shop".to_string(), subtask: None }));
         account.round(seen, HubCommands::default());
         account.result(&sent).blob.expect("a done review names its blob")
     }
@@ -884,8 +892,8 @@ mod tests {
             let (push, prompt, relay, notify) = (|_: &Caller, _: &PushApproval| unreachable!(), |_: &Caller, _: &PromptAnswer| unreachable!(), || {}, |_: &str| {});
             let (idea, item_answer, start_item) = (|_: &Caller, _: &Idea| unreachable!(), |_: &Caller, _: &ItemAnswer| unreachable!(), |_: &Caller, _: &StartItem| unreachable!());
             let (item_edit, review_open) = (|_: &Caller, _: &ItemEdit| unreachable!(), |_: &Caller, _: &ReviewOpen| unreachable!());
-            let (review_comments, review_read, accept_step) = (|_: &Caller, _: &ReviewComments| unreachable!(), |_: &Caller, _: &ReviewRead| unreachable!(), |_: &Caller, _: &AcceptStep| unreachable!());
-            round(&account.dir, 0, &accepts(word("answer-and-push")), ACCOUNT, &Hands { answer: &answer, push: &push, prompt: &prompt, idea: &idea, item_answer: &item_answer, start_item: &start_item, item_edit: &item_edit, review_open: &review_open, review_comments: &review_comments, review_read: &review_read, accept_step: &accept_step, relay: &relay, notify: &notify }, &now)
+            let (review_comments, review_read, accept_subtask, found) = (|_: &Caller, _: &ReviewComments| unreachable!(), |_: &Caller, _: &ReviewRead| unreachable!(), |_: &Caller, _: &AcceptSubtask| unreachable!(), |_: &Caller, _: &Payload| unreachable!());
+            round(&account.dir, 0, &accepts(word("answer-and-push")), ACCOUNT, &Hands { answer: &answer, push: &push, prompt: &prompt, idea: &idea, item_answer: &item_answer, start_item: &start_item, item_edit: &item_edit, review_open: &review_open, review_comments: &review_comments, review_read: &review_read, accept_subtask: &accept_subtask, found: &found, relay: &relay, notify: &notify }, &now)
         }));
         assert!(crashed.is_err());
         assert_eq!(seen.answers.borrow().len(), 1, "applied once, then cut off before it was recorded");
@@ -1222,13 +1230,13 @@ mod tests {
 
     #[test]
     fn hub_commands_drives_what_the_machine_takes_and_names_what_it_refuses() {
-        assert_eq!(accepts(HubCommands::default()), [Kind::Answer, Kind::ItemAnswer, Kind::Push, Kind::PromptAnswer, Kind::Idea, Kind::StartItem, Kind::ItemEdit, Kind::ReviewOpen, Kind::ReviewComments, Kind::ReviewRead, Kind::AcceptStep], "every kind unless set");
-        assert_eq!(accepts(HubCommands::of(&[HubCommand::Edit])), [Kind::ItemEdit]);
+        assert_eq!(accepts(HubCommands::default()), [Kind::Answer, Kind::ItemAnswer, Kind::Push, Kind::PromptAnswer, Kind::Idea, Kind::StartItem, Kind::FoundStart, Kind::FoundAdd, Kind::ItemEdit, Kind::FoundDismiss, Kind::ReviewOpen, Kind::ReviewComments, Kind::ReviewRead, Kind::AcceptStep, Kind::AcceptSubtask], "every kind unless set");
+        assert_eq!(accepts(HubCommands::of(&[HubCommand::Edit])), [Kind::ItemEdit, Kind::FoundDismiss]);
         assert_eq!(not_taken(Kind::AcceptStep, "devbox", &accepts(word("answer"))), "Not done: devbox takes no reviews from the hub. Review it at the machine, or allow reviews in its kebbie settings.");
         assert_eq!(not_taken(Kind::ItemEdit, "devbox", &accepts(word("answer"))), "Not saved: devbox takes no edits from the hub. Edit it at the machine, or allow edits in its kebbie settings.");
         assert_eq!(accepts(word("answer-and-push")), [Kind::Answer, Kind::ItemAnswer, Kind::Push, Kind::PromptAnswer]);
         assert_eq!(accepts(word("answer")), [Kind::Answer, Kind::ItemAnswer, Kind::PromptAnswer]);
-        assert_eq!(accepts(HubCommands::of(&[HubCommand::Idea, HubCommand::Start])), [Kind::Idea, Kind::StartItem]);
+        assert_eq!(accepts(HubCommands::of(&[HubCommand::Idea, HubCommand::Start])), [Kind::Idea, Kind::StartItem, Kind::FoundStart, Kind::FoundAdd]);
         assert!(accepts(HubCommands::OFF).is_empty());
         let off = accepts(HubCommands::OFF);
         assert_eq!(not_taken(Kind::Push, "devbox", &off), "Not pushed: devbox takes nothing from the hub. Push at the machine, or allow pushes in its kebbie settings.");

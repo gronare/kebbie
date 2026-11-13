@@ -368,15 +368,8 @@ pub(crate) enum DevicePush {
     Failed(String),
 }
 
-// A push through one step, as the phone sends it: the step's number and the commit it showed for that step.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct ThroughStep<'a> {
-    pub number: u32,
-    pub head: &'a str,
-}
-
-// The same push kebbie push runs for the hub on the user's behalf: the whole branch, or the first steps through the one named, as the push window's p takes them; the whole branch is refused only by the gates every push of the user's passes, never because HEAD or main moved since the user saw the task.
-pub(crate) fn push_as(caller: &Caller, address: &str, step: Option<ThroughStep>) -> DevicePush {
+// The same push kebbie push runs for the hub on the user's behalf, through the head the phone sent: the task's HEAD pushes the whole branch, the end of its pushable run pushes the run; the whole branch is refused only by the gates every push of the user's passes, never because HEAD or main moved since the user saw the task.
+pub(crate) fn push_as(caller: &Caller, address: &str, head: Option<&str>) -> DevicePush {
     let (task, place) = address.split_once('@').unwrap_or((address, ""));
     let Some(repo) = crate::repo::pooled_checkouts().into_iter().find(|repo| name_of(repo) == place) else {
         return DevicePush::UnknownTask(format!("No repo {place} on this machine"));
@@ -389,28 +382,25 @@ pub(crate) fn push_as(caller: &Caller, address: &str, step: Option<ThroughStep>)
         Ok(state) => state,
         Err(error) => return DevicePush::Failed(error),
     };
-    device_push(&state, caller, &repo, &slot, step, &super::line::live_read(), &mut live_push(&state))
+    device_push(&state, caller, &repo, &slot, head, &super::line::live_read(), &mut live_push(&state))
 }
 
-// The open commits up to and including step N's last, while that is still the commit the phone showed as the step's head; a step on the default branch already is settled.
-fn through_step(state: &Path, slot: &Slot, address: &str, upstream: &str, step: ThroughStep) -> std::result::Result<Through, DevicePush> {
-    let task = task_of(slot);
-    let steps = super::plan::read_now(state, &slot.path, upstream, address);
-    let index = usize::try_from(step.number).unwrap_or(usize::MAX).saturating_sub(1);
-    let short = &step.head[..7.min(step.head.len())];
-    let landed = crate::sh::succeeds("git", &["merge-base", "--is-ancestor", step.head, &crate::repo::tracking(upstream)], Some(&slot.path));
-    if index < steps.pushed || landed {
-        return Err(DevicePush::Settled(Notice::new(Tone::NotNow, format!("Nothing to push: step {} is on {} already", step.number, main_of(upstream))).detail("task", task).detail("commit", short).to_string()));
-    }
+// An open commit short of the last is pushed through only while it still ends the pushable run the phone saw; a head on the default branch already is settled; any other head pushes the whole branch.
+fn through_head(state: &Path, slot: &Slot, address: &str, upstream: &str, head: &str) -> std::result::Result<Through, DevicePush> {
     let open = open_shas(&slot.path, upstream).map_err(DevicePush::Failed)?;
-    let current = steps.items.iter().find(|listed| listed.index == index).and_then(super::plan::Step::head);
-    match open.iter().position(|sha| Some(sha.as_str()) == current && sha == step.head) {
-        Some(at) => Ok(Through::First { count: at + 1, of: open.len() }),
-        None => Err(DevicePush::HeadMoved(Notice::new(Tone::You, format!("Not pushed: step {} is not the step you saw", step.number)).you("Look at its steps again and push from there.").detail("task", task).detail("commit", short).to_string())),
+    let short = &head[..7.min(head.len())];
+    if !open.iter().any(|sha| sha == head) && crate::sh::succeeds("git", &["merge-base", "--is-ancestor", head, &crate::repo::tracking(upstream)], Some(&slot.path)) {
+        return Err(DevicePush::Settled(Notice::new(Tone::NotNow, format!("Nothing to push: what you saw is on {} already", main_of(upstream))).detail("task", task_of(slot)).detail("commit", short).to_string()));
     }
+    let Some(at) = open.iter().position(|sha| sha == head).filter(|at| at + 1 < open.len()) else { return Ok(Through::All) };
+    let subtasks = super::plan::read_now(state, &slot.path, upstream, address);
+    if subtasks.listed() && subtasks.pushable.as_ref().is_none_or(|run| run.through != head) {
+        return Err(DevicePush::HeadMoved(Notice::new(Tone::You, "Not pushed: what can go out changed since you saw it").you("Look at its push order again and push from there.").detail("task", task_of(slot)).detail("commit", short).to_string()));
+    }
+    Ok(Through::First { count: at + 1, of: open.len() })
 }
 
-pub(super) fn device_push(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, step: Option<ThroughStep>, read: super::line::Read, push: super::line::Push) -> DevicePush {
+pub(super) fn device_push(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, head: Option<&str>, read: super::line::Read, push: super::line::Push) -> DevicePush {
     let task = task_of(slot);
     let address = peers::address(task, &name_of(repo));
     let upstream = match default_branch(repo) {
@@ -423,7 +413,7 @@ pub(super) fn device_push(state: &Path, caller: &Caller, repo: &Path, slot: &Slo
         Ok(_) => {}
         Err(error) => return DevicePush::Failed(error),
     }
-    let through = match step.map(|step| through_step(state, slot, &address, &upstream, step)) {
+    let through = match head.map(|head| through_head(state, slot, &address, &upstream, head)) {
         None => Through::All,
         Some(Ok(through)) => through,
         Some(Err(refused)) => return refused,
@@ -1632,7 +1622,7 @@ mod tests {
     }
 
     #[test]
-    fn a_device_push_through_a_step_pushes_the_steps_up_to_it_and_leaves_the_later_ones_in_the_task() {
+    fn a_device_push_through_the_end_of_the_pushable_run_pushes_the_run_and_leaves_the_rest_in_the_task() {
         use crate::permit::Caller;
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         let pushing = Pushing::new(&dir);
@@ -1643,20 +1633,21 @@ mod tests {
         let second = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
         let (_, hand) = handed();
         let phone = Caller::hub("acc_01");
-        let through = |number: u32, head: &str| device_push(&pushing.state, &phone, &dir, &slot, Some(ThroughStep { number, head }), &|_, _| None, &mut device_pushes(&pushing.state, &hand));
-        let moved = through(1, &second);
-        assert!(matches!(&moved, DevicePush::HeadMoved(said) if said.contains("step 1 is not the step you saw")), "step 1 does not end at the second commit: {moved:?}");
-        assert!(matches!(through(3, &second), DevicePush::HeadMoved(_)), "there is no step 3");
+        let through = |head: &str| device_push(&pushing.state, &phone, &dir, &slot, Some(head), &|_, _| None, &mut device_pushes(&pushing.state, &hand));
+        let moved = through(&first);
+        assert!(matches!(&moved, DevicePush::HeadMoved(said) if said.contains("what can go out changed")), "the model is not accepted, so no run ends at its commit: {moved:?}");
+        let key = super::super::accept::open_commits(&slot.path, &upstream).unwrap()[0].key.clone();
+        super::super::accept::set_in(&pushing.state, &pushing.address, &key, true).unwrap();
         let main = main_of(&upstream).to_string();
         super::super::plan::listed_at(&pushing.state, &slot.path, &upstream, &pushing.address);
-        assert_eq!(through(1, &first), DevicePush::Pushed { short: first[..7].to_string(), main: main.clone() });
-        assert_eq!(git(&origin, &["rev-parse", &main]).unwrap(), first, "only the first step went out");
-        assert_eq!(git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), second, "the later step stays in the task");
-        let settled = through(1, &first);
-        assert!(matches!(&settled, DevicePush::Settled(said) if said.contains("step 1 is on")), "{settled:?}");
-        let steps = super::super::plan::read_now(&pushing.state, &slot.path, &upstream, &pushing.address);
-        assert_eq!((steps.pushed, steps.items.len(), steps.items[0].index), (1, 1, 1), "the board shows the next step as it stands");
-        assert_eq!(steps.items[0].head(), Some(second.as_str()));
+        assert_eq!(through(&first), DevicePush::Pushed { short: first[..7].to_string(), main: main.clone() });
+        assert_eq!(git(&origin, &["rev-parse", &main]).unwrap(), first, "only the run went out");
+        assert_eq!(git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), second, "the later subtask stays in the task");
+        let settled = through(&first);
+        assert!(matches!(&settled, DevicePush::Settled(said) if said.contains(&format!("on {main} already"))), "{settled:?}");
+        let subtasks = super::super::plan::read_now(&pushing.state, &slot.path, &upstream, &pushing.address);
+        assert_eq!((subtasks.pushed.len(), subtasks.items.len(), subtasks.items[0].id.as_str()), (1, 1, "command"), "the board shows the next subtask as it stands");
+        assert_eq!(subtasks.items[0].head(), Some(second.as_str()));
         cleanup(dir, origin, &slot);
     }
 
@@ -1751,7 +1742,7 @@ mod tests {
     }
 
     #[test]
-    fn a_push_through_a_commit_counts_its_steps_as_pushed_and_the_rest_map_onto_the_list_after_them() {
+    fn a_push_through_a_commit_counts_its_subtask_as_pushed_and_the_rest_keep_theirs() {
         use crate::tasks::plan::{done_at, list_at, listed_at, load};
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         let state = state_of(&dir);
@@ -1759,14 +1750,14 @@ mod tests {
         list_at(&state, &slot.path, &upstream, &address, &["Model", "Command", "Docs"]).unwrap();
         done_at(&state, &slot.path, &upstream, &address).unwrap();
         commit(&slot.path, "e", "fifth");
-        assert_eq!(listed_at(&state, &slot.path, &upstream, &address).pushed, 0);
+        assert!(listed_at(&state, &slot.path, &upstream, &address).pushed.is_empty());
         deliver(&dir, &slot, &upstream, Through::First { count: 1, of: 2 }, &Out { sha: git(&slot.path, &["rev-parse", "HEAD~1"]).unwrap(), rebased: false }, "the user", &state, &crate::ci::begin).unwrap();
         let shown = listed_at(&state, &slot.path, &upstream, &address);
-        assert_eq!((shown.pushed, shown.items[0].index, shown.items[0].title.as_str()), (1, 1, "Command"), "one commit went out: the first step");
+        assert_eq!((shown.pushed.len(), shown.items[0].id.as_str(), shown.items[0].title.as_str()), (1, "command", "Command"), "one commit went out: the model");
         assert_eq!(shown.items[0].commits.iter().map(|commit| commit.subject.as_str()).collect::<Vec<_>>(), ["fifth"]);
         list_at(&state, &slot.path, &upstream, &address, &["Command, again"]).unwrap();
-        assert_eq!(load(&state, &address).unwrap().titles[0], "Model", "the pushed step stays first");
-        assert_eq!(listed_at(&state, &slot.path, &upstream, &address).pushed, 1);
+        assert_eq!(load(&state, &address).unwrap().parts[0].title, "Model", "the pushed subtask stays first");
+        assert_eq!(listed_at(&state, &slot.path, &upstream, &address).pushed.len(), 1);
         cleanup(dir, origin, &slot);
     }
 
@@ -1852,12 +1843,12 @@ mod tests {
         assert!(crate::tasks::accept_required(&dir));
         let refused = authorize(&Caller::User, &dir, &slot, &upstream, Through::All).unwrap_err();
         let notice = crate::notice::Notice::parse(&refused).unwrap();
-        assert_eq!(notice.headline, "Not pushed: step 1 is not accepted", "{refused}");
+        assert_eq!(notice.headline, format!("Not pushed: commit {} is not accepted", &fourth[..7]), "{refused}");
         assert!(refused.contains(&format!("kebbie accept billing {}", &fourth[..7])), "it says how to accept it: {refused}");
         accept_commit(&state, &address, &slot, &upstream, &fourth);
-        assert!(authorize(&Caller::User, &dir, &slot, &upstream, Through::First { count: 1, of: 2 }).is_ok(), "push --through an accepted step goes");
+        assert!(authorize(&Caller::User, &dir, &slot, &upstream, Through::First { count: 1, of: 2 }).is_ok(), "push --through an accepted commit goes");
         let refused = authorize(&Caller::User, &dir, &slot, &upstream, Through::All).unwrap_err();
-        assert!(refused.contains("step 2 is not accepted") && refused.contains(&fifth[..7]), "{refused}");
+        assert!(refused.contains(&format!("commit {} is not accepted", &fifth[..7])), "{refused}");
         accept_commit(&state, &address, &slot, &upstream, &fifth);
         assert!(authorize(&Caller::User, &dir, &slot, &upstream, Through::All).is_ok(), "every commit accepted, it goes");
         crate::tasks::accept::forget("billing", &dir);
@@ -1878,14 +1869,14 @@ mod tests {
         }).unwrap_err();
         let notice = crate::notice::Notice::parse(&outcome).unwrap();
         assert_eq!(notice.headline, "billing did not push, so the rest wait");
-        assert!(outcome.contains("step 1 is not accepted") && outcome.contains("pricing"), "{outcome}");
+        assert!(outcome.contains("is not accepted") && outcome.contains("pricing"), "{outcome}");
         assert_eq!(tried, std::slice::from_ref(&slot.path), "the rest are not tried");
         std::fs::remove_file(crate::config::repo_file(&dir)).unwrap();
         cleanup(dir, origin, &slot);
     }
 
     #[test]
-    fn a_working_task_whose_accepted_steps_are_pushed_keeps_working_and_a_ready_one_stays_ready() {
+    fn a_working_task_whose_accepted_subtasks_are_pushed_keeps_working_and_a_ready_one_stays_ready() {
         use crate::phase::{Event, Phase};
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         commit(&slot.path, "e", "fifth");
@@ -1897,7 +1888,7 @@ mod tests {
         crate::phase::record(&state, &address, "user", &Event::PushQueued { ahead: 1 });
         crate::phase::record(&state, &address, "push", &Event::PushQueued { ahead: 0 });
         deliver(&dir, &slot, &upstream, Through::First { count: 1, of: 2 }, &first(&slot), "the user", &state, &crate::ci::begin).unwrap();
-        assert_eq!(phase(), Some(Phase::Working), "it goes on with the steps after the pushed one");
+        assert_eq!(phase(), Some(Phase::Working), "it goes on with the subtasks after the pushed one");
         commit(&slot.path, "f", "sixth");
         let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
         crate::phase::record(&state, &address, "report", &Event::Reported { state: "ready", head: Some(&head), committed: true, pushing: false });
@@ -1908,7 +1899,7 @@ mod tests {
     }
 
     #[test]
-    fn a_working_task_whose_every_commit_is_pushed_keeps_working_while_a_listed_step_is_left() {
+    fn a_working_task_whose_every_commit_is_pushed_keeps_working_while_a_listed_subtask_is_left() {
         use crate::phase::{Event, Phase};
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         let state = state_of(&dir);
@@ -1920,14 +1911,14 @@ mod tests {
         crate::phase::record(&state, &address, "user", &Event::PushQueued { ahead: 0 });
         crate::tasks::plan::listed_at(&state, &slot.path, &upstream, &address);
         deliver(&dir, &slot, &upstream, Through::First { count: 1, of: 1 }, &all(&slot), "the user", &state, &crate::ci::begin).unwrap();
-        assert_eq!(phase(), Some(Phase::Working), "the second step is still to come");
+        assert_eq!(phase(), Some(Phase::Working), "the second subtask is still to come");
         crate::tasks::plan::list_at(&state, &slot.path, &upstream, &address, &["Model"]).unwrap();
         commit(&slot.path, "e", "fifth");
         let ahead = git(&slot.path, &["rev-list", "--count", &format!("{upstream}..HEAD")]).unwrap().parse().unwrap();
         crate::phase::record(&state, &address, "user", &Event::PushQueued { ahead: 0 });
         crate::tasks::plan::listed_at(&state, &slot.path, &upstream, &address);
         deliver(&dir, &slot, &upstream, Through::First { count: ahead, of: ahead }, &all(&slot), "the user", &state, &crate::ci::begin).unwrap();
-        assert_eq!(phase(), Some(Phase::Idle), "with no step left it waits for work");
+        assert_eq!(phase(), Some(Phase::Idle), "with no subtask left it waits for work");
         cleanup(dir, origin, &slot);
     }
 

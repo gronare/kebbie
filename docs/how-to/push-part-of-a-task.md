@@ -16,7 +16,7 @@ kebbie pushes the commits up to and including the selected one. The task stays o
 - When the default branch changed files those commits change too, or they conflict, kebbie asks the task's Claude to do that rebase first, run the tests (and resolve the conflict) and report ready, and pushes them then.
 
 - If you accepted commits with [`kebbie accept`](../reference/commands.md#kebbie-accept-name-sha), they are marked `✓` and the window opens on the last of the accepted ones from the first commit, marked `◂ through here`. `p` there pushes them, and the task keeps working. This works while its Claude is still working too: the window then offers only the accepted ones.
-- If the task works in steps, its commits are grouped by step, each step's number and mark on its first commit, and the steps without commits show under them as what stays. `p` pushes through the end of the selected commit's step, so a step always goes out whole: `p push through step 3 and keep it open`. See [Work in steps](work-in-steps.md).
+- If the task works in subtasks, its commits stand in push order, each subtask's mark, number and title where its commits start, and the subtasks without commits show under them as what stays. `p` pushes the pushable run, the commits from the top whose subtasks you accepted, ending at `◂ through here`: `p push the accepted run, 3 commits and keep it open`. See [Work in subtasks](work-in-steps.md).
 
 ## From the command line
 

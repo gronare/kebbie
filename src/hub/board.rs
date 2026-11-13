@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Mutex;
 
-use kebbie_hub_protocol::{Agent, AgentStatus, Board, Checkout, Ci, CiState, Counts, Git, Group, Item, Later, LaterState, MAX_RULE_NAMES, NextPart, NextRow, OverrideBy, Prompt, PromptOption, PushPermission, Question, QuestionOption, Recover, Report, RoutineSummary, Rules, RulesOverride, RulesState, SecondOpinion, Step, StepCommit, StepState, Steps, Verdict, VerdictOutcome};
+use kebbie_hub_protocol::{Agent, AgentStatus, Board, Checkout, Ci, CiState, Counts, Git, Group, Item, Later, LaterState, MAX_RULE_NAMES, NextPart, NextRow, OverrideBy, Prompt, PromptOption, PushPermission, Question, QuestionOption, Recover, Report, RoutineSummary, Rules, RulesOverride, RulesState, SecondOpinion, Verdict, VerdictOutcome};
+use kebbie_hub_protocol::{Added, DecidedBy, DecisionKind, MAX_ADDED_REASON_CHARS, MAX_OBSTACLE_CHARS, Obstacle, ObstacleDecision, ObstacleState, OrderRow, Pushable, Subtask, SubtaskState};
 
 use super::blobs::{Attachment, PLAN_LIMIT};
 use crate::menu::Menu;
@@ -13,13 +14,14 @@ fn count(value: usize) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
 }
 
-// What the board reads beyond the items: the menu on each blocked agent's screen by address, each profile's model by name, and the repos whose steps must be accepted.
+// What the board reads beyond the items: the menu on each blocked agent's screen by address, each profile's model by name, the repos whose subtasks must be accepted, and each task's latest obstacle by address.
 #[derive(Clone, Debug, Default)]
 pub struct Seen {
     pub menus: BTreeMap<String, Menu>,
     pub models: BTreeMap<String, String>,
     pub home: Option<String>,
     pub accepting: BTreeSet<String>,
+    pub obstacles: BTreeMap<String, Obstacle>,
 }
 
 fn group(group: status::Group) -> Option<Group> {
@@ -148,24 +150,77 @@ fn ci(item: &status::Item) -> Option<Ci> {
     })
 }
 
-fn steps(item: &status::Item, seen: &Seen) -> Option<Steps> {
-    let steps = &item.steps;
-    if !steps.listed() {
+fn subtask_state(state: &crate::tasks::SubtaskState) -> SubtaskState {
+    match state {
+        crate::tasks::SubtaskState::Planned => SubtaskState::Planned,
+        crate::tasks::SubtaskState::InProgress => SubtaskState::InProgress,
+        crate::tasks::SubtaskState::Ready => SubtaskState::Ready,
+        crate::tasks::SubtaskState::Accepted => SubtaskState::Accepted,
+        crate::tasks::SubtaskState::Pushed => SubtaskState::Pushed,
+    }
+}
+
+fn line_within(text: &str, limit: usize) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(limit).collect()
+}
+
+// A subtask as the phone shows it: an open one with its commits, a pushed one with the commits it had on the branch, and one pushed before kebbie noted its commits not at all.
+fn subtask(shown: &crate::tasks::Subtask, rules: Option<&Rules>) -> Option<Subtask> {
+    let commits: Vec<String> = if shown.state == crate::tasks::SubtaskState::Pushed { shown.pushed.clone() } else { shown.commits.iter().map(|commit| commit.sha.clone()).collect() };
+    if shown.state == crate::tasks::SubtaskState::Pushed && commits.is_empty() {
         return None;
     }
+    let added = shown.added.as_ref().map(|added| Added { at: added.at, reason: line_within(&added.reason, MAX_ADDED_REASON_CHARS) }).filter(|added| !added.reason.is_empty());
+    let rules = (!shown.commits.is_empty()).then(|| rules.cloned()).flatten();
+    Some(Subtask { id: shown.id.clone(), title: shown.title.clone(), state: subtask_state(&shown.state), commits, added, rules })
+}
+
+type Plan = (Option<Vec<Subtask>>, Option<Vec<OrderRow>>, Option<Pushable>, Option<bool>);
+
+fn plan(item: &status::Item, seen: &Seen) -> Plan {
+    let subtasks = &item.subtasks;
+    if !subtasks.listed() {
+        return (None, None, None, None);
+    }
     let rules = rules(item);
-    let items = steps.items.iter().map(|step| {
-        let state = match &step.state {
-            crate::tasks::StepState::Planned => StepState::Planned,
-            crate::tasks::StepState::InProgress => StepState::InProgress,
-            crate::tasks::StepState::Ready => StepState::Ready,
-            crate::tasks::StepState::Accepted => StepState::Accepted,
-        };
-        let commits: Vec<StepCommit> = step.commits.iter().map(|commit| StepCommit { sha: commit.sha.clone(), subject: commit.subject.clone() }).collect();
-        let rules = (!commits.is_empty()).then(|| rules.clone()).flatten();
-        Step { number: count(step.index + 1), title: step.title.clone(), state, commits, rules }
-    }).collect();
-    Some(Steps { pushed: count(steps.pushed), items, required: Some(seen.accepting.contains(&item.place)) })
+    let listed: Vec<Subtask> = subtasks.pushed.iter().chain(&subtasks.items).filter_map(|shown| subtask(shown, rules.as_ref())).collect();
+    let order: Vec<OrderRow> = subtasks.order.iter().map(|row| OrderRow { sha: row.sha.clone(), subject: row.subject.clone(), subtask: row.subtask.clone() }).collect();
+    let pushable = subtasks.pushable.as_ref().map(|run| Pushable { count: count(run.count), through: run.through.clone(), subtasks: run.subtasks.clone() });
+    (Some(listed), Some(order), pushable, Some(seen.accepting.contains(&item.place)))
+}
+
+// A task's latest obstacle as the phone shows it, with the decision on it; one decided in the lead's or the user's own words, which name no kind, stays off.
+pub fn obstacle(found: &crate::obstacle::Obstacle) -> Option<Obstacle> {
+    use crate::obstacle::{By, Kind, State};
+    let text = |text: &str| -> String { text.chars().filter(|char| !char.is_control() || *char == '\n').take(MAX_OBSTACLE_CHARS).collect::<String>().trim().to_string() };
+    let decision = match &found.decision {
+        Some(decided) => {
+            let kind = match decided.kind {
+                Kind::Workaround => DecisionKind::Workaround,
+                Kind::Subtask => DecisionKind::Subtask,
+                Kind::Task => DecisionKind::Task,
+                Kind::Ask => DecisionKind::Ask,
+                Kind::Said => return None,
+            };
+            let by = match decided.by {
+                By::Investigator => DecidedBy::Investigator,
+                By::Lead => DecidedBy::Lead,
+                By::You => DecidedBy::You,
+            };
+            Some(ObstacleDecision { kind, by, text: text(&decided.line()) })
+        }
+        None => None,
+    };
+    let state = match (&decision, found.state) {
+        (Some(decided), _) if decided.kind == DecisionKind::Ask => ObstacleState::Asked,
+        (Some(_), _) => ObstacleState::Decided,
+        (None, State::Raised | State::Investigating) => ObstacleState::Investigating,
+        (None, State::Asked) => ObstacleState::Asked,
+        (None, State::WithLead) => ObstacleState::WithLead,
+        (None, State::Decided) => return None,
+    };
+    let shown = Obstacle { id: found.id.clone(), state, text: text(&found.text), at: found.at, decision };
+    (kebbie_hub_protocol::is_subtask_id(&shown.id) && !shown.text.is_empty() && shown.decision.as_ref().is_none_or(|decided| !decided.text.is_empty())).then_some(shown)
 }
 
 // Only what the protocol allow-lists: no path, pane, Space, dev server address or host leaves the machine.
@@ -175,6 +230,7 @@ pub fn item(item: &status::Item, seen: &Seen) -> Option<Item> {
     }
     let group = group(item.group())?;
     let address = crate::peers::address(&item.name, &item.place);
+    let (subtasks, order, pushable, require_accept) = plan(item, seen);
     Some(Item {
         group,
         urgency: item.urgency(),
@@ -194,7 +250,11 @@ pub fn item(item: &status::Item, seen: &Seen) -> Option<Item> {
         recover: item.recover_note().map(|note| Recover { note }),
         routine: item.routine.clone(),
         card: None,
-        steps: steps(item, seen),
+        subtasks,
+        order,
+        pushable,
+        require_accept,
+        obstacle: seen.obstacles.get(&address).cloned(),
         title: item.title.clone(),
         profile: item.profile.clone(),
         recipe: item.recipe.as_ref().map(|recipe| crate::recipe::shown_name(&recipe.name).to_string()),
@@ -284,7 +344,13 @@ fn seen(items: &[status::Item]) -> Seen {
     }).collect();
     let models = crate::profiles::load_all_in(&crate::profiles::dir()).0.into_iter().filter_map(|profile| Some((profile.name, profile.model?))).collect();
     let accepting = items.iter().filter_map(|item| Some((item.place.clone(), item.repo.as_ref()?))).filter(|(_, repo)| crate::tasks::accept_required(repo)).map(|(place, _)| place).collect();
-    Seen { menus, models, home: std::env::var("HOME").ok(), accepting }
+    let state = crate::lead::state_dir().ok();
+    let obstacles = items.iter().filter(|item| item.is_task()).filter_map(|item| {
+        let address = crate::peers::address(&item.name, &item.place);
+        let latest = crate::obstacle::load(state.as_deref()?, &address).pop()?;
+        Some((address, obstacle(&latest)?))
+    }).collect();
+    Seen { menus, models, home: std::env::var("HOME").ok(), accepting, obstacles }
 }
 
 // HEAD still makes the change the card was written for, by the push dialog's rule; the answer is kept per (card, HEAD) so the board loop runs git only when either moves.
@@ -376,21 +442,23 @@ pub(crate) mod tests {
         }
     }
 
+    pub(crate) fn listed(id: &str, number: usize, title: &str, state: crate::tasks::SubtaskState, shas: &[&str], accepted: bool) -> crate::tasks::Subtask {
+        let commits = shas.iter().map(|sha| crate::tasks::SubtaskCommit { sha: sha.repeat(40 / sha.len().max(1)), subject: format!("Subject of {sha}"), accepted }).collect();
+        crate::tasks::Subtask { id: id.to_string(), number, title: title.to_string(), state, commits, pushed: Vec::new(), extra: false, added: None, contiguous: true, waits_for: None }
+    }
+
     #[test]
-    fn the_rules_check_reaches_the_phone_as_its_state_on_the_task_and_each_committed_step_and_never_as_approved() {
-        use crate::tasks::{Step as Listed, StepState as Listing, Steps as Listings};
+    fn the_rules_check_reaches_the_phone_as_its_state_on_the_task_and_each_committed_subtask_and_never_as_approved() {
+        use crate::tasks::SubtaskState as Listing;
         let mut item = task(Some("idle"), Some("ready"), 2);
-        item.steps = Listings { pushed: 0, items: vec![
-            Listed { index: 0, title: "Model".to_string(), state: Listing::Accepted, commits: vec![crate::tasks::StepCommit { sha: "a".repeat(40), subject: "s".to_string(), accepted: true }], extra: false },
-            Listed { index: 1, title: "Docs".to_string(), state: Listing::Planned, commits: Vec::new(), extra: false },
-        ] };
+        item.subtasks = crate::tasks::ordered(crate::tasks::Subtasks { items: vec![listed("model", 1, "Model", Listing::Accepted, &["a"], true), listed("docs", 2, "Docs", Listing::Planned, &[], false)], ..Default::default() });
         let sent = |item: &status::Item| {
             let board = build(std::slice::from_ref(item), &[], Vec::new(), None, &Seen::default());
             board.check().unwrap();
             let shown = &board.items[0];
-            let steps = shown.steps.as_ref().unwrap();
-            assert_eq!(steps.items[0].rules, shown.git.as_ref().unwrap().rules, "a committed step carries the task's check");
-            assert_eq!(steps.items[1].rules, None, "a step with no commit has nothing checked");
+            let subtasks = shown.subtasks.as_ref().unwrap();
+            assert_eq!(subtasks[0].rules, shown.git.as_ref().unwrap().rules, "a committed subtask carries the task's check");
+            assert_eq!(subtasks[1].rules, None, "a subtask with no commit has nothing checked");
             assert!(!serde_json::to_string(&board).unwrap().contains("approved"));
             shown.git.as_ref().unwrap().rules.clone()
         };
@@ -423,40 +491,60 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_task_with_steps_reaches_the_board_with_each_step_and_a_task_without_them_carries_none() {
-        use crate::tasks::{Step as Listed, StepState as Listing, Steps as Listings};
-        let held = |shas: &[&str], accepted: bool| shas.iter().map(|sha| crate::tasks::StepCommit { sha: sha.to_string(), subject: format!("Subject of {sha}"), accepted }).collect::<Vec<_>>();
+    fn a_task_with_subtasks_reaches_the_board_with_each_subtask_its_push_order_and_run_and_a_task_without_them_carries_none() {
+        use crate::tasks::SubtaskState as Listing;
         let mut item = task(Some("working"), Some("working"), 2);
         item.name = "stripe".to_string();
         item.place = "billing".to_string();
-        item.steps = Listings { pushed: 1, items: vec![
-            Listed { index: 1, title: "Charge through a PaymentGateway".to_string(), state: Listing::Accepted, commits: held(&["2222222bbbb"], true), extra: false },
-            Listed { index: 2, title: "Add Stripe as the gateway".to_string(), state: Listing::Ready, commits: held(&["3333333cccc", "3333333dddd"], false), extra: false },
-            Listed { index: 3, title: "Remove the old payment client".to_string(), state: Listing::InProgress, commits: held(&["4444444eeee"], false), extra: false },
-            Listed { index: 4, title: "Docs".to_string(), state: Listing::Planned, commits: Vec::new(), extra: false },
-        ] };
+        let pushed = crate::tasks::Subtask { pushed: vec!["1".repeat(40)], added: Some(crate::tasks::SubtaskAdded { at: 9, reason: "Amounts carry no\ncurrency".to_string(), by: "investigator".to_string() }), ..listed("currency", 1, "Name the currency", Listing::Pushed, &[], false) };
+        item.subtasks = crate::tasks::ordered(crate::tasks::Subtasks { pushed: vec![pushed], items: vec![
+            listed("gateway", 2, "Charge through a PaymentGateway", Listing::Accepted, &["2"], true),
+            listed("stripe", 3, "Add Stripe as the gateway", Listing::Ready, &["3", "c"], false),
+            listed("remove-old", 4, "Remove the old payment client", Listing::InProgress, &["4"], false),
+            listed("docs", 5, "Docs", Listing::Planned, &[], false),
+        ], ..Default::default() });
         let mut plain = task(Some("working"), Some("working"), 2);
         plain.name = "search".to_string();
-        let mut pushed_only = plain.clone();
-        pushed_only.name = "dates".to_string();
-        pushed_only.steps = Listings { pushed: 2, items: Vec::new() };
-        let board = build(&[item, plain, pushed_only], &[], Vec::new(), None, &Seen::default());
+        let mut old = plain.clone();
+        old.name = "dates".to_string();
+        old.subtasks = crate::tasks::Subtasks { pushed: vec![listed("1", 1, "Model", Listing::Pushed, &[], false)], ..Default::default() };
+        let board = build(&[item, plain, old], &[], Vec::new(), None, &Seen::default());
         board.check().unwrap();
-        let steps = board.items[0].steps.as_ref().unwrap();
-        assert_eq!(steps.pushed, 1);
-        let shown: Vec<(u32, &str, StepState, Vec<&str>)> = steps.items.iter().map(|step| (step.number, step.title.as_str(), step.state, step.commits.iter().map(|commit| commit.sha.as_str()).collect())).collect();
-        assert_eq!(shown, [
-            (2, "Charge through a PaymentGateway", StepState::Accepted, vec!["2222222bbbb"]),
-            (3, "Add Stripe as the gateway", StepState::Ready, vec!["3333333cccc", "3333333dddd"]),
-            (4, "Remove the old payment client", StepState::InProgress, vec!["4444444eeee"]),
-            (5, "Docs", StepState::Planned, vec![]),
+        let shown = &board.items[0];
+        let subtasks = shown.subtasks.as_ref().unwrap();
+        assert_eq!(subtasks.iter().map(|subtask| (subtask.id.as_str(), subtask.state, subtask.commits.len())).collect::<Vec<_>>(), [
+            ("currency", SubtaskState::Pushed, 1),
+            ("gateway", SubtaskState::Accepted, 1),
+            ("stripe", SubtaskState::Ready, 2),
+            ("remove-old", SubtaskState::InProgress, 1),
+            ("docs", SubtaskState::Planned, 0),
         ]);
-        assert_eq!((steps.items[1].commits[1].subject.as_str(), steps.items[1].head()), ("Subject of 3333333dddd", Some("3333333dddd")), "each commit goes with its subject, and the step's head is its last");
-        let sent = serde_json::to_value(&board.items[0]).unwrap();
-        assert!(sent["steps"]["items"][1].get("sha").is_none(), "a step names its commits, never one sha");
-        assert_eq!(board.items[1].steps, None);
-        assert!(!serde_json::to_string(&board.items[1]).unwrap().contains("steps"), "a task without steps sends the board an older hub reads");
-        assert_eq!(board.items[2].steps.as_ref().map(|steps| (steps.pushed, steps.items.len())), Some((2, 0)));
+        assert_eq!(subtasks[0].added, Some(Added { at: 9, reason: "Amounts carry no currency".to_string() }), "why it was added, on one line");
+        assert_eq!(shown.order.as_ref().unwrap().iter().map(|row| row.subtask.as_str()).collect::<Vec<_>>(), ["gateway", "stripe", "stripe", "remove-old"], "the push order, top first");
+        assert_eq!(shown.pushable, Some(Pushable { count: 1, through: "2".repeat(40), subtasks: vec!["gateway".to_string()] }));
+        assert_eq!(shown.require_accept, Some(false));
+        assert!(serde_json::to_value(shown).unwrap().get("steps").is_none(), "subtasks, never steps");
+        assert_eq!((board.items[1].subtasks.as_ref(), board.items[1].order.as_ref()), (None, None));
+        assert!(!serde_json::to_string(&board.items[1]).unwrap().contains("subtasks"), "a task without subtasks carries none");
+        assert_eq!(board.items[2].subtasks.as_ref().map(Vec::len), Some(0), "a subtask pushed before kebbie noted its commits is left off");
+    }
+
+    #[test]
+    fn a_tasks_latest_obstacle_reaches_the_phone_with_its_decision_and_who_took_it() {
+        use crate::obstacle::{By, Decision, Kind, Obstacle as Kept, Source, State};
+        let kept = |state, decision: Option<Decision>| Kept { id: "o1".to_string(), at: 7, source: Source::Task, text: "the index stores titles only (src/index.py:88)".to_string(), on: String::new(), state, worktree: Default::default(), question: None, decision, replan: false };
+        let decided = |kind| Some(Decision { kind, by: By::Investigator, at: 8, reason: "The index has no frontmatter.".to_string(), plan: String::new(), replaced_by: None, subtask: Some("Store frontmatter".to_string()), task: None });
+        assert_eq!(obstacle(&kept(State::Investigating, None)).map(|shown| (shown.state, shown.decision)), Some((ObstacleState::Investigating, None)));
+        let shown = obstacle(&kept(State::Decided, decided(Kind::Subtask))).unwrap();
+        assert_eq!((shown.state, shown.at, shown.decision.as_ref().map(|decision| (decision.kind, decision.by, decision.text.as_str()))), (ObstacleState::Decided, 7, Some((DecisionKind::Subtask, DecidedBy::Investigator, "subtask first: Store frontmatter, because the index has no frontmatter (investigator)"))));
+        assert_eq!(obstacle(&kept(State::Decided, decided(Kind::Ask))).unwrap().state, ObstacleState::Asked, "a decision to ask is asked of you");
+        assert_eq!(obstacle(&kept(State::Decided, decided(Kind::Said))), None, "a decision in someone's own words names no kind the phone knows");
+        let mut item = task(Some("idle"), None, 1);
+        item.name = "lint".to_string();
+        let seen = Seen { obstacles: BTreeMap::from([(crate::peers::address("lint", &item.place), shown)]), ..Seen::default() };
+        let board = build(&[item], &[], Vec::new(), None, &seen);
+        board.check().unwrap();
+        assert_eq!(board.items[0].obstacle.as_ref().map(|shown| shown.id.as_str()), Some("o1"));
     }
 
     #[test]
@@ -516,7 +604,7 @@ pub(crate) mod tests {
         agent.kind = crate::agent::Agent::Codex;
         agent.answer = status::answer_in_space(crate::agent::Agent::Codex);
         let menu = crate::menu::parse_for(CODEX_APPROVAL, crate::agent::Agent::Codex).unwrap();
-        let seen = Seen { menus: BTreeMap::from([("hub@kebbie".to_string(), menu.clone())]), models: BTreeMap::from([("task".to_string(), "gpt-6.1-sol".to_string())]), home: Some("/Users/u".to_string()), accepting: BTreeSet::new() };
+        let seen = Seen { menus: BTreeMap::from([("hub@kebbie".to_string(), menu.clone())]), models: BTreeMap::from([("task".to_string(), "gpt-6.1-sol".to_string())]), home: Some("/Users/u".to_string()), accepting: BTreeSet::new(), obstacles: BTreeMap::new() };
         let board = build(std::slice::from_ref(&item), &[], Vec::new(), None, &seen);
         let shown = &board.items[0];
         let prompt = shown.prompt.as_ref().unwrap();
@@ -585,10 +673,10 @@ pub(crate) mod tests {
         let board = build(std::slice::from_ref(&fixing), &[], Vec::new(), None, &Seen::default());
         assert_eq!(board.items[0].push_waits.as_deref(), Some("pushing for you · its Codex fixes the red CI"));
         let mut stepped = task(Some("working"), Some("working"), 1);
-        stepped.steps = crate::tasks::Steps { pushed: 1, items: Vec::new() };
-        assert_eq!(build(std::slice::from_ref(&stepped), &[], Vec::new(), None, &Seen::default()).items[0].steps.as_ref().unwrap().required, Some(false), "without task.require_accept push takes what is committed");
+        stepped.subtasks = crate::tasks::Subtasks { items: vec![listed("docs", 1, "Docs", crate::tasks::SubtaskState::Planned, &[], false)], ..Default::default() };
+        assert_eq!(build(std::slice::from_ref(&stepped), &[], Vec::new(), None, &Seen::default()).items[0].require_accept, Some(false), "without task.require_accept push takes what is committed");
         let accepting = Seen { accepting: BTreeSet::from(["web".to_string()]), ..Seen::default() };
-        assert_eq!(build(&[stepped], &[], Vec::new(), None, &accepting).items[0].steps.as_ref().unwrap().required, Some(true), "with task.require_accept in its repo each step waits on your accept");
+        assert_eq!(build(&[stepped], &[], Vec::new(), None, &accepting).items[0].require_accept, Some(true), "with task.require_accept in its repo each subtask waits on your accept");
     }
 
     #[test]

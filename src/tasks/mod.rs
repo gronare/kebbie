@@ -18,7 +18,7 @@ mod started;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-pub(crate) use accept::{Unaccepted, accept, accept_step_from_device, accept_required, accepted_in, unaccepted_at, last_accepted_through, listing_at as accepted_listing_at, open_commits_at, rest_base, shown as accepted_shown};
+pub(crate) use accept::{Unaccepted, accept, accept_subtask_from_device, accept_required, accepted_in, unaccepted_at, last_accepted_through, listing_at as accepted_listing_at, open_commits_at, rest_base, shown as accepted_shown};
 pub(crate) use after::{EVERY as AFTER_EVERY, Asked as QueueAsked, and_list, after as after_command, at as start_at, drop as drop_wait, now as start_now, queue, queue_as, refuse_queued_name, Shown as WaitShown, shown as waits_shown, tick as after_tick};
 #[cfg(test)]
 pub(crate) use approval::{approval_by, approval_holds};
@@ -35,12 +35,12 @@ pub(crate) use park::{all as parked_all, Parked, UNPARKED, load as park_of, morn
 pub(crate) use landed::{EVERY as LANDED_EVERY, passed_after_cancel, Unsure as LandedUnsure, mark as landed_mark, tick as landed_tick, tick_cli as landed_tick_cli};
 pub(crate) use red_ci::{dismiss as dismiss_ci, dismissed as ci_dismissed, outside as ci_outside, outside_reason as ci_outside_reason};
 pub(crate) use launch::{Begun, Session, Start, awaits_first_prompt, begin, codex_restart_refusal, codex_resume_args, bypasses, latest_transcript, mark_awaits_prompt, new_session_id, on_profile, own_start_mode, plan_dir, profile_of, cluster_at, record_session, recorded_agent, recorded_session_id, start, task_at, task_role, task_role_now, transcript};
-pub(crate) use plan::{insert_first as insert_first_step, noted_after as steps_noted_after, seen_in as steps_seen_in, steps};
+pub(crate) use plan::{Asked as SubtasksAsked, add_preparatory, noted_after as subtasks_noted_after, seen_in as subtasks_seen_in, subtasks};
 #[cfg(test)]
-pub(crate) use plan::Commit as StepCommit;
-pub(crate) use plan::{Step, Steps, State as StepState, Tips as StepTips, read_at as steps_read, shown_at as steps_shown_at, for_path as steps_for, mark as step_mark, word as step_word};
+pub(crate) use plan::{Added as SubtaskAdded, Commit as SubtaskCommit, ordered};
+pub(crate) use plan::{Subtask, Subtasks, State as SubtaskState, Tips as SubtaskTips, read_at as subtasks_read, shown_at as subtasks_shown_at, for_path as subtasks_for, mark as subtask_mark, word as subtask_word};
 pub(crate) use pool::{Slot, find_task, list, move_work, slots, task_of, task_slots};
-pub(crate) use push::{DevicePush, ThroughStep, after_ci, cancel as cancel_push, land, place_in_line, push, push_as, rebase, tidy};
+pub(crate) use push::{DevicePush, after_ci, cancel as cancel_push, land, place_in_line, push, push_as, rebase, tidy};
 pub(crate) use stage::{WAIT_CEILING as STAGE_WAIT, stage, staged, tick as stage_tick, unstage};
 pub(crate) use started::{link, started_items, started_links};
 

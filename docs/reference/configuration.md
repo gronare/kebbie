@@ -92,7 +92,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 | `task.also_noticed` | `"backlog"` | either | What a task's Claude does with what it notices outside its task: `"backlog"`, `"fix"` or `"ask"`. |
 | `task.profile` | none | either | The [profile](#profiles) a task starts with when `kebbie start` names none with `--profile`. |
 | `task.sandbox` | `true` | either | Whether a task's and the reviewer's shell commands run in Claude Code's sandbox. |
-| `task.steps` | `true` | either | Whether tasks work in steps, each a slice of the work in small commits, listed with `kebbie steps` before they write code. |
+| `task.steps` | `true` | either | Whether tasks work in subtasks, each a slice of the work in small commits, listed with `kebbie subtasks` before they write code. |
 | `task.require_accept` | `false` | either | Whether every commit must be accepted before it can be pushed. Only with `task.steps` on. |
 | `task.permission_mode` | none | either | The [permission mode](https://code.claude.com/docs/en/permission-modes) a task's Claude starts in. |
 | `[[routines]]` | none | either | Checks kebbie runs on a schedule, each as a task that reports, plans or fixes. See [`[[routines]]`](#routines). |
@@ -110,16 +110,16 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 
 `task.profile`: unset, tasks start with the built-in `task`. `"none"` in a repo's file starts its tasks with the built-in `task` whatever config.toml names. A restarted task keeps the profile it started with. The board's Settings page picks it from the profiles there are, each with its `for`, and `none (task)` removes the key. See [Give tasks a profile](../how-to/give-tasks-a-profile.md).
 
-`task.steps`: on, the default, a task's role tells it to list its steps with `kebbie steps` before its first line of code, marks each one ready with `kebbie steps done`, and you accept and push its steps one at a time while it builds the next. `false`, in the machine config or in a repo's own file, turns it off: a task commits its own way and `kebbie steps` refuses. New tasks follow it; a running task once it restarts. `kebbie accept` works either way. See [Work in steps](../how-to/work-in-steps.md).
+`task.steps`: on, the default, a task's role tells it to list its subtasks with `kebbie subtasks` before its first line of code and mark each one ready with `kebbie subtasks done`, and you accept them and push the accepted run from the top while it builds on. `false`, in the machine config or in a repo's own file, turns it off: a task commits its own way and `kebbie subtasks` refuses. New tasks follow it; a running task once it restarts. `kebbie accept` works either way. See [Work in subtasks](../how-to/work-in-steps.md).
 
-`task.require_accept`: off, the default, accepting a step is up to you and a push takes what is committed. `true`, in the machine config or in a repo's own file, holds every push until each commit it takes is accepted: `kebbie push`, `--through`, the board's push and push in order refuse with the first step not accepted and how to accept it, and a ready task with a step to accept waits under Needs you, `accept step N` under its row. With `task.steps` off it has no effect. See [Require every step accepted](../how-to/work-in-steps.md#require-every-step-accepted).
+`task.require_accept`: off, the default, accepting a subtask is up to you and a push of the whole task takes what is committed. `true`, in the machine config or in a repo's own file, holds every push until each commit it takes is accepted: `kebbie push`, `--through`, the board's push and push in order refuse with the first subtask not accepted and how to accept it, and a ready task with a subtask to accept waits under Needs you, `accept subtask N` under its row. With `task.steps` off it has no effect. See [Require every subtask accepted](../how-to/work-in-steps.md#require-every-subtask-accepted).
 
 `task.sandbox` is strict: no retry outside it, and no start without it. See [The trust boundary](../explanation/trust-boundary.md#the-sandbox).
 
 - A task's shell writes only in its worktree, its temp folder, the package caches (`~/.cargo/registry`, `~/.cargo/git`, `~/.npm`, `~/.cache`) and the repo's shared `.git` folder, except its hooks, config and the other pooled worktrees' git dirs.
 - It reaches only crates.io, static.crates.io, index.crates.io, registry.npmjs.org, github.com, objects.githubusercontent.com, pypi.org and files.pythonhosted.org, and no Unix socket.
 - On macOS it may listen on local ports for a dev server.
-- kebbie's own task commands (`peers`, `tell`, `ask`, `report`, `steps`, `routine ok`, `link`, `backlog add`, `config`) run outside it.
+- kebbie's own task commands (`peers`, `tell`, `ask`, `report`, `subtasks`, `routine ok`, `link`, `backlog add`, `config`) run outside it.
 - On Linux it needs bubblewrap, socat and the seccomp filter (`npm install -g @anthropic-ai/sandbox-runtime`). Without them kebbie refuses to start a task or a review and names what to install.
 - `false` runs them unsandboxed, where a task's shell can pass as you to kebbie's user-only commands. `kebbie doctor`, a task's start and the board's Areas page say so.
 - A profile's `[sandbox] enabled` wins over it.
@@ -214,7 +214,7 @@ profile = "deep-codex"
 | `"idea"` | Ideas, added to the backlog as `kebbie backlog add` adds them. |
 | `"start"` | Starts of a backlog item as a task, as `g` on the board starts one. |
 | `"edit"` | Edits of a backlog item's title or one of its sections. |
-| `"review"` | A task's waiting step opened for review, line comments typed into its Claude, files marked read, and the step accepted. |
+| `"review"` | A task's waiting subtask opened for review, line comments typed into its Claude, files marked read, and the subtask accepted. |
 
 ```toml
 [hub]

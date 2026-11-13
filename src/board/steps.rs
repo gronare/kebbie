@@ -3,22 +3,22 @@ use ratatui::text::{Line, Span};
 
 use crate::keys::{self, Act};
 use crate::status::Item;
-use crate::tasks::{self, Step, StepState};
+use crate::tasks::{self, Subtask, SubtaskState};
 use super::widgets::{BLUE, GREEN, MUTED, SURFACE, TEXT, YELLOW, cut, plural, style, text_width};
 
 const INDENT: &str = "    ";
 
-fn waiting(step: &Step) -> bool {
-    step.state == StepState::Ready
+fn waiting(subtask: &Subtask) -> bool {
+    subtask.state == SubtaskState::Ready
 }
 
 pub(super) fn to_accept(item: &Item) -> usize {
-    item.steps.items.iter().filter(|step| waiting(step)).count()
+    item.subtasks.items.iter().filter(|subtask| waiting(subtask)).count()
 }
 
-// The accepted steps at the front of the branch, which a push may take while the task keeps working.
+// The commits of the pushable run at the top of the push order, which a push may take while the task keeps working.
 pub(super) fn accepted_run(item: &Item) -> usize {
-    item.steps.items.iter().take_while(|step| step.state == StepState::Accepted).count()
+    item.subtasks.pushable.as_ref().map_or(0, |run| run.count)
 }
 
 pub(super) fn to_accept_note(item: &Item) -> Option<String> {
@@ -27,25 +27,25 @@ pub(super) fn to_accept_note(item: &Item) -> Option<String> {
 }
 
 pub(super) fn accept_wanted(item: &Item) -> Option<String> {
-    let step = item.steps.items.iter().find(|step| waiting(step))?;
-    Some(format!("accept {} · {} review", step.index + 1, keys::key(Act::Review)))
+    let subtask = item.subtasks.items.iter().find(|subtask| waiting(subtask))?;
+    Some(format!("accept {} · {} review", subtask.number, keys::key(Act::Review)))
 }
 
-pub(super) fn mark_color(state: &StepState) -> Color {
+pub(super) fn mark_color(state: &SubtaskState) -> Color {
     match state {
-        StepState::Planned => MUTED,
-        StepState::InProgress => BLUE,
-        StepState::Ready => YELLOW,
-        StepState::Accepted => GREEN,
+        SubtaskState::Planned => MUTED,
+        SubtaskState::InProgress => BLUE,
+        SubtaskState::Ready => YELLOW,
+        SubtaskState::Accepted | SubtaskState::Pushed => GREEN,
     }
 }
 
 const TITLE_FLOOR: usize = 12;
 
-// The rules part of a ready step's label, longest first; the lines under the task's row say it in full, and a check that passed says nothing.
-fn rules_forms(item: &Item, state: &StepState) -> Vec<String> {
+// The rules part of a ready subtask's label, longest first; the lines under the task's row say it in full, and a check that passed says nothing.
+fn rules_forms(item: &Item, state: &SubtaskState) -> Vec<String> {
     use crate::status::RulesShown;
-    if *state != StepState::Ready {
+    if *state != SubtaskState::Ready {
         return Vec::new();
     }
     match item.rules_shown() {
@@ -57,12 +57,18 @@ fn rules_forms(item: &Item, state: &StepState) -> Vec<String> {
     }
 }
 
-fn state_word(state: &StepState) -> &'static str {
-    if *state == StepState::Planned { "" } else { tasks::step_word(state) }
+// The state word, and for an accepted subtask behind one that is not, which number it waits for.
+fn state_word(item: &Item, subtask: &Subtask) -> String {
+    let waits = subtask.waits_for.as_ref().and_then(|title| item.subtasks.items.iter().find(|other| other.title == *title));
+    match (&subtask.state, waits) {
+        (SubtaskState::Planned, _) => String::new(),
+        (SubtaskState::Accepted, Some(other)) => format!("accepted · waits for {}", other.number),
+        (state, _) => tasks::subtask_word(state).to_string(),
+    }
 }
 
-// What follows the state word, longest first: how many commits the step holds, then the rules part; each gives way before the state word does.
-fn label_forms(item: &Item, step: &Step) -> Vec<String> {
+// What follows the state word, longest first: how many commits the subtask holds, then the rules part; each gives way before the state word does.
+fn label_forms(item: &Item, step: &Subtask) -> Vec<String> {
     let count = match step.commits.len() {
         0 => None,
         1 => Some("1 commit".to_string()),
@@ -104,29 +110,29 @@ fn fitted(title: &str, state: &str, rules: &[String], room: usize) -> (String, S
     (shortened(title, title_room(label)), label.clone())
 }
 
-fn step_line(item: &Item, step: &Step, width: usize) -> Line<'static> {
-    let number = format!("{} ", step.index + 1);
+fn step_line(item: &Item, step: &Subtask, width: usize) -> Line<'static> {
+    let number = format!("{} ", step.number);
     let room = width.saturating_sub(INDENT.len() + 2 + number.len());
-    let (title, label) = fitted(&step.title, state_word(&step.state), &label_forms(item, step), room);
+    let (title, label) = fitted(&step.title, &state_word(item, step), &label_forms(item, step), room);
     let color = mark_color(&step.state);
-    let planned = step.state == StepState::Planned;
+    let planned = step.state == SubtaskState::Planned;
     let gap = room.saturating_sub(text_width(&title) + text_width(&label));
     Line::from(vec![
-        Span::raw(INDENT), Span::styled(tasks::step_mark(&step.state), style(color)), Span::raw(" "),
+        Span::raw(INDENT), Span::styled(tasks::subtask_mark(&step.state), style(color)), Span::raw(" "),
         Span::styled(number, style(MUTED)), Span::styled(title, style(if planned { MUTED } else { TEXT })),
         Span::raw(" ".repeat(gap)), Span::styled(label, style(color)),
     ])
 }
 
 pub(super) fn step_lines(item: &Item, highlighted: bool, width: usize) -> Vec<Line<'static>> {
-    if !item.steps.listed() {
+    if !item.subtasks.listed() {
         return Vec::new();
     }
     let mut lines = Vec::new();
-    if item.steps.pushed > 0 {
-        lines.push(Line::from(vec![Span::raw(INDENT), Span::styled(format!("↑ {} pushed", item.steps.pushed), style(MUTED))]));
+    if !item.subtasks.pushed.is_empty() {
+        lines.push(Line::from(vec![Span::raw(INDENT), Span::styled(format!("↑ {} pushed", item.subtasks.pushed.len()), style(MUTED))]));
     }
-    lines.extend(item.steps.items.iter().map(|step| step_line(item, step, width)));
+    lines.extend(item.subtasks.items.iter().map(|step| step_line(item, step, width)));
     if highlighted {
         lines.into_iter().map(|line| line.style(Style::new().bg(SURFACE))).collect()
     } else {
@@ -139,39 +145,45 @@ pub(crate) mod tests {
     use super::*;
     use crate::board::test_support::*;
     use crate::phase::Phase;
-    use crate::tasks::Steps;
+    use crate::tasks::Subtasks;
 
-    pub(crate) fn step(index: usize, title: &str, state: StepState) -> Step {
-        Step { index, title: title.to_string(), state, commits: Vec::new(), extra: false }
+    pub(crate) fn step(index: usize, title: &str, state: SubtaskState) -> Subtask {
+        Subtask { id: format!("s{}", index + 1), number: index + 1, title: title.to_string(), state, commits: Vec::new(), pushed: Vec::new(), extra: false, added: None, contiguous: true, waits_for: None }
     }
 
-    // The step done and holding the commits shas, all accepted or none.
-    pub(crate) fn holds(step: &mut Step, shas: &[&str], accepted: bool) {
-        step.state = if accepted { StepState::Accepted } else { StepState::Ready };
-        step.commits = shas.iter().map(|sha| tasks::StepCommit { sha: sha.to_string(), subject: format!("subject of {sha}"), accepted }).collect();
+    // The subtask done and holding the commits shas, all accepted or none.
+    pub(crate) fn holds(step: &mut Subtask, shas: &[&str], accepted: bool) {
+        step.state = if accepted { SubtaskState::Accepted } else { SubtaskState::Ready };
+        step.commits = shas.iter().map(|sha| tasks::SubtaskCommit { sha: sha.to_string(), subject: format!("subject of {sha}"), accepted }).collect();
     }
 
-    pub(crate) fn held(index: usize, title: &str, shas: &[&str], accepted: bool) -> Step {
-        let mut held = step(index, title, StepState::Planned);
+    pub(crate) fn held(index: usize, title: &str, shas: &[&str], accepted: bool) -> Subtask {
+        let mut held = step(index, title, SubtaskState::Planned);
         holds(&mut held, shas, accepted);
         held
     }
 
-    pub(crate) fn stripe() -> Steps {
-        Steps { pushed: 1, items: vec![
-            held(1, "Charge through a PaymentGateway", &["2222222bbbb"], false),
-            step(2, "Add Stripe as the gateway", StepState::InProgress),
-            step(3, "Remove the old payment client", StepState::Planned),
-        ] }
+    pub(crate) fn pushed_one() -> Vec<Subtask> {
+        vec![Subtask { pushed: vec!["1111111aaaa".to_string()], ..step(0, "Say what a gateway is", SubtaskState::Pushed) }]
     }
 
-    pub(crate) fn stepped(steps: Steps) -> Item {
+    pub(crate) use crate::tasks::ordered;
+
+    pub(crate) fn stripe() -> Subtasks {
+        ordered(Subtasks { pushed: pushed_one(), items: vec![
+            held(1, "Charge through a PaymentGateway", &["2222222bbbb"], false),
+            step(2, "Add Stripe as the gateway", SubtaskState::InProgress),
+            step(3, "Remove the old payment client", SubtaskState::Planned),
+        ], ..Subtasks::default() })
+    }
+
+    pub(crate) fn stepped(steps: Subtasks) -> Item {
         let mut item = crate::status::tests::task(Some("working"), Some("working"), 2);
         item.name = "stripe".to_string();
         item.title = Some("Switch the payment provider to Stripe".to_string());
         item.place = "billing".to_string();
         crate::status::tests::in_phase(&mut item, Phase::Working);
-        item.steps = steps;
+        item.subtasks = ordered(steps);
         item
     }
 
@@ -219,7 +231,7 @@ pub(crate) mod tests {
         let mut steps = stripe();
         holds(&mut steps.items[0], &["2222222bbbb"], true);
         holds(&mut steps.items[1], &["3333333cccc"], false);
-        steps.items[2].state = StepState::InProgress;
+        steps.items[2].state = SubtaskState::InProgress;
         let mut item = stepped(steps);
         item.git.as_mut().unwrap().approved = false;
         let mut app = test_app(vec![item]);
@@ -259,7 +271,7 @@ pub(crate) mod tests {
         let screen = rows.join("\n");
         let at = find(&rows, "Switch the payment provider to Stripe")[0].1;
         assert!(find(&rows, "NEEDS YOU")[0].1 < at && !screen.contains("READY TO PUSH"), "{screen}");
-        assert!(rows[at].trim_end().ends_with(" 1 to accept") && screen.contains("accept step 2 · r review"), "{screen}");
+        assert!(rows[at].trim_end().ends_with(" 1 to accept") && screen.contains("accept subtask 2 · r review"), "{screen}");
     }
 
     #[test]
@@ -269,7 +281,7 @@ pub(crate) mod tests {
         app.work_selected = 9;
         let (before, _) = render(&mut app, 120, 30);
         let mut with_empty = plain;
-        with_empty.steps = Steps::default();
+        with_empty.subtasks = Subtasks::default();
         let mut app = test_app(vec![with_empty]);
         app.work_selected = 9;
         let (after, _) = render(&mut app, 120, 30);
@@ -281,12 +293,12 @@ pub(crate) mod tests {
 
     const LONG: &str = "Round VAT once per invoice and rate instead of on every line";
 
-    fn long_steps() -> Steps {
-        Steps { pushed: 0, items: vec![
+    fn long_steps() -> Subtasks {
+        Subtasks { items: vec![
             held(0, LONG, &["2222222bbbb"], false),
-            step(1, LONG, StepState::InProgress),
-            step(2, LONG, StepState::Planned),
-        ] }
+            step(1, LONG, SubtaskState::InProgress),
+            step(2, LONG, SubtaskState::Planned),
+        ], ..Subtasks::default() }
     }
 
     fn step_rows(rows: &[String]) -> Vec<String> {
@@ -337,7 +349,7 @@ pub(crate) mod tests {
     #[test]
     fn a_committed_step_says_its_rules_in_the_task_rows_words_shortened() {
         let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 2);
-        let state = StepState::Ready;
+        let state = SubtaskState::Ready;
         assert!(rules_forms(&item, &state).is_empty(), "a check that passed says nothing");
         item.git.as_mut().unwrap().approved = false;
         assert_eq!(rules_forms(&item, &state), vec!["project rules not checked", "not checked"]);
@@ -352,7 +364,7 @@ pub(crate) mod tests {
         item.git.as_mut().unwrap().approved = true;
         item.git.as_mut().unwrap().approved_by = Some(crate::tasks::ApprovedBy::User);
         assert_eq!(rules_forms(&item, &state), vec!["pushed past the rules check by you", "past the rules"]);
-        assert!(rules_forms(&item, &StepState::Accepted).is_empty() && rules_forms(&item, &StepState::InProgress).is_empty());
+        assert!(rules_forms(&item, &SubtaskState::Accepted).is_empty() && rules_forms(&item, &SubtaskState::InProgress).is_empty());
         let mut working = stepped(stripe());
         working.git.as_mut().unwrap().approved = false;
         assert!(rules_forms(&working, &state).is_empty(), "under Working nothing was checked yet, the step says only committed");

@@ -1,12 +1,12 @@
 use std::path::{Path, PathBuf};
 
-use kebbie_hub_protocol::{AcceptStep, BLOB_OVERHEAD, DiffLine, FileStatus, Hunk, LineKind, MAX_BLOB_BYTES, Outcome, Reason, Review, ReviewComment, ReviewComments, ReviewCommit, ReviewFile, ReviewOffer, ReviewOpen, ReviewRead, ReviewStep, Side};
+use kebbie_hub_protocol::{AcceptSubtask, BLOB_OVERHEAD, DiffLine, FileStatus, Hunk, LineKind, MAX_BLOB_BYTES, Outcome, Reason, Review, ReviewComment, ReviewComments, ReviewCommit, ReviewFile, ReviewOffer, ReviewOpen, ReviewRead, ReviewSubtask, Side};
 
 use super::commands::{Done, plain};
 use crate::board::review_data::{self as data, Entry, Mark, Range};
 use crate::permit::Caller;
 
-// What a review's files may take together, the step's own text and the JSON around them aside.
+// What a review's files may take together, the subtask's own text and the JSON around them aside.
 const FILES_BUDGET: usize = MAX_BLOB_BYTES - BLOB_OVERHEAD - 16 * 1024;
 
 fn count(value: usize) -> u32 {
@@ -17,23 +17,36 @@ fn refused(reason: Reason, text: &str) -> Done {
     (Outcome::Refused { reason }, text.to_string())
 }
 
-// The step a task's review waits on: its first ready step not yet accepted.
-pub fn waiting_step(steps: &crate::tasks::Steps) -> Option<&crate::tasks::Step> {
-    steps.items.iter().find(|step| step.state == crate::tasks::StepState::Ready)
+// The subtask a task's review waits on: its first ready subtask not yet accepted.
+pub fn waiting_subtask(subtasks: &crate::tasks::Subtasks) -> Option<&crate::tasks::Subtask> {
+    subtasks.items.iter().find(|subtask| subtask.state == crate::tasks::SubtaskState::Ready)
 }
 
-// The files a step changes from under its first commit to its last.
-fn files_in(path: &Path, from: &str, to: &str) -> Option<u32> {
+fn paths_in(path: &Path, from: &str, to: &str) -> Option<Vec<String>> {
     let names = crate::repo::git_fixed(path, &["diff-tree", "--name-only", "-r", "--no-renames", "-z", from, to]).ok()?;
-    Some(count(names.split('\0').filter(|name| !name.is_empty()).count()))
+    Some(names.split('\0').filter(|name| !name.is_empty()).map(str::to_string).collect())
 }
 
-// The board row's offer of a review: the step that waits for the user's acceptance and how many files it touches.
+// The files a subtask changes: from under its first commit to its last when its commits lie together, else every file one of them changes.
+fn files_in(path: &Path, subtask: &crate::tasks::Subtask) -> Option<u32> {
+    let first = subtask.commits.first()?;
+    if subtask.contiguous {
+        return paths_in(path, &format!("{}^", first.sha), subtask.head()?).map(|paths| count(paths.len()));
+    }
+    let mut all: Vec<String> = Vec::new();
+    for commit in &subtask.commits {
+        all.extend(paths_in(path, &format!("{}^", commit.sha), &commit.sha)?);
+    }
+    all.sort();
+    all.dedup();
+    Some(count(all.len()))
+}
+
+// The board row's offer of a review: the subtask that waits for the user's acceptance and how many files it touches.
 pub fn offer(item: &crate::status::Item) -> Option<ReviewOffer> {
-    let step = waiting_step(&item.steps)?;
-    let first = step.commits.first()?;
-    let files = files_in(item.path.as_ref()?, &format!("{}^", first.sha), step.head()?)?;
-    Some(ReviewOffer { step: Some(count(step.index + 1)), files })
+    let subtask = waiting_subtask(&item.subtasks)?;
+    let files = files_in(item.path.as_ref()?, subtask)?;
+    Some(ReviewOffer { subtask: Some(subtask.id.clone()), files })
 }
 
 fn task_path(address: &str) -> std::result::Result<PathBuf, Done> {
@@ -46,10 +59,10 @@ fn reviewable(entry: &Entry) -> bool {
     matches!(entry.mark, Mark::Ready | Mark::Accepted) && !entry.commits.is_empty()
 }
 
-// The step the phone reviews: the one it names while it is ready or accepted, else the first ready one, among the task's steps or else its commits.
-fn opened_in(entries: data::Entries, step: Option<u32>) -> Option<Entry> {
-    match step {
-        Some(number) => entries.items.into_iter().find(|entry| entry.number == number as usize && reviewable(entry)),
+// The subtask the phone reviews: the one it names while it is ready or accepted, else the first ready one, among the task's subtasks or else its commits.
+fn opened_in(entries: data::Entries, subtask: Option<&str>) -> Option<Entry> {
+    match subtask {
+        Some(id) => entries.items.into_iter().find(|entry| entry.id == id && reviewable(entry)),
         None => entries.items.into_iter().find(|entry| entry.mark == Mark::Ready && !entry.commits.is_empty()),
     }
 }
@@ -152,34 +165,70 @@ fn left_out(unnamed: usize) -> Option<String> {
     }
 }
 
-// The step whole, from under its first commit to its last, then each of its commits with its own diff; the whole step's files take the budget first.
-pub fn build(root: &Path, address: &str, dir: &Path, step: &Entry) -> std::result::Result<Review, String> {
-    let range = step.range().ok_or("the step has no commit")?;
-    let head = object(root, &range.to).ok_or("the step's last commit is not a commit")?;
+// A subtask's files whole when its commits lie apart: each file once, with every one of its commits' hunks in order and its content as the last of them leaves it.
+fn merged(commits: &[ReviewCommit]) -> Vec<ReviewFile> {
+    let mut files: Vec<ReviewFile> = Vec::new();
+    for file in commits.iter().flat_map(|commit| &commit.files) {
+        match files.iter_mut().find(|merged| merged.path == file.path) {
+            Some(merged) => {
+                merged.omitted |= file.omitted;
+                merged.add += file.add;
+                merged.del += file.del;
+                merged.content = file.content.clone();
+                merged.read = file.read;
+                merged.status = match (merged.status, file.status) {
+                    (FileStatus::Added, FileStatus::Deleted) | (FileStatus::Deleted, FileStatus::Added) => FileStatus::Modified,
+                    (FileStatus::Added, _) => FileStatus::Added,
+                    (_, status) => status,
+                };
+                if merged.omitted {
+                    merged.hunks.clear();
+                } else {
+                    merged.hunks.extend(file.hunks.iter().cloned());
+                }
+            }
+            None => files.push(file.clone()),
+        }
+    }
+    files
+}
+
+// The subtask whole, then each of its commits with its own diff: whole from under its first commit to its last when they lie together, the whole subtask's files taking the budget first; else each commit's, file by file.
+pub fn build(root: &Path, address: &str, dir: &Path, subtask: &Entry) -> std::result::Result<Review, String> {
+    let last = subtask.head().ok_or("the subtask has no commit")?;
+    let head = object(root, last).ok_or("the subtask's last commit is not a commit")?;
     let since = crate::repo::default_branch(root).map(|branch| branch.trim_start_matches("origin/").to_string()).unwrap_or_else(|_| "main".to_string());
     let mut left = FILES_BUDGET;
-    let (files, unnamed) = files_of(root, dir, &range, &mut left);
-    let commits = step.commits.iter().map(|commit| {
+    let (whole, unnamed) = match subtask.range() {
+        Some(range) => files_of(root, dir, &range, &mut left),
+        None => (Vec::new(), 0),
+    };
+    let mut skipped = unnamed;
+    let commits = subtask.commits.iter().map(|commit| {
         let message = crate::repo::git(root, &["log", "-1", "--format=%s%x00%b", &commit.sha])?;
         let (subject, body) = message.split_once('\0').unwrap_or((&message, ""));
-        let (files, _) = files_of(root, dir, &Range::commit(&commit.sha), &mut left);
+        let (files, unnamed) = files_of(root, dir, &Range::commit(&commit.sha), &mut left);
+        if subtask.range().is_none() {
+            skipped = skipped.max(unnamed);
+        }
         Ok(ReviewCommit { sha: commit.sha.clone(), subject: subject.trim().to_string(), body: body.trim().to_string(), files })
     }).collect::<crate::sh::Result<Vec<_>>>()?;
-    let step = ReviewStep { number: count(step.number), title: step.title.clone(), commits, files };
-    let review = Review { address: address.to_string(), since, head, step: Some(step), guide: Vec::new(), left_out: left_out(unnamed), files: Vec::new() };
+    let files = if subtask.range().is_some() { whole } else { merged(&commits) };
+    let shown = ReviewSubtask { id: subtask.id.clone(), title: subtask.title.clone(), commits, files };
+    let review = Review { address: address.to_string(), since, head, subtask: Some(shown), guide: Vec::new(), left_out: left_out(skipped), files: Vec::new() };
     review.check().map_err(str::to_string)?;
     Ok(review)
 }
 
 pub fn open(_: &Caller, open: &ReviewOpen) -> std::result::Result<Vec<u8>, Done> {
     let path = task_path(&open.address)?;
-    let step = data::kebbie_marks(&path).and_then(|entries| opened_in(entries, open.step)).ok_or_else(|| match open.step {
-        Some(number) => refused(Reason::HeadMoved, &format!("Step {number} of {} is not ready to review now", open.address)),
+    let subtask = data::kebbie_marks(&path).and_then(|entries| opened_in(entries, open.subtask.as_deref())).ok_or_else(|| match &open.subtask {
+        Some(id) => refused(Reason::HeadMoved, &format!("Subtask {id} of {} is not ready to review now", open.address)),
         None => nothing_waits(&open.address),
     })?;
     let state = crate::lead::state_dir().map_err(|error| (Outcome::Failed, error))?;
     let dir = review_dir(&state, &open.address).unwrap_or_else(|| state.join("reviews").join("none"));
-    let review = build(&path, &open.address, &dir, &step).map_err(|error| (Outcome::Failed, format!("The review of {} was not made: {error}", open.address)))?;
+    let review = build(&path, &open.address, &dir, &subtask).map_err(|error| (Outcome::Failed, format!("The review of {} was not made: {error}", open.address)))?;
     serde_json::to_vec(&review).map_err(|error| (Outcome::Failed, error.to_string()))
 }
 
@@ -211,16 +260,17 @@ pub fn comments(_: &Caller, comments: &ReviewComments) -> Done {
     comments_with(comments, pane, |pane, text| crate::typing::prompt(pane, text, &comments.address))
 }
 
-// The read mark the split keeps, set only while the file's content is the one the phone saw: in the commit it names, else in the reviewable step whose whole diff shows that content.
+// The read mark the split keeps, set only while the file's content is the one the phone saw: in the commit it names, else in the reviewable subtask whose whole diff shows that content, else in the last of its commits that does when its commits lie apart.
 pub fn read_in(root: &Path, entries: Option<data::Entries>, read: &ReviewRead) -> Done {
-    let steps: Vec<Entry> = entries.map(|entries| entries.items.into_iter().filter(reviewable).collect()).unwrap_or_default();
-    if steps.is_empty() {
+    let subtasks: Vec<Entry> = entries.map(|entries| entries.items.into_iter().filter(reviewable).collect()).unwrap_or_default();
+    if subtasks.is_empty() {
         return nothing_waits(&read.address);
     }
     let shows = |range: &Range| !crate::sh::succeeds("git", &["diff", "--quiet", &range.from, &range.to, "--", &read.path], Some(root)) && content_of(root, &read.path, range).is_some_and(|(content, _)| content == read.content);
+    let apart = |entry: &Entry| -> Vec<Range> { if entry.range().is_some() { Vec::new() } else { entry.commits.iter().rev().map(|commit| Range::commit(&commit.sha)).collect() } };
     let range = match &read.sha {
-        Some(sha) => steps.iter().any(|step| step.holds(sha)).then(|| Range::commit(sha)).filter(shows),
-        None => steps.iter().filter_map(Entry::range).find(shows),
+        Some(sha) => subtasks.iter().any(|subtask| subtask.holds(sha)).then(|| Range::commit(sha)).filter(shows),
+        None => subtasks.iter().flat_map(|entry| entry.range().into_iter().chain(apart(entry))).find(shows),
     };
     match range {
         Some(range) => match data::set_read(root, &read.path, Some(&range), read.read) {
@@ -238,28 +288,28 @@ pub fn read(_: &Caller, read: &ReviewRead) -> Done {
     }
 }
 
-// Accepts step N, every commit in it, only while it still ends at the head the phone saw, through kebbie accept's own path.
-pub fn accept_in(root: &Path, entries: Option<data::Entries>, accept: &AcceptStep, run: impl FnOnce(&Path, &str, usize) -> crate::sh::Result<String>) -> Done {
-    let moved = || refused(Reason::HeadMoved, "That step changed since you saw it; open the review again");
-    let Some(entry) = entries.and_then(|entries| entries.items.into_iter().find(|entry| entry.number == accept.step as usize)) else { return moved() };
+// Accepts a subtask, every commit in it, only while it still ends at the head the phone saw, through kebbie accept's own path.
+pub fn accept_in(root: &Path, entries: Option<data::Entries>, accept: &AcceptSubtask, run: impl FnOnce(&Path, &str, &str) -> crate::sh::Result<String>) -> Done {
+    let moved = || refused(Reason::HeadMoved, "That subtask changed since you saw it; open the review again");
+    let Some(entry) = entries.and_then(|entries| entries.items.into_iter().find(|entry| entry.id == accept.subtask)) else { return moved() };
     if entry.head() != Some(accept.head.as_str()) {
         return moved();
     }
     match entry.mark {
-        Mark::Accepted => return refused(Reason::AlreadySettled, &format!("Step {} is accepted already", accept.step)),
+        Mark::Accepted => return refused(Reason::AlreadySettled, &format!("{} is accepted already", entry.title)),
         Mark::Ready => {}
-        _ => return refused(Reason::HeadMoved, &format!("Step {} is still in progress; its Claude marks it ready", accept.step)),
+        _ => return refused(Reason::HeadMoved, &format!("{} is still in progress; its agent marks it ready", entry.title)),
     }
     let task = accept.address.split_once('@').map_or(accept.address.as_str(), |(task, _)| task);
-    match run(root, task, entry.number) {
-        Ok(_) => (Outcome::Done, format!("Accepted step {} of {}", accept.step, accept.address)),
+    match run(root, task, &entry.id) {
+        Ok(_) => (Outcome::Done, format!("Accepted {} of {}", entry.title, accept.address)),
         Err(error) => (Outcome::Failed, plain(&error)),
     }
 }
 
-pub fn accept(caller: &Caller, accept: &AcceptStep) -> Done {
+pub fn accept(caller: &Caller, accept: &AcceptSubtask) -> Done {
     match task_path(&accept.address) {
-        Ok(path) => accept_in(&path, data::kebbie_marks(&path), accept, |root, task, number| crate::tasks::accept_step_from_device(caller, root, task, number)),
+        Ok(path) => accept_in(&path, data::kebbie_marks(&path), accept, |root, task, id| crate::tasks::accept_subtask_from_device(caller, root, task, id)),
         Err(done) => done,
     }
 }
@@ -286,7 +336,7 @@ mod tests {
     #[test]
     fn comments_go_in_as_one_prompt_in_the_splits_own_lines() {
         let comment = |side, sha: Option<&str>, text: &str| ReviewComment { path: "src/ci.rs".to_string(), line: 112, side, sha: sha.map(str::to_string), text: text.to_string() };
-        let comments = ReviewComments { address: "retry@kebbie".to_string(), step: Some(1), comments: vec![comment(Side::Old, Some(SHA), "Should each try\nget its own deadline?"), comment(Side::New, None, "Keep it")] };
+        let comments = ReviewComments { address: "retry@kebbie".to_string(), subtask: Some("1".to_string()), comments: vec![comment(Side::Old, Some(SHA), "Should each try\nget its own deadline?"), comment(Side::New, None, "Keep it")] };
         assert_eq!(comments_text(&comments), "src/ci.rs:112 (before) in 3f9a2d1 — Should each try get its own deadline?\nsrc/ci.rs:112 — Keep it");
         let typed = std::cell::RefCell::new(Vec::new());
         let (outcome, text) = comments_with(&comments, Some("p_9".to_string()), |pane, text| { typed.borrow_mut().push((pane.to_string(), text.to_string())); Ok(()) });
@@ -297,7 +347,7 @@ mod tests {
     }
 
     fn entry(number: usize, mark: Mark, shas: &[&str]) -> Entry {
-        Entry { commits: shas.iter().map(|sha| data::Commit { sha: sha.to_string(), subject: String::new(), accepted: false }).collect(), mark, number, title: format!("Step {number}") }
+        Entry { commits: shas.iter().map(|sha| data::Commit { sha: sha.to_string(), subject: String::new(), accepted: false }).collect(), mark, number, title: format!("Subtask {number}"), id: format!("s{number}"), contiguous: true }
     }
 
     fn entries(items: Vec<Entry>) -> Option<data::Entries> {
@@ -305,68 +355,72 @@ mod tests {
     }
 
     #[test]
-    fn a_review_holds_the_whole_step_and_each_of_its_commits_with_their_own_files() {
+    fn a_review_holds_the_whole_subtask_and_each_of_its_commits_with_their_own_files() {
         let lab = repo("hub-review");
         let step = entry(2, Mark::Ready, &[&lab.shas[1], &lab.shas[2]]);
         let review = build(&lab.slot, "billing@app", &lab.dir, &step).unwrap();
-        assert_eq!((review.since.as_str(), review.head.as_str(), review.files.len()), ("main", lab.shas[2].as_str(), 0), "the review ends at the step's last commit and its files are the step's");
-        let shown = review.step.as_ref().unwrap();
-        assert_eq!((shown.number, shown.title.as_str()), (2, "Step 2"));
-        assert_eq!(shown.files.iter().map(|file| file.path.as_str()).collect::<Vec<_>>(), ["b", "c"], "the whole step, from under its first commit to its last");
+        assert_eq!((review.since.as_str(), review.head.as_str(), review.files.len()), ("main", lab.shas[2].as_str(), 0), "the review ends at the subtask's last commit and its files are the subtask's");
+        let shown = review.subtask.as_ref().unwrap();
+        assert_eq!((shown.id.as_str(), shown.title.as_str()), ("s2", "Subtask 2"));
+        assert_eq!(shown.files.iter().map(|file| file.path.as_str()).collect::<Vec<_>>(), ["b", "c"], "the whole subtask, from under its first commit to its last");
         assert_eq!(shown.commits.iter().map(|commit| (commit.sha.as_str(), commit.subject.as_str(), commit.body.as_str(), commit.files.iter().map(|file| file.path.as_str()).collect::<Vec<_>>())).collect::<Vec<_>>(), [
             (lab.shas[1].as_str(), "Add b", "Why b exists.\nIt pays.", vec!["b"]),
             (lab.shas[2].as_str(), "Add c", "", vec!["c"]),
         ]);
         let file = &shown.files[0];
         assert_eq!((file.status, file.add, file.del, file.omitted, file.hunks[0].lines[0].new), (FileStatus::Added, 1, 0, false, Some(1)));
-        assert_eq!(file.content, shown.commits[0].files[0].content, "b is the same at the step's end as in its own commit");
+        assert_eq!(file.content, shown.commits[0].files[0].content, "b is the same at the subtask's end as in its own commit");
+        let apart = Entry { contiguous: false, ..entry(4, Mark::Ready, &[&lab.shas[0], &lab.shas[2]]) };
+        let review = build(&lab.slot, "billing@app", &lab.dir, &apart).unwrap();
+        let shown = review.subtask.as_ref().unwrap();
+        assert_eq!((shown.files.iter().map(|file| file.path.as_str()).collect::<Vec<_>>(), shown.commits.len()), (vec!["a", "c"], 2), "a subtask whose commits lie apart is its commits' files, never what lies between them");
         let logo = commit(&lab.slot, "logo.bin", "\0\x01\x02binary", "Add a logo");
-        let binary = &build(&lab.slot, "billing@app", &lab.dir, &entry(3, Mark::Ready, &[&logo])).unwrap().step.unwrap().files[0];
+        let binary = &build(&lab.slot, "billing@app", &lab.dir, &entry(3, Mark::Ready, &[&logo])).unwrap().subtask.unwrap().files[0];
         assert!(binary.omitted && binary.hunks.is_empty(), "a binary file is left out of the blob");
         let _ = std::fs::remove_dir_all(&lab.root);
     }
 
     #[test]
-    fn a_read_mark_lands_on_the_step_or_the_commit_whose_content_the_phone_saw() {
+    fn a_read_mark_lands_on_the_subtask_or_the_commit_whose_content_the_phone_saw() {
         let lab = repo("hub-review-read");
         let listed = || entries(vec![entry(1, Mark::Accepted, &[&lab.shas[0]]), entry(2, Mark::Ready, &[&lab.shas[1], &lab.shas[2]])]);
         let review = build(&lab.slot, "billing@app", &lab.dir, &listed().unwrap().items[1]).unwrap();
-        let content = review.step.as_ref().unwrap().files[0].content.clone();
+        let content = review.subtask.as_ref().unwrap().files[0].content.clone();
         let read = |sha: Option<&str>, content: &str| ReviewRead { address: "billing@app".to_string(), path: "b".to_string(), read: true, content: content.to_string(), sha: sha.map(str::to_string) };
         assert_eq!(read_in(&lab.slot, listed(), &read(None, &"a".repeat(40))).0, Outcome::Refused { reason: Reason::HeadMoved });
         assert_eq!(read_in(&lab.slot, listed(), &read(None, &content)).0, Outcome::Done);
-        assert!(data::is_read(&lab.slot, "b", Some(&data::Range { from: format!("{}^", lab.shas[1]), to: lab.shas[2].clone() })), "the mark the split reads for the step");
-        assert!(build(&lab.slot, "billing@app", &lab.dir, &listed().unwrap().items[1]).unwrap().step.unwrap().files[0].read);
+        assert!(data::is_read(&lab.slot, "b", Some(&data::Range { from: format!("{}^", lab.shas[1]), to: lab.shas[2].clone() })), "the mark the split reads for the subtask");
+        assert!(build(&lab.slot, "billing@app", &lab.dir, &listed().unwrap().items[1]).unwrap().subtask.unwrap().files[0].read);
         assert_eq!(read_in(&lab.slot, listed(), &read(Some(&lab.shas[1]), &content)).0, Outcome::Done, "a mark made in the commit");
         assert_eq!(read_in(&lab.slot, listed(), &read(Some(&lab.shas[2]), &content)).0, Outcome::Refused { reason: Reason::HeadMoved }, "c's commit holds no b of its own");
-        assert_eq!(read_in(&lab.slot, listed(), &read(Some(SHA), &content)).0, Outcome::Refused { reason: Reason::HeadMoved }, "a commit in no step");
+        assert_eq!(read_in(&lab.slot, listed(), &read(Some(SHA), &content)).0, Outcome::Refused { reason: Reason::HeadMoved }, "a commit in no subtask");
         assert_eq!(read_in(&lab.slot, None, &read(None, &content)).0, Outcome::Refused { reason: Reason::AlreadySettled });
         let _ = std::fs::remove_dir_all(&lab.root);
     }
 
     #[test]
-    fn accepting_a_step_from_the_phone_takes_it_whole_only_while_it_ends_where_the_phone_saw_it() {
+    fn accepting_a_subtask_from_the_phone_takes_it_whole_only_while_it_ends_where_the_phone_saw_it() {
         let lab = repo("hub-review-accept");
         let ready = |mark| entries(vec![entry(2, mark, &[&lab.shas[1], &lab.shas[2]])]);
-        let accept = |step: u32, head: &str| AcceptStep { address: "billing@app".to_string(), step, head: head.to_string() };
-        let never = |_: &Path, _: &str, _: usize| -> crate::sh::Result<String> { panic!("not accepted") };
-        assert_eq!(accept_in(&lab.slot, ready(Mark::Ready), &accept(2, &lab.shas[1]), never).0, Outcome::Refused { reason: Reason::HeadMoved }, "the step gained a commit since");
-        assert_eq!(accept_in(&lab.slot, ready(Mark::Ready), &accept(3, &lab.shas[2]), never).0, Outcome::Refused { reason: Reason::HeadMoved });
-        assert_eq!(accept_in(&lab.slot, ready(Mark::Accepted), &accept(2, &lab.shas[2]), never).0, Outcome::Refused { reason: Reason::AlreadySettled });
-        assert_eq!(accept_in(&lab.slot, ready(Mark::InProgress), &accept(2, &lab.shas[2]), never).0, Outcome::Refused { reason: Reason::HeadMoved }, "a step still in progress");
+        let accept = |subtask: &str, head: &str| AcceptSubtask { address: "billing@app".to_string(), subtask: subtask.to_string(), head: head.to_string() };
+        let never = |_: &Path, _: &str, _: &str| -> crate::sh::Result<String> { panic!("not accepted") };
+        assert_eq!(accept_in(&lab.slot, ready(Mark::Ready), &accept("s2", &lab.shas[1]), never).0, Outcome::Refused { reason: Reason::HeadMoved }, "the subtask gained a commit since");
+        assert_eq!(accept_in(&lab.slot, ready(Mark::Ready), &accept("s3", &lab.shas[2]), never).0, Outcome::Refused { reason: Reason::HeadMoved });
+        assert_eq!(accept_in(&lab.slot, ready(Mark::Accepted), &accept("s2", &lab.shas[2]), never).0, Outcome::Refused { reason: Reason::AlreadySettled });
+        assert_eq!(accept_in(&lab.slot, ready(Mark::InProgress), &accept("s2", &lab.shas[2]), never).0, Outcome::Refused { reason: Reason::HeadMoved }, "a subtask still in progress");
         let ran = std::cell::RefCell::new(None);
-        let (outcome, text) = accept_in(&lab.slot, ready(Mark::Ready), &accept(2, &lab.shas[2]), |_, task, number| { *ran.borrow_mut() = Some((task.to_string(), number)); Ok(String::new()) });
-        assert_eq!((outcome, text.as_str()), (Outcome::Done, "Accepted step 2 of billing@app"));
-        assert_eq!(ran.into_inner(), Some(("billing".to_string(), 2)), "by the step, so every commit in it");
+        let (outcome, text) = accept_in(&lab.slot, ready(Mark::Ready), &accept("s2", &lab.shas[2]), |_, task, id| { *ran.borrow_mut() = Some((task.to_string(), id.to_string())); Ok(String::new()) });
+        assert_eq!((outcome, text.as_str()), (Outcome::Done, "Accepted Subtask 2 of billing@app"));
+        assert_eq!(ran.into_inner(), Some(("billing".to_string(), "s2".to_string())), "by the subtask, so every commit in it");
         let _ = std::fs::remove_dir_all(&lab.root);
     }
 
     #[test]
-    fn the_phone_opens_the_step_it_names_while_ready_or_accepted_else_the_first_ready() {
+    fn the_phone_opens_the_subtask_it_names_while_ready_or_accepted_else_the_first_ready() {
         let listed = || data::Entries { items: vec![entry(1, Mark::Accepted, &["a"]), entry(2, Mark::Ready, &["b", "c"]), entry(3, Mark::InProgress, &["d"]), entry(4, Mark::Planned, &[])], steps: true, ..data::Entries::default() };
-        let number = |step| opened_in(listed(), step).map(|entry| entry.number);
-        assert_eq!((number(None), number(Some(1)), number(Some(2))), (Some(2), Some(1), Some(2)));
-        assert_eq!((number(Some(3)), number(Some(4)), number(Some(9))), (None, None, None), "a step in progress or planned has nothing to review yet");
+        let number = |id: Option<&str>| opened_in(listed(), id).map(|entry| entry.number);
+        assert_eq!((number(None), number(Some("s1")), number(Some("s2"))), (Some(2), Some(1), Some(2)));
+        assert_eq!((number(Some("s3")), number(Some("s4")), number(Some("s9"))), (None, None, None), "a subtask in progress or planned has nothing to review yet");
     }
 
     #[test]
@@ -377,28 +431,30 @@ mod tests {
         let sha = commit(&lab.slot, "ok.txt", "y\n", "Add two files").trim().to_string();
         assert!(sh(&lab.slot, &["show", "--name-only", "--format=", &sha]).contains("at:noon.txt"));
         let review = build(&lab.slot, "billing@app", &lab.dir, &entry(1, Mark::Ready, &[&sha])).unwrap();
-        let step = review.step.as_ref().unwrap();
+        let step = review.subtask.as_ref().unwrap();
         assert_eq!((step.files.iter().map(|file| file.path.as_str()).collect::<Vec<_>>(), step.commits[0].files.len()), (vec!["ok.txt"], 1));
         assert_eq!(review.left_out.as_deref(), Some("1 file whose name the phone cannot show; review it at the machine"));
         let _ = std::fs::remove_dir_all(&lab.root);
     }
 
     #[test]
-    fn a_task_offers_the_first_ready_step_with_the_files_of_the_whole_step() {
-        use crate::tasks::{Step, StepState, Steps};
-        let held = |index: usize, title: &str, shas: &[&str], accepted: bool| Step { index, title: title.to_string(), state: if accepted { StepState::Accepted } else { StepState::Ready }, commits: shas.iter().map(|sha| crate::tasks::StepCommit { sha: sha.to_string(), subject: String::new(), accepted }).collect(), extra: false };
-        let step = |index: usize, title: &str, state: StepState| Step { index, title: title.to_string(), state, commits: Vec::new(), extra: false };
+    fn a_task_offers_the_first_ready_subtask_with_the_files_of_the_whole_subtask() {
+        use crate::tasks::{Subtask, SubtaskState, Subtasks};
+        let held = |id: &str, title: &str, shas: &[&str], accepted: bool| Subtask { id: id.to_string(), number: 1, title: title.to_string(), state: if accepted { SubtaskState::Accepted } else { SubtaskState::Ready }, commits: shas.iter().map(|sha| crate::tasks::SubtaskCommit { sha: sha.to_string(), subject: String::new(), accepted }).collect(), pushed: Vec::new(), extra: false, added: None, contiguous: true, waits_for: None };
         let lab = repo("hub-offer");
         let mut item = crate::status::tests::task(Some("idle"), None, 3);
         item.path = Some(lab.slot.clone());
-        assert_eq!(offer(&item), None, "no steps, no offer");
-        item.steps = Steps { pushed: 0, items: vec![held(0, "Model", &[&lab.shas[0]], true), held(1, "Command", &[&lab.shas[1], &lab.shas[2]], false)] };
-        assert_eq!(offer(&item), Some(ReviewOffer { step: Some(2), files: 2 }));
-        item.steps.items[1].state = StepState::InProgress;
-        assert_eq!(offer(&item), None, "a step in progress waits for nothing yet");
-        item.steps.items[1] = held(1, "Command", &[&lab.shas[1], &lab.shas[2]], true);
-        item.steps.items.push(step(2, "Docs", StepState::Planned));
-        assert_eq!(offer(&item), None, "every step accepted");
+        assert_eq!(offer(&item), None, "no subtasks, no offer");
+        item.subtasks = Subtasks { items: vec![held("model", "Model", &[&lab.shas[0]], true), held("command", "Command", &[&lab.shas[1], &lab.shas[2]], false)], ..Subtasks::default() };
+        assert_eq!(offer(&item), Some(ReviewOffer { subtask: Some("command".to_string()), files: 2 }));
+        item.subtasks.items[1].contiguous = false;
+        item.subtasks.items[1].commits.remove(1);
+        item.subtasks.items[1].commits.push(crate::tasks::SubtaskCommit { sha: lab.shas[2].clone(), subject: String::new(), accepted: false });
+        assert_eq!(offer(&item).map(|offer| offer.files), Some(2), "a subtask apart counts the files its own commits change");
+        item.subtasks.items[1].state = SubtaskState::InProgress;
+        assert_eq!(offer(&item), None, "a subtask in progress waits for nothing yet");
+        item.subtasks.items[1] = held("command", "Command", &[&lab.shas[1], &lab.shas[2]], true);
+        assert_eq!(offer(&item), None, "every subtask accepted");
         let _ = std::fs::remove_dir_all(&lab.root);
     }
 }

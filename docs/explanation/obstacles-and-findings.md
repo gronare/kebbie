@@ -4,7 +4,7 @@ This page explains what happens when a task meets something in its way, or a rev
 
 ## A task stops at an obstacle instead of going around it
 
-An obstacle is something on the task's own path: a precondition its work needs is missing, a step of its plan cannot be built as planned, a trap makes it unsafe, or it goes only by a workaround. A red test the task did not cause, and a check it cannot run, count too.
+An obstacle is something on the task's own path: a precondition its work needs is missing, a part of its plan cannot be built as planned, a trap makes it unsafe, or it goes only by a workaround. A red test the task did not cause, and a check it cannot run, count too.
 
 The task stops that piece of work, writes the obstacle down with what it read and every way it sees, and raises it with [`kebbie obstacle`](../reference/commands.md#kebbie-obstacle---on-work-text). kebbie keeps it, and the task's row reads `obstacle · investigating` under Working, where a blocked report alone would sink under Idle. The task goes on with work the obstacle does not touch, or reports blocked.
 
@@ -15,7 +15,7 @@ The keeper starts kebbie's own investigator on each raised obstacle, the way it 
 | Decision | When | What kebbie does |
 | --- | --- | --- |
 | `workaround` | What it goes around changes anyway, or the real fix is out of proportion and the workaround stays contained | Tells the task to go on, with what replaces the workaround; when nothing does, files the real fix in the backlog. |
-| `subtask` | The missing piece belongs to this task and is small next to it | Puts it first among the task's unpushed steps and tells the task. One per task needs no answer from you; a second asks you. |
+| `subtask` | The missing piece belongs to this task and is small next to it | Adds it to the task's subtasks, with the investigator's reason, ahead of the subtask the task's commits go to now, sends the next commits to it, and tells the task its id. The task marks it done when it is built. One per task needs no answer from you; a second asks you. |
 | `task` | The missing piece is work of its own, or the same obstacle was met before | Queues that task to start at once, the lead's way, or points to a running task that builds it. The blocked work waits for it. |
 | `ask` | The trade-off is yours, or the investigator is unsure | Asks you on the board and the phone, with the options and a recommendation. Your answer goes to the task as yours. |
 

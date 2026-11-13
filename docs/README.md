@@ -17,7 +17,7 @@ Tasks
 - [Send a task to review](how-to/send-a-task-to-review.md): hold the push until a read-only reviewer passes the code.
 - [Push part of a task](how-to/push-part-of-a-task.md): land the first commits and keep the task open.
 - [Act on comments on pushed commits](how-to/act-on-comments-on-pushed-commits.md): each one read on its own merits, fixed in a task or answered.
-- [Work in steps](how-to/work-in-steps.md): a task lists its steps, you push them one at a time or together.
+- [Work in subtasks](how-to/work-in-steps.md): a task lists its subtasks, you accept them and push the accepted run while it builds on.
 - [Try a task before pushing](how-to/try-a-task-before-pushing.md): put its commits on local main, push main when it is right.
 - [Finish or throw away a task](how-to/finish-a-task.md): done, drop and reset.
 - [Park a task until later](how-to/park-a-task.md): out of its group, the lead's summaries and your notifications until it comes back.

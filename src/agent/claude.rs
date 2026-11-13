@@ -252,7 +252,7 @@ fn trusted_in(claude: &Value, dir: &Path) -> bool {
 // The deny rules and env rewrite name the rule, the push block holds when they are slipped, and the sandbox keeps the shell from passing as the user; gate is the task's address when kebbie keeps its note, whose Problem its edits then wait for.
 pub(crate) fn settings(kebbie: &str, address: &str, gate: Option<&str>, dirs: Option<&TaskDirs>, sandbox: Option<&Policy>) -> String {
     let hook = json!([{ "hooks": [{ "type": "command", "command": format!("{} hook", crate::sh::quote(kebbie)) }] }]);
-    let allow = ["peers", "tell", "report", "ask", "steps", "accepted", "routine ok"].map(|command| format!("Bash({kebbie} {command}:*)"));
+    let allow = ["peers", "tell", "report", "ask", "subtasks", "steps", "accepted", "routine ok"].map(|command| format!("Bash({kebbie} {command}:*)"));
     let evidence = json!([{ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("{} hook evidence {}", crate::sh::quote(kebbie), crate::sh::quote(address)) }] }]);
     let push_guard = json!({ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("{} hook push-guard", crate::sh::quote(kebbie)) }] });
     let mut hooks = json!({ "UserPromptSubmit": hook, "Stop": hook, "PreToolUse": [push_guard], "PostToolUse": evidence, "PostToolUseFailure": evidence });
@@ -455,7 +455,7 @@ pub(crate) fn reviewer_args(reviewer: &super::Reviewer) -> Vec<String> {
 }
 
 const INVESTIGATOR_ALLOWED: [&str; 10] = ["Read", "Grep", "Glob", "WebSearch", "WebFetch", "mcp__plugin_vault_vault", "Bash(git log:*)", "Bash(git diff:*)", "Bash(git show:*)", "Bash(git grep:*)"];
-const INVESTIGATOR_KEBBIE: [&str; 8] = ["status", "messages", "obstacles", "steps", "backlog", "found", "peers", "docs"];
+const INVESTIGATOR_KEBBIE: [&str; 9] = ["status", "messages", "obstacles", "subtasks", "steps", "backlog", "found", "peers", "docs"];
 
 // The investigator runs with the user's own settings, plugins and MCP servers, as every agent here does: the code, the vault and the web, and kebbie's reading commands.
 pub(crate) fn investigator_args(reviewer: &super::Reviewer, kebbie: &str) -> Vec<String> {

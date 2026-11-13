@@ -985,7 +985,7 @@ impl App {
                                     let marks = push::Marks::read(&path, &commits, item.turn_under_way()).while_working(busy(&item));
                                     if busy(&item) && marks.through().is_none() {
                                         self.about("push", &item.name);
-                                        self.show(Notice::new(Tone::NotNow, "Not yet: its Claude is still working").next("This opens once it reports, or once you accept its first step.").ok());
+                                        self.show(Notice::new(Tone::NotNow, "Not yet: its Claude is still working").next("This opens once it reports, or once you accept its first subtask.").ok());
                                         return;
                                     }
                                     let (card, tests) = (report::card_for(&path), evidence::for_path(&path));

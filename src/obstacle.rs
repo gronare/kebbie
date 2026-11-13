@@ -353,7 +353,7 @@ pub fn raise(cwd: &Path, on: Option<&str>, text: &str) -> Result<String> {
 }
 
 fn step_in_progress(cwd: &Path) -> Option<String> {
-    crate::tasks::steps_for(cwd, true).items.into_iter().find(|step| step.state == crate::tasks::StepState::InProgress).map(|step| step.title)
+    crate::tasks::subtasks_for(cwd, true).items.into_iter().find(|subtask| subtask.state == crate::tasks::SubtaskState::InProgress).map(|subtask| subtask.title)
 }
 
 // A review's findings about scope or intent go to the investigator as an obstacle of the review's; none starts when it is off, and the review asks the user as it does.
@@ -681,12 +681,12 @@ pub fn carry_out(state: &Path, address: &str, obstacle: &Obstacle, answer: &Answ
         }
         Kind::Subtask => {
             let title = answer.subtask.clone().unwrap_or_else(|| answer.plan.clone());
-            let placed = match crate::tasks::insert_first_step(state, &obstacle.worktree, address, &title) {
-                Ok(Some(number)) => format!(" kebbie put \"{title}\" in your steps as step {number}, ahead of the step it prepares."),
+            let placed = match crate::tasks::add_preparatory(state, &obstacle.worktree, address, &title, &answer.reason, now) {
+                Ok(Some(id)) => format!(" kebbie added \"{title}\" to your subtasks as {id}, ahead of the subtask it prepares, and your next commits go to it; mark it done with kebbie subtasks done {id}."),
                 Ok(None) => String::new(),
-                Err(error) => format!(" kebbie could not put it in your steps ({error}): run kebbie steps with it first among the unpushed ones."),
+                Err(error) => format!(" kebbie could not add it to your subtasks ({error}): add it with kebbie subtasks add \"{title}\" --because \"<why>\" --prepares <id>."),
             };
-            format!("{header}: subtask. Build \"{title}\" first, its commits ahead of the work it prepares ({}); a preparatory part changes nothing the user gets, so no question.{placed} {}", answer.plan, answer.reason)
+            format!("{header}: subtask. Build \"{title}\" next, before more of the work it prepares ({}); a preparatory part changes nothing the user gets, so no question.{placed} {}", answer.plan, answer.reason)
         }
         Kind::Task => format!("{header}: a task of its own first. {} {}", start_task(address, answer)?, answer.reason),
         Kind::Ask | Kind::Said => unreachable!(),

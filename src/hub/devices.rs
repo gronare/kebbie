@@ -263,6 +263,10 @@ impl Asked {
             Payload::ReviewComments(comments) => Asked { kind: Kind::ReviewComments, task: task(&comments.address), said: None },
             Payload::ReviewRead(read) => Asked { kind: Kind::ReviewRead, task: task(&read.address), said: Some(read.path.clone()) },
             Payload::AcceptStep(accept) => Asked { kind: Kind::AcceptStep, task: task(&accept.address), said: None },
+            Payload::AcceptSubtask(accept) => Asked { kind: Kind::AcceptSubtask, task: task(&accept.address), said: None },
+            Payload::FoundStart(start) => Asked { kind: Kind::FoundStart, task: item(&start.item), said: None },
+            Payload::FoundAdd(add) => Asked { kind: Kind::FoundAdd, task: item(&add.item), said: Some(task(&add.task)) },
+            Payload::FoundDismiss(dismiss) => Asked { kind: Kind::FoundDismiss, task: item(&dismiss.item), said: None },
             other => Asked { kind: other.kind(), task: String::new(), said: None },
         }
     }
@@ -279,7 +283,10 @@ impl Asked {
             Kind::ReviewOpen => format!("look at {}'s review", self.task),
             Kind::ReviewComments => format!("set of review comments for {}", self.task),
             Kind::ReviewRead => format!("read mark in {}'s review", self.task),
-            Kind::AcceptStep => format!("acceptance of {}'s step", self.task),
+            Kind::AcceptStep | Kind::AcceptSubtask => format!("acceptance of {}'s subtask", self.task),
+            Kind::FoundStart => format!("start of {}, found by tasks", self.task),
+            Kind::FoundAdd => format!("addition of {}, found by tasks, to a task", self.task),
+            Kind::FoundDismiss => format!("dismissal of {}, found by tasks", self.task),
             other => other.name().to_string(),
         }
     }

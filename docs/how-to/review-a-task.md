@@ -1,14 +1,14 @@
 # Review a task's changes
 
-Read a task's diff next to its Claude, step by step, and send it comments line by line.
+Read a task's diff next to its Claude, subtask by subtask, and send it comments line by line.
 
 ![The review view beside Claude: step 1 accepted with a, a line comment on step 2 sent to Claude, then the reviewer's rules check](../assets/clips/review-in-nvim.webp)
 
-1. Select the task on the board and press `r`. A split opens next to Claude: kebbie's view with the task's steps and files on top, the diff in nvim below. It opens on the first step waiting for your accept.
-2. Read the step's commits, listed under its tab, then pick a file with `↑` `↓` or a click. nvim shows its diff across the whole step at once. Press `→` to read one commit at a time: a step's commits follow it as tabs of their own, each with its message and its own diff.
+1. Select the task on the board and press `r`. A split opens next to Claude: kebbie's view with the task's subtasks and files on top, the diff in nvim below. It opens on the first subtask waiting for your accept.
+2. Read the subtask's commits, listed under its tab, then pick a file with `↑` `↓` or a click. nvim shows its diff across the whole subtask at once. Press `→` to read one commit at a time: a subtask's commits follow it as tabs of their own, each with its message and its own diff.
 3. Press `tab` twice to go to the diff. Press `c` on a line, or drag over lines and press `c`, and write your comment. It is typed into Claude's input box as `path:line in <sha> — text`, not sent.
-4. Press `tab` to go back to the steps. Press `r` on a file you have read.
-5. Press `a` on the step to accept all its commits, or on one commit to accept that one. The view moves on to the next step waiting.
+4. Press `tab` to go back to the subtasks. Press `r` on a file you have read.
+5. Press `a` on the subtask to accept all its commits, or on one commit to accept that one. The view moves on to the next subtask waiting.
 6. Switch to Claude's pane and press Enter to send all your comments at once.
 
 - If you are in the task's Claude, `/kebbie:review-split` opens the same split.

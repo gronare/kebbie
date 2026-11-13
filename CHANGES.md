@@ -6,7 +6,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 
 ### What's new
 - A task that meets an obstacle in its way stops and raises it with kebbie obstacle, and the board shows it being investigated.
-- kebbie's own investigator decides each obstacle once and carries it out: a workaround, a preparatory step, a task first, or a question to you.
+- kebbie's own investigator decides each obstacle once and carries it out: a workaround, a preparatory subtask, a task first, or a question to you.
 - investigate.profile picks the investigator's profile, Claude or Codex, or none to leave obstacles to the lead.
 - kebbie obstacles lists every obstacle with its decision and who took it: the investigator, the lead or you.
 - Review findings about scope or intent go to the investigator first, so only what stays uncertain reaches you.
@@ -15,9 +15,14 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - With the vault, a task searches the backlog before it files what it noticed, and adds itself to an item already there.
 - A task asks a trade-off that is yours before it builds it, and tells the lead each change to its plan with its reason.
 - A sign-off card has three parts, Built, Decisions with who took each, and Also noticed, and asks you nothing to confirm.
-- A step holds one or more small commits: a task marks it ready with kebbie steps done, and you review, accept and push it whole; update the hub first.
+- A task lists its work as titled subtasks with kebbie subtasks, and adds one later only with its reason, which you see beside it.
+- A task sends its commits to a subtask with kebbie subtasks on and marks it ready with kebbie subtasks done.
+- p in the push window pushes the accepted run, the commits from the top whose subtasks you accepted, and keeps the task open.
+- A plan from an older kebbie keeps its steps as subtasks with their numbers as ids, and kebbie steps still works.
 - The board shows the rules check on its own line under a task: checking, the project rules it breaks by name, or that you or the lead pushed past it; a passed check shows nothing.
-- From your phone you push a task through one of its steps, and the later steps stay in the task; update the hub first.
+- Your phone shows a task's subtasks, its push order and pushable run, and its latest obstacle with the decision; update the hub first.
+- From your phone you accept a subtask and push the accepted run, while the rest stays in the task.
+- From your phone you start, add to a task or dismiss what tasks found, listed in the backlog.
 - A task names a check to run after its push with kebbie report --after-push; once CI is green it runs the check itself and closes when it holds, or waits under Needs you with what failed.
 - When a hub refuses the board, kebbie says the hub has not enabled answering for your account, with the hub's link.
 - The phone answers an agent's prompt on a task's screen with one tap, while that prompt still shows; update the hub first.
@@ -37,7 +42,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Backlog items follow the vault's task template when the vault has one, and kebbie backlog template prints the sections.
 - A file named by board.backlog.template sets the sections of local backlog items, and kebbie doctor says when it does not read.
 - From your phone you edit a backlog item's title or any of its sections; update the hub first.
-- From your phone you review a task's waiting step: read its files, comment on lines, mark files read and accept it; update the hub first.
+- From your phone you review a task's waiting subtask: read its files, comment on lines, mark files read and accept it; update the hub first.
 - With the vault's note templates, a task's edits and done wait for the template's required sections.
 - With a vault that states watch, the keeper follows the vault's changes as they happen, instead of starting the vault command every 20 seconds and once for each changed backlog note.
 

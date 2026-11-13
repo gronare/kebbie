@@ -7,7 +7,7 @@ description: How a task gets done, from its start to its push: the lead's recipe
 
 A **recipe** is the shape of a task: its phases and where the user is needed. You pick one before you start a task, kebbie shows it under the task's row and writes it to the task's note, and the user reads it there when they ask why a task went the way it did. Your recipe and its why are the record a correction from the user is measured against, so make the why the signal you saw.
 
-Every recipe ends at the user's push, or yours under a push permission they gave. Accepting each step before it goes is the user's option, never a gate a recipe adds.
+Every recipe ends at the user's push, or yours under a push permission they gave. Accepting each subtask before it goes is the user's option, never a gate a recipe adds.
 
 ## Steps
 
@@ -29,14 +29,14 @@ Whether a task needs a reviewer is the assessor's judgement of its work, as your
 
 ## The note holds the history
 
-The task's note is where the why lives: kebbie writes the recipe and the assessor's word there, and a task with a vault note writes, as each phase ends, the approved mockup's link, its plan's steps and each change to them with the reason. Brief the task to keep it, so the board can stay the current state alone.
+The task's note is where the why lives: kebbie writes the recipe and the assessor's word there, and a task with a vault note writes, as each phase ends, the approved mockup's link, its plan's subtasks and each change to them with the reason. Brief the task to keep it, so the board can stay the current state alone.
 
 ## The recipes
 
 ### `small-fix`
 
 - **When**: the prompt settles what changes and how it behaves; one behaviour in a few files, no screen to design, nothing for the user to choose.
-- **Phases**: one step: the fix and the test that goes red without it, in one commit or a preparatory one first. No mockup and no plan beyond that step.
+- **Phases**: one subtask: the fix and the test that goes red without it, in one commit or a preparatory one first. No mockup and no plan beyond that subtask.
 - **The user**: the push.
 
 ### `feature-with-ui`
@@ -44,8 +44,8 @@ The task's note is where the why lives: kebbie writes the recipe and the assesso
 - **When**: a new or rebuilt screen, or behaviour the user will judge by seeing it.
 - **Phases**:
   1. **Mockup.** The task publishes a mockup and puts it to the user as a plan holding its link, with `kebbie ask --plan`. Their yes is the only gate on what is built: it revises the mockup until they say yes.
-  2. **Plan.** The task researches the code and lists its steps with `kebbie steps`. The plan is the task's own; it goes on without the user's approval.
-  3. **Build.** Steps in order, each a slice of the work in small deployable commits, preparatory commits first, trunk-based; `kebbie steps done` hands each finished step to review. When the code contradicts the plan, the task revises it by [PLAN.md](PLAN.md): it rewrites its steps with `kebbie steps`, tells the lead why, and writes the reason in its vault note when it has one.
+  2. **Plan.** The task researches the code and lists its subtasks with `kebbie subtasks`. The plan is the task's own; it goes on without the user's approval.
+  3. **Build.** Subtasks in order, each a slice of the work in small deployable commits, preparatory ones first, trunk-based; `kebbie subtasks done` hands each finished subtask to review. When the code contradicts the plan, the task revises it by [PLAN.md](PLAN.md): it adds a subtask with `kebbie subtasks add --because` or lists them anew, tells the lead why, and writes the reason in its vault note when it has one.
 - **The user**: the mockup's yes, then the push.
 
 ### `task-after-task`
@@ -57,8 +57,8 @@ The task's note is where the why lives: kebbie writes the recipe and the assesso
 ### `rollout-in-stages`
 
 - **When**: the change must reach production in stages with a deploy between them: an expand and contract column rename, a backfill before a constraint, a flag turned on before the old code goes.
-- **Phases**: one task, its steps in stage order. The prompt says where each stage ends and what must be live before the next starts; the task builds on while a stage is out.
-- **The user**: the push. Each stage goes out as a push of its own, through its step's last commit (`p` on that step in the push window, or push through the step from the phone), once the stage before it is live.
+- **Phases**: one task, its subtasks in stage order, each stage's commits above the next stage's in the branch. The prompt says where each stage ends and what must be live before the next starts; the task builds on while a stage is out.
+- **The user**: the push. Each stage goes out as a push of its own once the stage before it is live: the user accepts the stage's subtasks and pushes the accepted run (`p` in the push window, or push from the phone).
 
 ### `follow-up`
 
@@ -86,6 +86,6 @@ The task's note is where the why lives: kebbie writes the recipe and the assesso
 
 ### `same-files`
 
-- **When**: the new work would change files a running task changes (its changed files in `kebbie status --json`, or its steps).
+- **When**: the new work would change files a running task changes (its changed files in `kebbie status --json`, or its subtasks).
 - **Phases**: queue it `--after <running task> --why "both change <file>"`, or, when it is the same change, fold it into the running task with `kebbie tell`.
 - **The user**: nothing for the order.

@@ -49,7 +49,7 @@ impl Fake {
     fn kebbie(&self, args: &[String]) -> std::result::Result<String, String> {
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         match args.as_slice() {
-            ["accept", _, "--step", _] | ["accept", _, "--step", _, "--withdraw"] => Ok("Accepted the step".to_string()),
+            ["accept", _, "--subtask", _] | ["accept", _, "--subtask", _, "--withdraw"] => Ok("Accepted the subtask".to_string()),
             ["accept", _, sha, "--withdraw"] => {
                 let kept: Vec<String> = self.accepted().into_iter().filter(|kept| kept != sha).collect();
                 accept_elsewhere(&self.root, &kept.join("\n"));
@@ -79,11 +79,11 @@ fn accept_elsewhere(root: &Path, shas: &str) {
     crate::state::write(&accepted_file(root), shas).unwrap();
 }
 
-// kebbie's marks as the view reads them in-process: the steps when steps.json is there, else the commits with the fake's acceptances.
+// kebbie's marks as the view reads them in-process: the subtasks when steps.json is there, else the commits with the fake's acceptances.
 fn fake_marks(root: PathBuf, slot: PathBuf) -> impl FnMut(&Path) -> Option<data::Entries> {
     move |_: &Path| {
         if let Some(steps) = fs::read_to_string(root.join("steps.json")).ok().and_then(|text| serde_json::from_str::<Value>(&text).ok()) {
-            return data::from_steps(&steps, "billing");
+            return data::from_subtasks(&steps, "billing");
         }
         let accepted = accepted_in(&root);
         let log = sh(&slot, &["log", "--reverse", "--format=%H %s", "origin/main..HEAD"]);
@@ -156,16 +156,16 @@ fn open(repo: Repo) -> Opened {
     open_with(repo, Panes::default())
 }
 
-// Step 2 holds the first commit, step 3 the next two, step 4 is in progress and step 5 planned.
+// Subtask 2 holds the first commit, subtask 3 the next two, subtask 4 is in progress and subtask 5 planned.
 fn with_steps(repo: &Repo, accepted_first: bool) {
     let commit = |sha: &str, subject: &str, accepted: bool| json!({ "sha": sha, "subject": subject, "accepted": accepted });
     let steps = [
-        json!({ "index": 1, "title": "Change a", "extra": false, "state": if accepted_first { "accepted" } else { "ready" }, "commits": [commit(&repo.shas[0], "Change a", accepted_first)] }),
-        json!({ "index": 2, "title": "Add b and c", "extra": false, "state": "ready", "commits": [commit(&repo.shas[1], "Add b", false), commit(&repo.shas[2], "Add c", false)] }),
-        json!({ "index": 3, "title": "Write the docs", "extra": false, "state": "in-progress", "commits": [] }),
-        json!({ "index": 4, "title": "Release", "extra": false, "state": "planned", "commits": [] }),
+        json!({ "id": "change-a", "number": 2, "title": "Change a", "extra": false, "state": if accepted_first { "accepted" } else { "ready" }, "commits": [commit(&repo.shas[0], "Change a", accepted_first)] }),
+        json!({ "id": "add-b", "number": 3, "title": "Add b and c", "extra": false, "state": "ready", "commits": [commit(&repo.shas[1], "Add b", false), commit(&repo.shas[2], "Add c", false)] }),
+        json!({ "id": "write-docs", "number": 4, "title": "Write the docs", "extra": false, "state": "in-progress", "commits": [] }),
+        json!({ "id": "release", "number": 5, "title": "Release", "extra": false, "state": "planned", "commits": [] }),
     ];
-    fs::write(repo.root.join("steps.json"), json!({ "task": "billing@app", "listed": true, "pushed": 1, "steps": steps }).to_string()).unwrap();
+    fs::write(repo.root.join("steps.json"), json!({ "task": "billing@app", "listed": true, "pushed": 1, "subtasks": steps }).to_string()).unwrap();
 }
 
 fn row<'a>(screen: &'a [String], text: &str) -> &'a str {
@@ -187,23 +187,23 @@ fn a_narrow_review_with_steps_opens_on_the_first_ready_step_with_its_commits_and
     for (sha, subject) in [(&shas[1], "Add b"), (&shas[2], "Add c")] {
         assert!(row(&screen, &format!("{} {subject}", &sha[..7])).contains(&format!("▎   {} {subject}", &sha[..7])), "each commit of the step, one line each: {}", screen.join("\n"));
     }
-    assert!(row(&screen, "FILES").contains("FILES 2 · step 3"), "the whole step: {}", screen.join("\n"));
+    assert!(row(&screen, "FILES").contains("FILES 2 · subtask 3"), "the whole subtask: {}", screen.join("\n"));
     assert!(row(&screen, "+1").contains("▌ +1    -0    b"), "{}", screen.join("\n"));
     let diff: Vec<String> = serde_json::from_value(opened.shown()["diff"].clone()).unwrap();
     assert_eq!(diff[diff.len() - 4..], [format!("{}^", shas[1]), shas[2].clone(), "--".to_string(), "b".to_string()], "from under its first commit to its last");
     assert_eq!(opened.shown()["sha"], json!(shas[2]), "a comment names the step's last commit");
-    assert!(screen[19].starts_with("← → step · ↑ ↓ file · a accept · r read · / filter · tab to the diff"), "{}", screen[19]);
+    assert!(screen[19].starts_with("← → subtask · ↑ ↓ file · a accept · r read · / filter · tab to the diff"), "{}", screen[19]);
     assert!(screen.iter().all(|line| line.chars().count() == 80));
     opened.press(KeyCode::Right);
     assert_eq!(opened.view.selected, Some(Sel::Commit(3, shas[1].clone())), "right goes into the step's commits");
     let screen = opened.screen(80, 20);
-    assert!(row(&screen, "FILES").contains(&format!("FILES 1 · step 3 · {}", &shas[1][..7])) && row(&screen, "Why b exists.").contains("▎ Why b exists."), "a commit shows its own files and message: {}", screen.join("\n"));
+    assert!(row(&screen, "FILES").contains(&format!("FILES 1 · subtask 3 · {}", &shas[1][..7])) && row(&screen, "Why b exists.").contains("▎ Why b exists."), "a commit shows its own files and message: {}", screen.join("\n"));
     opened.press(KeyCode::Char('r'));
     assert!(data::is_read(&opened.repo.slot, "b", Some(&data::Range::commit(&shas[1]))));
     opened.press(KeyCode::Left);
     assert!(opened.view.files.iter().find(|file| file.path == "b").is_some_and(|file| file.read), "b read in its commit is read in the step, the same contents at its end");
     opened.press(KeyCode::Char('a'));
-    assert_eq!(opened.sent("accept billing"), [vec![kebbie_bin(), "accept".to_string(), "billing".to_string(), "--step".to_string(), "3".to_string()]], "a on a step accepts it whole");
+    assert_eq!(opened.sent("accept billing"), [vec![kebbie_bin(), "accept".to_string(), "billing".to_string(), "--subtask".to_string(), "add-b".to_string()]], "a on a subtask accepts it whole");
 }
 
 #[test]
@@ -282,7 +282,7 @@ fn tab_moves_focus_from_the_steps_to_the_files_to_nvim_and_back_and_shift_tab_go
     opened.press(KeyCode::Tab);
     assert_eq!(opened.sent("pane focus"), [focus_argv("p_view", "right")], "beside the view on a wide review");
     let screen = opened.screen(80, 20);
-    assert!(row(&screen, "tab").contains("tab back to the steps"), "{}", screen.join("\n"));
+    assert!(row(&screen, "tab").contains("tab back to the subtasks"), "{}", screen.join("\n"));
 }
 
 #[test]
@@ -322,7 +322,7 @@ fn a_accepts_the_selected_commit_through_kebbie_moves_to_the_next_waiting_and_wi
     opened.clear();
     opened.press(KeyCode::Char('a'));
     assert!(opened.sent("accept billing").is_empty(), "nothing is accepted on all");
-    assert!(opened.screen(80, 20).iter().any(|line| line.contains("Pick a step first")));
+    assert!(opened.screen(80, 20).iter().any(|line| line.contains("Pick a subtask first")));
 }
 
 #[test]
@@ -343,7 +343,7 @@ fn with_steps_kebbies_own_mark_decides_and_steps_without_a_commit_are_skipped() 
     }
     assert_eq!(opened.view.selected, Some(Sel::Step(2)), "out of the step, its commits fold away");
     opened.press(KeyCode::Char('a'));
-    assert_eq!(opened.sent("accept billing")[0][3..], ["--step", "2", "--withdraw"].map(String::from), "step 2 is accepted by kebbie's steps");
+    assert_eq!(opened.sent("accept billing")[0][3..], ["--subtask", "change-a", "--withdraw"].map(String::from), "subtask 2 is accepted by kebbie's subtasks");
 }
 
 #[test]

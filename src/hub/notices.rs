@@ -909,7 +909,7 @@ mod tests {
     }
 
     fn row(key: &ItemKey, title: &str) -> BacklogRow {
-        BacklogRow { item: key.clone(), title: title.to_string(), priority: Priority::Medium, repo: None, state: BacklogState::Ready, filed: 0, home: Home { kind: kebbie_hub_protocol::HomeKind::Vault, label: key.as_str().trim_start_matches("vault:").to_string() }, questions: 0, blocking: 0, goal: None, body: None }
+        BacklogRow { item: key.clone(), title: title.to_string(), priority: Priority::Medium, repo: None, state: BacklogState::Ready, filed: 0, home: Home { kind: kebbie_hub_protocol::HomeKind::Vault, label: key.as_str().trim_start_matches("vault:").to_string() }, questions: 0, blocking: 0, goal: None, body: None, found: None }
     }
 
     fn body(key: &ItemKey, questions: &[(&str, bool, Option<&str>)]) -> Attachment {

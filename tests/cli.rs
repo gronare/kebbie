@@ -1797,33 +1797,36 @@ fn kebbie_hub_dev_points_connect_and_status_at_the_dev_hub_and_its_own_identity_
 }
 
 #[test]
-fn a_task_lists_its_steps_unless_the_setting_is_off_and_only_the_user_accepts_a_commit() {
+fn a_task_lists_its_subtasks_unless_the_setting_is_off_and_only_the_user_accepts_a_commit() {
     let lab = Lab::new("steps");
     let (app, slot) = lab.task_fixture();
     let (app, slot) = (app.to_str().unwrap(), slot.to_str().unwrap());
     fs::write(&lab.config, "[task]\nsteps = false\n").unwrap();
-    let off = lab.run_as("billing@app", &["-C", slot, "steps", "Add refunds", "Document refunds"]);
+    let off = lab.run_as("billing@app", &["-C", slot, "subtasks", "Add refunds", "Document refunds"]);
     assert!(!off.status.success() && stderr(&off).contains("set task.steps = true"), "{}", stderr(&off));
     assert!(!lab.state.join("steps").exists(), "nothing is written while it is off");
     fs::write(&lab.config, "").unwrap();
     let planned = lab.run_as("billing@app", &["-C", slot, "steps", "Add refunds", "Document refunds"]);
-    assert!(planned.status.success(), "{}", stderr(&planned));
-    assert!(stdout(&planned).contains("◐ 1. Add refunds  in progress · 1 commit") && stdout(&planned).contains("○ 2. Document refunds"), "the commit so far is the step in progress's: {}", stdout(&planned));
+    assert!(planned.status.success(), "kebbie steps is kebbie subtasks: {}", stderr(&planned));
+    assert!(stdout(&planned).contains("◐ 1. Add refunds [add-refunds]  in progress · 1 commit") && stdout(&planned).contains("○ 2. Document refunds [document-refunds]"), "the commit so far is the subtask in progress's: {}", stdout(&planned));
+    let unformed = lab.run_as("billing@app", &["-C", slot, "subtasks", "done"]);
+    assert!(!unformed.status.success() && stderr(&unformed).contains("Not marked done: a commit of Add refunds breaks rule 1"), "a subtask goes to you well formed: {}", stderr(&unformed));
+    git(Path::new(slot), &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend", "-m", "Add refunds\n\nRefunds list under each invoice."]);
     let sha = git(Path::new(slot), &["rev-parse", "HEAD"]);
-    let shown = |lab: &Lab| -> serde_json::Value { serde_json::from_str(&stdout(&lab.run(&["-C", app, "steps", "billing", "--json"]))).unwrap() };
-    let refused = run_as_user(&lab, &["-C", app, "accept", "billing", "--step", "1"]);
-    assert!(!refused.status.success() && stderr(&refused).contains("step 1 is not ready yet"), "{}", stderr(&refused));
-    let done = lab.run_as("billing@app", &["-C", slot, "steps", "done"]);
-    assert!(done.status.success() && stdout(&done).contains("● 1. Add refunds  ready · 1 commit"), "kebbie steps done marks the step ready: {} {}", stdout(&done), stderr(&done));
-    let again = lab.run_as("billing@app", &["-C", slot, "steps", "done"]);
-    assert!(!again.status.success() && stderr(&again).contains("Step 2 holds no commit yet"), "{}", stderr(&again));
+    let shown = |lab: &Lab| -> serde_json::Value { serde_json::from_str(&stdout(&lab.run(&["-C", app, "subtasks", "billing", "--json"]))).unwrap() };
+    let refused = run_as_user(&lab, &["-C", app, "accept", "billing", "--subtask", "add-refunds"]);
+    assert!(!refused.status.success() && stderr(&refused).contains("Add refunds is not ready yet"), "{}", stderr(&refused));
+    let done = lab.run_as("billing@app", &["-C", slot, "subtasks", "done"]);
+    assert!(done.status.success() && stdout(&done).contains("● 1. Add refunds [add-refunds]  ready · 1 commit"), "kebbie subtasks done marks the subtask ready: {} {}", stdout(&done), stderr(&done));
+    let again = lab.run_as("billing@app", &["-C", slot, "subtasks", "done"]);
+    assert!(!again.status.success() && stderr(&again).contains("Document refunds holds no commit yet"), "{}", stderr(&again));
     let before = shown(&lab);
-    assert_eq!((before["steps"][0]["state"].as_str(), before["steps"][0]["commits"][0]["sha"].as_str(), before["steps"][0]["commits"][0]["accepted"].as_bool(), before["last_accepted"].as_str()), (Some("ready"), Some(sha.as_str()), Some(false), None));
-    let whole = run_as_user(&lab, &["-C", app, "accept", "billing", "--step", "1"]);
-    assert!(whole.status.success() && stdout(&whole).contains("Accepted step 1"), "{}", stderr(&whole));
-    assert_eq!((shown(&lab)["steps"][0]["state"].as_str(), shown(&lab)["last_accepted"].as_str()), (Some("accepted"), Some(sha.as_str())));
+    assert_eq!((before["subtasks"][0]["state"].as_str(), before["subtasks"][0]["commits"][0]["sha"].as_str(), before["subtasks"][0]["commits"][0]["accepted"].as_bool(), before["last_accepted"].as_str()), (Some("ready"), Some(sha.as_str()), Some(false), None));
+    let whole = run_as_user(&lab, &["-C", app, "accept", "billing", "--subtask", "add-refunds"]);
+    assert!(whole.status.success() && stdout(&whole).contains("Accepted Add refunds"), "{}", stderr(&whole));
+    assert_eq!((shown(&lab)["subtasks"][0]["state"].as_str(), shown(&lab)["last_accepted"].as_str(), shown(&lab)["pushable"]["through"].as_str()), (Some("accepted"), Some(sha.as_str()), Some(sha.as_str())));
     run_as_user(&lab, &["-C", app, "accept", "billing", "--step", "1", "--withdraw"]);
-    assert_eq!(shown(&lab)["steps"][0]["state"].as_str(), Some("ready"), "withdrawn whole");
+    assert_eq!(shown(&lab)["subtasks"][0]["state"].as_str(), Some("ready"), "withdrawn whole, by the number an older --step names");
     for role in ["lead", "billing@app"] {
         let refused = lab.run_as(role, &["-C", app, "accept", "billing", &sha]);
         assert!(!refused.status.success() && stderr(&refused).contains("accepting a commit is the user's call"), "{role}: {}", stderr(&refused));
@@ -1831,7 +1834,7 @@ fn a_task_lists_its_steps_unless_the_setting_is_off_and_only_the_user_accepts_a_
     let accepted = run_as_user(&lab, &["-C", app, "accept", "billing", &sha]);
     assert!(accepted.status.success() && stdout(&accepted).contains("Accepted"), "{}", stderr(&accepted));
     let after = shown(&lab);
-    assert_eq!((after["steps"][0]["commits"][0]["accepted"].as_bool(), after["last_accepted"].as_str()), (Some(true), Some(sha.as_str())));
+    assert_eq!((after["subtasks"][0]["commits"][0]["accepted"].as_bool(), after["last_accepted"].as_str()), (Some(true), Some(sha.as_str())));
     let withdrawn = run_as_user(&lab, &["-C", app, "accept", "billing", &sha, "--withdraw"]);
     assert!(withdrawn.status.success() && stdout(&withdrawn).contains("Acceptance withdrawn"), "{}", stderr(&withdrawn));
     assert_eq!(shown(&lab)["last_accepted"], serde_json::Value::Null);
@@ -1840,10 +1843,14 @@ fn a_task_lists_its_steps_unless_the_setting_is_off_and_only_the_user_accepts_a_
     assert!(read.status.success(), "a task reads its acceptances: {}", stderr(&read));
     let read: serde_json::Value = serde_json::from_str(&stdout(&read)).unwrap();
     assert_eq!((read["commits"][0]["sha"].as_str(), read["commits"][0]["accepted"].as_bool()), (Some(sha.as_str()), Some(true)));
-    let flagged = lab.run_as("billing@app", &["-C", slot, "steps", "Add refunds", "-1 off by one"]);
-    assert!(!flagged.status.success() && stderr(&flagged).contains("does not know -1 off by one") && stderr(&flagged).contains("kebbie steps --"), "{}", stderr(&flagged));
-    let dashed = lab.run_as("billing@app", &["-C", slot, "steps", "--", "Add refunds", "-1 off by one"]);
-    assert!(dashed.status.success() && stdout(&dashed).contains("2. -1 off by one"), "after -- every word is a step: {}", stdout(&dashed));
+    let unreasoned = lab.run_as("billing@app", &["-C", slot, "subtasks", "add", "Store refunds"]);
+    assert!(!unreasoned.status.success() && stderr(&unreasoned).contains("needs --because"), "{}", stderr(&unreasoned));
+    let added = lab.run_as("billing@app", &["-C", slot, "subtasks", "add", "Store refunds", "--because", "the docs need a stored refund", "--prepares", "document-refunds"]);
+    assert!(added.status.success() && stdout(&added).contains("Added Store refunds [store-refunds].") && stdout(&added).contains("2. Store refunds [store-refunds]"), "{} {}", stdout(&added), stderr(&added));
+    let flagged = lab.run_as("billing@app", &["-C", slot, "subtasks", "Add refunds", "-1 off by one"]);
+    assert!(!flagged.status.success() && stderr(&flagged).contains("does not know -1 off by one") && stderr(&flagged).contains("kebbie subtasks --"), "{}", stderr(&flagged));
+    let dashed = lab.run_as("billing@app", &["-C", slot, "subtasks", "--", "Add refunds", "-1 off by one"]);
+    assert!(dashed.status.success() && stdout(&dashed).contains("-1 off by one [1-off]"), "after -- every word is a subtask: {}", stdout(&dashed));
 }
 
 #[test]

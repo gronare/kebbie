@@ -38,9 +38,9 @@ Without a name, `land`, `follow`, `review`, `evidence`, `push`, `stage`, `unstag
 | [`kebbie review`](#kebbie-review-name) | Send a task to the reviewer. |
 | [`kebbie evidence`](#kebbie-evidence-name---json) | The test runs kebbie recorded for a task. |
 | [`kebbie approve`](#kebbie-approve-name) | Push a task's commits past the rules check. |
-| [`kebbie accept`](#kebbie-accept-name-sha) | Accept one of a task's commits, or a whole step. |
+| [`kebbie accept`](#kebbie-accept-name-sha) | Accept one of a task's commits, or a whole subtask. |
 | [`kebbie accepted`](#kebbie-accepted-name) | Which of a task's commits are accepted. |
-| [`kebbie steps`](#kebbie-steps-name-step-) | A task's steps and the state of each. |
+| [`kebbie subtasks`](#kebbie-subtasks-name-subtask-) | A task's subtasks, the state of each, the push order and the pushable run. |
 
 ### `kebbie start <name> [prompt]`
 
@@ -439,17 +439,17 @@ Your word or the lead's that a task's commits hold to the rules skill. It overri
 
 ### `kebbie accept <name> <sha>`
 
-Your word that one of the task's commits is right. Only you may run it: kebbie refuses it to the lead and to every task, whose settings deny it too. `kebbie steps` shows a step as accepted (`✓`) once every commit in it is. It marks the commit and blocks nothing, with `task.steps` on or off.
+Your word that one of the task's commits is right. Only you may run it: kebbie refuses it to the lead and to every task, whose settings deny it too. `kebbie subtasks` shows a subtask as accepted (`✓`) once every commit in it is. It marks the commit and blocks nothing, with `task.steps` on or off.
 
 - It belongs to the commit's code: a clean rebase or a reworded message keeps it, a changed line takes it back. Two commits with the same change, such as two empty commits, are accepted one at a time.
 - `<sha>` is one of the task's commits not yet pushed.
-- `kebbie accept <name> --step <n>` accepts every commit of step `n` at once. The step must be ready: its task's Claude ran `kebbie steps done` on it.
+- `kebbie accept <name> --subtask <id>` accepts every commit of a subtask at once, named by its id or its number. The subtask must be ready: its task's agent ran `kebbie subtasks done` on it. `--step <id>` is the same option.
 - `kebbie accepted` reads which commits are accepted.
 
 | Option | What it does |
 | --- | --- |
-| `--step <n>` | Accept every commit of step `n`, in place of one `<sha>`. |
-| `--withdraw` | Take the acceptance back, of the commit or of every commit in the step. |
+| `--subtask <id>` | Accept every commit of the subtask, in place of one `<sha>`. |
+| `--withdraw` | Take the acceptance back, of the commit or of every commit in the subtask. |
 
 ### `kebbie accepted [name]`
 
@@ -459,33 +459,45 @@ The task's commits not yet pushed, each marked `✓` when you accepted it. It on
 | --- | --- |
 | `--json` | `task`, `last_accepted` (the last commit of the run of accepted ones from the first unpushed one, or `null`) and `commits`, each with `sha`, `subject` and `accepted`. |
 
-### `kebbie steps [name] ["<step>" ...]`
+### `kebbie subtasks [name] ["<subtask>" ...]`
 
-The task's steps, in the order they go out. A step is a slice of the work holding one or more small commits, each deployable on its own. It needs [`task.steps`](configuration.md#tasks) on for the task's repo, the default, and refuses with how to turn it on when it is off.
+The task's work as titled subtasks, in the order they go out. A subtask is a slice of the work holding one or more small commits, each deployable on its own. It needs [`task.steps`](configuration.md#tasks) on for the task's repo, the default, and refuses with how to turn it on when it is off. `kebbie steps` is the same command.
 
-- In a task's worktree, every word is a step's title. Elsewhere, the first word names the task.
-- Put `--` before the titles when one starts with `-`: `kebbie steps -- "-v prints the version"`. Without it, kebbie refuses a word it would read as an option, so no title is dropped.
-- With titles, it writes the list, then shows it. A task's Claude runs it before its first line of code; you or the lead may run it too, but a task writes only its own steps.
-- Writing it again changes every step not pushed yet. The pushed ones stay first, and each commit stays in the step it is in, by position; a list that starts with the pushed ones again is taken as the whole list.
-- Without titles, it shows the steps.
-
-### `kebbie steps [name] done`
-
-Marks the step in progress ready: its slice of the work is finished and waits for you to review and accept it. The task's next commits go to the next step. A task's Claude runs it in its worktree; you or the lead name the task. It is refused while the step in progress holds no commit.
-
-A commit goes to the step in progress when it is made. A step keeps its commits by their change: a clean rebase, a reworded message or a squash keeps them in it, and a fixup folded into a commit stays in that commit's step. A step counts as pushed once all its commits' changes are on the default branch, however they got there: `kebbie push`, a staged task you pushed with main, or a push from elsewhere. Steps an older kebbie recorded read as one commit each, ready.
-
-| Mark | Means |
-| --- | --- |
-| `↑ 2 pushed` | The steps on the default branch, as a count. |
-| `✓` | Accepted: you accepted every commit in it. |
-| `●` | Ready, with its commits: waiting for you to accept it. |
-| `◐` | In progress, with the commits it holds so far. |
-| `○` | Planned. |
+- In a task's worktree, every word is a subtask's title. Elsewhere, the first word names the task.
+- Each subtask gets a short id from the first two words of its title that carry meaning: `Add the model` is `add-model`. Subtasks an older kebbie recorded as steps keep their step number as id.
+- Put `--` before the titles when one starts with `-`: `kebbie subtasks -- "-v prints the version"`. Without it, kebbie refuses a word it would read as an option, so no title is dropped.
+- With titles, it writes the list, then shows it. A task's agent runs it before its first line of code; you or the lead may run it too, but a task writes only its own subtasks.
+- Listing again keeps each subtask's id and commits under the same title. A changed title at the position of a subtask that holds commits renames it, the pushed ones stay first, and one left out that still holds commits stays, marked `(not in the list)`.
+- Without titles, it shows the subtasks, then the pushable run.
 
 | Option | What it does |
 | --- | --- |
-| `--json` | The steps as `task`, `listed`, `pushed`, `last_accepted` (the last commit of the run of accepted ones from the first unpushed one, or `null`) and `steps`, each with `index`, `title`, `state` (`planned`, `in-progress`, `ready` or `accepted`), `extra` and `commits`, each with `sha`, `subject` and `accepted`. |
+| `--because "<why>"` | With a new list, marks the subtasks it adds as added, with the reason. |
+| `--json` | The subtasks as `task`, `listed`, `pushed`, `pushed_subtasks`, `subtasks`, `order` (the push order, each commit with `sha`, `subject` and `subtask`), `pushable` (`count`, `through` and `subtasks`, or `null`) and `last_accepted`. Each subtask has `id`, `number`, `title`, `state` (`planned`, `in-progress`, `ready`, `accepted` or `pushed`), `extra`, `contiguous`, `added`, `waits_for`, `commits` (each with `sha`, `subject` and `accepted`) and `pushed`. |
+
+### `kebbie subtasks [name] add "<subtask>" --because "<why>"`
+
+Adds a subtask to the plan after the first listing, with the reason the plan changed, which you see beside it. It goes at the end, or before the subtask `--prepares <id>` names. `--because` is required.
+
+### `kebbie subtasks [name] on <id>`
+
+Sends the task's next commits to that subtask, which is in progress again.
+
+### `kebbie subtasks [name] done [<id>]`
+
+Marks a subtask ready: its slice of the work is finished and waits for you to review and accept it. Without an id, it marks the one commits go to now. A task's agent runs it in its worktree; you or the lead name the task. It is refused while the subtask holds no commit, and, with `kebbie:work-rules` as the rules skill, while one of its commits lacks a subject, a blank line and a body.
+
+A new commit goes to the subtask named with `on`, else to the first subtask not done; once every subtask is done, a commit opens an extra subtask titled by its subject. A subtask keeps its commits by their change: a clean rebase, a reworded message or a reorder keeps them in it, and a commit squashed into another stays with the subtask of the change beside it. Its commits need not lie together in the branch. A subtask counts as pushed once all its commits' changes are on the default branch, however they got there: `kebbie push`, a staged task you pushed with main, or a push from elsewhere.
+
+The **push order** is the branch's commits not yet on origin's default branch, oldest first. The **pushable run** is the longest run from its top where every commit's subtask is accepted: `p` in the push window pushes it.
+
+| Mark | Means |
+| --- | --- |
+| `↑ 2 pushed` | The subtasks on the default branch, as a count. |
+| `✓` | Accepted: you accepted every commit in it. `accepted · waits for <subtask>` when a commit of a subtask you have not accepted lies above one of its own. |
+| `●` | Ready, with its commits: waiting for you to accept it. |
+| `◐` | In progress, with the commits it holds so far. |
+| `○` | Planned. |
 
 ## Seeing what is going on
 
@@ -633,8 +645,10 @@ It is yours, or the lead's on your explicit choice. The lead's settings do not a
 | Command | What it does |
 | --- | --- |
 | `kebbie report --state <state> --next <step> <summary>` | Where the task stands and what you should do next. See [below](#kebbie-report). |
-| `kebbie steps "<step>" …` | The task's steps before its first line of code, with `task.steps` on. See [`kebbie steps`](#kebbie-steps-name-step-). |
-| `kebbie steps done` | The step in progress is finished and ready for you. See [`kebbie steps done`](#kebbie-steps-name-done). |
+| `kebbie subtasks "<subtask>" …` | The task's subtasks before its first line of code, with `task.steps` on. See [`kebbie subtasks`](#kebbie-subtasks-name-subtask-). |
+| `kebbie subtasks add "<subtask>" --because "<why>"` | A subtask the plan turns out to need. See [`kebbie subtasks add`](#kebbie-subtasks-name-add-subtask---because-why). |
+| `kebbie subtasks on <id>` | The next commits go to that subtask. |
+| `kebbie subtasks done [<id>]` | The subtask is finished and ready for you. See [`kebbie subtasks done`](#kebbie-subtasks-name-done-id). |
 | `kebbie routine ok <summary>` | A routine's task, when all is well: records the run as ok with the summary and closes the task as `drop` does. |
 | `kebbie ask --option "<label>: <meaning>" … --recommend <n> <question>` | Ask you what you want: scope, behaviour, a trade-off that is yours. |
 | `kebbie obstacle [--on <work>] <text>` | Raise an obstacle on the task's own path. See [below](#kebbie-obstacle---on-work-text). |
@@ -659,7 +673,7 @@ The task's Claude raises what stops a piece of its work as planned: what the wor
 
 - kebbie keeps it, and the task's row reads `obstacle · investigating`.
 - The keeper starts kebbie's investigator ([`investigate.profile`](configuration.md#investigation)), which decides `workaround`, `subtask`, `task` or `ask`. kebbie carries the decision out and sends it to the task. See [Obstacles and findings](../explanation/obstacles-and-findings.md).
-- `--on` names the work it blocks; left out, the step in progress.
+- `--on` names the work it blocks; left out, the subtask in progress.
 - The same text raised again answers with its decision. A second obstacle on the same work, or the task's third, asks you whether the plan holds.
 
 ### `kebbie obstacles [name] [--json]`
@@ -952,7 +966,7 @@ Once the machine has pinned an account key, the keeper posts the board every 15 
 - The revision is at least the current Unix time, so it keeps rising when `hub/relay.json` is lost.
 - Nothing is pushed to a phone: notifications through the hub are not available in this version, and [`notify.command`](configuration.md#notify-command) is how the machine tells you a task needs you.
 
-The board carries tasks with their group, summary, your next step, report, question and options, git counts, head, review verdict, CI, a task's steps with their number, title, state and commits (each its sha and subject), the checkouts' free and busy worktrees, the routines and away mode. It never carries a path, a pane, a Space, a host name, a dev server address or a commit's body.
+The board carries tasks with their group, summary, your next step, report, question and options, git counts, head, review verdict, CI, a task's subtasks with their id, title, state, the reason one was added and commits (each its sha and subject), its push order and pushable run, whether it requires accepting, its latest obstacle with the decision on it, the checkouts' free and busy worktrees, the routines and away mode. It never carries a path, a pane, a Space, a host name, a dev server address or a commit's body.
 
 - A queued task waiting for its time is left out; a blocked one shows under Needs you.
 - A plan to approve shows as its question, without the plan.

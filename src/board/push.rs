@@ -19,31 +19,35 @@ use super::{App, Hit, Mode};
 use super::steps::mark_color;
 use super::widgets::{GREEN, MAUVE, MUTED, SURFACE, TEXT, YELLOW, bold, centered, cut, fit, modal_block, plural, rule, section_header, style, text_width, wrap};
 
-// What the push window marks on its commits: which the user accepted, their steps, the steps with no commit yet, and the last of the accepted run.
+// What the push window marks on its commits: which the user accepted, their subtasks by number and title, the subtasks with no commit yet, and the last of the pushable run.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Marks {
     accepted: Vec<bool>,
-    steps: Vec<Option<tasks::StepState>>,
+    steps: Vec<Option<tasks::SubtaskState>>,
     numbers: Vec<Option<usize>>,
-    stays: Vec<tasks::Step>,
+    titles: Vec<Option<String>>,
+    stays: Vec<tasks::Subtask>,
     through: Option<usize>,
+    run: bool,
     working: bool,
 }
 
 impl Marks {
-    pub(super) fn of(commits: &[tasks::Commit], accepted: Vec<bool>, steps: &tasks::Steps, last: Option<&str>) -> Self {
-        let step = |commit: &tasks::Commit| steps.holding(&commit.sha);
+    pub(super) fn of(commits: &[tasks::Commit], accepted: Vec<bool>, subtasks: &tasks::Subtasks, last: Option<&str>) -> Self {
+        let subtask = |commit: &tasks::Commit| subtasks.holding(&commit.sha);
         Self {
-            steps: commits.iter().map(|commit| step(commit).map(|step| step.state.clone())).collect(),
-            numbers: commits.iter().map(|commit| step(commit).map(|step| step.index + 1)).collect(),
-            stays: steps.items.iter().filter(|step| step.commits.is_empty()).cloned().collect(),
+            steps: commits.iter().map(|commit| subtask(commit).map(|subtask| subtask.state.clone())).collect(),
+            numbers: commits.iter().map(|commit| subtask(commit).map(|subtask| subtask.number)).collect(),
+            titles: commits.iter().map(|commit| subtask(commit).map(|subtask| subtask.title.clone())).collect(),
+            stays: subtasks.items.iter().filter(|subtask| subtask.commits.is_empty()).cloned().collect(),
             through: last.and_then(|last| commits.iter().position(|commit| commit.sha == last)),
+            run: subtasks.listed(),
             accepted,
             working: false,
         }
     }
 
-    // While its Claude works, the window pushes only the accepted run and rewrites nothing.
+    // While its agent works, the window pushes only the accepted run and rewrites nothing.
     pub(super) fn while_working(self, working: bool) -> Self {
         Self { working, ..self }
     }
@@ -60,10 +64,17 @@ impl Marks {
         self.numbers.get(index).copied().flatten()
     }
 
-    // What p pushes through from the selected commit: the last commit of its step, so a step goes out whole.
+    // What p pushes through: with subtasks, the end of the pushable run whatever is picked; without, the commit picked.
     pub(super) fn end_of(&self, index: usize) -> usize {
-        let Some(step) = self.step_of(index) else { return index };
-        (index..self.numbers.len()).take_while(|at| self.step_of(*at) == Some(step)).last().unwrap_or(index)
+        match self.through.filter(|_| self.run) {
+            Some(through) => through,
+            None => index,
+        }
+    }
+
+    // Whether p pushes the pushable run rather than the commits up to the one picked.
+    pub(super) fn pushes_run(&self) -> bool {
+        self.run && self.through.is_some()
     }
 
     fn opens_step(&self, index: usize) -> bool {
@@ -72,10 +83,10 @@ impl Marks {
 
     // Reads the task's state, so only the board's own keys call it, never a test.
     pub(super) fn read(path: &Path, commits: &[tasks::Commit], working: bool) -> Self {
-        let steps = tasks::steps_for(path, working);
+        let subtasks = tasks::subtasks_for(path, working);
         let marked = tasks::accepted_in(path);
         let accepted = commits.iter().map(|commit| marked.iter().any(|(sha, accepted)| *sha == commit.sha && *accepted)).collect();
-        Self::of(commits, accepted, &steps, tasks::last_accepted_through(&marked, &steps).as_deref())
+        Self::of(commits, accepted, &subtasks, tasks::last_accepted_through(&marked, &subtasks).as_deref())
     }
 
     fn any_accepted(&self) -> bool {
@@ -90,22 +101,26 @@ impl Marks {
         self.through.unwrap_or(0)
     }
 
-    // A step's mark on its first commit; the commits after it in the step carry their own tick.
+    // A subtask's mark where its commits start in the push order; the commits after it in a row carry their own tick.
     fn mark(&self, index: usize) -> Span<'static> {
         match self.steps.get(index).cloned().flatten().filter(|_| self.opens_step(index)) {
-            Some(state) => Span::styled(format!("{} ", tasks::step_mark(&state)), style(mark_color(&state))),
+            Some(state) => Span::styled(format!("{} ", tasks::subtask_mark(&state)), style(mark_color(&state))),
             None if self.accepted.get(index) == Some(&true) => Span::styled("✓ ", style(GREEN)),
             None => Span::raw("  "),
         }
     }
 
     fn number_width(&self) -> usize {
-        self.numbers.iter().flatten().copied().chain(self.stays.iter().map(|step| step.index + 1)).map(|number| number.to_string().len()).max().unwrap_or(0)
+        self.numbers.iter().flatten().copied().chain(self.stays.iter().map(|subtask| subtask.number)).map(|number| number.to_string().len()).max().unwrap_or(0)
     }
 
     fn number(&self, number: Option<usize>) -> Span<'static> {
         let shown = number.map(|number| number.to_string()).unwrap_or_default();
         Span::styled(format!("{shown:>width$} ", width = self.number_width()), style(MUTED))
+    }
+
+    fn title(&self, index: usize) -> Option<&str> {
+        self.titles.get(index).and_then(Option::as_deref).filter(|_| self.opens_step(index))
     }
 }
 
@@ -122,20 +137,25 @@ fn commit_line(commit: &tasks::Commit, index: usize, active: bool, marks: &Marks
     }
     spans.extend([Span::styled(commit.sha.chars().take(7).collect::<String>(), style(MUTED)), Span::raw(" ")]);
     let through = marks.through == Some(index);
-    let used: usize = spans.iter().map(Span::width).sum::<usize>() + if through { text_width(THROUGH) } else { 0 };
-    let subject = if through { cut(&subject, width.saturating_sub(used)) } else { subject };
+    let owner = marks.title(index).map(|title| format!("  · {title}"));
+    let tail = if through { text_width(THROUGH) } else { 0 } + owner.as_deref().map_or(0, |owner| text_width(owner).min(24));
+    let used: usize = spans.iter().map(Span::width).sum::<usize>() + tail;
+    let subject = if through || owner.is_some() { cut(&subject, width.saturating_sub(used)) } else { subject };
     spans.push(Span::styled(subject, if active { bold(MAUVE) } else { style(TEXT) }));
+    if let Some(owner) = owner {
+        spans.push(Span::styled(cut(&owner, 24), style(MUTED)));
+    }
     if through {
         spans.push(Span::styled(THROUGH, style(GREEN)));
     }
     fit(spans, width).style(if active { Style::new().bg(SURFACE) } else { Style::new() })
 }
 
-// A step with no commit yet, under the commits, so the user sees what stays.
-fn stays_line(step: &tasks::Step, marks: &Marks, width: usize) -> Line<'static> {
-    let what = if step.state == tasks::StepState::InProgress { "in progress, stays" } else { "planned" };
+// A subtask with no commit yet, under the commits, so the user sees what stays.
+fn stays_line(step: &tasks::Subtask, marks: &Marks, width: usize) -> Line<'static> {
+    let what = if step.state == tasks::SubtaskState::InProgress { "in progress, stays" } else { "planned" };
     fit(vec![
-        Span::raw("  "), Span::styled(format!("{} ", tasks::step_mark(&step.state)), style(MUTED)), marks.number(Some(step.index + 1)), Span::raw(" ".repeat(8)),
+        Span::raw("  "), Span::styled(format!("{} ", tasks::subtask_mark(&step.state)), style(MUTED)), marks.number(Some(step.number)), Span::raw(" ".repeat(8)),
         Span::styled(step.title.clone(), style(MUTED)), Span::styled(format!("  {what}"), style(MUTED)),
     ], width)
 }
@@ -170,13 +190,11 @@ pub(super) fn push_lines(card: Option<&(report::Card, bool)>, tests: Option<&evi
     (lines, first_commit)
 }
 
-// With steps, selected is the last commit of the selected commit's step and step its number.
-pub(super) fn push_keys(commits: usize, selected: usize, through: Option<usize>, scrolls: bool, working: bool, step: Option<usize>) -> Line<'static> {
+// With subtasks and a pushable run, selected is the run's last commit and run is true.
+pub(super) fn push_keys(commits: usize, selected: usize, through: Option<usize>, scrolls: bool, working: bool, run: bool) -> Line<'static> {
+    let the_run = || if selected == 0 { "p push the accepted run, 1 commit".to_string() } else { format!("p push the accepted run, {} commits", selected + 1) };
     if working {
-        let mut keys = match step {
-            Some(step) => format!("p push through step {step}, the task keeps working"),
-            None => format!("p push {} accepted, the task keeps working", selected + 1),
-        };
+        let mut keys = if run { format!("{}, the task keeps working", the_run()) } else { format!("p push {} accepted, the task keeps working", selected + 1) };
         if through.is_some_and(|through| through > 0) {
             keys.push_str(" · ↑ ↓ commit");
         }
@@ -186,8 +204,8 @@ pub(super) fn push_keys(commits: usize, selected: usize, through: Option<usize>,
         keys.push_str(" · esc cancel");
         return Line::from(vec![Span::styled("Push?  ", style(YELLOW)), Span::styled(keys, style(MUTED))]);
     }
-    let keep = if let Some(step) = step {
-        format!("p push through step {step} and keep it open")
+    let keep = if run {
+        format!("{} and keep it open", the_run())
     } else if through == Some(selected) {
         format!("p push {} accepted, the task keeps working", selected + 1)
     } else if commits > 1 {
@@ -225,10 +243,7 @@ impl App {
                 let through = if keep_open { commits.get(end) } else { commits.last() };
                 let Some(through) = through.map(|commit| commit.sha.clone()) else { return };
                 let count = if keep_open { end + 1 } else { commits.len() };
-                let what = match marks.step_of(end).filter(|_| keep_open) {
-                    Some(step) => format!("through step {step}"),
-                    None => plural(count, "commit"),
-                };
+                let what = if keep_open && marks.pushes_run() { format!("the accepted run, {}", plural(count, "commit")) } else { plural(count, "commit") };
                 let (sender, result) = mpsc::channel();
                 let path_for_subject = path.clone();
                 thread::spawn(move || {
@@ -304,10 +319,10 @@ pub(super) fn draw_push(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit)> {
     starts.push(rows);
     let body_rows = rows;
     let end = marks.end_of(*selected);
-    let keys_rows = |scrolls: bool| Paragraph::new(push_keys(commits.len(), end, marks.through, scrolls, marks.working, marks.step_of(end))).wrap(Wrap { trim: false }).line_count(inner_width) as u16;
+    let keys_rows = |scrolls: bool| Paragraph::new(push_keys(commits.len(), end, marks.through, scrolls, marks.working, marks.pushes_run())).wrap(Wrap { trim: false }).line_count(inner_width) as u16;
     let room = frame.area().height.saturating_sub(4);
     let scrolls = body_rows + 1 + keys_rows(false) > room;
-    let keys = push_keys(commits.len(), end, marks.through, scrolls, marks.working, marks.step_of(end));
+    let keys = push_keys(commits.len(), end, marks.through, scrolls, marks.working, marks.pushes_run());
     let foot_rows = keys_rows(scrolls);
     let area = centered(frame.area(), width, body_rows + 1 + foot_rows + 2);
     let block = modal_block("push".to_string());
@@ -363,7 +378,7 @@ mod tests {
         let (lines, _) = push_lines(None, None, &commits, &Marks::default(), 1, 60);
         let screen = text(&lines);
         assert!(screen.contains("MESSAGE 2222222") && screen.contains("  ▎ Show refunds") && !screen.contains("money back"), "the message follows the selection: {screen}");
-        assert!(push_keys(2, 1, None, false, false, None).to_string().contains("p push the first 2 and keep it open"));
+        assert!(push_keys(2, 1, None, false, false, false).to_string().contains("p push the first 2 and keep it open"));
         let stale = report::Card { sha: "abcdef0123".to_string(), text: (0..40).map(|index| format!("line {index}")).collect::<Vec<_>>().join("\n"), file: PathBuf::from("/state/cards/billing@web.md") };
         let (lines, _) = push_lines(Some(&(stale, false)), None, &commits, &Marks::default(), 0, 60);
         let screen = text(&lines);
@@ -371,8 +386,8 @@ mod tests {
         let (lines, first) = push_lines(None, None, &commits[..1], &Marks::default(), 0, 60);
         assert_eq!(first, 1, "under the COMMITS header");
         assert_eq!(lines.len(), 7, "the body ends with the message; the keys are drawn apart");
-        assert_eq!(push_keys(1, 0, None, false, false, None).to_string(), "Push?  y push and close · p push and keep it open · e edit message · esc cancel");
-        assert!(push_keys(3, 2, None, false, false, Some(4)).to_string().contains("p push through step 4 and keep it open"), "with steps p counts steps");
+        assert_eq!(push_keys(1, 0, None, false, false, false).to_string(), "Push?  y push and close · p push and keep it open · e edit message · esc cancel");
+        assert!(push_keys(3, 1, Some(1), false, false, true).to_string().contains("p push the accepted run, 2 commits and keep it open"), "with subtasks p pushes the run");
     }
 
     fn pushing(app: &mut crate::board::App, commits: usize, card_lines: usize) {
@@ -511,7 +526,7 @@ mod tests {
         use ratatui::crossterm::event::KeyCode;
         use crate::board::test_support::*;
         let commits = three();
-        let marks = Marks::of(&commits, vec![true, true, false], &tasks::Steps::default(), Some(&commits[1].sha));
+        let marks = Marks::of(&commits, vec![true, true, false], &tasks::Subtasks::default(), Some(&commits[1].sha));
         assert_eq!(marks.start(), 1);
         let mut app = window(marks);
         let (rows, buffer) = render(&mut app, 100, 30);
@@ -529,7 +544,7 @@ mod tests {
         let (rows, _) = render(&mut app, 100, 30);
         let screen = rows.join("\n");
         assert!(screen.contains("p push the first 3 and keep it open") && screen.contains("22abcde Add Stripe as the gateway  ◂ through here"), "the mark stays on the last accepted commit: {screen}");
-        let gap = Marks::of(&commits, vec![false, true, false], &tasks::Steps::default(), None);
+        let gap = Marks::of(&commits, vec![false, true, false], &tasks::Subtasks::default(), None);
         assert_eq!(gap.start(), 0, "the first commit is not accepted, so the window starts at the top");
     }
 
@@ -538,7 +553,7 @@ mod tests {
         use ratatui::crossterm::event::KeyCode;
         use crate::board::test_support::*;
         let commits = three();
-        let marks = Marks::of(&commits, vec![true, true, false], &tasks::Steps::default(), Some(&commits[1].sha)).while_working(true);
+        let marks = Marks::of(&commits, vec![true, true, false], &tasks::Subtasks::default(), Some(&commits[1].sha)).while_working(true);
         let mut app = window(marks);
         let (rows, _) = render(&mut app, 100, 30);
         let screen = rows.join("\n");
@@ -560,7 +575,7 @@ mod tests {
         use crate::board::test_support::*;
         let commits = three();
         let mut plain = window(Marks::default());
-        let mut read = window(Marks::of(&commits, vec![false; 3], &tasks::Steps::default(), None));
+        let mut read = window(Marks::of(&commits, vec![false; 3], &tasks::Subtasks::default(), None));
         let (before, _) = render(&mut plain, 100, 30);
         let (after, _) = render(&mut read, 100, 30);
         assert_eq!(before, after);
@@ -570,38 +585,39 @@ mod tests {
     }
 
     #[test]
-    fn with_steps_each_step_marks_its_first_commit_the_steps_without_one_show_what_stays_and_p_pushes_a_step_whole() {
+    fn with_subtasks_each_marks_where_its_commits_start_with_its_title_those_without_one_show_what_stays_and_p_pushes_the_run() {
         use ratatui::crossterm::event::KeyCode;
         use crate::board::test_support::*;
-        use crate::board::steps::tests::{held, step};
+        use crate::board::steps::tests::{held, ordered, pushed_one, step};
         let commits = three();
-        let steps = tasks::Steps { pushed: 1, items: vec![
-            held(1, "Charge through a PaymentGateway", &[&commits[0].sha], true),
-            held(2, "Add Stripe as the gateway", &[&commits[1].sha, &commits[2].sha], false),
-            step(3, "Remove the old payment client", tasks::StepState::InProgress),
-            step(4, "Document the gateway", tasks::StepState::Planned),
-        ] };
-        let mut app = window(Marks::of(&commits, vec![true, false, false], &steps, Some(&commits[0].sha)));
+        let subtasks = ordered(tasks::Subtasks { pushed: pushed_one(), items: vec![
+            held(1, "Gateway", &[&commits[0].sha], true),
+            held(2, "Stripe", &[&commits[1].sha, &commits[2].sha], false),
+            step(3, "Remove the old client", tasks::SubtaskState::InProgress),
+            step(4, "Docs", tasks::SubtaskState::Planned),
+        ], ..tasks::Subtasks::default() });
+        let mut app = window(Marks::of(&commits, vec![true, false, false], &subtasks, Some(&commits[0].sha)));
         let (rows, buffer) = render(&mut app, 100, 30);
         let screen = rows.join("\n");
         let at = |text: &str| find(&rows, text).first().copied().unwrap_or_else(|| panic!("{text:?} in:\n{screen}"));
-        at("▸ ✓ 2 11abcde Charge through a PaymentGateway  ◂ through here");
-        let (x, y) = at("● 3 22abcde Add Stripe as the gateway");
+        at("▸ ✓ 2 11abcde Charge through a PaymentGateway  · Gateway  ◂ through here");
+        let (x, y) = at("● 3 22abcde Add Stripe as the gateway  · Stripe");
         assert_eq!(buffer[(x as u16, y as u16)].fg, YELLOW);
         at("      33abcde Log the gateway's answers");
-        let (x, y) = at("◐ 4         Remove the old payment client  in progress, stays");
+        assert!(!rows[at("33abcde").1].contains("· Stripe"), "the title stands where the subtask's commits start: {screen}");
+        let (x, y) = at("◐ 4         Remove the old client  in progress, stays");
         assert_eq!(buffer[(x as u16, y as u16)].fg, MUTED);
         assert_eq!(buffer[(x as u16 + 20, y as u16)].fg, MUTED, "what stays is muted whole");
-        at("○ 5         Document the gateway  planned");
-        assert!(at("◐ 4").1 > at("33abcde").1 && at("◐ 4").1 < at("MESSAGE").1, "the steps that stay sit under the commits: {screen}");
-        assert!(screen.contains("p push through step 2 and keep it open"), "{screen}");
+        at("○ 5         Docs  planned");
+        assert!(at("◐ 4").1 > at("33abcde").1 && at("◐ 4").1 < at("MESSAGE").1, "the subtasks that stay sit under the commits: {screen}");
+        assert!(screen.contains("p push the accepted run, 1 commit and keep it open"), "{screen}");
         let (x, y) = at("22abcde Add Stripe");
         assert_eq!(app.hit_at(x as u16, y as u16), Some(crate::board::Hit::Commit(1)), "the lines that stay come after the commits, so the hits still land on them");
         press(&mut app, key(KeyCode::Down));
         let (rows, _) = render(&mut app, 100, 30);
-        assert!(rows.join("\n").contains("p push through step 3 and keep it open"), "the selected commit's step goes whole: {}", rows.join("\n"));
-        let marks = Marks::of(&commits, vec![true, false, false], &steps, None);
-        assert_eq!((marks.end_of(0), marks.end_of(1), marks.end_of(2)), (0, 2, 2), "p pushes through the last commit of the selected commit's step");
-        assert_eq!(Marks::default().end_of(1), 1, "without steps, through the selected commit");
+        assert!(rows.join("\n").contains("p push the accepted run, 1 commit and keep it open"), "p pushes the run whatever commit is picked: {}", rows.join("\n"));
+        let marks = Marks::of(&commits, vec![true, false, false], &subtasks, Some(&commits[0].sha));
+        assert_eq!((marks.end_of(0), marks.end_of(1), marks.end_of(2)), (0, 0, 0), "p pushes through the end of the pushable run");
+        assert_eq!(Marks::default().end_of(1), 1, "without subtasks, through the selected commit");
     }
 }

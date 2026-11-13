@@ -22,13 +22,15 @@ pub struct Commit {
     pub accepted: bool,
 }
 
-// A step with its commits, or with task.steps off one commit as a step of its own.
+// A subtask with its commits, or with task.steps off one commit as an entry of its own.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Entry {
     pub commits: Vec<Commit>,
     pub mark: Mark,
     pub number: usize,
     pub title: String,
+    pub id: String,
+    pub contiguous: bool,
 }
 
 impl Entry {
@@ -40,8 +42,11 @@ impl Entry {
         self.commits.iter().any(|commit| commit.sha == sha)
     }
 
-    // The step's whole diff: from under its first commit to its last.
+    // The subtask's whole diff, from under its first commit to its last, only while no other subtask's commit lies between them.
     pub fn range(&self) -> Option<Range> {
+        if !self.contiguous {
+            return None;
+        }
         Some(Range { from: format!("{}^", self.commits.first()?.sha), to: self.head()?.to_string() })
     }
 }
@@ -160,15 +165,17 @@ fn commit_of(commit: &Value) -> Option<Commit> {
     Some(Commit { sha: commit["sha"].as_str()?.to_string(), subject: commit["subject"].as_str().unwrap_or_default().to_string(), accepted: commit["accepted"] == true })
 }
 
-pub fn from_steps(json: &Value, task: &str) -> Option<Entries> {
+pub fn from_subtasks(json: &Value, task: &str) -> Option<Entries> {
     if json["listed"] != true {
         return None;
     }
-    let items = json["steps"].as_array()?.iter().map(|step| Entry {
-        commits: step["commits"].as_array().map(|commits| commits.iter().filter_map(commit_of).collect()).unwrap_or_default(),
-        mark: mark_of(step["state"].as_str().unwrap_or_default()),
-        number: step["index"].as_u64().unwrap_or_default() as usize + 1,
-        title: step["title"].as_str().unwrap_or_default().to_string(),
+    let items = json["subtasks"].as_array()?.iter().map(|subtask| Entry {
+        commits: subtask["commits"].as_array().map(|commits| commits.iter().filter_map(commit_of).collect()).unwrap_or_default(),
+        mark: mark_of(subtask["state"].as_str().unwrap_or_default()),
+        number: subtask["number"].as_u64().unwrap_or_default() as usize,
+        title: subtask["title"].as_str().unwrap_or_default().to_string(),
+        id: subtask["id"].as_str().unwrap_or_default().to_string(),
+        contiguous: subtask["contiguous"] != false,
     }).collect();
     Some(Entries { pushed: json["pushed"].as_u64().unwrap_or_default() as usize, items, steps: true, task: Some(task.to_string()) })
 }
@@ -178,6 +185,8 @@ pub fn from_commits(json: &Value, task: &str) -> Option<Entries> {
         mark: if commit.accepted { Mark::Accepted } else { Mark::Ready },
         number: index + 1,
         title: commit.subject.clone(),
+        id: (index + 1).to_string(),
+        contiguous: true,
         commits: vec![commit],
     }).collect();
     Some(Entries { pushed: 0, items, steps: false, task: Some(task.to_string()) })
@@ -185,10 +194,10 @@ pub fn from_commits(json: &Value, task: &str) -> Option<Entries> {
 
 pub type Marks = dyn FnMut(&Path) -> Option<Entries>;
 
-// kebbie's own marks, read in-process: the steps with task.steps on, else the task's unpushed commits.
+// kebbie's own marks, read in-process: the subtasks with task.steps on, else the task's unpushed commits.
 pub fn kebbie_marks(root: &Path) -> Option<Entries> {
     let task = branch(root);
-    crate::tasks::steps_shown_at(root).and_then(|json| from_steps(&json, &task))
+    crate::tasks::subtasks_shown_at(root).and_then(|json| from_subtasks(&json, &task))
         .or_else(|| crate::tasks::accepted_listing_at(root).and_then(|json| from_commits(&json, &task)))
 }
 
@@ -198,7 +207,7 @@ pub fn read_entries(root: &Path, base: &str, marks: &mut Marks) -> Entries {
         return entries;
     }
     let log = git(root, &["log", "--reverse", "--format=%H%x09%s", &format!("{base}..HEAD")]).unwrap_or_default();
-    let items = log.lines().filter_map(|line| line.split_once('\t')).enumerate().map(|(index, (sha, subject))| Entry { commits: vec![Commit { sha: sha.to_string(), subject: subject.to_string(), accepted: false }], mark: Mark::Ready, number: index + 1, title: subject.to_string() }).collect();
+    let items = log.lines().filter_map(|line| line.split_once('\t')).enumerate().map(|(index, (sha, subject))| Entry { commits: vec![Commit { sha: sha.to_string(), subject: subject.to_string(), accepted: false }], mark: Mark::Ready, number: index + 1, title: subject.to_string(), id: (index + 1).to_string(), contiguous: true }).collect();
     Entries { items, ..Entries::default() }
 }
 
@@ -531,17 +540,18 @@ pub mod tests {
     }
 
     #[test]
-    fn steps_and_commits_read_kebbies_marks() {
-        let steps = json!({ "listed": true, "pushed": 1, "steps": [
-            { "index": 1, "title": "Change a", "state": "accepted", "commits": [{ "sha": "aaa", "subject": "One", "accepted": true }, { "sha": "bbb", "subject": "Two", "accepted": true }] },
-            { "index": 2, "title": "Write docs", "state": "in-progress", "commits": [{ "sha": "ccc", "subject": "Three", "accepted": false }] },
-            { "index": 3, "title": "Release", "state": "planned", "commits": [] },
+    fn subtasks_and_commits_read_kebbies_marks() {
+        let subtasks = json!({ "listed": true, "pushed": 1, "subtasks": [
+            { "id": "change-a", "number": 2, "title": "Change a", "state": "accepted", "contiguous": true, "commits": [{ "sha": "aaa", "subject": "One", "accepted": true }, { "sha": "bbb", "subject": "Two", "accepted": true }] },
+            { "id": "docs", "number": 3, "title": "Write docs", "state": "in-progress", "contiguous": false, "commits": [{ "sha": "ccc", "subject": "Three", "accepted": false }, { "sha": "eee", "subject": "Five", "accepted": false }] },
+            { "id": "release", "number": 4, "title": "Release", "state": "planned", "contiguous": true, "commits": [] },
         ] });
-        let entries = from_steps(&steps, "billing").unwrap();
+        let entries = from_subtasks(&subtasks, "billing").unwrap();
         assert_eq!(entries.pushed, 1);
-        assert_eq!(entries.items.iter().map(|entry| (entry.number, entry.mark, entry.commits.len())).collect::<Vec<_>>(), [(2, Mark::Accepted, 2), (3, Mark::InProgress, 1), (4, Mark::Planned, 0)]);
-        assert_eq!((entries.items[0].holds("bbb"), entries.items[0].head(), entries.items[0].range()), (true, Some("bbb"), Some(Range { from: "aaa^".to_string(), to: "bbb".to_string() })), "a step's diff runs from under its first commit to its last");
-        assert_eq!(from_steps(&json!({ "listed": false, "steps": [] }), "billing"), None, "a task without steps lists its commits");
+        assert_eq!(entries.items.iter().map(|entry| (entry.number, entry.id.as_str(), entry.mark, entry.commits.len())).collect::<Vec<_>>(), [(2, "change-a", Mark::Accepted, 2), (3, "docs", Mark::InProgress, 2), (4, "release", Mark::Planned, 0)]);
+        assert_eq!((entries.items[0].holds("bbb"), entries.items[0].head(), entries.items[0].range()), (true, Some("bbb"), Some(Range { from: "aaa^".to_string(), to: "bbb".to_string() })), "a subtask's diff runs from under its first commit to its last");
+        assert_eq!(entries.items[1].range(), None, "never across another subtask's commits");
+        assert_eq!(from_subtasks(&json!({ "listed": false, "subtasks": [] }), "billing"), None, "a task without subtasks lists its commits");
         let commits = from_commits(&json!({ "commits": [{ "sha": "aaa", "subject": "One", "accepted": false }, { "sha": "bbb", "subject": "Two", "accepted": true }] }), "billing").unwrap();
         assert_eq!(commits.items.iter().map(|entry| (entry.number, entry.mark, entry.commits.len())).collect::<Vec<_>>(), [(1, Mark::Ready, 1), (2, Mark::Accepted, 1)]);
         assert_eq!(commits.task.as_deref(), Some("billing"));

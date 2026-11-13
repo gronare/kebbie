@@ -8,8 +8,8 @@ A recipe is the shape of a task: what it does first and where it stops for you. 
 
 | Recipe | When |
 | --- | --- |
-| `small-fix` | The prompt settles the change: one step, the fix with the test that goes red without it, no mockup and no plan. |
-| `feature-with-ui` | A screen to design: a mockup until you say yes, then the task's own plan, then the build in small steps. |
+| `small-fix` | The prompt settles the change: one subtask, the fix with the test that goes red without it, no mockup and no plan. |
+| `feature-with-ui` | A screen to design: a mockup until you say yes, then the task's own plan, then the build in subtasks of small commits. |
 | `task-after-task` | It builds on another task's change, so it is queued until that one is on main. |
 | `rollout-in-stages` | It must reach production in stages, such as an expand and contract rename: one task, a push per stage. |
 | `follow-up` | A comment on a pushed commit, or red CI after a push. |
@@ -30,7 +30,7 @@ You start a task by hand without one, and it shows no recipe.
 
 The board shows `recipe: small fix` under the task's row, beside the [assessor's](review-gate.md#an-assessor-judges-whether-the-work-needs-a-review) word on its review, and the open task adds the lead's why. The board shows only how things stand now.
 
-The why is history, and history lives once, in the task's note: the vault note when the task has one, else kebbie's own `notes/<task>@<repo>.md` in its state. kebbie writes the recipe and the assessor's word in its own note; a task with a vault note is told to write them there, and writes its own decisions beside them as it goes: the mockup you approved, its plan's steps and why they changed. A Codex session has no vault tools, so for a Codex task the lead writes them.
+The why is history, and history lives once, in the task's note: the vault note when the task has one, else kebbie's own `notes/<task>@<repo>.md` in its state. kebbie writes the recipe and the assessor's word in its own note; a task with a vault note is told to write them there, and writes its own decisions beside them as it goes: the mockup you approved, its plan's subtasks and why they changed. A Codex session has no vault tools, so for a Codex task the lead writes them.
 
 ## A correction has something to correct
 

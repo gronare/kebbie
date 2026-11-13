@@ -188,7 +188,7 @@ pub struct Item {
     pub unrecorded: Option<String>,
     pub push_left: Option<String>,
     pub staged: bool,
-    pub steps: tasks::Steps,
+    pub subtasks: tasks::Subtasks,
     pub to_accept: Option<tasks::Unaccepted>,
     pub parked: Option<tasks::Parked>,
     pub assessment: Option<crate::assessment::Word>,
@@ -238,7 +238,7 @@ impl Item {
             name: wait.task.clone(), title, place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
             report: None, question: None, ci: None, recover: None, routine: None, push_waits: None,
             queued: Some(Queued { after, blocked: wait.blocked.clone(), waiting, names, base, at, backlog: wait.backlog.is_some() }),
-            held_by_draft: None, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), unrecorded: None, push_left: None, staged: false, steps: tasks::Steps::default(), to_accept: None, parked: None, assessment: None, recipe: None, obstacle: None, built: Built::default(),
+            held_by_draft: None, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), unrecorded: None, push_left: None, staged: false, subtasks: tasks::Subtasks::default(), to_accept: None, parked: None, assessment: None, recipe: None, obstacle: None, built: Built::default(),
         }
     }
 
@@ -796,9 +796,9 @@ pub fn named(state: &Path, id: &str) -> String {
     }
 }
 
-const COMMAND_WORDS: [&str; 33] = [
+const COMMAND_WORDS: [&str; 34] = [
     "tell", "choose", "approve", "push", "land", "review", "follow", "done", "drop", "ci", "dismiss", "outside", "restart", "after", "stage", "unstage",
-    "accept", "accepted", "steps", "report", "ask", "evidence", "move", "reset", "rebase", "tidy", "start", "decide", "defer", "answered", "hold", "retry", "reopen",
+    "accept", "accepted", "steps", "subtasks", "report", "ask", "evidence", "move", "reset", "rebase", "tidy", "start", "decide", "defer", "answered", "hold", "retry", "reopen",
 ];
 
 // An address right after `kebbie <subcommand>` is the command's argument, which a title in front of it would break.
@@ -883,7 +883,7 @@ pub(crate) fn title_of(state: &Path, address: &str, seen: Option<&str>, repo: &s
 // The shas everything a task's commits show stands on, so a read keyed on them is read once until one of them moves.
 #[derive(Clone, Debug)]
 struct Shas {
-    tips: tasks::StepTips,
+    tips: tasks::SubtaskTips,
     local: Option<String>,
 }
 
@@ -892,7 +892,7 @@ impl Shas {
         let tips = git(path, &["rev-parse", &crate::repo::tracking(upstream), "HEAD"])?;
         let (upstream_sha, head) = tips.split_once('\n').ok_or_else(|| format!("git rev-parse {upstream} HEAD printed one sha"))?;
         let local = upstream.split_once('/').and_then(|(_, branch)| git(path, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).ok());
-        Ok(Shas { tips: tasks::StepTips { upstream: upstream_sha.to_string(), head: head.to_string() }, local })
+        Ok(Shas { tips: tasks::SubtaskTips { upstream: upstream_sha.to_string(), head: head.to_string() }, local })
     }
 }
 
@@ -1082,7 +1082,7 @@ fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>,
             let agent_title = agent.as_ref().map(|agent| agent.title.clone());
             let working = agent.as_ref().is_some_and(|agent| agent.status == "working");
             let shas = match (&tips, &slot.head) {
-                (Some((upstream_sha, local)), Some(head)) => Ok(Shas { tips: tasks::StepTips { upstream: upstream_sha.clone(), head: head.clone() }, local: local.clone() }),
+                (Some((upstream_sha, local)), Some(head)) => Ok(Shas { tips: tasks::SubtaskTips { upstream: upstream_sha.clone(), head: head.clone() }, local: local.clone() }),
                 _ => Shas::read(&slot.path, &upstream),
             };
             let counts = shas.as_ref().map_err(String::clone).and_then(|shas| git_counts(&slot.path, shas));
@@ -1099,8 +1099,8 @@ fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>,
             let tokens = workspace.as_ref().and_then(|id| herdr::workspace_tokens(id).ok()).unwrap_or_default();
             let server = tokens["server"].is_string();
             let steps = match (state.as_deref(), &upstream_sha, &head) {
-                (Some(state), Some(upstream), Some(head)) => tasks::steps_read(state, &slot.path, &address, &tasks::StepTips { upstream: upstream.clone(), head: head.clone() }, working),
-                _ => tasks::Steps::default(),
+                (Some(state), Some(upstream), Some(head)) => tasks::subtasks_read(state, &slot.path, &address, &tasks::SubtaskTips { upstream: upstream.clone(), head: head.clone() }, working),
+                _ => tasks::Subtasks::default(),
             };
             let mut item = Item {
                 review: shas.as_ref().and_then(|shas| review_progress(&slot.path, shas, read_files.as_deref())),
@@ -1134,7 +1134,7 @@ fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>,
                 unrecorded: state.as_deref().and_then(|state| crate::evidence::unrecorded_for(state, &address, repo)),
                 push_left: state.as_deref().and_then(|state| tasks::push_left(state, &address)),
                 staged: state.as_deref().is_some_and(|state| tasks::staged(state, repo, &address)),
-                steps,
+                subtasks: steps,
                 to_accept: state.as_deref().filter(|_| accept_required && ahead > 0).zip(shas.as_ref()).and_then(|(state, shas)| tasks::unaccepted_at(state, &address, &slot.path, &shas.tips)),
                 parked: state.as_deref().and_then(|state| tasks::park_of(state, &address, began)),
                 assessment: state.as_deref().and_then(|state| crate::assessment::word_in(state, &address)),
@@ -1209,7 +1209,7 @@ fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>,
             unrecorded: None,
             push_left: None,
             staged: false,
-            steps: tasks::Steps::default(),
+            subtasks: tasks::Subtasks::default(),
             to_accept: None,
             parked: None,
             assessment: None,
@@ -1283,7 +1283,7 @@ pub(crate) mod tests {
             unrecorded: None,
             push_left: None,
             staged: false,
-            steps: tasks::Steps::default(),
+            subtasks: tasks::Subtasks::default(),
             to_accept: None,
             parked: None,
             assessment: None,
@@ -1646,7 +1646,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn waiting_to_accept(step: usize, count: usize) -> tasks::Unaccepted {
-        tasks::Unaccepted { count, step, sha: "abc1234".to_string(), next: format!("accept step {step}") }
+        tasks::Unaccepted { count, number: step, subtask: Some(format!("s{step}")), sha: "abc1234".to_string(), next: format!("accept subtask {step}") }
     }
 
     #[test]
@@ -1656,8 +1656,8 @@ pub(crate) mod tests {
         let before = (item.group(), item.next_for_you().map(str::to_string), item.wanted("enter"), item.summary());
         assert_eq!(before.0, Group::ReadyToPush, "without task.require_accept nothing waits on accepting");
         item.to_accept = Some(waiting_to_accept(2, 2));
-        assert_eq!((item.group(), item.next_for_you(), item.urgency()), (Group::NeedsYou, Some("accept step 2"), 1));
-        assert_eq!(item.wanted("enter"), Some(format!("accept step 2 · {} review", crate::keys::key(crate::keys::Act::Review))));
+        assert_eq!((item.group(), item.next_for_you(), item.urgency()), (Group::NeedsYou, Some("accept subtask 2"), 1));
+        assert_eq!(item.wanted("enter"), Some(format!("accept subtask 2 · {} review", crate::keys::key(crate::keys::Act::Review))));
         assert!(item.summary().contains("3 commits · 2 to accept"), "{}", item.summary());
         in_phase(&mut item, Phase::Pushing { ahead: 0 });
         assert_eq!((item.group(), item.next_for_you()), (Group::ReadyToPush, None), "a push already in line keeps its place");

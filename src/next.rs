@@ -255,12 +255,12 @@ fn same_files_in_build_order(rows: &mut Ranked) {
 fn coming(items: &[Item]) -> Option<String> {
     let working: Vec<&Item> = items.iter().filter(|item| item.is_task() && item.group() == Group::Working).collect();
     let stepped = working.iter().filter_map(|item| {
-        let total = item.steps.pushed + item.steps.items.len();
-        let done = item.steps.pushed + item.steps.items.iter().filter(|step| matches!(step.state, crate::tasks::StepState::Ready | crate::tasks::StepState::Accepted)).count();
+        let total = item.subtasks.pushed.len() + item.subtasks.items.len();
+        let done = item.subtasks.pushed.len() + item.subtasks.items.iter().filter(|step| matches!(step.state, crate::tasks::SubtaskState::Ready | crate::tasks::SubtaskState::Accepted)).count();
         (total > 0).then_some((*item, (done + 1).min(total), total))
     }).max_by(|(_, done, total), (_, other_done, other_total)| (done * other_total).cmp(&(other_done * total)));
     if let Some((item, step, total)) = stepped {
-        return Some(format!("{} (step {step} of {total})", item.titled()));
+        return Some(format!("{} (subtask {step} of {total})", item.titled()));
     }
     working.iter().min_by_key(|item| item.phase.as_ref().map_or(u64::MAX, |record| record.since)).map(|item| item.titled())
 }
@@ -490,7 +490,7 @@ pub(crate) mod tests {
         let items = [ready("card-component", "web", 300), held];
         let next = of(&items);
         assert_eq!(next.rows.iter().map(|row| (row.name.as_str(), row.part)).collect::<Vec<_>>(), [("billing", Part::Stopped), ("card-component", Part::Push)]);
-        assert_eq!((next.rows[0].said.as_str(), next.rows[0].icon), ("accept step 2", '!'));
+        assert_eq!((next.rows[0].said.as_str(), next.rows[0].icon), ("accept subtask 2", '!'));
         assert_eq!(next.pushes().len(), 1, "push in order leaves it out");
     }
 

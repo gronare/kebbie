@@ -15,7 +15,7 @@ The card is what the user reads above a task's commits when they push it. They r
 
 The card is three parts under a headline. Each part opens a paragraph with its label and a colon, which the board draws as the part's header. The labels are English, as written here; the lines under them follow the vault's language, or the user's without a vault.
 
-- **The headline**, in bold: what the user can do now, or what works now, in their words. It carries no commit or step counts and no shas: the push window shows those.
+- **The headline**, in bold: what the user can do now, or what works now, in their words. It carries no commit or subtask counts and no shas: the push window shows those.
 - `Built:` what the user can do now and where to see it (a page, a command, a file), at most six lines, with an image of anything visual as `![what it shows](<absolute path>)`. What the task changed outside the repo goes here too: a tool it installed, a service it restarted, a site that was down while it worked. For work with no commits, this is the whole card.
 - `Decisions:` each choice taken during the work, one line each: the choice, `because` its reason, and who took it in parentheses: `you`, `lead`, `task` or `investigator`. A decision that was reversed stays, with the line that replaced it: `replaced by: …`. Left out when nothing was decided.
 - `Also noticed:` only what lies outside the task, one line per item: what it is and where. kebbie files each line under Found by tasks as it takes the card and ends it with its item, `(found:<id>)`; a thing `kebbie found` lists already gets that ending from you, so it counts as found again. Something on the task's own path was an obstacle and has its line under Decisions. Left out when there is nothing.

@@ -82,9 +82,9 @@ Above the groups, Next lists what needs you in the order `N` on the board and `k
 
 A prompt on a task's agent's screen, such as Codex asking to run a command, shows under Questions and counts in its badge: the question, the command apart from it, and each option with the key it takes. With changes allowed on the device, you choose a plain option there; an option that takes your own words is answered at the machine.
 
-The open task shows its agent, profile and recipe, its steps, its rules check as on the board, and a review section: the assessment, the reviewer's verdict, whether the push waits for it, and a second opinion's points, which never hold the push.
+The open task shows its agent, profile and recipe, its subtasks, its latest obstacle with the decision on it, its rules check as on the board, and a review section: the assessment, the reviewer's verdict, whether the push waits for it, and a second opinion's points, which never hold the push.
 
-A task that works in [steps](work-in-steps.md) lists them under its row as on the board: the pushed ones as a count, then each step with its number, title, state (planned, in progress, ready or accepted) and its commits. With [`task.require_accept`](work-in-steps.md#require-every-step-accepted) on, the row says how many steps wait for your accept and which one is next, and the top of the board counts them across tasks as `◆ N to accept`; without it, the phone says accepting each step is optional and push takes what is committed. You accept a step on the machine, with `kebbie accept` or in the review split, or in its review on the phone.
+A task that works in [subtasks](work-in-steps.md) lists them under its row as on the board: the pushed ones as a count, then each subtask with its number, title, state (planned, in progress, ready, accepted or pushed), the reason one was added and its commits. The task also shows its push order and how far the pushable run reaches. With [`task.require_accept`](work-in-steps.md#require-every-subtask-accepted) on, the row says how many subtasks wait for your accept and which one is next, and the top of the board counts them across tasks as `◆ N to accept`; without it, the phone says accepting each subtask is optional and push takes what is committed. You accept a subtask on the machine, with `kebbie accept` or in the review split, or in its review on the phone.
 
 The board kebbie sends needs a hub whose web app reads it: an older one refuses the board, so update the hub first, then kebbie. An older kebbie keeps working with a newer hub, without Next and the rest.
 
@@ -108,7 +108,7 @@ The task shows the answer as sent, then the machine's own reply once it applied 
 What reaches a machine is its own choice, set by [`hub.commands`](../reference/configuration.md#keys) in its config.toml. **Machines** says it under each one: `takes answers and pushes`, `takes answers, not pushes` or `takes nothing from the hub`.
 
 - If a machine takes answers but not pushes, its task says `Not pushed: devbox takes no pushes from the hub. Push at the machine, or allow pushes in its kebbie settings.`
-- A task in [steps](work-in-steps.md) pushes through one of its ready steps: the steps up to it go out whole, through that step's last commit, as `p` in the board's push window takes them, and the later ones stay in the task. If that step's last commit changed since your phone showed it, the push is refused; a step on the default branch already says there is nothing to push.
+- A task in [subtasks](work-in-steps.md) pushes its accepted run, the commits from the top whose subtasks you accepted, as `p` in the board's push window does, and the rest stays in the task. If the run changed since your phone showed it, the push is refused with `Not pushed: what can go out changed since you saw it`; a run on the default branch already says there is nothing to push.
 - If you turn the switch off, the device sends nothing; the setting stays in that browser alone.
 - If the hub has not enabled answering for your account, the task says so instead.
 
@@ -120,6 +120,7 @@ What reaches a machine is its own choice, set by [`hub.commands`](../reference/c
 - **Answers an open question.** Pick the question on the item and write your answer. It waits with the lead until the lead folds it into the item, on the phone and on the board's card alike.
 - **Starts the item.** The machine starts it as `g` on the board does: the item is the task's prompt, and the lead picks how the task goes.
 - **Edits the item.** Tap **Edit** on its title or on a section, change it and save. The machine writes it into the item's file or vault note.
+- **Settles what tasks found.** What tasks noticed outside their work shows in the backlog as rows marked found by tasks, with the tasks that found it. Start one as a task, add it to a running task, or dismiss it, as [`kebbie found`](../reference/commands.md#kebbie-found---json) does.
 
 - If questions still wait on you, the start is refused and says how many; start it again to start it anyway.
 - The phone hears `Starting <task>` while the machine starts it. If the start fails, the device that asked gets a `Not started` notification that says why, and the item stays in the backlog.
@@ -129,13 +130,13 @@ What reaches a machine is its own choice, set by [`hub.commands`](../reference/c
 - If the section changed on the machine since you opened it, the edit is refused; read it again and edit what it says now. A required section cannot be saved empty.
 - An edit to a vault note needs a vault command that states the `write` capability, see [The vault contract](../reference/vault-contract.md#capabilities).
 
-### Review a step from your phone
+### Review a subtask from your phone
 
-A task whose step waits for your acceptance offers a review on its row, and any ready or accepted step opens from its steps. The review shows the step's commits, each with its message and its own diff, and every file the whole step changes, in the order the review split shows them. A device that makes changes also:
+A task whose subtask waits for your acceptance offers a review on its row, and any ready or accepted subtask opens from its subtasks. The review shows the subtask's commits, each with its message and its own diff, and every file the whole subtask changes, in the order the review split shows them. A device that makes changes also:
 
 - **Comments on a line.** Write a comment under any line, then **Send**. Every waiting comment is typed into the task's Claude as one message, each line shaped `path:line — text` as the review split sends them.
-- **Marks a file read.** The read box in a file's header sets the same read mark the review split shows, in the whole step or in one commit, until the file changes.
-- **Accepts the step.** **Accept** at the end accepts every commit of the step as `kebbie accept --step` does, and the board shows it accepted.
+- **Marks a file read.** The read box in a file's header sets the same read mark the review split shows, in the whole subtask or in one commit, until the file changes.
+- **Accepts the subtask.** **Accept** at the end accepts every commit of the subtask as `kebbie accept --subtask` does, and the board shows it accepted.
 
 - A binary file, or one too large to send, shows as left out; review it at the machine.
 - If the task's branch moved since you opened it, a read mark or an accept is refused; open the review again.

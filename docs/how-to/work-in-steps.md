@@ -1,58 +1,68 @@
-# Work in steps
+# Work in subtasks
 
-Have a task list its work as steps, each a slice of the work in one or more small commits, and push them while the task builds the next: one at a time or together, accepting each first if you want to.
+Have a task list its work as titled subtasks, each a slice of the work in one or more small commits, and push the accepted ones from the top of the branch while the task builds on.
 
-Tasks work in steps by default. Turned off, a task commits its own way and you push it as a whole or in part (see [Push part of a task](push-part-of-a-task.md)).
+Tasks work in subtasks by default. Turned off, a task commits its own way and you push it as a whole or in part (see [Push part of a task](push-part-of-a-task.md)).
 
-## Let the task list its steps
+## Let the task list its subtasks
 
-1. The task's Claude runs `kebbie steps` before its first line of code, with its steps in the order they go out, preparatory ones first:
-
-   ```bash
-   kebbie steps "Add the refunds table" "Refund an invoice" "Document refunds"
-   ```
-
-2. It commits each step in small commits, each deployable on its own. When a step's work is finished, it marks the step ready, and its next commits go to the next step:
+1. The task's agent runs `kebbie subtasks` before its first line of code, with its subtasks in the order they go out, preparatory ones first:
 
    ```bash
-   kebbie steps done
+   kebbie subtasks "Add the refunds table" "Refund an invoice" "Document refunds"
    ```
 
-3. See them with `kebbie steps billing`:
+   Each subtask gets a short id from its title: `add-refunds`, `refund-invoice`, `document-refunds`.
 
-   ```
-   billing@app's steps:
-     ● 1. Add the refunds table  ready · 2 commits
-     ◐ 2. Refund an invoice  in progress · 1 commit
-     ○ 3. Document refunds
-   ```
-
-   `○` is planned, `◐` in progress with the commits it holds so far, `●` ready and waiting for you to accept it, `✓` accepted, and `↑ 2 pushed` counts the steps already on the default branch.
-
-- If the split is wrong, tell the task. It lists its steps again: every step not pushed yet can change, and each commit stays in the step it is in.
-- If the task rebases, rewords or squashes its commits, they stay in their steps; a fixup folded into a commit stays in that commit's step.
-
-## Accept and push
-
-Accepting a step marks it as read and lets the push window start there. It is up to you: a step you did not accept pushes all the same, unless you [require every step accepted](#require-every-step-accepted).
-
-1. Read a ready step in review, the whole step or one commit at a time, and accept it. From the command line:
+2. It commits each subtask in small commits, each deployable on its own. Its commits go to the first subtask not done; when a subtask's work is finished, it marks it ready:
 
    ```bash
-   kebbie accept billing --step 1
+   kebbie subtasks done add-refunds
    ```
 
-   Only you can accept a step. The acceptance belongs to each commit's code: a clean rebase or a new message keeps it, a changed line takes it back. `kebbie accept billing a1b2c3d` accepts one commit, and `--withdraw` takes either back.
+3. See them with `kebbie subtasks billing`:
 
-2. Push the accepted steps. In the push window, `p` on a commit pushes through the end of its step, or run `kebbie push` through the step's last commit:
+   ```
+   billing@app's subtasks:
+     ● 1. Add the refunds table [add-refunds]  ready · 2 commits
+          a1b2c3d Add the refunds table
+          b2c3d4e Index refunds by invoice
+     ◐ 2. Refund an invoice [refund-invoice]  in progress · 1 commit
+          c3d4e5f Refund an invoice in full
+     ○ 3. Document refunds [document-refunds]
+   Pushable: nothing yet; the top commit's subtask is not accepted
+   ```
+
+   `○` is planned, `◐` in progress, `●` ready and waiting for you to accept it, `✓` accepted, and `↑ 2 pushed` counts the subtasks already on the default branch.
+
+- If the work needs a subtask the task did not list, it adds one with its reason, `kebbie subtasks add "Backfill old refunds" --because "<why>"`, placed before the subtask it prepares with `--prepares <id>`. You see the reason beside the subtask.
+- If the split is wrong, tell the task. It lists its subtasks again: a subtask keeps its id and its commits under the same title, and one left out that still holds commits stays, marked `(not in the list)`.
+- If the task rebases, rewords or reorders its commits, each keeps its subtask, since kebbie places a commit by its change. A subtask's commits need not lie together in the branch.
+
+## Accept and push the run
+
+The push order is the branch's commits, oldest at the top. The **pushable run** is the commits from the top whose subtasks you accepted, up to the first commit of a subtask you have not. Accepting is how you push part of a task; pushing all of it needs no accept unless you [require every subtask accepted](#require-every-subtask-accepted).
+
+1. Read a ready subtask in review, the whole subtask or one commit at a time, and accept it with `a`. From the command line:
 
    ```bash
-   kebbie push billing --through a1b2c3d
+   kebbie accept billing --subtask add-refunds
    ```
 
-   The task stays open and keeps building the next step: kebbie pushes the accepted commits without touching its worktree, rebased onto the default branch in a worktree of its own when the default branch moved, and tells its Claude to rebase onto the default branch once its work in progress is committed. The pushed steps drop out of the list and show as a count. See [Push part of a task](push-part-of-a-task.md).
+   Only you can accept a subtask, and only once it is ready. The acceptance belongs to each commit's code: a clean rebase or a new message keeps it, a changed line takes it back. `kebbie accept billing a1b2c3d` accepts one commit, and `--withdraw` takes either back.
 
-## Require every step accepted
+2. Push the accepted run. In the push window, `◂ through here` marks the run's last commit, and `p` pushes the run and keeps the task open:
+
+   ```
+   Push?  y push all and close · p push the accepted run, 2 commits and keep it open · …
+   ```
+
+   The task keeps building: kebbie pushes the run without touching its worktree, rebased onto the default branch in a worktree of its own when the default branch moved, and tells its agent to rebase once its work in progress is committed. The pushed subtasks drop out of the list and show as a count. See [Push part of a task](push-part-of-a-task.md).
+
+- If an accepted subtask has a commit behind one of a subtask you have not accepted, it shows `accepted · waits for <subtask>` and goes out once that one is accepted too.
+- If an accepted subtask gains a commit, it is ready again, with only the new commit to accept.
+
+## Require every subtask accepted
 
 Turn on `task.require_accept` when no commit should leave without you accepting it first.
 
@@ -66,16 +76,16 @@ Turn on `task.require_accept` when no commit should leave without you accepting 
 
    Or press space on `task.require_accept` on the board's [Settings page](../reference/board.md#settings-page).
 
-2. Accept each step once it is ready. A ready task with a step to accept waits under Needs you, with `accept step 2 · r review` under its row, and `N` lists it under Stopped on you instead of Push, in this order.
+2. Accept each subtask once it is ready. A ready task with a subtask to accept waits under Needs you, with `accept subtask 2 · r review` under its row, and `N` lists it under Stopped on you instead of Push, in this order.
 
 3. Push as before. A push that would take a commit you did not accept is refused, and says which:
 
    ```
-   Not pushed: step 2 is not accepted
-   Accept it with kebbie accept billing d4e5f6a, or with a in its review (r on the board); task.require_accept holds every commit until it is accepted.
+   Not pushed: subtask 2 is not accepted
+   Accept it with kebbie accept billing --subtask refund-invoice, or with a in its review (r on the board); task.require_accept holds every commit until it is accepted.
    ```
 
-   `kebbie push billing --through a1b2c3d` still pushes the accepted steps up to that commit. In push in order, the first task refused stops the rest, which stay ready.
+   `p` still pushes the accepted run. In push in order, the first task refused stops the rest, which stay ready.
 
 - With `task.steps` off, `task.require_accept` has no effect.
 
@@ -97,6 +107,6 @@ Turn on `task.require_accept` when no commit should leave without you accepting 
 
 ## Related
 
-- [`kebbie steps`](../reference/commands.md#kebbie-steps-name-step-) and [`kebbie accept`](../reference/commands.md#kebbie-accept-name-sha)
+- [`kebbie subtasks`](../reference/commands.md#kebbie-subtasks-name-subtask-) and [`kebbie accept`](../reference/commands.md#kebbie-accept-name-sha)
 - [Push part of a task](push-part-of-a-task.md)
 - [Review a task's changes](review-a-task.md)

@@ -106,7 +106,7 @@ fn an_obstacle_goes_to_the_investigator_and_the_lead_never_picks_a_way_from_memo
     let lead = lead_role();
     let obstacles = section(&lead, "## Obstacles and findings");
     says(obstacles, &["kebbie obstacle", "obstacle · investigating", "its own investigator", "investigate.profile", "not a question of method", "from memory", "kebbie obstacles decide", "kebbie recipe"], "an obstacle reached the lead as a question");
-    says(&playbook("OBSTACLE.md"), &["`workaround`", "`subtask`", "`task`", "`ask`", "kebbie files the real fix", "first among the task's unpushed steps", "queues the task", "asks the user on the board", "kebbie:investigate", "subagent", "effort", "kebbie obstacles decide"], "kebbie carries out each decision, and the lead the ones that reach it");
+    says(&playbook("OBSTACLE.md"), &["`workaround`", "`subtask`", "`task`", "`ask`", "kebbie files the real fix", "ahead of the subtask the task's commits go to now", "queues the task", "asks the user on the board", "kebbie:investigate", "subagent", "effort", "kebbie obstacles decide"], "kebbie carries out each decision, and the lead the ones that reach it");
     says(section(&lead, "## Questions from tasks"), &["An obstacle is not a question of method"], "the method rule names its exception");
 }
 
@@ -114,7 +114,7 @@ fn an_obstacle_goes_to_the_investigator_and_the_lead_never_picks_a_way_from_memo
 fn the_investigator_decides_in_line_with_the_goal_and_the_codes_quality_with_its_sources() {
     let skill = investigator();
     assert!(skill.starts_with("---\nname: investigate\n"), "the lead's subagent runs it by name");
-    says(&skill, &["the task's goal", "make the change easy, then make the easy change", "refactor", "context", "search", "official documentation", "`workaround`", "`subtask`", "`task`", "`ask`", "what will replace it", "one preparatory subtask", "recommend", "reason:", "plan:"], "the investigator chooses among the four with its sources");
+    says(&skill, &["the task's goal", "make the change easy, then make the easy change", "refactor", "context", "search", "official documentation", "`workaround`", "`subtask`", "`task`", "`ask`", "what will replace it", "one preparatory subtask", "sends the next commits to it until the task marks it done", "recommend", "reason:", "plan:"], "the investigator chooses among the four with its sources");
     assert!(!skill.contains("read-only") && !skill.contains("allowlist"), "the investigator has the tools every agent has");
 }
 
@@ -128,7 +128,7 @@ fn a_review_finding_about_scope_or_intent_is_resolved_through_the_investigator_a
 #[test]
 fn the_card_records_who_decided_and_keeps_a_reversed_decision_with_the_one_that_replaced_it() {
     let card = playbook("CARD.md");
-    says(&card, &["\nBuilt:\n", "\nDecisions:\n", "\nAlso noticed:\n", "`you`", "`lead`", "`task`", "`investigator`", "replaced", "no commit or step counts", "outside the task", "English", "vault's language"], "a card rewritten between reports turned a decision without trace");
+    says(&card, &["\nBuilt:\n", "\nDecisions:\n", "\nAlso noticed:\n", "`you`", "`lead`", "`task`", "`investigator`", "replaced", "no commit or subtask counts", "outside the task", "English", "vault's language"], "a card rewritten between reports turned a decision without trace");
     assert!(!card.to_lowercase().contains("confirm:"), "a card has no confirm part");
 }
 
@@ -166,5 +166,5 @@ fn the_answer_block_the_investigator_is_taught_is_the_one_kebbie_parses() {
 #[test]
 fn a_decision_kebbie_sends_is_the_tasks_to_follow_and_the_same_obstacle_raised_again_is_not_investigated_twice() {
     let page = playbook("OBSTACLE.md");
-    says(&page, &["comes from kebbie", "kebbie puts it in your steps", "decided before is your decision", "without a second investigation", "a task's third, asks the user whether the plan holds"], "a task kept raising the same obstacle until it got the answer it wanted");
+    says(&page, &["comes from kebbie", "kebbie adds it, sends your next commits to it and tells you its id", "decided before is your decision", "without a second investigation", "a task's third, asks the user whether the plan holds"], "a task kept raising the same obstacle until it got the answer it wanted");
 }

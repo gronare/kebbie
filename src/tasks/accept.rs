@@ -86,10 +86,10 @@ pub(crate) struct Open {
 pub(crate) fn open_commits(path: &Path, upstream: &str) -> Result<Vec<Open>> {
     let tips = git(path, &["rev-parse", &crate::repo::tracking(upstream), "HEAD"])?;
     let (shas, head) = tips.split_once('\n').ok_or_else(|| format!("git rev-parse {upstream} HEAD printed one sha"))?;
-    open_commits_at(path, &super::StepTips { upstream: shas.to_string(), head: head.to_string() })
+    open_commits_at(path, &super::SubtaskTips { upstream: shas.to_string(), head: head.to_string() })
 }
 
-pub(crate) fn open_commits_at(path: &Path, tips: &super::StepTips) -> Result<Vec<Open>> {
+pub(crate) fn open_commits_at(path: &Path, tips: &super::SubtaskTips) -> Result<Vec<Open>> {
     let (shas, head) = (tips.upstream.as_str(), tips.head.as_str());
     let (raw, base) = cached(&RAW, (shas, head), || {
         let raw = commit_codes(path, &["--reverse", &format!("{shas}..{head}")])?;
@@ -141,12 +141,12 @@ pub fn last_of_run(commits: &[(String, bool)]) -> Option<&str> {
     commits.iter().take_while(|(_, accepted)| *accepted).last().map(|(sha, _)| sha.as_str())
 }
 
-// The same run ended at a step's last commit: with steps listed, the last commit of the accepted steps first in line.
-pub fn last_accepted_through(commits: &[(String, bool)], steps: &super::plan::Steps) -> Option<String> {
-    if !steps.listed() {
+// The run a push may take: with subtasks listed, the pushable run of accepted subtasks from the top; without, the accepted commits from the first.
+pub fn last_accepted_through(commits: &[(String, bool)], subtasks: &super::plan::Subtasks) -> Option<String> {
+    if !subtasks.listed() {
         return last_of_run(commits).map(str::to_string);
     }
-    steps.items.iter().take_while(|step| step.state == super::plan::State::Accepted).last().and_then(|step| step.head()).map(str::to_string)
+    subtasks.pushable.as_ref().map(|run| run.through.clone())
 }
 
 struct Task {
@@ -166,27 +166,31 @@ pub fn accept_required(repo: &Path) -> bool {
     crate::config::resolve(Some(repo)).is_ok_and(|config| config.settings.steps.value && config.settings.require_accept.value)
 }
 
-// The first commit not accepted among the first `take` unpushed ones, as the step it is, and how many of all of them are not accepted.
+// The first commit not accepted among the first `take` unpushed ones, as the subtask it belongs to, and how many subtasks wait to be accepted.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Unaccepted {
     pub count: usize,
-    pub step: usize,
+    pub number: usize,
+    pub subtask: Option<String>,
     pub sha: String,
     pub next: String,
 }
 
-// Counted by step: a step with any commit not accepted waits once, however many it holds.
-pub fn unaccepted(commits: &[(String, bool)], take: usize, steps: &super::plan::Steps) -> Option<Unaccepted> {
-    let number = |at: usize, sha: &str| steps.holding(sha).map_or(steps.pushed + at + 1, |step| step.index + 1);
+// Counted by subtask: a subtask with any commit not accepted waits once, however many it holds; a commit in no subtask counts on from the listed ones.
+pub fn unaccepted(commits: &[(String, bool)], take: usize, subtasks: &super::plan::Subtasks) -> Option<Unaccepted> {
+    let listed = subtasks.items.len() + subtasks.pushed.len();
+    let owner = |at: usize, sha: &str| subtasks.holding(sha).map_or((listed + at + 1, None), |subtask| (subtask.number, Some(subtask.id.clone())));
     let (at, (sha, _)) = commits.iter().take(take).enumerate().find(|(_, (_, accepted))| !accepted)?;
-    let step = number(at, sha);
-    let mut waiting: Vec<usize> = commits.iter().enumerate().filter(|(_, (_, accepted))| !accepted).map(|(at, (sha, _))| number(at, sha)).collect();
+    let (number, subtask) = owner(at, sha);
+    let mut waiting: Vec<usize> = commits.iter().enumerate().filter(|(_, (_, accepted))| !accepted).map(|(at, (sha, _))| owner(at, sha).0).collect();
+    waiting.sort_unstable();
     waiting.dedup();
-    Some(Unaccepted { count: waiting.len(), step, sha: sha.clone(), next: format!("accept step {step}") })
+    let next = if subtask.is_some() { format!("accept subtask {number}") } else { format!("accept commit {}", &sha[..7.min(sha.len())]) };
+    Some(Unaccepted { count: waiting.len(), number, subtask, sha: sha.clone(), next })
 }
 
 // The task's unaccepted commits as the board shows them; None when every one is accepted.
-pub fn unaccepted_at(state: &Path, address: &str, path: &Path, tips: &super::StepTips) -> Option<Unaccepted> {
+pub fn unaccepted_at(state: &Path, address: &str, path: &Path, tips: &super::SubtaskTips) -> Option<Unaccepted> {
     let accepted = codes_in(state, address);
     let commits: Vec<(String, bool)> = open_commits_at(path, tips).ok()?.into_iter().map(|open| (open.sha, accepted.contains(&open.key))).collect();
     unaccepted(&commits, commits.len(), &super::plan::read_at(state, path, address, tips, false))
@@ -195,16 +199,19 @@ pub fn unaccepted_at(state: &Path, address: &str, path: &Path, tips: &super::Ste
 // With task.require_accept on, a push takes only accepted commits; the first that is not is named with how to accept it.
 pub(super) fn refuse_unaccepted(state: &Path, address: &str, task: &str, path: &Path, upstream: &str, take: Option<usize>, refused: &str) -> Result<()> {
     let commits = accepted_at(state, address, path, upstream)?;
-    let steps = super::plan::read_now(state, path, upstream, address);
-    let Some(first) = unaccepted(&commits, take.unwrap_or(commits.len()), &steps) else { return Ok(()) };
+    let subtasks = super::plan::read_now(state, path, upstream, address);
+    let Some(first) = unaccepted(&commits, take.unwrap_or(commits.len()), &subtasks) else { return Ok(()) };
     let short = &first.sha[..7.min(first.sha.len())];
-    let how = if steps.holding(&first.sha).is_some() { format!("kebbie accept {task} --step {}", first.step) } else { format!("kebbie accept {task} {short}") };
-    Notice::new(Tone::You, format!("{refused}: step {} is not accepted", first.step))
+    let (how, what) = match &first.subtask {
+        Some(id) => (format!("kebbie accept {task} --subtask {id}"), format!("subtask {} is not accepted", first.number)),
+        None => (format!("kebbie accept {task} {short}"), format!("commit {short} is not accepted")),
+    };
+    Notice::new(Tone::You, format!("{refused}: {what}"))
         .you(format!("Accept it with {how}, or with a in its review ({} on the board); task.require_accept holds every commit until it is accepted.", crate::keys::key(crate::keys::Act::Review)))
         .detail("task", task).detail("commit", short).err()
 }
 
-// What the push window preselects: None when the first unpushed commit is not accepted, or the task has none; with steps, the last commit of the accepted steps first in line.
+// What the push window preselects: None when the first unpushed commit is not accepted, or the task has none; with subtasks, the end of the pushable run.
 pub fn last_accepted(path: &Path) -> Option<String> {
     let task = task_at(path, None).ok()?;
     let state = state_dir().ok()?;
@@ -249,71 +256,69 @@ fn listing(state: &Path, task: &Task) -> Result<serde_json::Value> {
     Ok(serde_json::json!({ "task": task.address, "last_accepted": last_of_run(&commits), "commits": listed }))
 }
 
-// What kebbie accept takes: one commit by its sha, or every commit of a step by its number.
+// What kebbie accept takes: one commit by its sha, or every commit of a subtask by its id or number.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Accepting<'a> {
     Commit(&'a str),
-    Step(&'a str),
+    Subtask(&'a str),
 }
 
-const ACCEPT_USAGE: &str = "kebbie accept <name> <sha> [--withdraw], or kebbie accept <name> --step <n> [--withdraw]";
+const ACCEPT_USAGE: &str = "kebbie accept <name> <sha> [--withdraw], or kebbie accept <name> --subtask <id> [--withdraw]";
 
-// The user's word that a commit's code is right, or every commit of a step; it holds through a clean rebase and a reword, and a changed line takes it back.
-pub fn accept(cwd: &Path, name: Option<&str>, sha: Option<&str>, step: Option<&str>, on: bool) -> Result<String> {
-    let what = match (sha, step) {
-        (Some(_), Some(_)) => return Err(format!("kebbie accept takes a commit or a step, not both: {ACCEPT_USAGE}")),
-        (_, Some(step)) => Some(Accepting::Step(step)),
+// The user's word that a commit's code is right, or every commit of a subtask; it holds through a clean rebase and a reword, and a changed line takes it back.
+pub fn accept(cwd: &Path, name: Option<&str>, sha: Option<&str>, subtask: Option<&str>, on: bool) -> Result<String> {
+    let what = match (sha, subtask) {
+        (Some(_), Some(_)) => return Err(format!("kebbie accept takes a commit or a subtask, not both: {ACCEPT_USAGE}")),
+        (_, Some(subtask)) => Some(Accepting::Subtask(subtask)),
         (sha, None) => sha.map(Accepting::Commit),
     };
     accept_as(&crate::permit::caller(), cwd, name, what, on)
 }
 
-// Read from the Claude above, not the folder, which kebbie -C or a cd sets to anything.
+// Read from the agent above, not the folder, which kebbie -C or a cd sets to anything.
 fn accept_as(caller: &Caller, cwd: &Path, name: Option<&str>, what: Option<Accepting>, on: bool) -> Result<String> {
     crate::permit::user_only_as(caller, "accepting a commit")?;
-    let name = name.ok_or_else(|| format!("kebbie accept needs a task name and a commit or a step: {ACCEPT_USAGE}"))?;
-    let what = what.ok_or_else(|| format!("kebbie accept needs the commit or the step: {ACCEPT_USAGE}"))?;
+    let name = name.ok_or_else(|| format!("kebbie accept needs a task name and a commit or a subtask: {ACCEPT_USAGE}"))?;
+    let what = what.ok_or_else(|| format!("kebbie accept needs the commit or the subtask: {ACCEPT_USAGE}"))?;
     let task = task_at(cwd, Some(name))?;
     match what {
         Accepting::Commit(sha) => accept_in(&state_dir()?, &task, sha, on),
-        Accepting::Step(number) => {
-            let number: usize = number.parse().ok().filter(|number| *number >= 1).ok_or_else(|| format!("--step takes a step's number, from 1: {ACCEPT_USAGE}"))?;
-            accept_step_in(&state_dir()?, &task, number, on)
-        }
+        Accepting::Subtask(said) => accept_subtask_in(&state_dir()?, &task, said, on),
     }
 }
 
-// A device the user approved accepts a step through the hub, which hub.commands allows; the head it saw is checked by the caller.
-pub(crate) fn accept_step_from_device(caller: &Caller, cwd: &Path, name: &str, number: usize) -> Result<String> {
+// A device the user approved accepts a subtask through the hub, which hub.commands allows; the head it saw is checked by the caller.
+pub(crate) fn accept_subtask_from_device(caller: &Caller, cwd: &Path, name: &str, id: &str) -> Result<String> {
     if !matches!(caller, Caller::Hub { .. }) {
-        return accept_as(caller, cwd, Some(name), Some(Accepting::Step(&number.to_string())), true);
+        return accept_as(caller, cwd, Some(name), Some(Accepting::Subtask(id)), true);
     }
     let task = task_at(cwd, Some(name))?;
-    accept_step_in(&state_dir()?, &task, number, true)
+    accept_subtask_in(&state_dir()?, &task, id, true)
 }
 
-// Every commit of step `number`, which must be ready to be accepted; withdrawing takes any step's back.
-fn accept_step_in(state: &Path, task: &Task, number: usize, on: bool) -> Result<String> {
-    let steps = super::plan::read_now(state, &task.path, &task.upstream, &task.address);
-    let Some(step) = steps.items.iter().find(|step| step.index + 1 == number) else {
-        return Notice::new(Tone::Failed, format!("{} has no step {number} to push", task.address)).detail("task", &task.address).err();
+// Every open commit of the subtask said, by its id or number, which must be ready to be accepted; withdrawing takes any subtask's back.
+fn accept_subtask_in(state: &Path, task: &Task, said: &str, on: bool) -> Result<String> {
+    let subtasks = super::plan::read_now(state, &task.path, &task.upstream, &task.address);
+    let Some(subtask) = subtasks.find(said).filter(|subtask| subtask.state != super::plan::State::Pushed) else {
+        return Notice::new(Tone::Failed, format!("{} has no subtask {said} to push", task.address)).detail("task", &task.address).err();
     };
-    if on && !matches!(step.state, super::plan::State::Ready | super::plan::State::Accepted) {
-        return Notice::new(Tone::NotNow, format!("Not accepted: step {number} is not ready yet")).next("Its Claude marks it ready with kebbie steps done once its work is finished.").detail("task", &task.address).err();
+    if on && !matches!(subtask.state, super::plan::State::Ready | super::plan::State::Accepted) {
+        return Notice::new(Tone::NotNow, format!("Not accepted: {} is not ready yet", subtask.title)).next("Its agent marks it ready with kebbie subtasks done once its work is finished.").detail("task", &task.address).err();
     }
     let open = open_commits(&task.path, &task.upstream)?;
     let mut changed = false;
-    for commit in &step.commits {
-        let key = open.iter().find(|open| open.sha == commit.sha).map(|open| open.key.clone()).ok_or_else(|| Notice::new(Tone::Failed, "That step changed while it was read; try again").detail("task", &task.address).to_string())?;
+    for commit in &subtask.commits {
+        let key = open.iter().find(|open| open.sha == commit.sha).map(|open| open.key.clone()).ok_or_else(|| Notice::new(Tone::Failed, "That subtask changed while it was read; try again").detail("task", &task.address).to_string())?;
         changed |= set_in(state, &task.address, &key, on)?;
     }
+    let title = &subtask.title;
     let headline = match (on, changed) {
-        (true, true) => format!("Accepted step {number}"),
-        (true, false) => format!("Step {number} is accepted already"),
-        (false, true) => format!("Acceptance of step {number} withdrawn"),
-        (false, false) => format!("Step {number} was not accepted"),
+        (true, true) => format!("Accepted {title}"),
+        (true, false) => format!("{title} is accepted already"),
+        (false, true) => format!("Acceptance of {title} withdrawn"),
+        (false, false) => format!("{title} was not accepted"),
     };
-    let notice = Notice::new(Tone::Done, headline).detail("task", &task.address).detail("commits", step.commits.len().to_string());
+    let notice = Notice::new(Tone::Done, headline).detail("task", &task.address).detail("subtask", &subtask.id).detail("commits", subtask.commits.len().to_string());
     if on { notice.next("A changed line in any of its commits takes the acceptance back.").ok() } else { notice.ok() }
 }
 
@@ -415,48 +420,52 @@ mod tests {
         cleanup(dir, origin, &slot);
     }
 
+    fn held(id: &str, number: usize, state: super::super::plan::State, shas: &[&str]) -> super::super::plan::Subtask {
+        let commits = shas.iter().map(|sha| super::super::plan::Commit { sha: sha.to_string(), subject: String::new(), accepted: false }).collect();
+        super::super::plan::Subtask { id: id.to_string(), number, title: id.to_string(), state, commits, pushed: Vec::new(), extra: false, added: None, contiguous: true, waits_for: None }
+    }
+
     #[test]
-    fn the_first_commit_not_accepted_is_named_by_its_step_within_what_a_push_takes_and_waiting_steps_count_once() {
-        use super::super::plan::{Commit, State, Step, Steps};
+    fn the_first_commit_not_accepted_is_named_by_its_subtask_within_what_a_push_takes_and_waiting_subtasks_count_once() {
+        use super::super::plan::{State, Subtasks};
         let commits = |marks: &[bool]| marks.iter().enumerate().map(|(at, accepted)| (format!("c{at}"), *accepted)).collect::<Vec<_>>();
-        let none = Steps::default();
-        assert_eq!(unaccepted(&commits(&[true, false, false]), 3, &none).map(|first| (first.step, first.count, first.sha, first.next)), Some((2, 2, "c1".to_string(), "accept step 2".to_string())));
+        let none = Subtasks::default();
+        assert_eq!(unaccepted(&commits(&[true, false, false]), 3, &none).map(|first| (first.number, first.subtask, first.count, first.sha, first.next)), Some((2, None, 2, "c1".to_string(), "accept commit c1".to_string())));
         assert_eq!(unaccepted(&commits(&[true, false]), 1, &none), None, "a push of the first commit takes only accepted ones");
         assert_eq!(unaccepted(&commits(&[true, true]), 2, &none), None);
-        let held = |shas: &[&str]| shas.iter().map(|sha| Commit { sha: sha.to_string(), subject: String::new(), accepted: false }).collect();
-        let listed = Steps { pushed: 1, items: vec![Step { index: 1, title: "Command".to_string(), state: State::Ready, commits: held(&["c0", "c1"]), extra: false }, Step { index: 2, title: "Docs".to_string(), state: State::InProgress, commits: held(&["c2"]), extra: false }] };
-        assert_eq!(unaccepted(&commits(&[false, false, false]), 3, &listed).map(|first| (first.step, first.count)), Some((2, 2)), "a listed step keeps its number after the pushed ones, and two commits of one step wait as one step");
-        assert_eq!(unaccepted(&commits(&[true, false]), 2, &Steps { pushed: 1, items: Vec::new() }).map(|first| first.step), Some(3), "an unlisted commit counts on from the pushed steps");
+        let listed = Subtasks { pushed: vec![held("model", 1, State::Pushed, &[])], items: vec![held("command", 2, State::Ready, &["c0", "c2"]), held("docs", 3, State::InProgress, &["c1"])], ..Subtasks::default() };
+        assert_eq!(unaccepted(&commits(&[false, false, false]), 3, &listed).map(|first| (first.number, first.subtask, first.count, first.next)), Some((2, Some("command".to_string()), 2, "accept subtask 2".to_string())), "a subtask's commits apart from each other wait as one subtask");
+        assert_eq!(unaccepted(&commits(&[true, true, true, false]), 4, &listed).map(|first| first.number), Some(7), "an unlisted commit counts on from the listed subtasks");
     }
 
     #[test]
-    fn the_accepted_run_ends_at_the_last_commit_of_the_accepted_steps_first_in_line() {
-        use super::super::plan::{Commit, State, Step, Steps};
-        let step = |index: usize, state: State, shas: &[&str]| Step { index, title: String::new(), state, commits: shas.iter().map(|sha| Commit { sha: sha.to_string(), subject: String::new(), accepted: true }).collect(), extra: false };
+    fn the_run_a_push_takes_is_the_pushable_run_with_subtasks_and_the_accepted_commits_without() {
+        use super::super::plan::{Run, State, Subtasks};
         let commits = vec![("c0".to_string(), true), ("c1".to_string(), true), ("c2".to_string(), true)];
-        let steps = Steps { pushed: 0, items: vec![step(0, State::Accepted, &["c0", "c1"]), step(1, State::InProgress, &["c2"])] };
-        assert_eq!(last_accepted_through(&commits, &steps).as_deref(), Some("c1"), "an accepted commit of the step in progress is not pushed with the run");
-        assert_eq!(last_accepted_through(&commits, &Steps::default()).as_deref(), Some("c2"), "without steps the run is the commits'");
+        let subtasks = Subtasks { items: vec![held("model", 1, State::Accepted, &["c0", "c1"]), held("docs", 2, State::InProgress, &["c2"])], pushable: Some(Run { count: 2, through: "c1".to_string(), subtasks: vec!["model".to_string()] }), ..Subtasks::default() };
+        assert_eq!(last_accepted_through(&commits, &subtasks).as_deref(), Some("c1"), "an accepted commit of the subtask in progress is not pushed with the run");
+        assert_eq!(last_accepted_through(&commits, &Subtasks { pushable: None, ..subtasks }), None);
+        assert_eq!(last_accepted_through(&commits, &Subtasks::default()).as_deref(), Some("c2"), "without subtasks the run is the commits'");
     }
 
     #[test]
-    fn accepting_a_step_accepts_each_of_its_commits_once_it_is_ready_and_withdrawing_takes_them_all_back() {
+    fn accepting_a_subtask_accepts_each_of_its_commits_once_it_is_ready_and_withdrawing_takes_them_all_back() {
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         let fourth = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
         let state = state_of(&dir);
         crate::tasks::plan::list_at(&state, &slot.path, &upstream, "billing@app", &["Model", "Command"]).unwrap();
         let fifth = commit(&slot.path, "e", "fifth");
-        let refused = accept_step_in(&state, &task(&slot, &upstream), 1, true).unwrap_err();
-        assert!(refused.contains("step 1 is not ready yet"), "{refused}");
+        let refused = accept_subtask_in(&state, &task(&slot, &upstream), "model", true).unwrap_err();
+        assert!(refused.contains("Model is not ready yet"), "{refused}");
         crate::tasks::plan::done_at(&state, &slot.path, &upstream, "billing@app").unwrap();
         commit(&slot.path, "f", "sixth");
-        assert!(accept_step_in(&state, &task(&slot, &upstream), 1, true).unwrap().contains("Accepted step 1"));
+        assert!(accept_subtask_in(&state, &task(&slot, &upstream), "model", true).unwrap().contains("Accepted Model"));
         let accepted = accepted_at(&state, "billing@app", &slot.path, &upstream).unwrap();
-        assert_eq!(accepted.iter().map(|(sha, accepted)| (sha.as_str(), *accepted)).collect::<Vec<_>>()[..2], [(fourth.as_str(), true), (fifth.as_str(), true)], "both commits of step 1");
-        assert!(!accepted[2].1, "and not the next step's");
-        assert!(accept_step_in(&state, &task(&slot, &upstream), 1, true).unwrap().contains("accepted already"));
-        assert!(accept_step_in(&state, &task(&slot, &upstream), 3, true).unwrap_err().contains("has no step 3"));
-        assert!(accept_step_in(&state, &task(&slot, &upstream), 1, false).unwrap().contains("withdrawn"));
+        assert_eq!(accepted.iter().map(|(sha, accepted)| (sha.as_str(), *accepted)).collect::<Vec<_>>()[..2], [(fourth.as_str(), true), (fifth.as_str(), true)], "both commits of the model");
+        assert!(!accepted[2].1, "and not the next subtask's");
+        assert!(accept_subtask_in(&state, &task(&slot, &upstream), "1", true).unwrap().contains("accepted already"), "a subtask goes by its number too, as an older app's step does");
+        assert!(accept_subtask_in(&state, &task(&slot, &upstream), "docs", true).unwrap_err().contains("has no subtask docs"));
+        assert!(accept_subtask_in(&state, &task(&slot, &upstream), "model", false).unwrap().contains("withdrawn"));
         assert!(codes_in(&state, "billing@app").is_empty());
         cleanup(dir, origin, &slot);
     }
@@ -508,7 +517,7 @@ mod tests {
                 assert!(refused.contains("accepting a commit is the user's call") && refused.contains(&crate::permit::describe(&caller)), "{refused}");
             }
         }
-        assert!(!accept_as(&Caller::User, Path::new("/nowhere"), Some("billing"), Some(Accepting::Step("2")), true).unwrap_err().contains("the user's call"), "the user gets past the guard");
+        assert!(!accept_as(&Caller::User, Path::new("/nowhere"), Some("billing"), Some(Accepting::Subtask("2")), true).unwrap_err().contains("the user's call"), "the user gets past the guard");
         assert!(accept(Path::new("/nowhere"), Some("billing"), Some("abc"), Some("2"), true).unwrap_err().contains("not both"));
     }
 }

@@ -211,7 +211,7 @@ impl View {
     pub fn range(&self) -> Option<Range> {
         let (_, entry) = self.selected_entry()?;
         match self.selected.as_ref()? {
-            Sel::Step(_) => entry.range(),
+            Sel::Step(_) => entry.range().or_else(|| entry.head().map(Range::commit)),
             Sel::Commit(_, sha) => Some(Range::commit(sha)),
         }
     }
@@ -269,7 +269,7 @@ impl View {
     }
 
     pub fn title(&self) -> String {
-        let noun = if self.entries.steps { "step" } else { "commit" };
+        let noun = if self.entries.steps { "subtask" } else { "commit" };
         if let Some(commit) = self.selected_commit().filter(|_| self.entries.steps) {
             return format!("{noun} {} · {}", self.selected.as_ref().map_or(0, Sel::number), data::short(&commit.sha));
         }
@@ -336,22 +336,22 @@ impl View {
         }
     }
 
-    // kebbie accept is the user's alone, and this pane runs under their own shell, so kebbie takes it from here; a step goes by its number, so every commit in it is accepted at once.
+    // kebbie accept is the user's alone, and this pane runs under their own shell, so kebbie takes it from here; a subtask goes by its id, so every commit in it is accepted at once.
     pub fn accept(&mut self) {
         let Some(task) = self.entries.task.clone() else {
             self.note = Some(("Accepting is for a task's commits; this review is not a task's".to_string(), YELLOW));
             return;
         };
         let Some((index, entry)) = self.selected_entry().map(|(index, entry)| (index, entry.clone())) else {
-            self.note = Some(("Pick a step first: ← →".to_string(), YELLOW));
+            self.note = Some(("Pick a subtask first: ← →".to_string(), YELLOW));
             return;
         };
         let (target, what, withdraw) = match self.selected_commit() {
             Some(commit) => (vec![commit.sha.clone()], data::short(&commit.sha).to_string(), commit.accepted),
-            None => (vec!["--step".to_string(), entry.number.to_string()], format!("step {}", entry.number), entry.mark == Mark::Accepted),
+            None => (vec!["--subtask".to_string(), entry.id.clone()], format!("subtask {}", entry.number), entry.mark == Mark::Accepted),
         };
         if self.entries.steps && self.selected_commit().is_none() && !withdraw && entry.mark != Mark::Ready {
-            self.note = Some((format!("Step {} is still in progress; its Claude marks it ready", entry.number), YELLOW));
+            self.note = Some((format!("Subtask {} is still in progress; its agent marks it ready", entry.number), YELLOW));
             return;
         }
         let mut argv = vec![data::kebbie_bin(), "accept".into(), task];

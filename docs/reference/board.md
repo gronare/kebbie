@@ -22,7 +22,7 @@ The status line shows:
 | --- | --- |
 | `⚠N` on Routines | N routine runs wait for you with findings. |
 | Counts | What needs you (tasks, and devices waiting for your approval), tasks that are working, are in review, are ready to push and wait for CI, and waiting questions. |
-| `◆ N to accept`, yellow | N steps of tasks working in steps wait for you to accept them. |
+| `◆ N to accept`, yellow | N subtasks of tasks working in subtasks wait for you to accept them. |
 | `! N bugs to send` | Bugs and wishes about kebbie, saved here, wait for you to send them to its maintainers, on their row under Work, such as `! 1 bug and 2 wishes to send`. |
 | Plan usage | How much of the plan is used. |
 | `↻ N stale` | Claude sessions or Codex tasks wait to be restarted. |
@@ -102,9 +102,9 @@ A task row shows its commits, uncommitted and untracked files, and how far it is
 | `second opinion: 2 points · v i reads them`, muted | Under the row: the [second opinion](../how-to/send-a-task-to-review.md#ask-for-a-second-opinion) gave its points, which the lead passes to the task; the push never waits on them. `second opinion: codex-review reading…` while it reads, `(stale)` once the code changed. |
 | `review being assessed`, `review not assessed · v`, muted | The assessor is at work, or gave no answer, which counts as a suggestion. |
 
-#### A task in steps
+#### A task in subtasks
 
-With [`task.steps`](configuration.md) on and steps listed, the task's steps not pushed yet sit under its row, one line each, with the step's number and title:
+With [`task.steps`](configuration.md) on and subtasks listed, the task's subtasks not pushed yet sit under its row, one line each, with the subtask's number, title and state:
 
 ```
 ◐ Switch the payment provider to Stripe        billing · 1 to accept
@@ -117,16 +117,16 @@ With [`task.steps`](configuration.md) on and steps listed, the task's steps not 
 
 | Line or mark | Means |
 | --- | --- |
-| `N to accept`, yellow | On the row, in place of its commit count: N ready steps wait for you to accept them. |
-| `↑ N pushed`, muted | N steps are on the default branch already. |
+| `N to accept`, yellow | On the row, in place of its commit count: N ready subtasks wait for you to accept them. |
+| `↑ N pushed`, muted | N subtasks are on the default branch already. |
 | `○`, muted | Planned. |
 | `◐ … in progress · N commits`, blue | Its Claude is at work on it, with the commits it holds so far; without commits, just `in progress`. |
-| `● … ready · N commits`, yellow | Its Claude ran `kebbie steps done` on it: finished, waiting for you to accept it, followed by the task's rules check in short while it is not passed: `· project rules not checked`, `· checking project rules` while the reviewer or the lead checks, `· breaks N project rules` when it found some, `· pushed past the rules check by you` (or `by the lead`) after `kebbie approve`. A passed check adds nothing. |
-| `✓ … accepted`, green | You accepted every commit in it. |
-| `accept N · r review` | Under the steps: the first step waiting for you. `r` opens the review, and [`kebbie accept`](commands.md#kebbie-accept-name-sha) accepts it. |
-| `accept step N · r review` | With [`task.require_accept`](configuration.md) on, a ready task with a step to accept waits under Needs you with this line: it cannot be pushed until step N is accepted. |
+| `● … ready · N commits`, yellow | Its agent ran `kebbie subtasks done` on it: finished, waiting for you to accept it, followed by the task's rules check in short while it is not passed: `· project rules not checked`, `· checking project rules` while the reviewer or the lead checks, `· breaks N project rules` when it found some, `· pushed past the rules check by you` (or `by the lead`) after `kebbie approve`. A passed check adds nothing. |
+| `✓ … accepted`, green | You accepted every commit in it. `accepted · waits for <subtask>` when a commit of a subtask you have not accepted lies above one of its own in the push order. |
+| `accept N · r review` | Under the subtasks: the first subtask waiting for you. `r` opens the review, and [`kebbie accept`](commands.md#kebbie-accept-name-sha) accepts it. |
+| `accept subtask N · r review` | With [`task.require_accept`](configuration.md) on, a ready task with a subtask to accept waits under Needs you with this line: it cannot be pushed until subtask N is accepted. |
 
-A step to accept leaves the task in the group its phase gives it, under Working while it builds the next step. The state word always shows: a long title is shortened at a word with `…` to make room, and only when the title would drop below 12 columns does the rules part shorten (`· 2 breaks`, `· checking`, `· not checked`, `· past the rules`) and then go. Without steps, the row is as above. See [Work in steps](../how-to/work-in-steps.md).
+A subtask to accept leaves the task in the group its phase gives it, under Working while it builds on. The state word always shows: a long title is shortened at a word with `…` to make room, and only when the title would drop below 12 columns does the rules part shorten (`· 2 breaks`, `· checking`, `· not checked`, `· past the rules`) and then go. Without subtasks, the row is as above. See [Work in subtasks](../how-to/work-in-steps.md).
 
 While Claude waits on a prompt of its own, such as a permission or trust question, the `you:` line says `answer Claude's prompt in its Space or through the lead`. `g` takes you to its Space, and the lead has the question and its options in its chat. A Codex task on a start-up question says what Codex asks, as `answer Codex in its Space: it asks whether you trust its folder`. See [Claude's own prompts in a task](../explanation/lead-and-away-mode.md#claudes-own-prompts-in-a-task).
 
@@ -173,7 +173,7 @@ kebbie keeps one phase per task, and only what changes it writes it: its start, 
 - A task whose commits are on the default branch that kebbie does not close by itself, marked `landed on main · d closes it` beside a question, or `landed on main, but its worktree has uncommitted changes or a stash` (see [`kebbie done`](commands.md#kebbie-done-name)).
 - A task that reported needs-you, or ready with nothing committed.
 - A task that reported ready with commits while tracked files are uncommitted, marked `2 uncommitted files hold it: a.md and b.md · p then p pushes the commits and keeps them`. The push window opens on its last commit, so `p` pushes every commit and keeps the task open with the files as they are; its approval is of the commits and stays.
-- With `task.require_accept` on, a ready task with a commit you have not accepted, marked `accept step N`.
+- With `task.require_accept` on, a ready task with a commit you have not accepted, marked `accept subtask N`.
 - A task whose turn ended without a report even after kebbie asked for one.
 - A task whose CI failed after a push of only some of its commits, marked `CI failed: <workflow> · <job> · <step>`, and `its Claude says outside the code: <reason>` once its Claude has said so. `C` dismisses it.
 - A push under way whose Claude reported needs-you.
@@ -469,7 +469,7 @@ The item's card shows its title, priority, repo, state, the day it was filed and
 | Group | What is in it | In what order |
 | --- | --- | --- |
 | Approve or deny | A device on your account that sent this machine a command under [`hub.trust = "device"`](configuration.md#machine), waiting for you to let it make changes here. Its row says when `hub.auto_approve` lets it in. | The one that has waited longest first. |
-| Stopped on you | A task that stands still until you act: a question or a plan to approve, Claude's own prompt, a report that asks you something, a crash, a red CI only you can settle, a step to accept with `task.require_accept` on. | The one most tasks wait behind first, then the one that has waited longest. |
+| Stopped on you | A task that stands still until you act: a question or a plan to approve, Claude's own prompt, a report that asks you something, a crash, a red CI only you can settle, a subtask to accept with `task.require_accept` on. | The one most tasks wait behind first, then the one that has waited longest. |
 | Push, in this order | What is ready to push and not in the push line yet. A task whose ready report names another to push first (`kebbie report --after`) says `after <task>` while that task is open. | What other tasks wait on first, in any repo, queued or ready to push after it, then two tasks that change the same files in the order they were built, then the one that was ready first. |
 | To read | A task that reported ready with nothing to push, such as a research result. | The one a decision waits on first, then the oldest. |
 
@@ -535,10 +535,10 @@ Opened by `p`. The window is in four parts, each under a header on a rule:
 | --- | --- |
 | `CARD` | The task's sign-off card, marked current at its commit or written before the code changed. Its images are listed by file name; `s` on the board shows them. |
 | `TESTS` | The latest recorded test run, as on the task's row. A run before a clean rebase, a reworded message or a squash still counts as current. |
-| `COMMITS` | The commits that will land, with their count. A commit you accepted is marked `✓`, green. With steps, the commits are grouped by step, each step's mark and number on its first commit, and the steps without commits follow, muted: `in progress, stays` or `planned`; `p` pushes through the end of the selected commit's step. |
+| `COMMITS` | The commits that will land, with their count. A commit you accepted is marked `✓`, green. With subtasks, the commits stand in push order, oldest first, and where a subtask's commits start they carry its mark, number and `· title`; the subtasks without commits follow, muted: `in progress, stays` or `planned`. |
 | `MESSAGE` | The selected commit's full message, set off by a bar so it does not read as part of the card. |
 
-With accepted commits, the window opens on the last of the accepted ones from the first commit on, marked `◂ through here`, and `p` reads `p push N accepted, the task keeps working` while it is selected. With steps, that run ends with the last accepted step. Without any, it opens on the first commit. While the task's Claude is working, `p` opens the window only once it has accepted commits from the first one on, and the window then pushes only those: `↑` `↓` stop at the last of them, and `y`, `e` and `s` wait until the task reports.
+With accepted commits, the window opens on the last of the accepted ones from the first commit on, marked `◂ through here`, and `p` reads `p push N accepted, the task keeps working` while it is selected. With subtasks, `◂ through here` ends the pushable run, the commits from the top whose subtasks you accepted, and `p` reads `p push the accepted run, N commits and keep it open`. Without any, it opens on the first commit. While the task's agent is working, `p` opens the window only once it has accepted commits from the first one on, and the window then pushes only those: `↑` `↓` stop at the last of them, and `y`, `e` and `s` wait until the task reports.
 
 The keys sit under a rule at the bottom and stay there. A window taller than the screen scrolls the parts above them, keeping the selected commit in view.
 
@@ -549,7 +549,7 @@ The keys sit under a rule at the bottom and stay there. A window taller than the
 | `e` | Edit the selected commit's message. |
 | `s` | Squash all commits into one. Claude drafts the message in the background, ready to edit. Needs two or more commits. |
 | `y` | Push every commit shown and close the task. |
-| `p` | Push the commits up to the selected one and keep the task open. With steps, through the end of the selected commit's step: `p push through step N and keep it open`. |
+| `p` | Push the commits up to the selected one and keep the task open. With subtasks and a pushable run, the run, whichever commit is selected. |
 | `esc`, `q` | Close without pushing. |
 
 In the message editor: `ctrl-s` saves, `ctrl-o` opens your `$EDITOR`, `esc` goes back.

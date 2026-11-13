@@ -216,9 +216,9 @@ fn keys(view: &View) -> Line<'static> {
     let pairs: &[(&str, &str)] = if view.typing {
         &[("type", "to filter"), ("!word", "hides"), ("enter", "keeps it"), ("esc", "clears")]
     } else if view.focus == Panel::Diff {
-        &[("tab", "back to the steps"), ("shift-tab", "the files"), ("q", "closes")]
+        &[("tab", "back to the subtasks"), ("shift-tab", "the files"), ("q", "closes")]
     } else {
-        &[("← →", "step"), ("↑ ↓", "file"), ("a", "accept"), ("r", "read"), ("/", "filter"), ("tab", "to the diff")]
+        &[("← →", "subtask"), ("↑ ↓", "file"), ("a", "accept"), ("r", "read"), ("/", "filter"), ("tab", "to the diff")]
     };
     let mut spans = Vec::new();
     for (index, (key, label)) in pairs.iter().enumerate() {
@@ -239,16 +239,16 @@ fn help() -> Vec<Line<'static>> {
     let heading = |text: &str| Line::from(Span::styled(text.to_string(), bold(MAUVE)));
     let key = |key: &str, about: &str| Line::from(vec![Span::styled(format!("  {key:<11}"), bold(TEXT)), Span::styled(about.to_string(), style(SUBTEXT))]);
     vec![
-        heading("Steps and files"),
-        key("← →  h l", "the previous or next step, or a commit of the step picked; all is the whole branch"),
+        heading("Subtasks and files"),
+        key("← →  h l", "the previous or next subtask, or a commit of the subtask picked; all is the whole branch"),
         key("↑ ↓  j k", "the previous or next file; the diff shows it at once"),
-        key("a", "accept the step, or the commit picked in it; on one accepted, withdraw it"),
+        key("a", "accept the subtask, or the commit picked in it; on one accepted, withdraw it"),
         key("r", "mark the file read, or unread"),
         key("/", "filter the files: words to keep, !word to hide; esc clears"),
         key("m", "hide or show the commit message"),
-        key("tab", "the next panel: steps, files, diff; shift-tab goes back"),
+        key("tab", "the next panel: subtasks, files, diff; shift-tab goes back"),
         key("enter", "to the diff"),
-        key("mouse", "click a step or a file; the wheel scrolls the files"),
+        key("mouse", "click a subtask or a file; the wheel scrolls the files"),
         key("q", "close the review"),
         Line::default(),
         heading("Diff (nvim)"),
@@ -258,7 +258,7 @@ fn help() -> Vec<Line<'static>> {
         key("o", "edit the file over the diff; ctrl-q back, leader m comments"),
         key("-", "open the file's folder over the diff"),
         key("u  w", "reload the diff when the file changed; line wrap"),
-        key("tab", "back to the steps; shift-tab to the files"),
+        key("tab", "back to the subtasks; shift-tab to the files"),
         key("q", "close the review"),
         Line::default(),
         Line::from(Span::styled("Comments wait in Claude's input box until you press Enter there.", style(MUTED))),

@@ -72,7 +72,7 @@ impl SecondShown {
     }
 }
 
-pub fn second_shown(address: &str, path: &Path, tips: &tasks::StepTips) -> Option<SecondShown> {
+pub fn second_shown(address: &str, path: &Path, tips: &tasks::SubtaskTips) -> Option<SecondShown> {
     second_shown_in(&crate::lead::state_location().ok()?, address, |sha| tasks::same_code(path, &tips.upstream, sha, &tips.head))
 }
 
@@ -199,7 +199,7 @@ pub fn shown(address: &str, path: &Path, upstream: &str) -> Option<Shown> {
     shown_by(&crate::lead::state_location().ok()?, address, |verdict| holds(verdict, path, upstream, &head))
 }
 
-pub fn shown_at(address: &str, path: &Path, tips: &tasks::StepTips) -> Option<Shown> {
+pub fn shown_at(address: &str, path: &Path, tips: &tasks::SubtaskTips) -> Option<Shown> {
     shown_by(&crate::lead::state_location().ok()?, address, |verdict| holds(verdict, path, &tips.upstream, &tips.head))
 }
 
@@ -1036,7 +1036,7 @@ fn brief(brief: &Brief) -> String {
     };
     format!(
         "Review the branch of the task {address} in {}, at {sha}, by the kebbie:review instructions in your system prompt.\n\n\
-         Its commits, oldest first, are {upstream}..{sha}, after any steps it pushed already, which you read the same way:\n{commits}\n\n\
+         Its commits, oldest first, are {upstream}..{sha}, after any subtasks it pushed already, which you read the same way:\n{commits}\n\n\
          {rules}\n\n\
          {}\n\n\
          {tests}\n\n\
@@ -1601,7 +1601,7 @@ mod tests {
         assert_eq!(said, ["Add refunds to the billing page.", "Refunds only within 30 days."]);
         let mut shape = Brief { address: "billing@app", worktree: Path::new("/src/wt1.app"), upstream: "origin/main", sha: "abc123", commits: "abc123 Add refunds", rules: "kebbie:work-rules", rules_file: Some(Path::new("/kebbie/skills/work-rules/SKILL.md")), quoted: None, said: &said, tests: "- ✓ cargo test · 3 passed · at abc123 · `cargo test`", also_noticed: config::AlsoNoticed::Backlog, docs: None };
         let text = brief(&shape);
-        assert!(text.contains("origin/main..abc123, after any steps it pushed already, which you read the same way:\nabc123 Add refunds"), "{text}");
+        assert!(text.contains("origin/main..abc123, after any subtasks it pushed already, which you read the same way:\nabc123 Add refunds"), "{text}");
         assert!(text.contains("`kebbie:work-rules`, at /kebbie/skills/work-rules/SKILL.md: read it"), "{text}");
         assert!(text.contains("does not need is a finding.\n\n- ✓ cargo test · 3 passed · at abc123"), "the reviewer reads the recorded test runs: {text}");
         shape.rules_file = None;

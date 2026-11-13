@@ -26,7 +26,7 @@ Its task role is written for Codex. Codex can't run kebbie's setup and rules ski
    | Line | What it writes |
    | --- | --- |
    | `plugin` | kebbie's plugin in Codex's plugin cache. |
-   | `approvals` | `~/.codex/rules/kebbie.rules`, which lets the twelve commands a task runs, `kebbie report`, `kebbie tell`, `kebbie ask` and `kebbie steps` among them, past Codex's approval question. |
+   | `approvals` | `~/.codex/rules/kebbie.rules`, which lets the thirteen commands a task runs, `kebbie report`, `kebbie tell`, `kebbie ask` and `kebbie subtasks` among them, past Codex's approval question. |
    | `vault` | With a vault, `[mcp_servers.vault]` in Codex's `config.toml`, so a Codex task keeps its own note. |
 
 4. Press `⏎`. Nothing is written before it, and `esc` quits without writing.

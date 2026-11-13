@@ -9,8 +9,8 @@ sleep 0.6
 mode working
 say "● Reading the product page in src/product/."
 sleep 2
-kebbie steps "Keep a wishlist per shopper" "Save products for later from the product page" >/dev/null
-say "● Bash(kebbie steps \"Keep a wishlist per shopper\" \"Save products for later from the product page\")" "  ⎿  2 steps listed"
+kebbie subtasks "Keep a wishlist per shopper" "Save products for later from the product page" >/dev/null
+say "● Bash(kebbie subtasks \"Keep a wishlist per shopper\" \"Save products for later from the product page\")" "  ⎿  2 subtasks listed"
 sleep 1.5
 mkdir -p src/product
 cat > src/product/wishlist.ts <<'TS'

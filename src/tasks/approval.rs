@@ -232,7 +232,7 @@ pub fn approved(path: &Path, upstream: &str, address: &str) -> bool {
     approval_file(&state, address).exists() && fingerprint(path, upstream).is_ok_and(|current| approval_holds(&state, address, &current))
 }
 
-pub fn approved_at(path: &Path, tips: &super::StepTips, address: &str) -> Option<ApprovedBy> {
+pub fn approved_at(path: &Path, tips: &super::SubtaskTips, address: &str) -> Option<ApprovedBy> {
     let state = state_dir().ok()?;
     if !approval_file(&state, address).exists() {
         return None;

@@ -675,7 +675,7 @@ pub fn hook(address: &str, input: &str) -> String {
     let Some(cwd) = payload.cwd().map(PathBuf::from) else { return String::new() };
     let settings = crate::config::resolve(Some(&cwd)).map(|loaded| loaded.settings);
     if settings.as_ref().is_ok_and(|settings| settings.steps.value) && let Ok(state) = state_dir() {
-        tasks::steps_noted_after(&state, address, input);
+        tasks::subtasks_noted_after(&state, address, input);
     }
     let listed = commands(&settings.map(|settings| settings.test_commands.value).unwrap_or_default());
     let mut said = Vec::new();

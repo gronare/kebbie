@@ -568,7 +568,7 @@ def over_limit(key, limit):
 EOF
 save "$H/code/wt1.api" "Count requests per API key" "The public API has no limit, so one key can starve the others. Each key now keeps its request times for the last minute, the count the limiter middleware will check."
 
-cd "$H/code/wt2.api" && run kebbie steps "Round VAT once per invoice and rate" "Preview old and new VAT per invoice" >/dev/null
+cd "$H/code/wt2.api" && run kebbie subtasks "Round VAT once per invoice and rate" "Preview old and new VAT per invoice" >/dev/null
 put "$H/code/wt2.api" app/invoices/vat.py <<'EOF'
 from collections import defaultdict
 from decimal import Decimal, ROUND_HALF_UP
@@ -659,7 +659,7 @@ verdict: changes
 EOF
   cd "$H/code/wt3.shop" && run kebbie report --state ready --next "push it" "Product images load as they scroll into view" >/dev/null
 
-  cd "$H/code/wt4.api" && run kebbie steps "Add the refunds table" "Refund an invoice in part or in full" "Write a credit note for each refund" >/dev/null
+  cd "$H/code/wt4.api" && run kebbie subtasks "Add the refunds table" "Refund an invoice in part or in full" "Write a credit note for each refund" >/dev/null
   put "$H/code/wt4.api" app/db/migrations/0007_refunds.py <<'EOF'
 def up(db):
     db.create_table("refunds", invoice_id="int", amount="decimal", reason="text", created_at="timestamp")
