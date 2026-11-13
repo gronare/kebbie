@@ -258,6 +258,11 @@ impl Asked {
             Payload::Idea(idea) => Asked { kind: Kind::Idea, task: String::new(), said: Some(short(&idea.text)) },
             Payload::ItemAnswer(answer) => Asked { kind: Kind::ItemAnswer, task: item(&answer.item), said: Some(short(&answer.answer)) },
             Payload::StartItem(start) => Asked { kind: Kind::StartItem, task: item(&start.item), said: None },
+            Payload::ItemEdit(edit) => Asked { kind: Kind::ItemEdit, task: item(&edit.item), said: None },
+            Payload::ReviewOpen(open) => Asked { kind: Kind::ReviewOpen, task: task(&open.address), said: None },
+            Payload::ReviewComments(comments) => Asked { kind: Kind::ReviewComments, task: task(&comments.address), said: None },
+            Payload::ReviewRead(read) => Asked { kind: Kind::ReviewRead, task: task(&read.address), said: Some(read.path.clone()) },
+            Payload::AcceptStep(accept) => Asked { kind: Kind::AcceptStep, task: task(&accept.address), said: None },
             other => Asked { kind: other.kind(), task: String::new(), said: None },
         }
     }
@@ -270,6 +275,11 @@ impl Asked {
             Kind::Idea => "idea for the backlog".to_string(),
             Kind::ItemAnswer => format!("answer on the backlog item {}", self.task),
             Kind::StartItem => format!("start of the backlog item {}", self.task),
+            Kind::ItemEdit => format!("edit of the backlog item {}", self.task),
+            Kind::ReviewOpen => format!("look at {}'s review", self.task),
+            Kind::ReviewComments => format!("set of review comments for {}", self.task),
+            Kind::ReviewRead => format!("read mark in {}'s review", self.task),
+            Kind::AcceptStep => format!("acceptance of {}'s step", self.task),
             other => other.name().to_string(),
         }
     }

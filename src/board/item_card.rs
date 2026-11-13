@@ -6,7 +6,8 @@ use ratatui::text::{Line, Span};
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::backlog::Entry;
-use crate::backlog_file::{Question, State, questions_in, shape_of, state_of};
+use crate::backlog_file::{Question, State, shape_of, state_of};
+use crate::item_template::Template;
 use crate::backlog_kept::Answer;
 use crate::keys::{self, Act};
 use crate::notice::{Notice, Tone};
@@ -85,12 +86,14 @@ pub(super) struct ItemCard {
     pub(super) scroll: u16,
     pub(super) follow: bool,
     pub(super) typing: Option<String>,
+    pub(super) template: Template,
 }
 
 impl ItemCard {
     pub(super) fn new(entry: Entry, body: String, answers: Vec<Answer>) -> Self {
         let (priority, repo) = (entry.priority.clone(), entry.area.clone());
-        let mut card = Self { entry, path: None, priority, repo, filed: String::new(), drafting: false, short: false, body, answers, pick: 0, scroll: 0, follow: true, typing: None };
+        let template = crate::item_template::for_source(&entry.source);
+        let mut card = Self { entry, path: None, priority, repo, filed: String::new(), drafting: false, short: false, body, answers, pick: 0, scroll: 0, follow: true, typing: None, template };
         card.pick = card.next_open(0);
         card
     }
@@ -118,13 +121,13 @@ impl ItemCard {
             }
             _ => return None,
         }
-        self.answers = crate::backlog_kept::settle(state, &self.entry.reference, &self.body);
+        self.answers = crate::backlog_kept::settle(state, &self.entry.reference, &self.body, &self.template);
         self.pick = self.pick.min(self.questions().len().saturating_sub(1));
         Some(())
     }
 
     pub(super) fn questions(&self) -> Vec<Question> {
-        questions_in(&self.body)
+        self.template.questions_in(&self.body)
     }
 
     fn answer_to(&self, question: &Question) -> Option<&Answer> {
@@ -141,12 +144,12 @@ impl ItemCard {
         if self.body.trim().is_empty() && self.path.is_none() {
             return self.entry.shape.state.unwrap_or(State::Ready);
         }
-        state_of(self.drafting, self.short, &self.body)
+        state_of(self.drafting, self.short, &self.body, &self.template)
     }
 
     pub(super) fn state_text(&self) -> String {
         let answered: Vec<String> = self.answers.iter().map(|answer| answer.question.clone()).collect();
-        let shape = shape_of(self.state(), &self.body, &answered, &self.filed);
+        let shape = shape_of(self.state(), &self.body, &answered, &self.filed, &self.template);
         let with_lead = (shape.with_lead > 0).then(|| plural(shape.with_lead, "answer") + " with the lead");
         match self.state() {
             State::Drafting if shape.waiting > 0 => format!("drafting: {} on you{}", waits(shape.waiting), with_lead.map_or(String::new(), |text| format!(" · {text}"))),
@@ -217,6 +220,7 @@ pub(super) fn card_lines(card: &ItemCard, width: usize) -> (Vec<Line<'static>>, 
     let (label, place) = card.place();
     fact(label, &place, width, &mut lines);
     let questions = card.questions();
+    let asks = card.template.questions.as_deref().and_then(|key| card.template.heading(key)).unwrap_or_default().to_lowercase();
     let mut starts = Vec::new();
     let mut heading = "";
     let mut asked = 0;
@@ -229,7 +233,7 @@ pub(super) fn card_lines(card: &ItemCard, width: usize) -> (Vec<Line<'static>>, 
             }
             heading = if name.trim().is_empty() { " " } else { name.trim() };
             let mut spans = vec![Span::styled(name.trim().to_string(), bold(TEAL))];
-            if name.trim() == "Open questions" {
+            if name.trim().to_lowercase() == asks {
                 let waiting = questions.iter().filter(|question| question.blocks && card.answer_to(question).is_none()).count();
                 let extra = if waiting == 0 { "none blocks the start".to_string() } else { format!("{} on you before it starts", if waiting == 1 { "1 waits".to_string() } else { format!("{waiting} wait") }) };
                 spans.push(Span::styled(format!("  {extra}"), style(MUTED)));
@@ -240,7 +244,7 @@ pub(super) fn card_lines(card: &ItemCard, width: usize) -> (Vec<Line<'static>>, 
         if line.is_empty() || line.starts_with("# ") {
             continue;
         }
-        if heading == "Open questions" && let Some(question) = questions.get(asked).filter(|question| line.ends_with(question.text.as_str()) && (line.starts_with("- ") || line.starts_with("* "))) {
+        if heading.to_lowercase() == asks && let Some(question) = questions.get(asked).filter(|question| line.ends_with(question.text.as_str()) && (line.starts_with("- ") || line.starts_with("* "))) {
             starts.push(lines.len());
             let answer = card.answer_to(question);
             let text = answer.map_or(question.text.clone(), |answer| format!("with the lead: \"{}\"", answer.answer));
@@ -499,10 +503,10 @@ mod tests {
         let sent = screen(&mut shown).join("\n");
         assert!(sent.contains("?  with the lead: \"Only the e2e job.\"") || sent.contains("? with the lead: \"Only the e2e job.\""), "{sent}");
         assert!(sent.contains("state     drafting: 1 question waits on you · 1 answer with the lead") && sent.contains("▌? Should a rerun show on the row?"), "{sent}");
-        let kept = crate::backlog_kept::settle(&state, "Projects/answer.md", BODY);
+        let kept = crate::backlog_kept::settle(&state, "Projects/answer.md", BODY, &Template::builtin());
         assert_eq!(kept.len(), 1, "kept while the question stands");
         let folded = BODY.replace("- [ ] Which red runs count as flaky?\n", "");
-        assert!(crate::backlog_kept::settle(&state, "Projects/answer.md", &folded).is_empty(), "folded in, it leaves");
+        assert!(crate::backlog_kept::settle(&state, "Projects/answer.md", &folded, &Template::builtin()).is_empty(), "folded in, it leaves");
         let mut after = ItemCard::new(entry("Projects/answer.md", drafting(1)), folded, Vec::new());
         assert!(screen(&mut after).join("\n").contains("state     drafting: 1 question waits on you\n") || screen(&mut after).join("\n").contains("drafting: 1 question waits on you "));
     }

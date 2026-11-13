@@ -192,6 +192,8 @@ fn reads_the_machine_keys() {
     assert_eq!(machine("[board.backlog]\nsources = []\n").sources, Some(Vec::new()));
     assert_eq!(settings(&Worktree::default(), &machine("[board.backlog]\nsources = []\n")).sources.value, Vec::new(), "an explicit empty list turns the backlog off");
     assert_eq!(machine("[board.backlog]\nsources = [\"local\", \"vault\"]\n").sources, Some(vec![Source::Local, Source::Vault]), "an older config that lists both still loads");
+    assert_eq!(machine("[board.backlog]\ntemplate = \"item.json\"\n").template.as_deref(), Some("item.json"));
+    assert!(parse_machine("[board.backlog]\ntemplate = 3\n", "config.toml").is_err(), "a template is a path");
     assert_eq!(settings(&Worktree::default(), &machine("[board.backlog]\nsources = [\"local\", \"linear\", \"vault\"]\n")).sources.value, [Source::Linear, Source::Vault], "with the vault listed, the local folder is not read");
     assert_eq!((crate::config::filing(&[Source::Linear, Source::Vault]), crate::config::filing(&[Source::Local]), crate::config::filing(&[Source::Linear])), (Some(Source::Vault), Some(Source::Local), None));
 }
@@ -286,7 +288,7 @@ fn unknown_keys_are_named_with_the_file_and_ignored_while_bad_values_still_fail(
     assert_eq!(warned("colour = 1
 "), [format!("/home/u/.config/kebbie/config.toml: colour: unknown key; known keys here: {all}")]);
     assert_eq!(warned("[backlog]\nsources = []\n"), [format!("/home/u/.config/kebbie/config.toml: backlog: unknown key; known keys here: {all}")]);
-    assert_eq!(warned("[board.backlog]\nsource = []\n"), ["/home/u/.config/kebbie/config.toml: board.backlog.source: unknown key; known keys here: sources, ongoing"]);
+    assert_eq!(warned("[board.backlog]\nsource = []\n"), ["/home/u/.config/kebbie/config.toml: board.backlog.source: unknown key; known keys here: sources, ongoing, template"]);
     assert_eq!(machine("colour = 1\n[backlog]\nsources = []\n[board]\ncolumns = 3\n[board.backlog]\nsource = []\n"), Machine::default(), "unknown keys and tables are ignored");
     let error = |text: &str| parse_machine(text, "/home/u/.config/kebbie/config.toml").unwrap_err();
     assert_eq!(error("colour = 1\n[board.backlog]\nsources = [\"jira\"]\n"), "/home/u/.config/kebbie/config.toml: board.backlog.sources: \"jira\" is not a source; use \"local\", \"vault\" or \"linear\"");
@@ -528,10 +530,10 @@ fn hub_commands_takes_every_kind_unless_the_machine_config_lists_some_and_still_
         assert_eq!(machine(&format!("[hub]\ncommands = {word:?}\n")).hub_commands.map(HubCommands::taken), Some(kinds), "{word}");
     }
     assert!(!HubCommands::from_word("answer-and-push").unwrap().takes(Start), "a machine set to the old word takes no new kind until its config lists it");
-    assert!(parse_machine("[hub]\ncommands = \"push\"\n", "config.toml").unwrap_err().contains("hub.commands: \"push\" is not a choice; list any of \"answer\", \"push\", \"prompt\", \"idea\" and \"start\""));
+    assert!(parse_machine("[hub]\ncommands = \"push\"\n", "config.toml").unwrap_err().contains("hub.commands: \"push\" is not a choice; list any of \"answer\", \"push\", \"prompt\", \"idea\", \"start\", \"edit\" and \"review\""));
     assert!(parse_machine("[hub]\ncommands = [\"answer\", \"merge\"]\n", "config.toml").unwrap_err().contains("hub.commands: \"merge\" is not a kind of command"));
     let entry = entries(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) }).into_iter().find(|entry| entry.key == "hub.commands").expect("kebbie config edit lists hub.commands");
-    assert_eq!((entry.value.as_str(), entry.kind, entry.scope), ("[\"answer\", \"push\", \"prompt\", \"idea\", \"start\"]", Kind::List, Scope::Machine));
+    assert_eq!((entry.value.as_str(), entry.kind, entry.scope), ("[\"answer\", \"push\", \"prompt\", \"idea\", \"start\", \"edit\", \"review\"]", Kind::List, Scope::Machine));
     assert!(entry.about.starts_with("What this machine takes from your devices through the hub, as a list of kinds:") && entry.about.contains("\"answer-and-push\" is [\"answer\", \"push\", \"prompt\"]"), "{}", entry.about);
 }
 
@@ -676,7 +678,7 @@ fn sample(entry: &Entry) -> String {
 fn each_keys_scope_is_the_files_that_take_it_and_what_its_text_says() {
     let loaded = Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
     let all = entries(&loaded);
-    assert_eq!(all.len(), 47);
+    assert_eq!(all.len(), 48);
     for entry in all {
         let (section, field) = entry.key.rsplit_once('.').unwrap();
         let text = format!("[{section}]\n{field} = {}\n", sample(&entry));

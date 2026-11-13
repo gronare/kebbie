@@ -18,7 +18,7 @@ mod started;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-pub(crate) use accept::{Unaccepted, accept, accept_required, accepted_in, unaccepted_at, last_of_run, listing_at as accepted_listing_at, open_commits_at, rest_base, shown as accepted_shown};
+pub(crate) use accept::{Unaccepted, accept, accept_from_device, accept_required, accepted_in, unaccepted_at, last_of_run, listing_at as accepted_listing_at, open_commits_at, rest_base, shown as accepted_shown};
 pub(crate) use after::{EVERY as AFTER_EVERY, Asked as QueueAsked, and_list, after as after_command, at as start_at, drop as drop_wait, now as start_now, queue, refuse_queued_name, Shown as WaitShown, shown as waits_shown, tick as after_tick};
 #[cfg(test)]
 pub(crate) use approval::approval_holds;

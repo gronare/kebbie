@@ -60,6 +60,8 @@ Until the note's Problem section is written, the task's Claude cannot edit files
 
 Claude writes the Problem in its own words from your prompt; your prompt never goes into the vault as you typed it.
 
+With a vault that has note templates (the `templates` capability), the note is the task template's sections, and edits wait for its required ones instead of Problem: Background, Goal and Source in the default template. Done then waits for the same sections.
+
 ## Two machines, one vault
 
 Two kebbies, say on a Mac and a work devbox, can share one vault. Each claims the notes it works on, so the other sees which machine and which task has a note.

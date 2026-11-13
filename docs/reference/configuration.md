@@ -36,11 +36,27 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 | --- | --- | --- | --- |
 | `board.backlog.sources` | `["local"]` | config.toml only | Where the Backlog column finds work and new items are written: `"local"` or `"vault"`, and `"linear"` beside either. See [Backlog sources](#backlog-sources). |
 | `board.backlog.ongoing` | `"top"` | config.toml only | Where the Backlog column shows ONGOING, the vault notes in progress: `"top"`, `"bottom"` or `"hidden"`. |
+| `board.backlog.template` | none | config.toml only | A file with the sections of local backlog items. See [Backlog sources](#backlog-sources). |
 | `board.groups` | the order below | config.toml only | The order of the Work column's groups. |
 | `[keys]` | the board's own | config.toml only | The board's keys by action, a table of strings, as `inbox = "I"`. See [Board](board.md#keys-in-configtoml). |
 
 - `board.backlog.sources`: new items are written to `"local"` or `"vault"`, so a list holds one of them; Linear is only read. A config that lists both reads as the vault alone, and `kebbie doctor` says so. `[]` turns the backlog off.
 - `board.backlog.ongoing`: above the backlog items, below them, or not at all. Hidden, a note another machine claims still asks before it starts here.
+- `board.backlog.template`: a JSON or TOML file, read from the folder of config.toml when the path is relative. Unset, local items have kebbie's own sections: Background, Goal and Source required, What we know, Open questions and Out of scope beside them. Vault items follow the vault's task template, and kebbie's own when the vault has none. `kebbie backlog template --local` shows the one in use.
+
+  ```toml
+  # ~/.config/kebbie/item.toml
+  questions = "risks"
+
+  [[sections]]
+  key = "problem"
+  heading = "Problem"
+  required = true
+
+  [[sections]]
+  key = "risks"
+  heading = "Risks"
+  ```
 - `board.groups`: a list of `"needs-you"`, `"working"`, `"in-review"`, `"ready-to-push"`, `"ci-running"`, `"waiting-for-work"`, `"queued"`, by default in that order. Groups the list leaves out follow in the default order, so `["ready-to-push"]` moves only Ready to push to the top. A name not in the list is an error that names the valid ones.
 - `[keys]`: [Board](board.md#keys-in-configtoml) has the actions and the rules. `kebbie config` shows each key in effect and why an entry was ignored.
 
@@ -149,7 +165,7 @@ An assessment with no answer reads as `review not assessed`, a suggestion in eve
 | `notify.command` | none | config.toml only | The shell command kebbie runs when something needs you. Unset sends nothing. See [Notify command](#notify-command). |
 | `vault.command` | none | config.toml only | The vault command kebbie runs for task notes, log lines and the board's snapshot, before its own arguments, such as `"uvx mindin"`. |
 | `hub.url` | the kebbie hub, `https://hub.kebbie.dev` | config.toml only | The [kebbie hub](../how-to/see-your-board-on-your-phone.md) `kebbie hub connect` and the board's `H` window connect this machine to. |
-| `hub.commands` | all five kinds | config.toml only | What this machine takes from your devices through the hub: a list of `"answer"`, `"push"`, `"prompt"`, `"idea"` and `"start"`. See [Answer and push from your phone](../how-to/see-your-board-on-your-phone.md#answer-and-push-from-your-phone). |
+| `hub.commands` | all seven kinds | config.toml only | What this machine takes from your devices through the hub: a list of `"answer"`, `"push"`, `"prompt"`, `"idea"`, `"start"`, `"edit"` and `"review"`. See [Answer and push from your phone](../how-to/see-your-board-on-your-phone.md#answer-and-push-from-your-phone). |
 | `hub.trust` | `"device"` | config.toml only | Which of your devices this machine takes commands from: `"device"`, each device you approve here, or `"account"`, any device signed in to your account. |
 | `hub.auto_approve` | `"24h"` | config.toml only | When a device waiting under `hub.trust = "device"` is let in: `"24h"` after its first command unless you deny it, or `"never"`, only when you approve it. |
 | `hub.approve_from` | `"devices"` | config.toml only | Where a waiting device can be approved: `"devices"`, also from a device you approved on this machine, or `"machine"`, only here. |
@@ -184,13 +200,15 @@ An assessment with no answer reads as `review not assessed`, a suggestion in eve
 | `"prompt"` | Choices on an agent's prompt. |
 | `"idea"` | Ideas, added to the backlog as `kebbie backlog add` adds them. |
 | `"start"` | Starts of a backlog item as a task, as `g` on the board starts one. |
+| `"edit"` | Edits of a backlog item's title or one of its sections. |
+| `"review"` | A task's waiting step opened for review, line comments typed into its Claude, files marked read, and the step accepted. |
 
 ```toml
 [hub]
 commands = ["answer", "prompt", "idea"]
 ```
 
-- Unset, the machine takes all five. `[]` takes nothing, and the board still posts; your phone shows each machine's choice under Machines.
+- Unset, the machine takes all seven. `[]` takes nothing, and the board still posts; your phone shows each machine's choice under Machines.
 - The single words of earlier versions still read: `"answer-and-push"` is `["answer", "push", "prompt"]`, `"answer"` is `["answer", "prompt"]` and `"off"` is `[]`.
 - A refused command gets an answer that names it, such as `Not pushed: devbox takes no pushes from the hub. Push at the machine, or allow pushes in its kebbie settings.`
 - A change counts from the next command; `kebbie hub status` shows it on its `commands:` line.

@@ -53,6 +53,29 @@ pub fn append_to(file: &Path) -> std::io::Result<fs::File> {
     OpenOptions::new().create(true).append(true).mode(0o600).open(file)
 }
 
+// An exclusive flock on a lock file, held until dropped, for a file more than one process rewrites whole.
+pub struct Locked(fs::File);
+
+impl Locked {
+    pub fn wait(lock: &Path) -> Result<Locked> {
+        use std::os::fd::AsRawFd;
+        let file = append_to(lock).map_err(|error| format!("{}: {error}", lock.display()))?;
+        // SAFETY: flock on a descriptor this File owns.
+        match unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } {
+            0 => Ok(Locked(file)),
+            _ => Err(format!("{}: {}", lock.display(), std::io::Error::last_os_error())),
+        }
+    }
+}
+
+impl Drop for Locked {
+    fn drop(&mut self) {
+        use std::os::fd::AsRawFd;
+        // SAFETY: unlocks the descriptor this value owns.
+        unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

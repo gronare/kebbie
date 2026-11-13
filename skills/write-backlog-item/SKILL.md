@@ -15,14 +15,18 @@ The item is the user's **intent**, written out: their words are terse on purpose
 
 Metadata: a **title** (what changes, a dozen words at most), a **priority** (`urgent`, `high`, `medium` or `low`) and the **repo** (the folder name of the repo the work happens in; starting the item as a task needs it).
 
-Six sections, in this order, each a `## ` heading:
+The body is the **template** of the place the item is saved: its sections in order, each a `## ` heading. `kebbie backlog template` prints the template where new items go (`--vault` or `--local` for the other place), marking the required sections and the one the open questions sit under. Fill the template your source gives, every section of it.
 
-- **Background**: what happens today and why it is a problem.
-- **Goal**: what the user can do when it is done, from the user's side.
+kebbie's own template, which the vault's default task template matches:
+
+- **Background** (required): what happens today and why it is a problem.
+- **Goal** (required): what the user can do when it is done, from the user's side.
 - **What we know**: the files, commits, earlier decisions and links that bear on it, each one you read.
 - **Open questions**: what the user must decide before work starts, one bullet each. `- [ ] ` before a question that blocks the start; a plain `- ` for one the work can settle. `None.` when there is none.
 - **Out of scope**: what this item leaves alone.
-- **Source**: who said it and when: `The user, 2026-11-12, in the lead's chat`, `The task billing@web, deferred from its own work`. Keep a short item's own words here, quoted.
+- **Source** (required): who said it and when: `The user, 2026-11-12, in the lead's chat`, `The task billing@web, deferred from its own work`. Keep a short item's own words here, quoted.
+
+A template with other sections is filled the same way, each section from its heading, the questions as bullets under its questions section.
 
 ## Steps
 
@@ -32,10 +36,10 @@ Six sections, in this order, each a `## ` heading:
 
    Done when `kebbie backlog` marks it `drafting`.
 2. **Research.** Read what bears on it: the code it touches, the notes on its area, the history (`git log` on those files, the tasks and decisions before it), and your conversation with the user. Done when every claim you are about to write in Background and What we know points at something you read in this step, not at memory.
-3. **Write.** Fill every section from that reading. Done when each section has content, the Goal reads from the user's side, and each thing you could not establish is a bullet under Open questions.
+3. **Write.** Fill every section of the template from that reading. Done when each required section has content, every heading of the template is there, the goal reads from the user's side, and each thing you could not establish is a bullet under the questions section.
 4. **Save** where your role says new items go:
-   - **The vault**: a task note in `Projects/`, the metadata in its frontmatter (`title`, `priority`, `area` as a wikilink to the area note), the six sections as its body, status `backlog`.
-   - **The local backlog**: a new item with `kebbie backlog add --priority <priority> --repo <repo> "<Title>" -`, the six sections on stdin in a quoted heredoc (`<<'EOF'`); it prints the item's ref and file. An item already filed you rewrite in its own file: keep its `+++` header, set its fields and `status = "backlog"`, and replace the body after the header.
+   - **The vault**: a task note in `Projects/`, the metadata in its frontmatter (`title`, `priority`, `area` as a wikilink to the area note), the template's sections as its body, status `backlog`.
+   - **The local backlog**: a new item with `kebbie backlog add --priority <priority> --repo <repo> "<Title>" -`, the template's sections on stdin in a quoted heredoc (`<<'EOF'`); it prints the item's ref and file. An item already filed you rewrite in its own file: keep its `+++` header, set its fields and `status = "backlog"`, and replace the body after the header.
 
    A `- [ ] ` question left in it keeps the item drafting on the board until the user answers it.
 
@@ -44,4 +48,4 @@ Six sections, in this order, each a `## ` heading:
 
 ## Open questions belong to the item
 
-An item's questions stay in its Open questions, with the item: never in `kebbie ask`, never under Needs you. The user answers them on the item's card on the board, and kebbie brings you each answer with the question it answers. Fold the answer into the section it settles (Goal, What we know, Out of scope), take the question out, and save the item again: until you do, the card shows the answer as with you. It is **ready** once no `- [ ] ` question is left.
+An item's questions stay under its questions section (Open questions in kebbie's own template), with the item: never in `kebbie ask`, never under Needs you. The user answers them on the item's card on the board, and kebbie brings you each answer with the question it answers. Fold the answer into the section it settles (such as Goal, What we know or Out of scope), take the question out, and save the item again: until you do, the card shows the answer as with you. It is **ready** once no `- [ ] ` question is left.

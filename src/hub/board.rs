@@ -171,6 +171,7 @@ pub fn item(item: &status::Item, seen: &Seen) -> Option<Item> {
         recipe: item.recipe.as_ref().map(|recipe| crate::recipe::shown_name(&recipe.name).to_string()),
         assessment: item.assessment.as_ref().map(crate::assessment::Word::text),
         second_opinion: item.second.as_ref().map(|second| SecondOpinion { by: second.by.clone(), points: second.points.map(count), running: second.running }),
+        review: super::review::offer(item),
         address,
     })
 }

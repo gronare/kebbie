@@ -273,9 +273,11 @@ pub fn is_read(root: &Path, path: &str, commit: Option<&str>) -> bool {
     marks(root).contains(&line)
 }
 
+// The board's split and the keeper's phone reviews both set marks, so each rewrite holds the marks' lock.
 pub fn set_read(root: &Path, path: &str, commit: Option<&str>, read: bool) -> crate::sh::Result<()> {
     let file = marks_file(root).ok_or("kebbie has no state dir for read marks")?;
     let line = mark_line(root, path, commit);
+    let _locked = crate::state::Locked::wait(&PathBuf::from(format!("{}.lock", file.display())))?;
     let mut kept: Vec<String> = marks(root).into_iter().filter(|kept| *kept != line).collect();
     if read {
         kept.push(line);
@@ -437,6 +439,20 @@ pub mod tests {
         assert!(!is_read(&repo.slot, "a", Some(&repo.shas[0])));
         let file = marks_file(&repo.slot).unwrap();
         assert!(file.starts_with(crate::lead::state_location().unwrap()), "marks live in kebbie's state dir: {}", file.display());
+        let _ = fs::remove_dir_all(&repo.root);
+    }
+
+    #[test]
+    fn marks_set_at_once_from_the_board_and_the_phone_are_all_kept() {
+        let repo = repo("read-race");
+        let sha = repo.shas[0].clone();
+        std::thread::scope(|scope| {
+            for n in 0..8 {
+                let (slot, sha) = (&repo.slot, &sha);
+                scope.spawn(move || set_read(slot, &format!("p{n}"), Some(sha), true).unwrap());
+            }
+        });
+        assert!((0..8).all(|n| is_read(&repo.slot, &format!("p{n}"), Some(&sha))), "{:?}", marks(&repo.slot));
         let _ = fs::remove_dir_all(&repo.root);
     }
 

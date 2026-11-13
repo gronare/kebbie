@@ -94,7 +94,7 @@ fn read_all() -> (Option<u64>, Vec<(Entry, Option<String>)>) {
             let now = crate::messages::now();
             items.extend(crate::backlog_kept::kept_in(&state).iter().map(|kept| (kept.entry(now), None)));
         }
-        shape_all(&mut items, &local, index.as_ref(), &state);
+        shape_all(&mut items, &local, index.as_ref(), &state, &Templates::now());
     }
     sort(&mut items, |(entry, _)| entry, |entry| index.as_ref().filter(|_| entry.source == "vault").and_then(|index| index.changed_at(&entry.reference)));
     (value["updated"].as_u64(), items)
@@ -145,6 +145,22 @@ pub fn fetch_vault_bodies() {
     }
 }
 
+// The templates a pass reads its items by, read once for the pass.
+pub struct Templates {
+    pub local: crate::item_template::Template,
+    pub vault: crate::item_template::Template,
+}
+
+impl Templates {
+    pub fn now() -> Templates {
+        Templates { local: crate::item_template::local(), vault: crate::item_template::for_vault() }
+    }
+
+    pub fn of(&self, source: &str) -> &crate::item_template::Template {
+        if source == "vault" { &self.vault } else { &self.local }
+    }
+}
+
 struct ItemRead {
     state: crate::backlog_file::State,
     body: String,
@@ -152,7 +168,7 @@ struct ItemRead {
 }
 
 // An item's state and markdown: a local one from the file already read, a vault one from the index or kebbie's copy.
-fn read_item(entry: &Entry, local: &std::collections::HashMap<String, crate::backlog_file::Item>, index: Option<&crate::vault::Index>, state: &Path) -> Option<ItemRead> {
+fn read_item(entry: &Entry, local: &std::collections::HashMap<String, crate::backlog_file::Item>, index: Option<&crate::vault::Index>, state: &Path, template: &crate::item_template::Template) -> Option<ItemRead> {
     let (state_now, body, filed) = match entry.source.as_str() {
         "local" => {
             let item = local.get(&entry.reference).cloned().or_else(|| crate::backlog_file::find(&entry.reference).map(|(_, item)| item))?;
@@ -161,7 +177,7 @@ fn read_item(entry: &Entry, local: &std::collections::HashMap<String, crate::bac
         "vault" => {
             let drafting = index.and_then(|index| index.status_of(&entry.reference)).as_deref() == Some("draft");
             match vault_body(index, state, &entry.reference) {
-                Some(body) => (crate::backlog_file::state_of(drafting, false, &body), body, String::new()),
+                Some(body) => (crate::backlog_file::state_of(drafting, false, &body, template), body, String::new()),
                 None if drafting => (crate::backlog_file::State::Drafting, String::new(), String::new()),
                 None => return None,
             }
@@ -172,16 +188,17 @@ fn read_item(entry: &Entry, local: &std::collections::HashMap<String, crate::bac
 }
 
 // Each item's state, its questions waiting on the user and the answers of theirs still with the lead, settling the answers once for the whole backlog.
-fn shape_all(items: &mut [(Entry, Option<String>)], local: &std::collections::HashMap<String, crate::backlog_file::Item>, index: Option<&crate::vault::Index>, state: &Path) {
-    let read: Vec<Option<ItemRead>> = items.iter().map(|(entry, _)| read_item(entry, local, index, state)).collect();
-    let bodies: Vec<(&str, &str)> = items.iter().zip(&read).filter_map(|((entry, _), read)| Some((entry.reference.as_str(), read.as_ref()?.body.as_str()))).collect();
+fn shape_all(items: &mut [(Entry, Option<String>)], local: &std::collections::HashMap<String, crate::backlog_file::Item>, index: Option<&crate::vault::Index>, state: &Path, templates: &Templates) {
+    let read: Vec<Option<ItemRead>> = items.iter().map(|(entry, _)| read_item(entry, local, index, state, templates.of(&entry.source))).collect();
+    let bodies: Vec<(&str, &str, &crate::item_template::Template)> = items.iter().zip(&read).filter_map(|((entry, _), read)| Some((entry.reference.as_str(), read.as_ref()?.body.as_str(), templates.of(&entry.source)))).collect();
     let kept = crate::backlog_kept::settle_all(state, &bodies);
     for ((entry, body), read) in items.iter_mut().zip(read) {
         let Some(read) = read else { continue };
+        let template = templates.of(&entry.source);
         let answered: Vec<String> = kept.iter().filter(|answer| answer.item == entry.reference).map(|answer| answer.question.clone()).collect();
-        entry.shape = crate::backlog_file::shape_of(read.state, &read.body, &answered, &read.filed);
+        entry.shape = crate::backlog_file::shape_of(read.state, &read.body, &answered, &read.filed, template);
         if entry.summary.is_empty() && read.state == crate::backlog_file::State::Ready {
-            entry.summary = crate::backlog_file::first_line(&read.body);
+            entry.summary = template.first_line(&read.body);
         }
         *body = Some(read.body);
     }
@@ -413,9 +430,10 @@ pub struct Role {
 
 const VAULT_WORK: &str = "- **The vault**: keep it current: started tasks and what each push landed in the repo log, the user's decisions in the task's note. New work goes in the backlog as under Taking in ideas.";
 const AFTER_PUSH: &str = "- `<who> pushed <task>: <n> commits to <branch> (<sha> <subject>; …)` comes among kebbie's notices after every push, the user's or yours. Write the repo's log line in the vault with `log_append`: what landed, with those shas. When the task is done, close its note (`close`, with `merged_into` when the area note took it in) or append to it what landed.";
-const KEPT_VAULT_WORK: &str = "- **The vault**: kebbie keeps each task's note: it opens one when the task starts (or claims the backlog note named with `--backlog`), the task writes its Problem before its first change and its solution and decisions as it goes, kebbie writes the repo's log line after each push and closes the note at done. Your part is the area notes and the user's decisions that reach beyond one task. New work goes in the backlog as under Taking in ideas.";
+const KEPT_VAULT_WORK: &str = "- **The vault**: kebbie keeps each task's note: it opens one when the task starts (or claims the backlog note named with `--backlog`), the task writes what its edits wait for before its first change (its Problem, or with the vault's note templates the task template's required sections) and the rest as it goes, kebbie writes the repo's log line after each push and closes the note at done. Your part is the area notes and the user's decisions that reach beyond one task. New work goes in the backlog as under Taking in ideas.";
 const KEPT_AFTER_PUSH: &str = "- `<who> pushed <task>: <n> commits to <branch> (<sha> <subject>; …)` comes among kebbie's notices after every push, the user's or yours; kebbie has written the repo's log line from those commits.";
-const KEPT_TASKS: &str = "Every task kebbie starts has its own note in the vault: kebbie opens it at the start, or claims the backlog note named with `--backlog`, and the task writes it from your prompt. Done waits until the note has its solution and decisions, kebbie then closes it, and a reset puts it back in the backlog.";
+const OLD_NOTES: &str = "A vault note written before the vault's task template, without its sections, also shows as `to write`. Leave those as they stand: one is written out when it is picked up (`g` on the board, `kebbie start --backlog`), where its task fills the template's sections before it changes code, or when the user opens it and asks you to, by the skill in its own note.";
+const KEPT_TASKS: &str = "Every task kebbie starts has its own note in the vault: kebbie opens it at the start, or claims the backlog note named with `--backlog`, and the task writes it from your prompt. Done waits until the note has its solution and decisions (with note templates, the template's required sections), kebbie then closes it, and a reset puts it back in the backlog.";
 
 fn local_role() -> String {
     format!(
@@ -485,6 +503,7 @@ fn intake_role(sources: &[Source], vault: bool) -> String {
          A short item the user adds outside this chat (`n` on the board, `kebbie backlog add`, a file of their own) reaches you as a message from kebbie, or as `to write` in `kebbie backlog`: write it out by the skill at once and save it where it is, then show the user the written item. \
          An item's questions belong to the item: they stay under its Open questions, never in `kebbie ask` and never under Needs you. The user answers them on the item's card on the board, and kebbie brings you each answer with its question: fold the answer into the item and take the question out; the item is ready once no question blocks it.",
     );
+    let steps = if source == Source::Vault { format!("{steps}\n\n{OLD_NOTES}") } else { steps };
     if vault {
         return format!("{steps}\n\n{KEPT_TASKS}");
     }
@@ -552,7 +571,7 @@ mod tests {
         }
         let local: std::collections::HashMap<String, crate::backlog_file::Item> = [one.clone(), two.clone()].into_iter().map(|item| (item.reference(), item)).collect();
         let mut items = vec![(one.entry(today()), None), (two.entry(today()), None)];
-        shape_all(&mut items, &local, None, &state);
+        shape_all(&mut items, &local, None, &state, &Templates { local: crate::item_template::Template::builtin(), vault: crate::item_template::Template::builtin() });
         assert_eq!(items[0].1.as_deref(), Some(one.body.as_str()), "the body comes from the file the listing read, not a second read: these files are not on disk");
         assert_eq!((items[0].0.shape.waiting, items[0].0.shape.with_lead), (0, 1), "{:?}", items[0].0.shape);
         assert_eq!((items[1].0.shape.waiting, items[1].0.shape.with_lead), (1, 0), "{:?}", items[1].0.shape);

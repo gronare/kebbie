@@ -882,6 +882,7 @@ mod tests {
         let hub = open_hub(|config| {
             config.vapid_subject = "mailto:hub-admin@example.com".to_string();
             config.push_allow_hosts = vec!["127.0.0.1".to_string()];
+            config.commands = true;
         });
         let mut browser = member(&hub);
         let state = connected_state(&hub, &mut browser);
@@ -913,7 +914,7 @@ mod tests {
 
     fn body(key: &ItemKey, questions: &[(&str, bool, Option<&str>)]) -> Attachment {
         let questions = questions.iter().map(|(text, blocks, answer)| OpenQuestion { text: text.to_string(), blocks: *blocks, pending_answer: answer.map(str::to_string) }).collect();
-        let written = BacklogBody { background: String::new(), goal: String::new(), what_we_know: String::new(), questions, out_of_scope: String::new(), source: String::new() };
+        let written = BacklogBody { sections: Vec::new(), questions, questions_key: None };
         Attachment::Backlog { item: key.clone(), text: serde_json::to_string(&written).unwrap() }
     }
 

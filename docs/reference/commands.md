@@ -495,6 +495,7 @@ The task's commits not yet pushed are its next steps, in order. A commit beyond 
 | `kebbie messages` | The sessions' messages, live. `--print` prints the last 30. |
 | `kebbie backlog` | The backlog the board shows. |
 | `kebbie backlog add [--priority <p>] [--repo <repo>] "<line>" [-]` | Add a backlog item where new items go. A line alone is a short item the lead writes out in full; with `-`, the written-out item's sections come on stdin. See [Fill the backlog](../how-to/fill-the-backlog.md#add-an-item). |
+| `kebbie backlog template [--local\|--vault] [--json]` | The sections a backlog item is written in where new items go, the required ones marked: the vault's task template, the file [`board.backlog.template`](configuration.md#backlog-sources) names, or kebbie's own. `--local` or `--vault` shows the other place's. |
 
 `kebbie profiles` shows each profile with what it is for, what it is about, and its agent, model, effort, permission mode and skills. Under a profile that runs Codex, a `codex:` line gives the Codex binary, its version and whether kebbie's plugin is installed. A file that does not load is listed as ignored, with the reason. `--json` gives one object per profile, and `{"error": …}` for an ignored file.
 

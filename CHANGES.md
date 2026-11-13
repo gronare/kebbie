@@ -20,6 +20,11 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Backlog sources take local or vault, not both: new items go to the vault when it is listed, and kebbie doctor says so for an older config.
 - ⏎ on a backlog item opens its card, where you answer its open questions; o opens its options.
 - A backlog row shows whether the item is to write, drafting or waits on your answers, and g asks once before starting one that waits.
+- Backlog items follow the vault's task template when the vault has one, and kebbie backlog template prints the sections.
+- A file named by board.backlog.template sets the sections of local backlog items, and kebbie doctor says when it does not read.
+- From your phone you edit a backlog item's title or any of its sections; update the hub first.
+- From your phone you review a task's waiting step: read its files, comment on lines, mark files read and accept it; update the hub first.
+- With the vault's note templates, a task's edits and done wait for the template's required sections.
 
 ### Fixed
 - hub.commands = [] takes nothing from the hub, so a device no longer approves or denies another on that machine.

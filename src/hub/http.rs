@@ -50,6 +50,7 @@ enum Method {
     Get,
     Post,
     Put,
+    Delete,
 }
 
 pub struct Client {
@@ -91,6 +92,10 @@ impl Client {
         parse::<serde::de::IgnoredAny>(&self.send(Method::Put, path, Some(body.to_vec()), "application/octet-stream")?).map(|_| ())
     }
 
+    pub fn delete(&self, path: &str) -> Result<(), HubError> {
+        self.send(Method::Delete, path, None, JSON).map(|_| ())
+    }
+
     pub fn reachable(&self) -> Result<(), HubError> {
         self.send(Method::Get, "/healthz", None, JSON).map(|_| ())
     }
@@ -128,8 +133,8 @@ impl Client {
     fn once(&self, method: Method, url: &str, body: Option<&[u8]>, content_type: &str) -> Result<ureq::http::Response<ureq::Body>, HubError> {
         let bearer = self.token.as_ref().map(|token| format!("Bearer {token}"));
         let answer = match method {
-            Method::Get => {
-                let request = self.agent.get(url);
+            Method::Get | Method::Delete => {
+                let request = if method == Method::Get { self.agent.get(url) } else { self.agent.delete(url) };
                 match &bearer { Some(bearer) => request.header("authorization", bearer).call(), None => request.call() }
             }
             Method::Post | Method::Put => {

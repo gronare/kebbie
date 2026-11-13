@@ -36,6 +36,17 @@ pub enum Released {
 }
 
 #[derive(Debug, PartialEq)]
+pub enum Wrote {
+    Saved,
+    Stale,
+}
+
+// The one line mindin's write answers when the note changed since the etag was read.
+fn stale_etag(etag: &str, key: &str) -> String {
+    format!("mindin: the etag {etag} no longer matches {key}; it changed since it was read")
+}
+
+#[derive(Debug, PartialEq)]
 pub struct Opened {
     pub path: String,
     pub created: bool,
@@ -47,6 +58,8 @@ pub const CLAIMS: &str = "claims";
 pub const LOG: &str = "log";
 pub const SNAPSHOT: &str = "snapshot";
 pub const READ: &str = "read";
+pub const TEMPLATES: &str = "templates";
+pub const WRITE: &str = "write";
 
 // What the vault command says it is: `about --json` where it answers that, else the bridge read from `status` and its help (vaults up to 0.13).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -122,11 +135,20 @@ impl Cli {
     }
 
     fn run(&self, command: &[String], args: &[&str]) -> Result<std::result::Result<String, String>> {
+        self.run_with(command, args, None)
+    }
+
+    fn run_with(&self, command: &[String], args: &[&str], input: Option<&str>) -> Result<std::result::Result<String, String>> {
         let shown = command.join(" ");
         let (program, rest) = command.split_first().ok_or("the vault command is empty")?;
         let mut command = Command::new(program);
-        command.args(rest).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        command.args(rest).args(args).stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = command.spawn().map_err(|error| format!("{program}: {error}"))?;
+        if let (Some(text), Some(mut stdin)) = (input, child.stdin.take()) {
+            use std::io::Write;
+            let text = text.to_string();
+            std::thread::spawn(move || { let _ = stdin.write_all(text.as_bytes()); });
+        }
         let mut stdout = child.stdout.take().ok_or("no stdout")?;
         let mut stderr = child.stderr.take().ok_or("no stderr")?;
         let out = std::thread::spawn(move || { let mut text = String::new(); let _ = stdout.read_to_string(&mut text); text });
@@ -165,8 +187,14 @@ impl Cli {
         Ok(Opened { path, created: value["created"] == true })
     }
 
+    // No keys asks for the task template's required sections, as a vault with templates checks them.
     pub fn missing(&self, note: &str, need: &[&str]) -> Result<Vec<String>> {
-        let value = self.call(&["task", "check", note, "--need", &need.join(",")])?;
+        let joined = need.join(",");
+        let mut args = vec!["task", "check", note];
+        if !need.is_empty() {
+            args.extend(["--need", &joined]);
+        }
+        let value = self.call(&args)?;
         let missing = value["missing"].as_array().ok_or("vault task check: no missing list in its answer")?;
         Ok(missing.iter().filter_map(Value::as_str).map(str::to_string).collect())
     }
@@ -243,6 +271,36 @@ impl Cli {
         self.output(&["read", key, "--body"])?.map_err(|error| format!("vault read: {error}"))
     }
 
+    // None when the vault has no template for the kind, which it answers with no sections.
+    pub fn template(&self, kind: &str) -> Result<Option<crate::item_template::Template>> {
+        let value = self.call(&["template", "--json", "--kind", kind])?;
+        if value["sections"].as_array().is_some_and(Vec::is_empty) {
+            return Ok(None);
+        }
+        crate::item_template::Template::from_value(&value).map(Some).map_err(|error| format!("vault template: {error}"))
+    }
+
+    // The note exactly as stored, with the etag a write names to refuse writing over a change made since.
+    pub fn read_note(&self, key: &str) -> Result<(String, String)> {
+        let value = self.call(&["read", "--json", "--", key])?;
+        let etag = field(&value, "etag");
+        match value["text"].as_str() {
+            Some(text) if !etag.is_empty() => Ok((text.to_string(), etag)),
+            _ => Err("vault read: no text and etag in its answer".to_string()),
+        }
+    }
+
+    pub fn write_note(&self, key: &str, etag: &str, text: &str) -> Result<Wrote> {
+        if !self.can(WRITE) {
+            return Err("the vault states no write capability".to_string());
+        }
+        match self.run_with(&self.command, &["write", "--etag", etag, "--", key], Some(text))? {
+            Ok(answer) => serde_json::from_str::<Value>(answer.trim()).ok().filter(|value| !field(value, "path").is_empty()).map(|_| Wrote::Saved).ok_or_else(|| "vault write: no path in its answer".to_string()),
+            Err(error) if error == stale_etag(etag, key) => Ok(Wrote::Stale),
+            Err(error) => Err(format!("vault write: {error}")),
+        }
+    }
+
     // `snapshot --json [--since ETAG]`; the inner error is the server's refusal, an unknown command on a server without snapshots.
     pub fn snapshot(&self, since: Option<&str>) -> Result<std::result::Result<String, String>> {
         let mut args = vec!["snapshot", "--json"];
@@ -312,6 +370,8 @@ fn needs(args: &[&str]) -> Option<&'static str> {
         ("log", _) => Some(LOG),
         ("snapshot", _) => Some(SNAPSHOT),
         ("read", _) => Some(READ),
+        ("template", _) => Some(TEMPLATES),
+        ("write", _) => Some(WRITE),
         _ => None,
     }
 }
@@ -975,6 +1035,34 @@ mod tests {
         let mut calls = old.calls();
         calls.sort();
         assert_eq!(calls, ["log path --repo api", "log path --repo api --repo web", "log path --repo web"], "an older server answers for the last repo alone, so each is asked again");
+    }
+
+    #[test]
+    fn a_note_is_read_and_written_back_as_mindin_answers_and_only_its_stale_etag_line_reads_as_changed() {
+        let dir = crate::sh::test_dir("vault-write");
+        let script = dir.join("mindin");
+        let body = r#"#!/bin/sh
+d='DIR'
+printf '%s\n' "$*" >> "$d/argv.log"
+case "$1" in
+read) printf '{"text":"---\\ntitle: x\\n---\\nbody\\n","etag":"e1"}' ;;
+write) cat > "$d/stdin"; case "$3" in
+  e1) printf '{"path":"%s","etag":"e2"}' "$5" ;;
+  stale) echo "mindin: the etag stale no longer matches $5; it changed since it was read" >&2; exit 1 ;;
+  *) echo "mindin: error: argument --etag: the etag $3 changed since it was read" >&2; exit 2 ;;
+  esac ;;
+esac
+"#;
+        crate::executable::write(&script, body.replace("DIR", &dir.to_string_lossy())).unwrap();
+        let cli = Cli { capabilities: Some(vec![READ.to_string(), WRITE.to_string()]), ..Cli::new(vec![script.to_string_lossy().to_string()]) };
+        assert_eq!(cli.read_note("-odd.md"), Ok(("---\ntitle: x\n---\nbody\n".to_string(), "e1".to_string())));
+        assert_eq!(cli.write_note("-odd.md", "e1", "new text"), Ok(Wrote::Saved));
+        assert_eq!(std::fs::read_to_string(dir.join("stdin")).unwrap(), "new text", "the note goes on stdin");
+        assert_eq!(cli.write_note("Projects/x.md", "stale", "t"), Ok(Wrote::Stale));
+        assert!(cli.write_note("Projects/x.md", "e9", "t").is_err(), "another error naming the etag is no stale etag");
+        let calls = std::fs::read_to_string(dir.join("argv.log")).unwrap();
+        assert_eq!(calls.lines().take(2).collect::<Vec<_>>(), ["read --json -- -odd.md", "write --etag e1 -- -odd.md"], "a key never reads as an option");
+        assert!(Cli { capabilities: Some(vec![READ.to_string()]), ..cli }.write_note("Projects/x.md", "e1", "t").is_err(), "no write capability, no write");
     }
 
     #[test]

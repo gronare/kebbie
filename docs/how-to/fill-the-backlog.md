@@ -39,7 +39,7 @@ When the lead is not running, the item waits as you typed it, and the lead write
 
 ## What a written-out item holds
 
-Every item, whoever files it, has the same sections:
+Every item, whoever files it, has the sections of its place's template: the vault's task template for vault notes, the file [`board.backlog.template`](../reference/configuration.md#backlog-sources) names for local items, else kebbie's own. `kebbie backlog template` prints the one where new items go. kebbie's own, which the vault's default matches:
 
 | Section | Holds |
 | --- | --- |
@@ -50,7 +50,9 @@ Every item, whoever files it, has the same sections:
 | Out of scope | What the item leaves alone. |
 | Source | Who said it and when, with your own words. |
 
-What the lead could not find out goes under Open questions. While one of them blocks the start, the item is drafting, and its row says how many questions wait on you. Format: [The local backlog](../reference/files.md#the-local-backlog).
+Background, Goal and Source are required. An item that lacks a heading or leaves a required section empty is to write. What the lead could not find out goes under Open questions. While one of them blocks the start, the item is drafting, and its row says how many questions wait on you.
+
+A vault note written before the vault had its task template shows as to write too. The lead leaves it as it is until you start it, when its task writes the sections before it changes code, or until you open it and ask the lead to write it out. Format: [The local backlog](../reference/files.md#the-local-backlog).
 
 ## Answer an item's questions
 

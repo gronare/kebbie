@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use kebbie_hub_api::{HubInfo, Inbox, ResultStored, ResultUpload};
-use kebbie_hub_protocol::{AccountKey, Answer, AppliedCommands, CommandResult, DeviceDecision, Dropped, Envelope, Header, Id, Idea, ItemAnswer, Kind, Machine, Outcome, Payload, PromptAnswer, PushApproval, Reason, Refusal, StartItem, Trust, VerifiedDevice, authorize, seal};
+use kebbie_hub_protocol::{AcceptStep, AccountKey, Answer, AppliedCommands, BLOB_OVERHEAD, BlobRef, CommandResult, DeviceDecision, Dropped, Envelope, Header, Id, Idea, ItemAnswer, ItemEdit, Kind, MAX_BLOB_BYTES, Machine, Outcome, Payload, PromptAnswer, PushApproval, REVIEW_MEDIA_TYPE, Reason, Refusal, ReviewComments, ReviewOpen, ReviewRead, StartItem, Trust, VerifiedDevice, authorize, seal};
 use serde::{Deserialize, Serialize};
 
 use super::devices::{self, Asked, Decision, Locked, Policy};
@@ -70,6 +70,7 @@ pub struct Bridge {
 }
 
 pub type Done = (Outcome, String);
+pub type Opened = std::result::Result<Vec<u8>, Done>;
 
 // What applying a command does, given as functions so tests drive the bridge without touching the user's tasks.
 pub struct Hands<'a> {
@@ -79,6 +80,11 @@ pub struct Hands<'a> {
     pub idea: &'a dyn Fn(&Caller, &Idea) -> Done,
     pub item_answer: &'a dyn Fn(&Caller, &ItemAnswer) -> Done,
     pub start_item: &'a dyn Fn(&Caller, &StartItem) -> Done,
+    pub item_edit: &'a dyn Fn(&Caller, &ItemEdit) -> Done,
+    pub review_open: &'a dyn Fn(&Caller, &ReviewOpen) -> Opened,
+    pub review_comments: &'a dyn Fn(&Caller, &ReviewComments) -> Done,
+    pub review_read: &'a dyn Fn(&Caller, &ReviewRead) -> Done,
+    pub accept_step: &'a dyn Fn(&Caller, &AcceptStep) -> Done,
     pub relay: &'a dyn Fn(),
     pub notify: &'a dyn Fn(&str),
 }
@@ -135,6 +141,8 @@ pub fn accepts(policy: HubCommands) -> Vec<Kind> {
         HubCommand::Prompt => vec![Kind::PromptAnswer],
         HubCommand::Idea => vec![Kind::Idea],
         HubCommand::Start => vec![Kind::StartItem],
+        HubCommand::Edit => vec![Kind::ItemEdit],
+        HubCommand::Review => vec![Kind::ReviewOpen, Kind::ReviewComments, Kind::ReviewRead, Kind::AcceptStep],
     }).collect()
 }
 
@@ -183,6 +191,8 @@ fn not_taken(kind: Kind, machine: &str, accepts: &[Kind]) -> String {
         Kind::Answer | Kind::ItemAnswer => ("Not answered", "Answer", "answers"),
         Kind::Idea => ("Not added", "Add it", "ideas"),
         Kind::StartItem => ("Not started", "Start it", "starts"),
+        Kind::ItemEdit => ("Not saved", "Edit it", "edits"),
+        Kind::ReviewOpen | Kind::ReviewComments | Kind::ReviewRead | Kind::AcceptStep => ("Not done", "Review it", "reviews"),
         Kind::DeviceDecision if accepts.is_empty() => return format!("Not decided: {machine} takes nothing from the hub. Approve or deny it at the machine: N on the board, or kebbie hub devices."),
         Kind::DeviceDecision => return format!("Not decided: {machine} takes device approvals only at the machine. Approve or deny it there: N on the board, or kebbie hub devices."),
         other => return format!("Not done: {machine} takes no {} from the hub", other.name()),
@@ -203,8 +213,17 @@ fn refusal_text(reason: Reason, kind: Kind, machine: &str, accepts: &[Kind]) -> 
     }
 }
 
-fn result(header: &Header, (outcome, text): Done) -> CommandResult {
-    CommandResult { command: header.id.clone(), device: header.from.clone(), outcome, text }
+fn result(header: &Header, (outcome, text): Done, blob: Option<BlobRef>) -> CommandResult {
+    let blob = blob.filter(|_| outcome == Outcome::Done);
+    CommandResult { command: header.id.clone(), device: header.from.clone(), outcome, text, blob }
+}
+
+// The review goes up sealed before the result that names it, so the phone never meets a blob the hub lacks.
+fn review_blob(dir: &Path, identity: &Identity, address: &str, plaintext: &[u8], now: u64) -> std::result::Result<BlobRef, Done> {
+    if plaintext.len() + BLOB_OVERHEAD > MAX_BLOB_BYTES {
+        return Err((Outcome::Failed, format!("The review of {address} is too large to send; review it at the machine")));
+    }
+    super::blobs::review(dir, address, plaintext, REVIEW_MEDIA_TYPE, now, super::blobs::put_with(identity), super::blobs::delete_with(identity)).map_err(|error| (Outcome::Failed, format!("The review of {address} did not reach the hub: {error}")))
 }
 
 // One command from the inbox: checked against the pinned account, hub.commands and the device's approval, applied at most once, and its result recorded before it is sent; a device waiting for approval has its command held.
@@ -237,7 +256,7 @@ pub fn handle(dir: &Path, identity: &Identity, account: &AccountKey, accepts: &[
     }
     let handled = match outcome {
         Err(Refusal::Drop(dropped)) => Handled::Dropped(dropped),
-        Err(Refusal::Replay(result)) => Handled::Replayed(result),
+        Err(Refusal::Replay(result)) => Handled::Replayed(*result),
         Err(Refusal::Waiting(verified)) => {
             let device = verified.device.id().clone();
             ledger.held.entry(held_key(&device, &header.id)).or_insert_with(|| Held { envelope: envelope.clone(), device: device.clone(), asked: Asked::of(&verified.payload, devices::question_label) });
@@ -248,13 +267,14 @@ pub fn handle(dir: &Path, identity: &Identity, account: &AccountKey, accepts: &[
         }
         Err(Refusal::Answer(reason)) => {
             let reason = if reason == Reason::Expired && ledger.held.contains_key(&held_key(&header.from, &header.id)) { Reason::NotApproved } else { reason };
-            Handled::Refused(result(header, (Outcome::Refused { reason }, refusal_text(reason, header.kind, &identity.name, accepts))))
+            Handled::Refused(result(header, (Outcome::Refused { reason }, refusal_text(reason, header.kind, &identity.name, accepts)), None))
         }
-        Ok(_) if ledger.started.get(&header.id).is_some_and(|started| started.from == header.from) => Handled::Refused(result(header, (Outcome::Failed, STOPPED.to_string()))),
+        Ok(_) if ledger.started.get(&header.id).is_some_and(|started| started.from == header.from) => Handled::Refused(result(header, (Outcome::Failed, STOPPED.to_string()), None)),
         Ok(verified) => {
             ledger.started.insert(header.id.clone(), Started { from: header.from.clone(), at: now });
             save_ledger(dir, &ledger)?;
             let caller = Caller::Hub { account: account.account.as_str().to_string(), name: verified.device.cert().name.clone() };
+            let mut blob = None;
             let done = as_device(verified.device.id(), || match &verified.payload {
                 Payload::Answer(answer) => (hands.answer)(&caller, answer),
                 Payload::Push(push) => (hands.push)(&caller, push),
@@ -262,10 +282,21 @@ pub fn handle(dir: &Path, identity: &Identity, account: &AccountKey, accepts: &[
                 Payload::Idea(idea) => (hands.idea)(&caller, idea),
                 Payload::ItemAnswer(answer) => (hands.item_answer)(&caller, answer),
                 Payload::StartItem(start) => (hands.start_item)(&caller, start),
+                Payload::ItemEdit(edit) => (hands.item_edit)(&caller, edit),
+                Payload::ReviewOpen(open) => match (hands.review_open)(&caller, open).and_then(|plaintext| review_blob(dir, identity, &open.address, &plaintext, now)) {
+                    Ok(sealed) => {
+                        blob = Some(sealed);
+                        (Outcome::Done, format!("The review of {} is ready", open.address))
+                    }
+                    Err(done) => done,
+                },
+                Payload::ReviewComments(comments) => (hands.review_comments)(&caller, comments),
+                Payload::ReviewRead(read) => (hands.review_read)(&caller, read),
+                Payload::AcceptStep(accept) => (hands.accept_step)(&caller, accept),
                 Payload::DeviceDecision(decision) => device_decision(dir, &identity.name, policy, decision, now),
                 _ => (Outcome::Refused { reason: Reason::NotAllowed }, not_taken(header.kind, &identity.name, accepts)),
             });
-            Handled::Applied(result(header, done))
+            Handled::Applied(result(header, done, blob))
         }
     };
     if let Handled::Applied(result) | Handled::Refused(result) = &handled {
@@ -460,7 +491,21 @@ fn keeper_hands<T>(state: &Path, run: impl FnOnce(&Hands) -> T) -> T {
     let notify = |text: &str| {
         crate::notify::send(state, &crate::notify::Notice::from(crate::notify::Event::Device, "kebbie", text.to_string()));
     };
-    run(&Hands { answer: &answered, push: &|caller, push| pushed(crate::tasks::push_as(caller, &push.address)), prompt: &prompt, idea: &super::backlog::idea, item_answer: &super::backlog::item_answer, start_item: &super::backlog::start_item, relay: &relay, notify: &notify })
+    run(&Hands {
+        answer: &answered,
+        push: &|caller, push| pushed(crate::tasks::push_as(caller, &push.address)),
+        prompt: &prompt,
+        idea: &super::backlog::idea,
+        item_answer: &super::backlog::item_answer,
+        start_item: &super::backlog::start_item,
+        item_edit: &super::backlog::item_edit,
+        review_open: &super::review::open,
+        review_comments: &super::review::comments,
+        review_read: &super::review::read,
+        accept_step: &super::review::accept,
+        relay: &relay,
+        notify: &notify,
+    })
 }
 
 // The keeper's thread for one identity directory: it idles while the machine has no pinned account or the hub takes no commands, and long-polls otherwise.
@@ -604,11 +649,12 @@ mod tests {
         backlog: RefCell<Vec<(Caller, Payload)>>,
         relays: Cell<u32>,
         told: RefCell<Vec<String>>,
+        head: Cell<char>,
     }
 
     impl Seen {
         fn new() -> Seen {
-            Seen { answers: RefCell::new(Vec::new()), pushes: RefCell::new(Vec::new()), prompts: RefCell::new(Vec::new()), backlog: RefCell::new(Vec::new()), relays: Cell::new(0), told: RefCell::new(Vec::new()) }
+            Seen { answers: RefCell::new(Vec::new()), pushes: RefCell::new(Vec::new()), prompts: RefCell::new(Vec::new()), backlog: RefCell::new(Vec::new()), relays: Cell::new(0), told: RefCell::new(Vec::new()), head: Cell::new('a') }
         }
 
         fn applied(&self) -> usize {
@@ -641,9 +687,33 @@ mod tests {
             seen.backlog.borrow_mut().push((caller.clone(), Payload::StartItem(start.clone())));
             if start.anyway { (Outcome::Done, "Starting retry-red-runs@web".to_string()) } else { (Outcome::Refused { reason: Reason::QuestionsOpen { blocking: 2 } }, "Not started: 2 questions wait on you".to_string()) }
         };
+        let item_edit = |caller: &Caller, edit: &ItemEdit| {
+            seen.backlog.borrow_mut().push((caller.clone(), Payload::ItemEdit(edit.clone())));
+            (Outcome::Done, "Saved Goal".to_string())
+        };
+        let review_open = |caller: &Caller, open: &ReviewOpen| {
+            seen.backlog.borrow_mut().push((caller.clone(), Payload::ReviewOpen(open.clone())));
+            if open.address == "gone@shop" { Err((Outcome::Refused { reason: Reason::AlreadySettled }, "Nothing in gone@shop waits for review now".to_string())) } else { Ok(serde_json::to_vec(&kebbie_hub_protocol::Review { head: seen.head.get().to_string().repeat(40), ..review_of(&open.address) }).unwrap()) }
+        };
+        let review_comments = |caller: &Caller, comments: &ReviewComments| {
+            seen.backlog.borrow_mut().push((caller.clone(), Payload::ReviewComments(comments.clone())));
+            (Outcome::Done, "Sent 1 comment".to_string())
+        };
+        let review_read = |caller: &Caller, read: &ReviewRead| {
+            seen.backlog.borrow_mut().push((caller.clone(), Payload::ReviewRead(read.clone())));
+            (Outcome::Done, "Marked it read".to_string())
+        };
+        let accept_step = |caller: &Caller, accept: &AcceptStep| {
+            seen.backlog.borrow_mut().push((caller.clone(), Payload::AcceptStep(accept.clone())));
+            (Outcome::Done, "Accepted step 1".to_string())
+        };
         let relay = || seen.relays.set(seen.relays.get() + 1);
         let notify = |text: &str| seen.told.borrow_mut().push(text.to_string());
-        run(&Hands { answer: &answer, push: &push, prompt: &prompt, idea: &idea, item_answer: &item_answer, start_item: &start_item, relay: &relay, notify: &notify })
+        run(&Hands { answer: &answer, push: &push, prompt: &prompt, idea: &idea, item_answer: &item_answer, start_item: &start_item, item_edit: &item_edit, review_open: &review_open, review_comments: &review_comments, review_read: &review_read, accept_step: &accept_step, relay: &relay, notify: &notify })
+    }
+
+    fn review_of(address: &str) -> kebbie_hub_protocol::Review {
+        kebbie_hub_protocol::Review { address: address.to_string(), since: "main".to_string(), head: "a".repeat(40), step: None, guide: Vec::new(), left_out: None, files: Vec::new() }
     }
 
     fn answer() -> Payload {
@@ -731,6 +801,47 @@ mod tests {
     }
 
     #[test]
+    fn a_review_goes_up_sealed_before_the_result_that_names_it_and_nothing_waiting_names_none() {
+        let mut account = Account::connected();
+        let seen = Seen::new();
+        let sent = account.send(&Payload::ReviewOpen(ReviewOpen { address: "retry@shop".to_string() }));
+        account.round(&seen, HubCommands::default());
+        let result = account.result(&sent);
+        assert_eq!((result.outcome, result.text.as_str()), (Outcome::Done, "The review of retry@shop is ready"));
+        let blob = result.blob.expect("a done review names its blob");
+        assert_eq!(blob.media_type, REVIEW_MEDIA_TYPE);
+        let ciphertext = account.hub.runtime.block_on(account.browser.blob(&blob.id)).unwrap();
+        let review: kebbie_hub_protocol::Review = serde_json::from_slice(&kebbie_hub_protocol::open_blob(&blob, &ciphertext).unwrap()).unwrap();
+        assert_eq!(review, review_of("retry@shop"));
+        let gone = account.send(&Payload::ReviewOpen(ReviewOpen { address: "gone@shop".to_string() }));
+        account.round(&seen, HubCommands::default());
+        let settled = account.result(&gone);
+        assert_eq!((settled.outcome, settled.blob), (Outcome::Refused { reason: Reason::AlreadySettled }, None));
+        let edit = account.send(&Payload::ItemEdit(ItemEdit { item: kebbie_hub_protocol::ItemKey::parse("local:fix").unwrap(), section: Some("goal".to_string()), text: "New".to_string(), base: kebbie_hub_protocol::text_hash("") }));
+        account.round(&seen, HubCommands::of(&[HubCommand::Answer]));
+        assert_eq!(account.result(&edit).outcome, Outcome::Refused { reason: Reason::NotAllowed }, "edits follow hub.commands");
+    }
+
+    fn opened(account: &mut Account, seen: &Seen) -> BlobRef {
+        let sent = account.send(&Payload::ReviewOpen(ReviewOpen { address: "retry@shop".to_string() }));
+        account.round(seen, HubCommands::default());
+        account.result(&sent).blob.expect("a done review names its blob")
+    }
+
+    #[test]
+    fn an_unchanged_review_is_the_same_blob_on_the_hub_and_a_changed_one_replaces_it() {
+        let mut account = Account::connected();
+        let seen = Seen::new();
+        let first = opened(&mut account, &seen);
+        assert_eq!(opened(&mut account, &seen), first);
+        seen.head.set('b');
+        let changed = opened(&mut account, &seen);
+        assert_ne!(changed.id, first.id);
+        assert!(account.hub.runtime.block_on(account.browser.blob(&first.id)).is_err(), "the review it replaced is gone from the hub");
+        assert!(account.hub.runtime.block_on(account.browser.blob(&changed.id)).is_ok());
+    }
+
+    #[test]
     fn a_kind_outside_hub_commands_is_refused_naming_the_kind_and_nothing_is_applied() {
         let mut account = Account::connected();
         let seen = Seen::new();
@@ -771,7 +882,9 @@ mod tests {
             };
             let (push, prompt, relay, notify) = (|_: &Caller, _: &PushApproval| unreachable!(), |_: &Caller, _: &PromptAnswer| unreachable!(), || {}, |_: &str| {});
             let (idea, item_answer, start_item) = (|_: &Caller, _: &Idea| unreachable!(), |_: &Caller, _: &ItemAnswer| unreachable!(), |_: &Caller, _: &StartItem| unreachable!());
-            round(&account.dir, 0, &accepts(word("answer-and-push")), ACCOUNT, &Hands { answer: &answer, push: &push, prompt: &prompt, idea: &idea, item_answer: &item_answer, start_item: &start_item, relay: &relay, notify: &notify }, &now)
+            let (item_edit, review_open) = (|_: &Caller, _: &ItemEdit| unreachable!(), |_: &Caller, _: &ReviewOpen| unreachable!());
+            let (review_comments, review_read, accept_step) = (|_: &Caller, _: &ReviewComments| unreachable!(), |_: &Caller, _: &ReviewRead| unreachable!(), |_: &Caller, _: &AcceptStep| unreachable!());
+            round(&account.dir, 0, &accepts(word("answer-and-push")), ACCOUNT, &Hands { answer: &answer, push: &push, prompt: &prompt, idea: &idea, item_answer: &item_answer, start_item: &start_item, item_edit: &item_edit, review_open: &review_open, review_comments: &review_comments, review_read: &review_read, accept_step: &accept_step, relay: &relay, notify: &notify }, &now)
         }));
         assert!(crashed.is_err());
         assert_eq!(seen.answers.borrow().len(), 1, "applied once, then cut off before it was recorded");
@@ -1108,7 +1221,10 @@ mod tests {
 
     #[test]
     fn hub_commands_drives_what_the_machine_takes_and_names_what_it_refuses() {
-        assert_eq!(accepts(HubCommands::default()), [Kind::Answer, Kind::ItemAnswer, Kind::Push, Kind::PromptAnswer, Kind::Idea, Kind::StartItem], "every kind unless set");
+        assert_eq!(accepts(HubCommands::default()), [Kind::Answer, Kind::ItemAnswer, Kind::Push, Kind::PromptAnswer, Kind::Idea, Kind::StartItem, Kind::ItemEdit, Kind::ReviewOpen, Kind::ReviewComments, Kind::ReviewRead, Kind::AcceptStep], "every kind unless set");
+        assert_eq!(accepts(HubCommands::of(&[HubCommand::Edit])), [Kind::ItemEdit]);
+        assert_eq!(not_taken(Kind::AcceptStep, "devbox", &accepts(word("answer"))), "Not done: devbox takes no reviews from the hub. Review it at the machine, or allow reviews in its kebbie settings.");
+        assert_eq!(not_taken(Kind::ItemEdit, "devbox", &accepts(word("answer"))), "Not saved: devbox takes no edits from the hub. Edit it at the machine, or allow edits in its kebbie settings.");
         assert_eq!(accepts(word("answer-and-push")), [Kind::Answer, Kind::ItemAnswer, Kind::Push, Kind::PromptAnswer]);
         assert_eq!(accepts(word("answer")), [Kind::Answer, Kind::ItemAnswer, Kind::PromptAnswer]);
         assert_eq!(accepts(HubCommands::of(&[HubCommand::Idea, HubCommand::Start])), [Kind::Idea, Kind::StartItem]);

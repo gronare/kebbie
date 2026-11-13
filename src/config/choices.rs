@@ -87,10 +87,12 @@ pub enum HubCommand {
     Prompt,
     Idea,
     Start,
+    Edit,
+    Review,
 }
 
 impl HubCommand {
-    pub const ALL: [HubCommand; 5] = [HubCommand::Answer, HubCommand::Push, HubCommand::Prompt, HubCommand::Idea, HubCommand::Start];
+    pub const ALL: [HubCommand; 7] = [HubCommand::Answer, HubCommand::Push, HubCommand::Prompt, HubCommand::Idea, HubCommand::Start, HubCommand::Edit, HubCommand::Review];
 
     pub fn key(self) -> &'static str {
         match self {
@@ -99,6 +101,8 @@ impl HubCommand {
             HubCommand::Prompt => "prompt",
             HubCommand::Idea => "idea",
             HubCommand::Start => "start",
+            HubCommand::Edit => "edit",
+            HubCommand::Review => "review",
         }
     }
 

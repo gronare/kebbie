@@ -177,7 +177,11 @@ pub fn refresh(cli: &Cli, state: &Path, now: u64) -> Result<Refreshed> {
 // One refresh for whichever process keeps the vault fresh: the keeper when it runs, else the board.
 pub fn tick(state: &Path) -> Result<()> {
     let Some(cli) = crate::vault_cli::detect() else { return Ok(()) };
-    refresh(&cli, state, seconds(SystemTime::now())).map(|_| ())
+    let now = seconds(SystemTime::now());
+    if let Err(error) = crate::item_template::refresh(&cli, state, now) {
+        crate::vault_cli::warn_log(state, &format!("the vault's task template was not read: {error}"));
+    }
+    refresh(&cli, state, now).map(|_| ())
 }
 
 // The board's own refresher, idle while the keeper owns the work.

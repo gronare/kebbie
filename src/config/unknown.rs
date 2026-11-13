@@ -27,7 +27,7 @@ pub(super) const MACHINE_KEYS: [&str; 18] = ["board", "worktree", "task", "revie
 pub(super) const REPO_KEYS: [&str; 8] = ["actions", "worktree", "task", "review", "ci", "comments", "docs", "routines"];
 const SECTION_KEYS: [(&str, &[&str]); 18] = [
     ("board", &["groups", "backlog"]),
-    ("board.backlog", &["sources", "ongoing"]),
+    ("board.backlog", &["sources", "ongoing", "template"]),
     ("update", &["channel", "agents"]),
     ("restart", &["idle_minutes", "auto"]),
     ("keeper", &["enabled"]),

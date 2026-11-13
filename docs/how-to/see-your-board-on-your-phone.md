@@ -118,12 +118,27 @@ What reaches a machine is its own choice, set by [`hub.commands`](../reference/c
 - **Adds an idea.** Tap **New idea**, write it and pick the machine. It is filed as `kebbie backlog add` files it, and the lead writes it out, hearing that it came from your phone.
 - **Answers an open question.** Pick the question on the item and write your answer. It waits with the lead until the lead folds it into the item, on the phone and on the board's card alike.
 - **Starts the item.** The machine starts it as `g` on the board does: the item is the task's prompt, and the lead picks how the task goes.
+- **Edits the item.** Tap **Edit** on its title or on a section, change it and save. The machine writes it into the item's file or vault note.
 
 - If questions still wait on you, the start is refused and says how many; start it again to start it anyway.
 - The phone hears `Starting <task>` while the machine starts it. If the start fails, the device that asked gets a `Not started` notification that says why, and the item stays in the backlog.
 - If the question changed on the item since you read it, the answer is refused; read the item again.
 - If the item is already running as a task, or left the backlog, the machine says so.
 - A note in a vault two machines share is the same item on both; start it from one.
+- If the section changed on the machine since you opened it, the edit is refused; read it again and edit what it says now. A required section cannot be saved empty.
+- An edit to a vault note needs a vault command that states the `write` capability, see [The vault contract](../reference/vault-contract.md#capabilities).
+
+### Review a step from your phone
+
+A task whose step waits for your acceptance offers a review on its row. Open it to read the step's commit and every file it changes, in the order the review split shows them. A device that makes changes also:
+
+- **Comments on a line.** Write a comment under any line, then **Send**. Every waiting comment is typed into the task's Claude as one message, each line shaped `path:line — text` as the review split sends them.
+- **Marks a file read.** The read box in a file's header sets the same read mark the review split shows, until the file changes.
+- **Accepts the step.** **Accept** at the end accepts it as `kebbie accept` does, and the board shows it accepted.
+
+- A binary file, or one too large to send, shows as left out; review it at the machine.
+- If the task's branch moved since you opened it, a read mark or an accept is refused; open the review again.
+- If its Claude has text in its input box, the comments are not sent; send them again once it is clear.
 
 ### Approve a new device on the machine
 

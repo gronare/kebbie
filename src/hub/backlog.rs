@@ -1,11 +1,12 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use kebbie_hub_protocol::{BacklogBody, BacklogRow, BacklogState, Home, HomeKind, Id, Idea, ItemAnswer, ItemKey, OpenQuestion, Outcome, Priority, Reason, StartItem};
+use kebbie_hub_protocol::{BacklogBody, BacklogRow, BacklogState, BodySection, Home, HomeKind, Id, Idea, ItemAnswer, ItemEdit, ItemKey, OpenQuestion, Outcome, Priority, Reason, StartItem, text_hash};
 
 use super::blobs::{Attachment, PLAN_LIMIT};
 use super::commands::{Done, plain};
-use crate::backlog::Entry;
+use crate::backlog::{Entry, Templates};
+use crate::item_template::Template;
 use crate::backlog_file::{self, Filing, Shelf, State};
 use crate::config::Source;
 use crate::permit::Caller;
@@ -94,17 +95,13 @@ fn home(entry: &Entry, key: &ItemKey) -> Home {
     }
 }
 
-fn section(body: &str, heading: &str) -> String {
-    backlog_file::section(body, heading).trim().to_string()
-}
-
 // The item's questions as the phone shows them, each with the user's answer while it waits with the lead.
-pub fn open_questions(body: &str, reference: &str, state: &Path) -> Vec<OpenQuestion> {
-    questions_with(body, reference, &crate::backlog_kept::answers_in(state))
+pub fn open_questions(body: &str, reference: &str, state: &Path, template: &Template) -> Vec<OpenQuestion> {
+    questions_with(body, reference, &crate::backlog_kept::answers_in(state), template)
 }
 
-fn questions_with(body: &str, reference: &str, answers: &[crate::backlog_kept::Answer]) -> Vec<OpenQuestion> {
-    backlog_file::questions_in(body).into_iter().map(|question| {
+fn questions_with(body: &str, reference: &str, answers: &[crate::backlog_kept::Answer], template: &Template) -> Vec<OpenQuestion> {
+    template.questions_in(body).into_iter().map(|question| {
         let pending_answer = answers.iter().find(|answer| answer.item == reference && answer.question == question.text).map(|answer| answer.answer.clone());
         OpenQuestion { text: question.text, blocks: question.blocks, pending_answer }
     }).collect()
@@ -114,16 +111,23 @@ fn waiting(questions: &[OpenQuestion]) -> usize {
     questions.iter().filter(|question| question.blocks && question.pending_answer.is_none()).count()
 }
 
+// The body the phone shows and edits: the template's sections in order, each as its text stands, the open questions apart under the section that holds them.
+pub fn body_of_item(body: &str, template: &Template, questions: Vec<OpenQuestion>) -> BacklogBody {
+    let sections = template.sections.iter().map(|section| BodySection { key: section.key.clone(), heading: section.heading.clone(), text: template.shown(body, &section.key), required: section.required }).collect();
+    BacklogBody { sections, questions, questions_key: template.questions.clone() }
+}
+
 // The rows of the board's Backlog column and each written item's body as a blob; Linear rows stay on the machine, having no key the phone can send back.
-pub fn rows(items: &[(Entry, Option<String>)], state: &Path, root: Option<&Path>, today: i64) -> (Vec<BacklogRow>, Vec<Attachment>) {
+pub fn rows(items: &[(Entry, Option<String>)], state: &Path, root: Option<&Path>, today: i64, templates: &Templates) -> (Vec<BacklogRow>, Vec<Attachment>) {
     let mut seen = BTreeSet::new();
     let (mut rows, mut bodies) = (Vec::new(), Vec::new());
     let answers = crate::backlog_kept::answers_in(state);
     for (entry, body) in items {
         let Some(item) = key_of(entry, root).filter(|item| seen.insert(item.clone())) else { continue };
+        let template = templates.of(&entry.source);
         let body = body.as_deref().filter(|body| !body.trim().is_empty());
-        let questions = body.map(|body| questions_with(body, &entry.reference, &answers)).unwrap_or_default();
-        let goal = body.and_then(|body| section(body, "Goal").lines().map(str::trim).find(|line| !line.is_empty()).map(str::to_string));
+        let questions = body.map(|body| questions_with(body, &entry.reference, &answers, template)).unwrap_or_default();
+        let goal = body.and_then(|body| template.shown(body, template.goal_key()?).lines().map(str::trim).find(|line| !line.is_empty()).map(str::to_string));
         rows.push(BacklogRow {
             item: item.clone(),
             title: entry.title.clone(),
@@ -138,7 +142,7 @@ pub fn rows(items: &[(Entry, Option<String>)], state: &Path, root: Option<&Path>
             body: None,
         });
         if let Some(body) = body {
-            let written = BacklogBody { background: section(body, "Background"), goal: section(body, "Goal"), what_we_know: section(body, "What we know"), questions, out_of_scope: section(body, "Out of scope"), source: section(body, "Source") };
+            let written = body_of_item(body, template, questions);
             if let Ok(text) = serde_json::to_string(&written).map_err(|error| error.to_string()).and_then(|text| if text.len() <= PLAN_LIMIT { Ok(text) } else { Err(String::new()) }) {
                 bodies.push(Attachment::Backlog { item, text });
             }
@@ -157,7 +161,7 @@ fn body_of(entry: &Entry, index: Option<&crate::vault::Index>, state: &Path) -> 
 }
 
 pub fn gather(state: &Path) -> (Vec<BacklogRow>, Vec<Attachment>) {
-    rows(&crate::backlog::with_bodies(), state, crate::vault::root().as_deref(), crate::backlog::today())
+    rows(&crate::backlog::with_bodies(), state, crate::vault::root().as_deref(), crate::backlog::today(), &Templates::now())
 }
 
 // An item the phone named, as this machine's backlog has it now.
@@ -170,7 +174,7 @@ pub struct Found {
 
 impl Found {
     fn questions(&self, state: &Path) -> Vec<OpenQuestion> {
-        open_questions(&self.body, &self.entry.reference, state)
+        open_questions(&self.body, &self.entry.reference, state, &crate::item_template::for_source(&self.entry.source))
     }
 }
 
@@ -244,6 +248,152 @@ pub fn start_on(desk: &Desk, start: &StartItem, run: impl FnOnce(&Found) -> Resu
     }
 }
 
+// What an edit changes once its base holds: the title, or the body with one section's text replaced.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Change {
+    Title(String),
+    Body(String),
+}
+
+// An edit lands only on the text the phone saw, hashing to its base; a required section is never emptied, and a section the body lacks is added at its end.
+pub fn change_for(title: &str, body: &str, template: &Template, edit: &ItemEdit) -> std::result::Result<Change, Done> {
+    let changed = || refused(Reason::SectionChanged, "Not saved: it changed on the machine since you opened it; read it again and edit what it says now");
+    let Some(key) = edit.section.as_deref() else {
+        return if text_hash(title) == edit.base { Ok(Change::Title(edit.text.trim().to_string())) } else { Err(changed()) };
+    };
+    let Some(section) = template.sections.iter().find(|section| section.key == key) else { return Err(changed()) };
+    if text_hash(&template.shown(body, key)) != edit.base {
+        return Err(changed());
+    }
+    if section.required && edit.text.trim().is_empty() {
+        return Err(refused(Reason::BadRequest, &format!("Not saved: {} is required, so it cannot be left empty", section.heading)));
+    }
+    let edited = template.replace(body, key, &edit.text).unwrap_or_else(|| format!("{}\n\n## {}\n\n{}\n", body.trim_end(), section.heading, edit.text.trim()));
+    Ok(Change::Body(edited))
+}
+
+fn saved(edit: &ItemEdit, template: &Template) -> Done {
+    let what = edit.section.as_deref().and_then(|key| template.heading(key)).unwrap_or("the title");
+    (Outcome::Done, format!("Saved {what}"))
+}
+
+// The item file with the change made and the rest as it stands: its header's other keys, and a hand-written file's own shape for a body edit.
+fn edited_file(text: &str, item: &backlog_file::Item, change: Change) -> std::result::Result<String, String> {
+    let header = text.strip_prefix("+++\n").and_then(|rest| rest.split_once("\n+++\n").or_else(|| rest.strip_suffix("\n+++").map(|front| (front, ""))));
+    match (header, change) {
+        (Some((front, _)), Change::Title(title)) => {
+            let mut table: toml_edit::DocumentMut = front.parse().map_err(|error: toml_edit::TomlError| error.to_string())?;
+            table["title"] = toml_edit::value(title);
+            Ok(format!("+++\n{}\n+++\n\n{}\n", table.to_string().trim_end(), item.body.trim()))
+        }
+        (Some((front, _)), Change::Body(body)) => Ok(format!("+++\n{front}\n+++\n\n{}\n", body.trim())),
+        (None, Change::Title(title)) => Ok(backlog_file::Item { title, ..item.clone() }.text()),
+        (None, Change::Body(body)) => Ok(format!("{}\n", body.trim())),
+    }
+}
+
+// A local item is its file: the edit is read against it and written only while the file still holds the text it was read from.
+pub fn edit_local(path: &Path, template: &Template, edit: &ItemEdit) -> Done {
+    let changed = || refused(Reason::SectionChanged, "Not saved: it changed on the machine since you opened it; read it again and edit what it says now");
+    let stem = path.file_stem().map(|stem| stem.to_string_lossy().to_string()).unwrap_or_default();
+    let Some((text, item)) = std::fs::read_to_string(path).ok().and_then(|text| backlog_file::parse(&stem, &text).map(|item| (text, item))) else {
+        return refused(Reason::UnknownItem, "That item is no longer in this machine's backlog");
+    };
+    let written = match change_for(&item.title, &item.body, template, edit).map(|change| edited_file(&text, &item, change)) {
+        Err(done) => return done,
+        Ok(Err(error)) => return (Outcome::Failed, format!("Not saved: its header does not read ({error})")),
+        Ok(Ok(written)) => written,
+    };
+    if std::fs::read_to_string(path).ok().as_deref() != Some(text.as_str()) {
+        return changed();
+    }
+    match crate::state::write(path, written) {
+        Ok(()) => saved(edit, template),
+        Err(error) => (Outcome::Failed, format!("Not saved: {error}")),
+    }
+}
+
+// The frontmatter and the text after it, as a vault note is stored.
+fn split_note(text: &str) -> (&str, &str) {
+    let Some(rest) = text.strip_prefix("---\n") else { return ("", text) };
+    match rest.find("\n---\n") {
+        Some(end) => text.split_at(4 + end + 5),
+        None => ("", text),
+    }
+}
+
+// The note's title as its frontmatter's YAML gives it; None when the frontmatter does not parse.
+fn title_in(front: &str) -> Option<String> {
+    let Some(yaml) = front.strip_prefix("---\n").and_then(|rest| rest.strip_suffix("---\n")) else { return Some(String::new()) };
+    let documents = yaml_rust2::YamlLoader::load_from_str(yaml).ok()?;
+    Some(match documents.first().map(|document| &document["title"]) {
+        Some(yaml_rust2::Yaml::String(text) | yaml_rust2::Yaml::Real(text)) => text.clone(),
+        Some(yaml_rust2::Yaml::Integer(number)) => number.to_string(),
+        Some(yaml_rust2::Yaml::Boolean(flag)) => flag.to_string(),
+        _ => String::new(),
+    })
+}
+
+// The frontmatter with its title set, the lines a multi-line title continues on replaced too; a quoted JSON string is a YAML string.
+fn retitled(front: &str, title: &str) -> String {
+    let quoted = serde_json::to_string(title).unwrap_or_default();
+    let mut lines: Vec<&str> = front.lines().collect();
+    let line = format!("title: {quoted}");
+    match lines.iter().position(|line| line.starts_with("title:")) {
+        Some(at) => {
+            let end = at + 1 + lines[at + 1..].iter().take_while(|line| line.starts_with([' ', '\t'])).count();
+            lines.splice(at..end, [line.as_str()]);
+        }
+        None if lines.len() >= 2 => lines.insert(1, &line),
+        None => {}
+    }
+    format!("{}\n", lines.join("\n"))
+}
+
+pub trait NoteStore {
+    fn read(&self, key: &str) -> Result<(String, String)>;
+    fn write(&self, key: &str, etag: &str, text: &str) -> Result<crate::vault_cli::Wrote>;
+}
+
+impl NoteStore for crate::vault_cli::Cli {
+    fn read(&self, key: &str) -> Result<(String, String)> {
+        self.read_note(key)
+    }
+
+    fn write(&self, key: &str, etag: &str, text: &str) -> Result<crate::vault_cli::Wrote> {
+        self.write_note(key, etag, text)
+    }
+}
+
+// A vault note is read as stored with its etag, edited, and written back against that etag, so a change made in between is never written over.
+pub fn edit_note(store: &dyn NoteStore, key: &str, template: &Template, edit: &ItemEdit) -> Done {
+    let (text, etag) = match store.read(key) {
+        Ok(read) => read,
+        Err(error) => return (Outcome::Failed, format!("Not saved: the vault did not give the note ({error})")),
+    };
+    let (front, body) = split_note(&text);
+    let Some(title) = title_in(front) else { return (Outcome::Failed, "Not saved: the note's frontmatter does not read as YAML; edit it in the vault".to_string()) };
+    let edited = match change_for(&title, body, template, edit) {
+        Err(done) => return done,
+        Ok(Change::Title(title)) => format!("{}{body}", retitled(front, &title)),
+        Ok(Change::Body(body)) => format!("{front}{body}"),
+    };
+    match store.write(key, &etag, &edited) {
+        Ok(crate::vault_cli::Wrote::Saved) => saved(edit, template),
+        Ok(crate::vault_cli::Wrote::Stale) => refused(Reason::SectionChanged, "Not saved: the note changed in the vault while it was saved; read it again and edit what it says now"),
+        Err(error) => (Outcome::Failed, format!("Not saved: {error}")),
+    }
+}
+
+// A vault note the phone may edit is one this machine's backlog lists, named by its path inside the vault.
+fn listed_note(entries: &[Entry], item: &ItemKey, root: Option<&Path>) -> Option<String> {
+    entries.iter().filter(|entry| entry.source == "vault").find(|entry| key_of(entry, root).as_ref() == Some(item)).and_then(|entry| vault_path(&entry.reference, root))
+}
+
+fn writes(cli: &crate::vault_cli::Cli) -> bool {
+    cli.capabilities.as_ref().is_some_and(|stated| stated.iter().any(|one| one == crate::vault_cli::WRITE))
+}
+
 // A task name from the item's title that no branch or running task in the repo has yet, so the start never resumes another task.
 fn free_name(repo: &Path, title: &str) -> String {
     let base = Some(crate::board::suggested_name(title)).filter(|name| !name.is_empty()).unwrap_or_else(|| "item".to_string());
@@ -299,6 +449,30 @@ pub fn item_answer(caller: &Caller, answer: &ItemAnswer) -> Done {
     }
 }
 
+pub fn item_edit(_: &Caller, edit: &ItemEdit) -> Done {
+    let unknown = || refused(Reason::UnknownItem, "That item is no longer in this machine's backlog");
+    match edit.item.home() {
+        HomeKind::Kept => refused(Reason::BadRequest, "Not saved: the lead has yet to write it out and file it in the vault"),
+        HomeKind::Local => {
+            let root = crate::vault::root();
+            let entry = crate::backlog::load().entries.into_iter().find(|entry| key_of(entry, root.as_deref()).as_ref() == Some(&edit.item));
+            match entry.and_then(|entry| backlog_file::find(&entry.reference)) {
+                Some((path, _)) => edit_local(&path, &crate::item_template::local(), edit),
+                None => unknown(),
+            }
+        }
+        HomeKind::Vault => {
+            let root = crate::vault::root();
+            let Some(key) = listed_note(&crate::backlog::load().entries, &edit.item, root.as_deref()) else { return unknown() };
+            match crate::vault_cli::detect() {
+                Some(cli) if writes(&cli) => edit_note(&cli, &key, &crate::item_template::for_vault(), edit),
+                Some(_) => (Outcome::Failed, "Not saved: this machine's vault command states no write capability, so kebbie cannot write notes through it; edit the note in the vault".to_string()),
+                None => (Outcome::Failed, "Not saved: this machine reaches no vault now".to_string()),
+            }
+        }
+    }
+}
+
 pub fn start_item(_: &Caller, start: &StartItem) -> Done {
     match crate::lead::state_dir() {
         Ok(state) => start_on(&desk_for(&state, &start.item, &tell_lead), start, start_found),
@@ -322,6 +496,10 @@ mod tests {
         Entry { source: source.to_string(), title: "Retry a flaky red run".to_string(), priority: "urgent".to_string(), area: "web".to_string(), reference: reference.to_string(), age: "2 d".to_string(), shape, ..Entry::default() }
     }
 
+    fn templates() -> Templates {
+        Templates { local: Template::builtin(), vault: Template::builtin() }
+    }
+
     fn hub() -> Caller {
         Caller::Hub { account: "acc_01".to_string(), name: "iPhone 16".to_string() }
     }
@@ -334,11 +512,11 @@ mod tests {
     fn a_vault_note_has_one_key_on_every_machine_sharing_the_vault_and_a_local_item_one_the_protocol_takes() {
         let root = Path::new("/Users/someone/vault");
         let (one, two) = (crate::sh::test_dir("backlog-one"), crate::sh::test_dir("backlog-two"));
-        let here = rows(&[(entry("vault", "Projects/retry.md"), None)], &one, Some(root), today()).0;
-        let there = rows(&[(entry("vault", "/Users/someone/vault/Projects/retry.md"), None)], &two, Some(root), today()).0;
+        let here = rows(&[(entry("vault", "Projects/retry.md"), None)], &one, Some(root), today(), &templates()).0;
+        let there = rows(&[(entry("vault", "/Users/someone/vault/Projects/retry.md"), None)], &two, Some(root), today(), &templates()).0;
         assert_eq!(here[0].item.as_str(), "vault:Projects/retry.md");
         assert_eq!((here[0].item.clone(), here[0].home.clone()), (there[0].item.clone(), there[0].home.clone()), "the key and its label are the note's path inside the vault");
-        assert!(rows(&[(entry("vault", "/elsewhere/Projects/retry.md"), None)], &one, Some(root), today()).0.is_empty(), "a path outside the vault never leaves as a key");
+        assert!(rows(&[(entry("vault", "/elsewhere/Projects/retry.md"), None)], &one, Some(root), today(), &templates()).0.is_empty(), "a path outside the vault never leaves as a key");
         let ascii = key_of(&entry("local", "local:retry-flaky"), None).unwrap();
         let unicode = key_of(&entry("local", "local:åtgärda-något"), None).unwrap();
         assert_eq!(ascii.as_str(), "local:retry-flaky");
@@ -353,7 +531,7 @@ mod tests {
         crate::backlog_kept::answer(&state, crate::backlog_kept::Answer { item: "Projects/retry.md".to_string(), question: "Should a rerun show on the row?".to_string(), answer: "Yes, as a dot".to_string(), at: 1 }).unwrap();
         let kept = Entry { source: "kept".to_string(), reference: "kept:a1b2c3".to_string(), area: String::new(), shape: Shape { state: Some(State::ToWrite), kept: true, ..Shape::default() }, ..entry("kept", "") };
         let items = [(entry("vault", "Projects/retry.md"), Some(BODY.to_string())), (entry("vault", "Projects/retry.md"), None), (kept, None), (entry("linear", "ABC-1"), None)];
-        let (rows, bodies) = rows(&items, &state, None, today());
+        let (rows, bodies) = rows(&items, &state, None, today(), &templates());
         assert_eq!(rows.len(), 2, "one row per item, and no Linear row");
         let row = &rows[0];
         assert_eq!((row.priority, row.repo.as_deref(), row.state, row.filed), (Priority::High, Some("web"), BacklogState::Drafting, crate::backlog::epoch_day("2026-11-10").unwrap() as u64 * 86_400));
@@ -362,7 +540,10 @@ mod tests {
         let [Attachment::Backlog { item, text }] = bodies.as_slice() else { panic!("{bodies:?}") };
         assert_eq!(item, &row.item);
         let body: BacklogBody = serde_json::from_str(text).unwrap();
-        assert_eq!((body.goal.as_str(), body.out_of_scope.as_str(), body.what_we_know.as_str()), ("A flaky red run is rerun once by itself.\nThe rest stay red.", "Retrying a refused push.", "- G reruns a red run."));
+        let part = |key: &str| body.section(key).map(|section| (section.heading.as_str(), section.text.as_str(), section.required));
+        assert_eq!(body.sections.iter().map(|section| section.key.as_str()).collect::<Vec<_>>(), ["background", "goal", "known", "questions", "scope", "source"], "the template's sections in order");
+        assert_eq!((part("goal"), part("scope"), part("known")), (Some(("Goal", "A flaky red run is rerun once by itself.\nThe rest stay red.", true)), Some(("Out of scope", "Retrying a refused push.", false)), Some(("What we know", "- G reruns a red run.", false))));
+        assert_eq!((body.questions_key.as_deref(), part("questions").map(|(_, text, _)| text)), (Some("questions"), Some("")), "the questions go apart");
         assert_eq!(body.questions.iter().map(|question| (question.blocks, question.pending_answer.as_deref())).collect::<Vec<_>>(), [(true, None), (true, Some("Yes, as a dot")), (false, None)]);
 
         let mut board = crate::hub::board::build(&[], &[], Vec::new(), None, &crate::hub::board::Seen::default());
@@ -391,7 +572,7 @@ mod tests {
         assert_eq!((outcome, text.as_str()), (Outcome::Done, "Added to the backlog. The lead writes it out; it waits for the lead when none runs."));
         let item = &backlog_file::items(&dir)[0];
         assert_eq!((item.title.as_str(), item.repo.as_str(), item.state()), ("Rerun a flaky red run once", "web", State::ToWrite));
-        assert!(backlog_file::section(&item.body, "Source").contains("The user on iPhone 16, "), "{}", item.body);
+        assert!(Template::builtin().text(&item.body, "source").contains("The user on iPhone 16, "), "{}", item.body);
         assert!(told.borrow()[0].starts_with("The user on iPhone 16 added a quick item to the backlog: \"Rerun a flaky red run once\""), "{:?}", told.borrow());
 
         let (outcome, text) = idea_on(&shelf, &[Source::Vault], &hub(), &Idea { repo: None, ..idea.clone() });
@@ -429,7 +610,7 @@ mod tests {
         let kept = crate::backlog_kept::answers_in(&state);
         assert_eq!((kept[0].item.as_str(), kept[0].question.as_str(), kept[0].answer.as_str()), ("Projects/retry.md", "Which red runs count as flaky?", "Only e2e"));
         assert_eq!(told.borrow()[0], crate::backlog_kept::answer_text("The user on iPhone 16", "Retry a flaky red run", "vault: Projects/retry.md", "Which red runs count as flaky?", "Only e2e"));
-        assert_eq!(open_questions(BODY, "Projects/retry.md", &state)[0].pending_answer.as_deref(), Some("Only e2e"), "the board's card and the phone both show it with the lead");
+        assert_eq!(open_questions(BODY, "Projects/retry.md", &state, &Template::builtin())[0].pending_answer.as_deref(), Some("Only e2e"), "the board's card and the phone both show it with the lead");
     }
 
     #[test]
@@ -453,5 +634,128 @@ mod tests {
         assert_eq!((outcome, text.as_str()), (Outcome::Done, "Starting retry-flaky-red-run@web. It shows under Work in a moment; if it cannot start, a notice says why"));
         assert_eq!(ran.borrow().as_deref(), Some("Projects/retry.md"), "started from the item, as g does");
         assert_eq!(start_on(&desk(&state, Some(found("vault")), &tell), &start(true), |_| Err("kebbie start: no repo".to_string())).0, Outcome::Failed);
+    }
+
+    fn editing(section: Option<&str>, text: &str, base: &str) -> ItemEdit {
+        ItemEdit { item: ItemKey::parse("local:retry").unwrap(), section: section.map(str::to_string), text: text.to_string(), base: text_hash(base) }
+    }
+
+    #[test]
+    fn an_edit_lands_only_on_the_text_the_phone_saw_and_never_empties_a_required_section() {
+        let template = Template::builtin();
+        let goal = template.shown(BODY, "goal");
+        let Ok(Change::Body(body)) = change_for("Retry", BODY, &template, &editing(Some("goal"), "Rerun it once.", &goal)) else { panic!("applied") };
+        assert_eq!(template.text(&body, "goal"), "Rerun it once.");
+        assert_eq!(template.questions_in(&body), template.questions_in(BODY), "the rest stands");
+        assert_eq!(change_for("Retry", BODY, &template, &editing(Some("goal"), "x", "an older goal")).unwrap_err().0, Outcome::Refused { reason: Reason::SectionChanged });
+        assert_eq!(change_for("Retry", BODY, &template, &editing(Some("goal"), "  ", &goal)).unwrap_err(), (Outcome::Refused { reason: Reason::BadRequest }, "Not saved: Goal is required, so it cannot be left empty".to_string()));
+        assert!(matches!(change_for("Retry", BODY, &template, &editing(Some("scope"), "", "Retrying a refused push.")), Ok(Change::Body(_))), "an optional section may be emptied");
+        assert_eq!(change_for("Retry", BODY, &template, &editing(Some("risks"), "x", "")).unwrap_err().0, Outcome::Refused { reason: Reason::SectionChanged }, "a section the template does not have");
+        assert_eq!(change_for("Retry", BODY, &template, &editing(None, "Retry flaky runs", "Retry")).unwrap(), Change::Title("Retry flaky runs".to_string()));
+        assert_eq!(change_for("Retry", BODY, &template, &editing(None, "New", "Old")).unwrap_err().0, Outcome::Refused { reason: Reason::SectionChanged });
+        let Ok(Change::Body(old)) = change_for("Retry", "## Problem\n\nIt broke.\n", &template, &editing(Some("goal"), "Works.", "")) else { panic!("an older note takes the section") };
+        assert_eq!((template.text(&old, "goal"), old.starts_with("## Problem\n\nIt broke.")), ("Works.".to_string(), true));
+    }
+
+    #[test]
+    fn a_local_item_is_edited_in_its_file_and_keeps_the_header_keys_kebbie_does_not_read() {
+        let dir = crate::sh::test_dir("edit-local");
+        let path = dir.join("retry.md");
+        let item = backlog_file::Item { stem: "retry".to_string(), title: "Retry".to_string(), priority: "high".to_string(), repo: "web".to_string(), status: "backlog".to_string(), filed: "2026-11-12".to_string(), body: BODY.to_string() };
+        std::fs::write(&path, item.text().replacen("+++\n", "+++\nowner = \"ops\" # who asked\n", 1)).unwrap();
+        let template = Template::builtin();
+        let done = edit_local(&path, &template, &editing(Some("known"), "- It reruns once.", "- G reruns a red run."));
+        assert_eq!(done, (Outcome::Done, "Saved What we know".to_string()));
+        let saved = backlog_file::parse("retry", &std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!((template.text(&saved.body, "known"), saved.priority.as_str()), ("- It reruns once.".to_string(), "high"));
+        assert_eq!(edit_local(&path, &template, &editing(None, "Retry flaky runs", "Retry")).0, Outcome::Done);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(backlog_file::parse("retry", &text).unwrap().title, "Retry flaky runs");
+        assert!(text.starts_with("+++\nowner = \"ops\" # who asked\ntitle = \"Retry flaky runs\"\n"), "{text}");
+        assert_eq!(edit_local(&path, &template, &editing(None, "Again", "Retry")).0, Outcome::Refused { reason: Reason::SectionChanged });
+        let hand = dir.join("by-hand.md");
+        std::fs::write(&hand, "Fix the login\n\n## Goal\n\nIt works.\n").unwrap();
+        assert_eq!(edit_local(&hand, &template, &editing(Some("goal"), "It works again.", "It works.")).0, Outcome::Done);
+        assert_eq!(std::fs::read_to_string(&hand).unwrap(), "Fix the login\n\n## Goal\n\nIt works again.\n", "a hand-written file keeps its shape");
+        assert_eq!(edit_local(&dir.join("gone.md"), &template, &editing(Some("goal"), "x", "")).0, Outcome::Refused { reason: Reason::UnknownItem });
+    }
+
+    #[test]
+    fn the_phone_edits_only_a_vault_note_the_backlog_lists() {
+        let root = Path::new("/Users/someone/vault");
+        let entries = [entry("vault", "/Users/someone/vault/Projects/retry.md"), entry("local", "local:other")];
+        let key = |path: &str| ItemKey::vault(path).unwrap();
+        assert_eq!(listed_note(&entries, &key("Projects/retry.md"), Some(root)).as_deref(), Some("Projects/retry.md"));
+        for elsewhere in ["Areas/kebbie.md", "Log/web-logg.md", "Projects/held-by-another-machine.md"] {
+            assert_eq!(listed_note(&entries, &key(elsewhere), Some(root)), None, "{elsewhere} is not in the backlog");
+        }
+    }
+
+    #[test]
+    fn the_rows_goal_is_the_templates_goal_or_else_its_first_required_section() {
+        let template = Template { sections: vec![crate::item_template::Section { key: "context".to_string(), heading: "Context".to_string(), required: false }, crate::item_template::Section { key: "problem".to_string(), heading: "Problem".to_string(), required: true }], questions: None };
+        let state = crate::sh::test_dir("backlog-goal");
+        let templates = Templates { local: template.clone(), vault: template };
+        let rows = rows(&[(entry("vault", "Projects/retry.md"), Some("## Context\n\nSome.\n\n## Problem\n\nIt breaks.\n".to_string()))], &state, None, today(), &templates).0;
+        assert_eq!(rows[0].goal.as_deref(), Some("It breaks."));
+    }
+
+    struct Store {
+        text: String,
+        written: RefCell<Vec<(String, String)>>,
+        answer: Result<crate::vault_cli::Wrote>,
+    }
+
+    impl Store {
+        fn holding(text: &str) -> Store {
+            Store { text: text.to_string(), written: RefCell::new(Vec::new()), answer: Ok(crate::vault_cli::Wrote::Saved) }
+        }
+    }
+
+    impl NoteStore for Store {
+        fn read(&self, _: &str) -> Result<(String, String)> {
+            Ok((self.text.clone(), "e1".to_string()))
+        }
+
+        fn write(&self, _: &str, etag: &str, text: &str) -> Result<crate::vault_cli::Wrote> {
+            self.written.borrow_mut().push((etag.to_string(), text.to_string()));
+            match &self.answer {
+                Ok(crate::vault_cli::Wrote::Saved) => Ok(crate::vault_cli::Wrote::Saved),
+                Ok(crate::vault_cli::Wrote::Stale) => Ok(crate::vault_cli::Wrote::Stale),
+                Err(error) => Err(error.clone()),
+            }
+        }
+    }
+
+    #[test]
+    fn a_vault_note_is_written_back_against_the_etag_it_was_read_with() {
+        let note = format!("---\ntitle: \"Retry \\\"flaky\\\" runs\"\nstatus: backlog\n---\n{BODY}");
+        let store = Store::holding(&note);
+        let template = Template::builtin();
+        let goal = template.shown(BODY, "goal");
+        assert_eq!(edit_note(&store, "Projects/retry.md", &template, &editing(Some("goal"), "Once.", &goal)), (Outcome::Done, "Saved Goal".to_string()));
+        let (etag, written) = store.written.borrow()[0].clone();
+        assert_eq!(etag, "e1");
+        assert!(written.starts_with("---\ntitle: \"Retry \\\"flaky\\\" runs\"\nstatus: backlog\n---\n## Background"), "{written}");
+        assert_eq!(template.text(&written, "goal"), "Once.");
+        assert_eq!(edit_note(&store, "Projects/retry.md", &template, &editing(None, "Retry once", "Retry \"flaky\" runs")).0, Outcome::Done, "the title as the note stores it");
+        assert!(store.written.borrow()[1].1.starts_with("---\ntitle: \"Retry once\"\nstatus: backlog\n---\n"), "{}", store.written.borrow()[1].1);
+        let raced = Store { answer: Ok(crate::vault_cli::Wrote::Stale), ..Store::holding(&note) };
+        assert_eq!(edit_note(&raced, "Projects/retry.md", &template, &editing(Some("goal"), "Once.", &goal)).0, Outcome::Refused { reason: Reason::SectionChanged });
+        let broken = Store { answer: Err("vault write: mindin: error: argument --etag: the etag changed since it was read".to_string()), ..Store::holding(&note) };
+        assert_eq!(edit_note(&broken, "Projects/retry.md", &template, &editing(Some("goal"), "Once.", &goal)).0, Outcome::Failed, "an error that only mentions the etag is no change in the vault");
+    }
+
+    #[test]
+    fn a_vault_notes_title_is_read_and_set_as_its_yaml_holds_it() {
+        let template = Template::builtin();
+        let folded = Store::holding(&format!("---\nstatus: backlog\ntitle: >-\n  Retry a flaky\n  red run\nkind: task\n---\n{BODY}"));
+        assert_eq!(edit_note(&folded, "Projects/retry.md", &template, &editing(None, "Retry once", "Retry a flaky red run")).0, Outcome::Done, "a folded title reads as one line");
+        assert_eq!(folded.written.borrow()[0].1, format!("---\nstatus: backlog\ntitle: \"Retry once\"\nkind: task\n---\n{BODY}"), "its continuation lines go with it");
+        let single = Store::holding(&format!("---\ntitle: 'It''s: a # title' # comment\n---\n{BODY}"));
+        assert_eq!(edit_note(&single, "Projects/retry.md", &template, &editing(None, "New", "It's: a # title")).0, Outcome::Done);
+        let broken = Store::holding(&format!("---\ntitle: [unclosed\n---\n{BODY}"));
+        assert_eq!(edit_note(&broken, "Projects/retry.md", &template, &editing(None, "New", "")).0, Outcome::Failed);
+        assert!(broken.written.borrow().is_empty(), "nothing is written over a frontmatter that does not read");
     }
 }

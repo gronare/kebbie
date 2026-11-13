@@ -2,11 +2,12 @@ use std::path::{Path, PathBuf};
 
 use crate::backlog::{Entry, PRIORITIES};
 use crate::config::Source;
+pub use crate::item_template::Question;
+use crate::item_template::Template;
 use crate::notice::{Notice, Tone};
 use crate::sh::Result;
 
 pub const PREFIX: &str = "local:";
-pub const SECTIONS: [&str; 6] = ["Background", "Goal", "What we know", "Open questions", "Out of scope", "Source"];
 pub const SKILL: &str = "kebbie:write-backlog-item";
 const DRAFT: &str = "draft";
 const DRAFTING: &str = "drafting";
@@ -49,12 +50,6 @@ impl State {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct Question {
-    pub text: String,
-    pub blocks: bool,
-}
-
 // Blocking questions waiting on the user, answers of theirs the lead has yet to fold in, and the state those leave; Linear has none.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Shape {
@@ -65,49 +60,32 @@ pub struct Shape {
     pub filed: String,
 }
 
-// `- [ ] ` under Open questions blocks the start until the user answers it; a plain bullet is settled during the work.
-pub fn questions_in(body: &str) -> Vec<Question> {
-    section(body, "Open questions").lines().filter_map(|line| {
-        let line = line.trim();
-        let (blocks, text) = match line.strip_prefix("- [ ] ").or_else(|| line.strip_prefix("* [ ] ")) {
-            Some(text) => (true, text),
-            None => (false, line.strip_prefix("- ").or_else(|| line.strip_prefix("* "))?),
-        };
-        let text = text.trim();
-        (!text.is_empty() && !text.starts_with("[x]") && !text.starts_with("[X]")).then(|| Question { text: text.to_string(), blocks })
-    }).collect()
-}
-
-// The lead marks an item drafting while it writes it out; an item short of a section is to write; a blocking question keeps it drafting.
-pub fn state_of(drafting: bool, short: bool, body: &str) -> State {
+// An item short of a heading or of a required section's text is to write; the lead marks one drafting while it writes it out; a blocking question keeps it drafting.
+pub fn state_of(drafting: bool, short: bool, body: &str, template: &Template) -> State {
     if drafting {
         State::Drafting
-    } else if short || !missing_sections(body).is_empty() {
+    } else if short || !template.missing(body).is_empty() {
         State::ToWrite
-    } else if questions_in(body).iter().any(|question| question.blocks) {
+    } else if template.questions_in(body).iter().any(|question| question.blocks) {
         State::Drafting
     } else {
         State::Ready
     }
 }
 
-pub fn shape_of(state: State, body: &str, answered: &[String], filed: &str) -> Shape {
-    let blocking: Vec<Question> = questions_in(body).into_iter().filter(|question| question.blocks).collect();
+pub fn shape_of(state: State, body: &str, answered: &[String], filed: &str, template: &Template) -> Shape {
+    let blocking: Vec<Question> = template.questions_in(body).into_iter().filter(|question| question.blocks).collect();
     let with_lead = blocking.iter().filter(|question| answered.contains(&question.text)).count();
     Shape { state: Some(state), waiting: blocking.len() - with_lead, with_lead, kept: false, filed: filed.to_string() }
 }
 
-pub fn first_line(body: &str) -> String {
-    ["Goal", "Background"].iter().find_map(|heading| section(body, heading).lines().map(str::trim).find(|line| !line.is_empty()).map(str::to_string)).unwrap_or_default()
-}
-
 impl Item {
     pub fn to_write(&self) -> bool {
-        self.status == DRAFT || !missing_sections(&self.body).is_empty()
+        self.status == DRAFT || !crate::item_template::local().missing(&self.body).is_empty()
     }
 
     pub fn state(&self) -> State {
-        state_of(self.status == DRAFTING, self.status == DRAFT, &self.body)
+        state_of(self.status == DRAFTING, self.status == DRAFT, &self.body, &crate::item_template::local())
     }
 
     pub fn reference(&self) -> String {
@@ -122,24 +100,18 @@ impl Item {
     }
 
     pub fn entry(&self, today: i64) -> Entry {
+        let template = crate::item_template::local();
         Entry {
             source: "local".to_string(),
             title: self.title.clone(),
             priority: self.priority.clone(),
             area: self.repo.clone(),
             reference: self.reference(),
-            summary: if self.to_write() { String::new() } else { first_line(&self.body) },
+            summary: if self.to_write() { String::new() } else { template.first_line(&self.body) },
             age: crate::backlog::epoch_day(&self.filed).map_or(String::new(), |day| format!("{} d", (today - day).max(0))),
-            shape: shape_of(self.state(), &self.body, &[], &self.filed),
+            shape: shape_of(self.state(), &self.body, &[], &self.filed, &template),
         }
     }
-}
-
-pub fn section<'a>(body: &'a str, heading: &str) -> &'a str {
-    let marker = format!("## {heading}\n");
-    let Some(start) = body.find(&marker).map(|at| at + marker.len()) else { return "" };
-    let rest = &body[start..];
-    rest.find("\n## ").map_or(rest, |end| &rest[..end])
 }
 
 fn priority_of(word: &str) -> String {
@@ -238,21 +210,13 @@ pub fn find(item: &str) -> Option<(PathBuf, Item)> {
     Some((file(&dir, &found.stem), found))
 }
 
-fn draft_body(by: &str, filed: &str, line: &str) -> String {
-    let mut body = String::new();
-    for heading in SECTIONS {
-        let text = match heading {
-            "Background" => TO_WRITE.to_string(),
-            "Source" => format!("{by}, {filed}: \"{}\"", line.trim()),
-            _ => String::new(),
-        };
-        body.push_str(&format!("## {heading}\n\n{text}{}", if text.is_empty() { "" } else { "\n\n" }));
-    }
-    body
-}
-
-pub fn missing_sections(body: &str) -> Vec<&'static str> {
-    SECTIONS.into_iter().filter(|heading| !body.lines().any(|line| line.trim_end() == format!("## {heading}"))).collect()
+// A draft holds every heading: the first section says the lead writes it out, Source keeps the line as typed.
+fn draft_body(by: &str, filed: &str, line: &str, template: &Template) -> String {
+    let first = template.sections.first().map_or("background", |section| section.key.as_str());
+    let source = if template.heading("source").is_some() { "source" } else { first };
+    let said = format!("{by}, {filed}: \"{}\"", line.trim());
+    let texts = if source == first { vec![(first, format!("{TO_WRITE}\n\n{said}"))] } else { vec![(first, TO_WRITE.to_string()), (source, said)] };
+    template.body_with(&texts)
 }
 
 pub struct Filing<'a> {
@@ -273,6 +237,10 @@ fn checked_priority(priority: &str) -> Result<String> {
 
 // The item as it will be filed: written out when a body comes with it, else a draft the lead writes out.
 pub fn item_from(filing: &Filing, filed: &str) -> Result<Item> {
+    item_from_with(filing, filed, &crate::item_template::local())
+}
+
+pub fn item_from_with(filing: &Filing, filed: &str, template: &Template) -> Result<Item> {
     let priority = checked_priority(filing.priority)?;
     let (title, _, area) = split_line(filing.line);
     if title.is_empty() {
@@ -281,13 +249,13 @@ pub fn item_from(filing: &Filing, filed: &str) -> Result<Item> {
     let repo = Some(filing.repo.trim()).filter(|repo| !repo.is_empty()).unwrap_or(&area).to_string();
     let (status, body) = match filing.body.map(str::trim).filter(|body| !body.is_empty()) {
         Some(body) => {
-            let missing = missing_sections(body);
+            let missing = template.missing(body);
             if !missing.is_empty() {
-                return Notice::new(Tone::You, "Not added: the item is not written out").you(format!("Write it with the skill {SKILL}: it needs {}.", missing.iter().map(|heading| format!("## {heading}")).collect::<Vec<_>>().join(", "))).err();
+                return Notice::new(Tone::You, "Not added: the item is not written out").you(format!("Write it with the skill {SKILL}: it needs {}; kebbie backlog template prints the sections.", missing.join(", "))).err();
             }
             ("backlog".to_string(), body.to_string())
         }
-        None => (DRAFT.to_string(), draft_body(filing.by, filed, filing.line)),
+        None => (DRAFT.to_string(), draft_body(filing.by, filed, filing.line, template)),
     };
     Ok(Item { stem: String::new(), title, priority, repo, status, filed: filed.to_string(), body })
 }
@@ -315,7 +283,7 @@ pub fn migrate(dir: &Path, filed: &str) -> Result<usize> {
         }
         let line = if summary.is_empty() { title.clone() } else { format!("{title} — {summary}") };
         let stem = stem_for(&title, |stem| file(dir, stem).exists());
-        let item = Item { stem: stem.clone(), title, priority, repo: area, status: DRAFT.to_string(), filed: filed.to_string(), body: draft_body(&format!("moved from {OLD_FILE}"), filed, &line) };
+        let item = Item { stem: stem.clone(), title, priority, repo: area, status: DRAFT.to_string(), filed: filed.to_string(), body: draft_body(&format!("moved from {OLD_FILE}"), filed, &line, &crate::item_template::local()) };
         crate::state::write(&file(dir, &stem), item.text())?;
         moved += 1;
     }
@@ -457,15 +425,17 @@ mod tests {
     }
 
     fn written() -> String {
-        SECTIONS.iter().map(|heading| format!("## {heading}\n\nSome {heading}.\n")).collect::<Vec<_>>().join("\n")
+        Template::builtin().sections.iter().map(|section| format!("## {}\n\nSome {}.\n", section.heading, section.heading)).collect::<Vec<_>>().join("\n")
     }
 
     #[test]
     fn a_quick_line_becomes_a_draft_with_every_section_and_the_line_as_its_source() {
         let item = item_from(&quick("Fix login — the session drops on reload (app)", "High"), "2026-11-12").unwrap();
         assert_eq!((item.title.as_str(), item.priority.as_str(), item.repo.as_str(), item.to_write()), ("Fix login", "high", "app", true));
-        assert!(missing_sections(&item.body).is_empty(), "{}", item.body);
-        assert!(section(&item.body, "Background").contains("To write: the lead writes this item out") && section(&item.body, "Source").contains("The user, 2026-11-12: \"Fix login — the session drops on reload (app)\""), "{}", item.body);
+        let template = Template::builtin();
+        assert!(template.sections.iter().all(|section| template.has(&item.body, &section.key)), "{}", item.body);
+        assert_eq!(template.missing(&item.body), ["## Goal"], "a draft's goal waits for the lead");
+        assert!(template.text(&item.body, "background").contains("To write: the lead writes this item out") && template.text(&item.body, "source").contains("The user, 2026-11-12: \"Fix login — the session drops on reload (app)\""), "{}", item.body);
         let entry = item.entry(crate::backlog::epoch_day("2026-11-14").unwrap());
         assert_eq!((entry.summary.as_str(), entry.shape.state), ("", Some(State::ToWrite)), "a draft has no goal to show yet");
         assert_eq!(item.entry(crate::backlog::epoch_day("2026-11-14").unwrap()).age, "2 d");
@@ -483,6 +453,19 @@ mod tests {
         assert!(short.contains("not written out") && short.contains("## Goal") && short.contains("## Source") && !short.contains("## Background,"), "{short}");
         assert!(item_from(&quick("Fix", "soon"), "2026-11-12").unwrap_err().contains("\"soon\" is not a priority"));
         assert!(item_from(&quick("  ", ""), "2026-11-12").unwrap_err().contains("needs a title"));
+    }
+
+    #[test]
+    fn a_configured_template_shapes_the_draft_and_what_a_written_item_needs() {
+        let template = Template::parse(r#"{"sections":[{"key":"problem","heading":"Problem","required":true},{"key":"risks","heading":"Risks"}],"questions":"risks"}"#).unwrap();
+        let draft = item_from_with(&quick("Fix login", ""), "2026-11-12", &template).unwrap();
+        assert_eq!(draft.body, "## Problem\n\nTo write: the lead writes this item out with the skill kebbie:write-backlog-item.\n\nThe user, 2026-11-12: \"Fix login\"\n\n## Risks\n\n", "the line is kept in the first section when the template has no Source");
+        let short = item_from_with(&Filing { body: Some("## Problem\n\n## Risks\n\n- [ ] Which?\n"), ..quick("Fix login", "") }, "2026-11-12", &template).unwrap_err();
+        assert!(short.contains("## Problem") && !short.contains("## Risks"), "an empty required section: {short}");
+        let body = "## Problem\n\nIt broke.\n\n## Risks\n\n- [ ] Which?\n";
+        assert!(item_from_with(&Filing { body: Some(body), ..quick("Fix login", "") }, "2026-11-12", &template).is_ok());
+        assert_eq!(state_of(false, false, body, &template), State::Drafting, "a blocking question under the template's questions section");
+        assert_eq!(state_of(false, false, body, &Template::builtin()), State::ToWrite, "the same body misses kebbie's own sections");
     }
 
     #[test]
@@ -508,7 +491,7 @@ mod tests {
     fn an_open_question_that_blocks_keeps_the_item_drafting() {
         let with = |questions: &str, status: &str| Item { stem: "x".to_string(), title: "X".to_string(), priority: "high".to_string(), repo: "app".to_string(), status: status.to_string(), filed: String::new(), body: written().replace("Some Open questions.", questions) };
         let open = with("- [ ] Should the old links keep working?\n- Which test covers it, settled in the work\n- [x] Which repo: app", "backlog");
-        assert_eq!(questions_in(&open.body), [Question { text: "Should the old links keep working?".to_string(), blocks: true }, Question { text: "Which test covers it, settled in the work".to_string(), blocks: false }]);
+        assert_eq!(Template::builtin().questions_in(&open.body), [Question { text: "Should the old links keep working?".to_string(), blocks: true }, Question { text: "Which test covers it, settled in the work".to_string(), blocks: false }]);
         assert_eq!(open.state(), State::Drafting);
         assert_eq!((open.entry(0).shape.waiting, open.entry(0).summary.as_str()), (1, "Some Goal."));
         assert_eq!(with("- Which test covers it\n", "backlog").state(), State::Ready, "a question the work settles does not hold it");
@@ -563,7 +546,7 @@ mod tests {
         assert_eq!(migrate(&dir, "2026-11-12").unwrap(), 2);
         let moved = items(&dir);
         assert_eq!(moved.iter().map(|item| (item.title.as_str(), item.priority.as_str(), item.repo.as_str(), item.to_write())).collect::<Vec<_>>(), [("Fix login", "high", "app", true), ("Write the docs", "none", "", true)]);
-        assert!(section(&moved[0].body, "Source").contains("moved from backlog.md, 2026-11-12: \"Fix login — the session drops on reload\""), "{}", moved[0].body);
+        assert!(Template::builtin().text(&moved[0].body, "source").contains("moved from backlog.md, 2026-11-12: \"Fix login — the session drops on reload\""), "{}", moved[0].body);
         assert!(!root.join("backlog.md").exists() && std::fs::read_to_string(root.join("backlog.md.bak")).unwrap() == old, "the old file is kept, renamed");
         assert_eq!(migrate(&dir, "2026-11-12").unwrap(), 0, "once");
         std::fs::write(root.join("backlog.md"), "- Fix login\n- New one\n").unwrap();

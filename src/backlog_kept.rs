@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 
 use crate::backlog::Entry;
 use crate::backlog_file::{Question, Shape, State};
+use crate::item_template::Template;
 use crate::sh::Result;
 
 pub const PREFIX: &str = "kept:";
@@ -137,13 +138,13 @@ pub fn answer_text(who: &str, title: &str, wherein: &str, question: &str, answer
 }
 
 // An answer leaves once its question is gone from the item: the lead has folded it in.
-pub fn settle(state: &Path, item: &str, body: &str) -> Vec<Answer> {
-    settle_all(state, &[(item, body)]).into_iter().filter(|answer| answer.item == item).collect()
+pub fn settle(state: &Path, item: &str, body: &str, template: &Template) -> Vec<Answer> {
+    settle_all(state, &[(item, body, template)]).into_iter().filter(|answer| answer.item == item).collect()
 }
 
-// The same for the whole backlog, given each item's body; an item not listed, or one read without its Open questions heading (half written as it was read), keeps its answers. Every answer still with the lead comes back.
-pub fn settle_all(state: &Path, bodies: &[(&str, &str)]) -> Vec<Answer> {
-    let open: Vec<(&str, Vec<Question>)> = bodies.iter().filter(|(_, body)| !crate::backlog_file::missing_sections(body).contains(&"Open questions")).map(|(item, body)| (*item, crate::backlog_file::questions_in(body))).collect();
+// The same for the whole backlog, given each item's body and template; an item not listed, or one read without its template's questions heading (half written as it was read), keeps its answers. Every answer still with the lead comes back.
+pub fn settle_all(state: &Path, bodies: &[(&str, &str, &Template)]) -> Vec<Answer> {
+    let open: Vec<(&str, Vec<Question>)> = bodies.iter().filter(|(_, body, template)| template.questions.as_deref().is_some_and(|key| template.has(body, key))).map(|(item, body, template)| (*item, template.questions_in(body))).collect();
     let still_open = |answer: &Answer| open.iter().find(|(item, _)| *item == answer.item).is_none_or(|(_, questions)| questions.iter().any(|question| question.text == answer.question));
     let (kept, folded): (Vec<Answer>, Vec<Answer>) = answers_in(state).into_iter().partition(still_open);
     if folded.is_empty() {
@@ -185,9 +186,20 @@ mod tests {
         answer(&state, Answer { item: "local:x".to_string(), question: "Which job?".to_string(), answer: "e2e".to_string(), at: 1 }).unwrap();
         let whole = body("- [ ] Which job?");
         let cut = &whole[..whole.find("## Open questions").unwrap()];
-        assert_eq!(settle(&state, "local:x", cut).len(), 1, "read while the lead was writing it, its questions only look gone");
+        assert_eq!(settle(&state, "local:x", cut, &Template::builtin()).len(), 1, "read while the lead was writing it, its questions only look gone");
         assert_eq!(answers_in(&state).len(), 1);
-        assert!(settle(&state, "local:x", &body("")).is_empty(), "read whole without the question, the answer was folded in");
+        assert!(settle(&state, "local:x", &body(""), &Template::builtin()).is_empty(), "read whole without the question, the answer was folded in");
+        let _ = std::fs::remove_dir_all(state);
+    }
+
+    #[test]
+    fn the_half_written_guard_reads_the_templates_own_questions_heading() {
+        let state = crate::sh::test_dir("backlog-answers-template");
+        let template = Template::parse(r#"{"sections":[{"key":"problem","heading":"Problem","required":true},{"key":"risks","heading":"Risks"}],"questions":"risks"}"#).unwrap();
+        answer(&state, Answer { item: "Projects/x.md".to_string(), question: "Which job?".to_string(), answer: "e2e".to_string(), at: 1 }).unwrap();
+        assert_eq!(settle(&state, "Projects/x.md", "## Problem\n\nIt broke.\n\n## Open questions\n\n", &template).len(), 1, "no Risks heading yet: half written");
+        assert_eq!(settle(&state, "Projects/x.md", "## Problem\n\nIt broke.\n\n## Risks\n\n- [ ] Which job?\n", &template).len(), 1);
+        assert!(settle(&state, "Projects/x.md", "## Problem\n\nIt broke.\n\n## Risks\n\n", &template).is_empty(), "under Risks and gone: folded in");
         let _ = std::fs::remove_dir_all(state);
     }
 
@@ -196,7 +208,7 @@ mod tests {
         let state = crate::sh::test_dir("backlog-answers-shape");
         answer(&state, Answer { item: "Projects/old.md".to_string(), question: "Which job?".to_string(), answer: "e2e".to_string(), at: 1 }).unwrap();
         let older = "## Background\n\nB.\n\n## Open questions\n\n- [ ] Which repo?\n";
-        assert!(settle(&state, "Projects/old.md", older).is_empty(), "no Goal or Source heading, yet its questions are all there: the answer was folded in");
+        assert!(settle(&state, "Projects/old.md", older, &Template::builtin()).is_empty(), "no Goal or Source heading, yet its questions are all there: the answer was folded in");
         assert!(answers_in(&state).is_empty());
         let _ = std::fs::remove_dir_all(state);
     }
@@ -226,8 +238,8 @@ mod tests {
         answer(&state, given("Which job?")).unwrap();
         answer(&state, given("Which job?")).unwrap();
         answer(&state, Answer { item: "local:y".to_string(), ..given("Other?") }).unwrap();
-        assert_eq!(settle(&state, "local:x", &body("- [ ] Which job?")).len(), 1, "a second answer to one question replaces the first");
-        assert!(settle(&state, "local:x", &body("")).is_empty());
+        assert_eq!(settle(&state, "local:x", &body("- [ ] Which job?"), &Template::builtin()).len(), 1, "a second answer to one question replaces the first");
+        assert!(settle(&state, "local:x", &body(""), &Template::builtin()).is_empty());
         assert_eq!(answers_in(&state).len(), 1, "folded in, it leaves; another item's answer stays");
     }
 }

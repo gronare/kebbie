@@ -899,7 +899,7 @@ fn pushed_notice(landed: &Landed) -> String {
     let mut text = format!("{}: {} to {target} ({}).", who_pushed(pusher, address), plural(count, "commit"), commits.lines().collect::<Vec<_>>().join("; "));
     text.push_str(match (closed, waits) {
         (true, _) => " The task is done and closed.",
-        (false, true) => " The task stays open until its note has its solution and decisions; kebbie asked it to write them.",
+        (false, true) => " The task stays open until its note has what done needs; kebbie asked it to write it.",
         (false, false) => " The task stays open with the rest of its branch.",
     });
     match logged {
@@ -985,7 +985,7 @@ mod tests {
         assert!(kept.contains("kebbie wrote the repo's log line") && !kept.contains("Write the repo's log line"), "{kept}");
         assert!(!kept.contains("area note") && !failed_text(commits).contains("area note"), "kebbie logs the push itself; the notice carries no chore for the lead's area note: {kept}");
         let waits = pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits, closed: false, note: Some("Projects/billing.md"), logged: Some(true), waits: true });
-        assert!(waits.contains("stays open until its note has its solution and decisions"), "{waits}");
+        assert!(waits.contains("stays open until its note has what done needs"), "{waits}");
         let failed = pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits, closed: true, note: Some("Projects/billing.md"), logged: Some(false), waits: false });
         assert!(failed.contains("kebbie could not write the repo's log line: write it in the vault with what landed and these shas") && !failed.contains("kebbie wrote"), "a log append that failed leaves the line to the lead: {failed}");
     }
@@ -1037,7 +1037,7 @@ mod tests {
         assert!(matches!(&waits, Close::Waits(text) if text.contains("its note lacks its solution")));
         let record = crate::phase::load(&state, &noted).unwrap();
         assert_eq!((record.phase, record.by.as_str()), (Phase::Closing, "ci"), "it waits for its note, under the source that asked");
-        assert!(lead_about(&noted).iter().any(|message| message.text.contains("stays open until its note has its solution")));
+        assert!(lead_about(&noted).iter().any(|message| message.text.contains("stays open until its note has what done needs")));
         let failed = close_pushed(&state, "failing", "push", None, told(&failing), |_, _| Err("herdr is gone".to_string()));
         assert!(matches!(failed, Close::Done(Err(error)) if error == "herdr is gone"));
         let record = crate::phase::load(&state, &failing).unwrap();

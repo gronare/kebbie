@@ -37,6 +37,12 @@ kebbie asks this first, at each `kebbie doctor` run and whenever its kept answer
 | `log` | `log append`, `log path` | Pushes write no log lines. |
 | `snapshot` | `snapshot --json [--since <etag>]` | The board reads the vault's local index instead. |
 | `read` | `read <note> --body` | A plan in a vault note shows only from the local index. |
+| `templates` | `template --json --kind task`, and `task check` with no `--need` | Items and task notes use kebbie's own sections, and the edit gate and done check `problem`, `solution` and `decisions`. |
+| `write` | `read --json -- <note>`, answering `{"text", "etag"}`, then `write --etag <etag> -- <note>` with the note on stdin, answering `{"path", "etag"}` | An edit from the phone to a vault backlog item is refused. |
+
+With `templates`, kebbie asks for the task template at most every six hours and keeps it in `item-template.json` in its state directory. An answer with no sections means the vault has no task template, and is kept as long; an ask that fails is tried again after ten minutes. Backlog items are read and written by its sections, found under a heading of any level as the vault finds them, the phone shows them in its order, the task's edits wait for its required sections, and so does done.
+
+A `write` whose etag no longer matches exits 1 with the line `mindin: the etag <etag> no longer matches <note>; it changed since it was read` on stderr; kebbie tells the phone the note changed and to read it again. Any other failure is reported as it stands.
 
 ## `status`
 

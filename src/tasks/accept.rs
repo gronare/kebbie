@@ -249,6 +249,15 @@ fn accept_as(caller: &Caller, cwd: &Path, name: Option<&str>, sha: Option<&str>,
     accept_in(&state_dir()?, &task, sha, on)
 }
 
+// A device the user approved accepts through the hub, which hub.commands allows; the step it saw is checked by the caller.
+pub(crate) fn accept_from_device(caller: &Caller, cwd: &Path, name: &str, sha: &str) -> Result<String> {
+    if !matches!(caller, Caller::Hub { .. }) {
+        return accept_as(caller, cwd, Some(name), Some(sha), true);
+    }
+    let task = task_at(cwd, Some(name))?;
+    accept_in(&state_dir()?, &task, sha, true)
+}
+
 fn accept_in(state: &Path, task: &Task, sha: &str, on: bool) -> Result<String> {
     let full = git(&task.path, &["rev-parse", "--verify", "--quiet", &format!("{sha}^{{commit}}")]).map_err(|_| Notice::new(Tone::Failed, "Not accepted: that is not a commit").detail("commit", sha).to_string())?;
     let Some(key) = open_commits(&task.path, &task.upstream)?.into_iter().find(|open| open.sha == full).map(|open| open.key) else {

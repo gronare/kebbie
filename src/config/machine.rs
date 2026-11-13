@@ -10,6 +10,7 @@ pub struct Machine {
     pub sources: Option<Vec<Source>>,
     pub groups: Option<Vec<Group>>,
     pub ongoing: Option<OngoingAt>,
+    pub template: Option<String>,
     pub channel: Option<Channel>,
     pub agent_updates: Option<AgentUpdates>,
     pub restart: Restart,
@@ -116,13 +117,15 @@ struct Board {
     sources: Option<Vec<Source>>,
     groups: Option<Vec<Group>>,
     ongoing: Option<OngoingAt>,
+    template: Option<String>,
 }
 
 fn board(table: &Table) -> Result<Board> {
     let Some(board) = subtable(table, "board", "board")? else { return Ok(Board::default()) };
     let groups = board.get("groups").map(groups).transpose()?;
     let Some(backlog) = subtable(board, "backlog", "board.backlog")? else { return Ok(Board { groups, ..Board::default() }) };
-    Ok(Board { sources: backlog_sources(backlog)?, groups, ongoing: ongoing_at(backlog)? })
+    let template = text(backlog, "template", "board.backlog.template")?.filter(|path| !path.trim().is_empty());
+    Ok(Board { sources: backlog_sources(backlog)?, groups, ongoing: ongoing_at(backlog)?, template })
 }
 
 pub(super) fn update(table: &Table) -> Result<Option<Channel>> {
@@ -188,7 +191,7 @@ fn hub_url(table: &Table) -> Result<Option<String>> {
 
 fn hub_commands(table: &Table) -> Result<Option<HubCommands>> {
     let Some(hub) = subtable(table, "hub", "hub")? else { return Ok(None) };
-    const CHOICES: &str = "list any of \"answer\", \"push\", \"prompt\", \"idea\" and \"start\", as in [\"answer\", \"prompt\"]";
+    const CHOICES: &str = "list any of \"answer\", \"push\", \"prompt\", \"idea\", \"start\", \"edit\" and \"review\", as in [\"answer\", \"prompt\"]";
     match hub.get("commands") {
         None => Ok(None),
         Some(value) if value.is_array() => HubCommands::from_keys(&strings(value, "hub.commands")?).map(Some).map_err(|given| format!("hub.commands: \"{given}\" is not a kind of command; {CHOICES}")),
@@ -259,6 +262,6 @@ pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
         return Err(fail(per_repo("worktree.stage_on_main")));
     }
     crate::routines::parse_list(&table, None, source).map_err(fail)?;
-    let Board { sources, groups, ongoing } = board(&table).map_err(fail)?;
-    Ok(Machine { keys: keys(&table).map_err(fail)?, sources, groups, ongoing, channel: update(&table).map_err(fail)?, agent_updates: agent_updates(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, keeper: enabled_in(&table, "keeper").map_err(fail)?, recover: enabled_in(&table, "recover").map_err(fail)?, machine_name: machine_name(&table).map_err(fail)?, hub_url: hub_url(&table).map_err(fail)?, hub_commands: hub_commands(&table).map_err(fail)?, hub_trust: hub_choice(&table, "trust", &HubTrust::ALL.map(|trust| (trust.key(), trust))).map_err(fail)?, hub_auto_approve: hub_choice(&table, "auto_approve", &AutoApprove::ALL.map(|auto| (auto.key(), auto))).map_err(fail)?, hub_approve_from: hub_choice(&table, "approve_from", &ApproveFrom::ALL.map(|from| (from.key(), from))).map_err(fail)?, report: report(&table).map_err(fail)?, propose_issues: propose_issues(&table).map_err(fail)?, worktree })
+    let Board { sources, groups, ongoing, template } = board(&table).map_err(fail)?;
+    Ok(Machine { keys: keys(&table).map_err(fail)?, sources, groups, ongoing, template, channel: update(&table).map_err(fail)?, agent_updates: agent_updates(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, keeper: enabled_in(&table, "keeper").map_err(fail)?, recover: enabled_in(&table, "recover").map_err(fail)?, machine_name: machine_name(&table).map_err(fail)?, hub_url: hub_url(&table).map_err(fail)?, hub_commands: hub_commands(&table).map_err(fail)?, hub_trust: hub_choice(&table, "trust", &HubTrust::ALL.map(|trust| (trust.key(), trust))).map_err(fail)?, hub_auto_approve: hub_choice(&table, "auto_approve", &AutoApprove::ALL.map(|auto| (auto.key(), auto))).map_err(fail)?, hub_approve_from: hub_choice(&table, "approve_from", &ApproveFrom::ALL.map(|from| (from.key(), from))).map_err(fail)?, report: report(&table).map_err(fail)?, propose_issues: propose_issues(&table).map_err(fail)?, worktree })
 }

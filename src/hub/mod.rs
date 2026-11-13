@@ -14,6 +14,7 @@ pub mod pair;
 pub mod qr;
 pub mod relay;
 pub mod report;
+pub mod review;
 #[cfg(test)]
 pub(crate) mod tests;
 

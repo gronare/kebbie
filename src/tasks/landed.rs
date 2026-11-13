@@ -46,7 +46,7 @@ impl Unsure {
         match self {
             Unsure::Turn => format!("landed on {main} · kebbie closes it after this turn"),
             Unsure::Uncommitted => format!("landed on {main}, but its worktree has uncommitted changes or a stash: commit them, or drop it to discard them"),
-            Unsure::Note => format!("landed on {main} · its note waits for its solution and decisions"),
+            Unsure::Note => format!("landed on {main} · its note waits for what done needs"),
             Unsure::Prompt | Unsure::Question => format!("landed on {main} · {done} closes it"),
         }
     }

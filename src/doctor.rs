@@ -600,6 +600,15 @@ pub fn backlog(sources: &[Source], vault_source: impl Fn() -> Result<String, Str
     }).collect()
 }
 
+// A template file [board.backlog] template names that does not read leaves local items on kebbie's own.
+pub fn item_template(named: Option<&Path>) -> Option<Check> {
+    let file = named?;
+    Some(match crate::item_template::read_file(file) {
+        Ok(_) => ok("backlog template", format!("local items follow {}", file.display())).brief("backlog template"),
+        Err(error) => warn("backlog template", format!("{error}; local items follow kebbie's own template until it reads"), one("fix the file, or remove template under [board.backlog]; kebbie backlog template --local shows the sections in use")),
+    })
+}
+
 // An older config that lists both reads as the vault alone; the local folder stays on disk, unread.
 pub fn mixed_sources(listed: &[Source], local_dir: &Path, config: &Path) -> Option<Check> {
     crate::config::mixes_local_and_vault(listed).then(|| {
@@ -983,6 +992,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
     let local_dir = env.config.with_file_name("backlog");
     checks.extend(config::load_machine(&env.config).ok().and_then(|machine| machine.sources).and_then(|listed| mixed_sources(&listed, &local_dir, &env.config)));
     checks.extend(backlog(&settings.sources.value, crate::vault::source, &local_dir));
+    checks.extend(item_template(crate::item_template::configured_file(&env.config).as_deref()));
     let claude = read_json(&env.claude_dir.join(".claude.json")).or_else(|| read_json(&env.home.join(".claude.json")));
     let vault = vault_plugin(installed.as_ref(), |file| std::fs::read_to_string(file).ok());
     checks.extend(unused_sources(&settings.sources.value, vault, linear_mcp(installed.as_ref(), claude.as_ref()), &env.config));
@@ -1423,6 +1433,18 @@ mod tests {
         assert!(mixed.level == Level::Warn && mixed.fact.contains("new items go to the vault, and /home/u/.config/kebbie/backlog is no longer read"), "{mixed:?}");
         assert_eq!(mixed.fix, ["set sources = [\"vault\", \"linear\"] under [board.backlog] in /home/u/.config/kebbie/config.toml, after moving what you still want from that folder into the vault"]);
         assert!(mixed_sources(&[Source::Vault, Source::Linear], nowhere, config).is_none());
+    }
+
+    #[test]
+    fn a_backlog_template_file_that_does_not_read_is_a_warning() {
+        let dir = crate::sh::test_dir("doctor-template");
+        assert_eq!(item_template(None), None, "kebbie's own when none is named");
+        std::fs::write(dir.join("item.toml"), "[[sections]]\nkey = \"goal\"\nheading = \"Goal\"\n").unwrap();
+        assert_eq!(item_template(Some(&dir.join("item.toml"))).unwrap().level, Level::Ok);
+        std::fs::write(dir.join("broken.toml"), "sections = 3").unwrap();
+        let broken = item_template(Some(&dir.join("broken.toml"))).unwrap();
+        assert!(broken.level == Level::Warn && broken.fact.contains("broken.toml") && broken.fact.ends_with("local items follow kebbie's own template until it reads"), "{broken:?}");
+        assert_eq!(item_template(Some(&dir.join("missing.toml"))).unwrap().level, Level::Warn);
     }
 
     #[test]

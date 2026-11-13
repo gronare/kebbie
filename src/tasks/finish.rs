@@ -70,7 +70,7 @@ pub fn done(cwd: &Path, name: Option<&str>) -> Result<String> {
     close_task(cwd, name, vault.as_ref(), said, None).map(|closed| closed.to_string())
 }
 
-// Done waits for the task's note to have its solution and decisions: Err is the refusal, the task told what to write; a vault that does not answer lets done go on, and Ok says so as a detail.
+// Done waits for the task's note to have what done needs (its solution and decisions, or the template's required sections): Err is the refusal, the task told what to write; a vault that does not answer lets done go on, and Ok says so as a detail.
 pub(super) fn note_ready(vault: Option<&crate::vault_cli::Cli>, state: &Path, address: &str, task: &str) -> Result<Option<String>> {
     note_waits(vault, state, address, task, true)
 }

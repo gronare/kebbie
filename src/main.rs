@@ -29,6 +29,7 @@ mod inbox;
 mod install_signal;
 mod issue_recheck;
 mod issues;
+mod item_template;
 mod keeper;
 mod keys;
 mod known;
@@ -195,6 +196,9 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   add a backlog item: a short one the lead writes out, or with - the
                                   written-out item's sections on stdin
   kebbie backlog filed <kept:id>  the lead filed the item kebbie kept a row for: the row gives way to its note
+  kebbie backlog template [--local|--vault] [--json]
+                                  the sections a backlog item is written in, where new items go: the vault's task
+                                  template, the file [board.backlog] template names, or kebbie's own
   kebbie link <name> <item>       tie a running task to a backlog item or project note, as start --backlog does:
                                   done tells the lead to close it, reset puts it back in the backlog
   kebbie land [name]              rebase a task onto the default branch without pushing; on a conflict, its Claude
@@ -425,9 +429,10 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   until --stable returns to the channel)
 
 With the vault plugin installed, enabled and configured, the vault holds each task: start opens the task's note
-(or claims the vault backlog note it starts from), edits wait until the note's Problem is written, push writes
-the repo's log line from the commit subjects, done waits for the note's solution and decisions and then closes
-it, and reset puts it back in the backlog. Without the plugin none of this runs.
+(or claims the vault backlog note it starts from), edits wait until the note's Problem is written (with a vault
+that has note templates, the task template's required sections), push writes the repo's log line from the
+commit subjects, done waits for the note's solution and decisions (or those sections) and then closes it, and
+reset puts it back in the backlog. Without the plugin none of this runs.
 
 Without a name, land, follow, park, unpark, review, evidence, push, stage, unstage, done, drop and reset act on the task whose worktree you are in.
 -C <dir> runs as if started in <dir>. kebbie --version (or kebbie version) prints kebbie main on the main channel
@@ -694,6 +699,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("messages") => messages::run(),
         Some("backlog") if arguments.positional(1) == Some("save") => backlog::save(),
         Some("backlog") if arguments.positional(1) == Some("filed") => backlog_file::filed(arguments.positional(2).unwrap_or_default()),
+        Some("backlog") if arguments.positional(1) == Some("template") => item_template::shown(arguments.flag("--local"), arguments.flag("--vault"), arguments.flag("--json")),
         Some("backlog") if arguments.positional(1) == Some("add") => backlog_file::add(arguments.value("--priority"), arguments.value("--repo"), arguments.rest(2), arguments.flag("-")),
         Some("backlog") => backlog::show(),
         Some("land") => tasks::land(&cwd, name),
