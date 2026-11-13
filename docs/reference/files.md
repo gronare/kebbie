@@ -145,6 +145,7 @@ A `comments/` file holds the comment as GitHub gave it (author, text, file and l
 | `vault-status.json` | What the vault command last answered: on or off, its name, version and capabilities, kept a while so a start or a push does not ask the vault each time. |
 | `vault-logs/` | Each repo's vault log note, or an empty file where the vault named none, asked again after an hour. |
 | `vault-snapshot.json` | The last vault snapshot, which the Areas page, the backlog and the ongoing notes read. |
+| `vault-watch.json` | The cursor the vault's `watch` last answered, and the keeper's `watch` process while it runs. |
 | `vault-snapshot-verdict.json` | Whether the vault server answers snapshots, so a server without them is asked again only after ten minutes or a plugin update. |
 | `vault.log` | The vault calls that failed, one line each. |
 

@@ -36,6 +36,7 @@ kebbie asks this first, at each `kebbie doctor` run and whenever its kept answer
 | `claims` | `task claim`, `task release` | Notes are kept, but claimed by no machine. |
 | `log` | `log append`, `log path` | Pushes write no log lines. |
 | `snapshot` | `snapshot --json [--since <etag>]` | The board reads the vault's local index instead. |
+| `watch` | `watch --json --body [--since <cursor>]`, one long-lived process the keeper runs | The keeper asks for `snapshot` every 20 seconds and reads each changed backlog note with `read`. |
 | `read` | `read <note> --body` | A plan in a vault note shows only from the local index. |
 | `templates` | `template --json --kind task`, and `task check` with no `--need` | Items and task notes use kebbie's own sections, and the edit gate and done check `problem`, `solution` and `decisions`. |
 | `write` | `read --json -- <note>`, answering `{"text", "etag"}`, then `write --etag <etag> -- <note>` with the note on stdin, answering `{"path", "etag"}` | An edit from the phone to a vault backlog item is refused. |
@@ -43,6 +44,24 @@ kebbie asks this first, at each `kebbie doctor` run and whenever its kept answer
 With `templates`, kebbie asks for the task template at most every six hours and keeps it in `item-template.json` in its state directory. An answer with no sections means the vault has no task template, and is kept as long; an ask that fails is tried again after ten minutes. Backlog items are read and written by its sections, found under a heading of any level as the vault finds them, the phone shows them in its order, the task's edits wait for its required sections, and so does done.
 
 A `write` whose etag no longer matches exits 1 with the line `mindin: the etag <etag> no longer matches <note>; it changed since it was read` on stderr; kebbie tells the phone the note changed and to read it again. Any other failure is reported as it stands.
+
+## `watch --json --body`
+
+With `snapshot` and `watch`, the keeper runs one `watch` for as long as it runs, instead of asking for a snapshot every 20 seconds. Each line on stdout is one JSON object:
+
+```json
+{"cursor": "a1b2c3d4.42", "reset": false, "more": false, "changes": [
+  {"key": "Projects/export.md", "action": "write", "version": "…", "note": {"frontmatter": {"status": "backlog"}, "body": "…"}}
+]}
+```
+
+| Field | What kebbie does with it |
+| --- | --- |
+| `cursor` | Kept in `vault-watch.json` after the line is applied, and passed as `--since` when the keeper starts `watch` again. |
+| `reset` | `true` makes kebbie take a full `snapshot`, then follow from this cursor. |
+| `changes` | Each note's latest state: `write` with its `frontmatter` and `body`, `delete` with `note: null`, or `schema`. kebbie writes a change to a note the snapshot holds straight into its copy, and a backlog note's body into its copy of the backlog. A note it does not hold yet, a changed kind, a frontmatter that does not parse or a `schema` makes it take a full `snapshot`. |
+
+When `watch` exits, the keeper starts it again after 1 second, then twice as long each time up to 5 minutes. The keeper stops it when it stops.
 
 ## `status`
 

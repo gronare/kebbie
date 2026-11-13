@@ -25,6 +25,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - From your phone you edit a backlog item's title or any of its sections; update the hub first.
 - From your phone you review a task's waiting step: read its files, comment on lines, mark files read and accept it; update the hub first.
 - With the vault's note templates, a task's edits and done wait for the template's required sections.
+- With a vault that states watch, the keeper follows the vault's changes as they happen, instead of starting the vault command every 20 seconds and once for each changed backlog note.
 
 ### Fixed
 - hub.commands = [] takes nothing from the hub, so a device no longer approves or denies another on that machine.

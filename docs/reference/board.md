@@ -717,7 +717,7 @@ A new name is checked as [`machine.name`](configuration.md#keys) is. A `config.t
 
 Press `2` to open it and `1` to go back. It needs the vault: it lists the vault's system notes with their repos. `kebbie areas` prints the same.
 
-It reads a snapshot of the vault where the vault server answers one, which works with a vault hosted on a server, and the local vault index where it does not. The keeper fetches the snapshot every 20 seconds, or the full board does while the keeper is off; the status line's `vault index:` says how long ago it was fetched. A snapshot holds the last 50 lines of each log note.
+It reads a snapshot of the vault where the vault server answers one, which works with a vault hosted on a server, and the local vault index where it does not. When the vault states `watch`, the keeper follows the vault with one long-lived `watch` and writes each change into the snapshot as it comes; otherwise it fetches the snapshot every 20 seconds, or the full board does while the keeper is off. The status line's `vault index:` says how long ago the snapshot last changed. A snapshot holds the last 50 lines of each log note.
 
 - Areas group into **needs you** (main ahead of origin, commits since the last release, or a task waiting on you), **active** and **quiet**.
 - Each shows its running tasks, open notes and backlog, main against origin, the last tag and commits since, and the last vault log line.

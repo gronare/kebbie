@@ -88,6 +88,7 @@ mod vault;
 mod vault_cli;
 mod vault_found;
 mod vault_snapshot;
+mod vault_watch;
 mod when;
 
 use std::path::Path;

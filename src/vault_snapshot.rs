@@ -177,11 +177,21 @@ pub fn refresh(cli: &Cli, state: &Path, now: u64) -> Result<Refreshed> {
 // One refresh for whichever process keeps the vault fresh: the keeper when it runs, else the board.
 pub fn tick(state: &Path) -> Result<()> {
     let Some(cli) = crate::vault_cli::detect() else { return Ok(()) };
-    let now = seconds(SystemTime::now());
-    if let Err(error) = crate::item_template::refresh(&cli, state, now) {
+    tick_with(&cli, state, seconds(SystemTime::now()))
+}
+
+// While the keeper's watch follows this command the snapshot is kept current from its stream; a watch for another command is stopped, and the keeper starts one for this.
+pub fn tick_with(cli: &Cli, state: &Path, now: u64) -> Result<()> {
+    if let Err(error) = crate::item_template::refresh(cli, state, now) {
         crate::vault_cli::warn_log(state, &format!("the vault's task template was not read: {error}"));
     }
-    refresh(&cli, state, now).map(|_| ())
+    if crate::vault_watch::live(state, cli) {
+        return Ok(());
+    }
+    if crate::vault_watch::watching(state) {
+        crate::vault_watch::stop(state);
+    }
+    refresh(cli, state, now).map(|_| ())
 }
 
 // The board's own refresher, idle while the keeper owns the work.
@@ -206,7 +216,7 @@ pub fn spawn_board_refresher() {
 // For a command run on its own, with no board or keeper keeping the snapshot fresh.
 pub fn refresh_if_older(state: &Path, seconds_old: u64) {
     let now = seconds(SystemTime::now());
-    if current(state).is_some_and(|snapshot| snapshot.fetched.is_some_and(|at| now.saturating_sub(at) < seconds_old)) {
+    if crate::vault_watch::watching(state) || current(state).is_some_and(|snapshot| snapshot.fetched.is_some_and(|at| now.saturating_sub(at) < seconds_old)) {
         return;
     }
     let _ = tick(state);

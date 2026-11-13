@@ -100,7 +100,7 @@ fn read_all() -> (Option<u64>, Vec<(Entry, Option<String>)>) {
     (value["updated"].as_u64(), items)
 }
 
-fn bodies_file(state: &Path) -> PathBuf {
+pub(crate) fn bodies_file(state: &Path) -> PathBuf {
     state.join("backlog-bodies.json")
 }
 
@@ -115,12 +115,24 @@ pub fn vault_body(index: Option<&crate::vault::Index>, state: &Path, key: &str) 
     (changed.is_none() || kept["mtime"].as_f64() == changed).then(|| kept["body"].as_str().map(str::to_string)).flatten()
 }
 
-// Fills kebbie's copy of the vault backlog notes the index has no body for; the board's refresher runs it, away from the screen.
+// Fills kebbie's copy of the vault backlog notes the index has no body for; the board's refresher runs it, away from the screen, unless the keeper's watch keeps the copy.
 pub fn fetch_vault_bodies() {
+    let (Ok(state), Some(cli)) = (crate::lead::state_dir(), crate::vault_cli::cli()) else { return };
+    fetch_vault_bodies_in(&cli, &state, crate::vault::Index::open);
+}
+
+pub fn fetch_vault_bodies_in(cli: &crate::vault_cli::Cli, state: &Path, index: impl FnOnce() -> Result<crate::vault::Index>) {
+    if crate::vault_watch::watching(state) {
+        return;
+    }
+    if let Ok(index) = index() {
+        fill_vault_bodies(cli, state, &index);
+    }
+}
+
+pub fn fill_vault_bodies(cli: &crate::vault_cli::Cli, state: &Path, index: &crate::vault::Index) {
     static REFUSED: std::sync::Mutex<Vec<(String, std::time::Instant)>> = std::sync::Mutex::new(Vec::new());
-    let (Ok(state), Ok(index)) = (crate::lead::state_dir(), crate::vault::Index::open()) else { return };
-    let Some(cli) = crate::vault_cli::cli() else { return };
-    let mut cached: Value = fs::read_to_string(bodies_file(&state)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_else(|| json!({}));
+    let mut cached: Value = fs::read_to_string(bodies_file(state)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_else(|| json!({}));
     let mut refused = REFUSED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     refused.retain(|(_, at)| at.elapsed() < std::time::Duration::from_secs(300));
     let mut changed = false;
@@ -141,7 +153,7 @@ pub fn fetch_vault_bodies() {
         }
     }
     if changed {
-        let _ = crate::state::write(&bodies_file(&state), cached.to_string());
+        let _ = crate::state::write(&bodies_file(state), cached.to_string());
     }
 }
 

@@ -33,6 +33,10 @@ kebbie asks the command what it is with `about --json`: its name, its version an
 
 `kebbie doctor` asks again at each run. When the answer names the package's new name, it suggests the `vault.command` line with it, and `kebbie doctor --fix` writes that line after your `y`.
 
+## The keeper follows the vault
+
+The board, the Areas page and the backlog read kebbie's copy of the vault, never the vault itself. A vault that states `watch` tells the keeper what changed the moment it changes: the keeper runs one `watch` for the vault, with a server or a local folder or S3 alike, and writes each change into its copy. Between changes the keeper then starts no vault command; it waits on the one `watch`. With an older vault, the keeper asks for a fresh snapshot every 20 seconds instead.
+
 ## Each agent reaches the vault on its own
 
 `vault.command` is kebbie's connection, not the agent's. A task's agent reads and writes the vault through its own MCP server: the vault plugin in Claude Code, `[mcp_servers.vault]` in Codex's `config.toml`, or Cursor's `mcp.json`. `kebbie setup` adds the vault to each agent you tick, the vault plugin in Claude Code and the vault command as Codex's server, and lists each of those writes on its review before it makes them.

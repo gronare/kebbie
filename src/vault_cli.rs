@@ -57,6 +57,7 @@ pub const TASKS: &str = "tasks";
 pub const CLAIMS: &str = "claims";
 pub const LOG: &str = "log";
 pub const SNAPSHOT: &str = "snapshot";
+pub const WATCH: &str = "watch";
 pub const READ: &str = "read";
 pub const TEMPLATES: &str = "templates";
 pub const WRITE: &str = "write";
@@ -369,6 +370,7 @@ fn needs(args: &[&str]) -> Option<&'static str> {
         ("task", _) => Some(TASKS),
         ("log", _) => Some(LOG),
         ("snapshot", _) => Some(SNAPSHOT),
+        ("watch", _) => Some(WATCH),
         ("read", _) => Some(READ),
         ("template", _) => Some(TEMPLATES),
         ("write", _) => Some(WRITE),

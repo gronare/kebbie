@@ -196,6 +196,11 @@ impl Index {
         }
     }
 
+    // The snapshot kept in this state directory alone, for the keeper's watch, which reads it without a local index.
+    pub fn of_state(state: &Path) -> Result<Self> {
+        crate::vault_snapshot::current(state).map(|snapshot| Self::of_snapshot(snapshot, None)).ok_or_else(|| "no vault snapshot is kept".to_string())
+    }
+
     pub fn at(path: &Path) -> Result<Self> {
         Ok(Self { db: Some(connect(path)?), path: Some(path.to_path_buf()), snapshot: None, bodies: Default::default() })
     }
