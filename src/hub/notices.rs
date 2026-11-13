@@ -621,10 +621,10 @@ mod tests {
 
     #[test]
     fn each_notice_says_what_it_is_about_in_its_title_and_the_thing_itself_in_its_body() {
-        let asked = crate::questions::parse(&["Per invoice: one rounding, on the total", "Per line: matches the old export"], Some("1"), false, "Round VAT per invoice or per line?").unwrap();
-        let question = crate::questions::question_notice("billing@greenhouse", &asked, false);
-        assert_eq!(texts(&question), ("billing · greenhouse".to_string(), "Round VAT per invoice or per line? The lead recommends per invoice: one rounding, on the total.".to_string()));
-        assert_eq!(texts(&crate::questions::question_notice("billing@greenhouse", &asked, true)).1, "Round VAT per invoice or per line?", "a plan's approve is no recommendation worth a push");
+        let asked = crate::questions::parse(&["Once: after a minute, then give up", "Not at all: show the decline"], Some("1"), false, "Retry a declined card once or not at all?").unwrap();
+        let question = crate::questions::question_notice("checkout@shop", &asked, false);
+        assert_eq!(texts(&question), ("checkout · shop".to_string(), "Retry a declined card once or not at all? The lead recommends once: after a minute, then give up.".to_string()));
+        assert_eq!(texts(&crate::questions::question_notice("checkout@shop", &asked, true)).1, "Retry a declined card once or not at all?", "a plan's approve is no recommendation worth a push");
         let prompt = About::Prompt { address: "wt3@kebbie".to_string(), said: "Claude asks to run cargo test --workspace. Yes or No.".to_string() };
         assert_eq!(texts(&prompt), ("wt3 · kebbie".to_string(), "Claude asks to run cargo test --workspace. Yes or No.".to_string()));
         let questions = About::ItemQuestions { item: item("Projects/retry.md"), title: "Retry flaky red runs".to_string(), first: "Which red runs count as flaky?".to_string(), count: 3 };
@@ -643,13 +643,13 @@ mod tests {
         assert_eq!(texts(&started), ("Started: Retry flaky red runs".to_string(), "On MacBook as retry, recipe feature.".to_string()));
         assert_eq!(texts(&About::Started { item: item("Projects/retry.md"), title: "Retry flaky red runs".to_string(), address: "retry@web".to_string(), recipe: None }).1, "On MacBook as retry.");
         let opened = [question.open(), questions.open(), new.open(), started.open()];
-        assert_eq!(opened, [Target::Task { address: "billing@greenhouse".to_string() }, Target::Item { item: item("Projects/retry.md") }, Target::Device { device }, Target::Task { address: "retry@web".to_string() }]);
+        assert_eq!(opened, [Target::Task { address: "checkout@shop".to_string() }, Target::Item { item: item("Projects/retry.md") }, Target::Device { device }, Target::Task { address: "retry@web".to_string() }]);
         assert_eq!([question.category(), prompt.category(), questions.category(), new.category(), ready.category(), red.category(), started.category()], [NoticeCategory::Questions, NoticeCategory::Questions, NoticeCategory::IdeaQuestions, NoticeCategory::NewDevice, NoticeCategory::Ready, NoticeCategory::CiFailed, NoticeCategory::Started]);
     }
 
     #[test]
     fn a_long_title_or_body_is_cut_to_the_limits_and_every_notice_passes_the_protocols_check() {
-        let long = About::Question { address: "billing@greenhouse".to_string(), text: "Why? ".repeat(400), recommended: None };
+        let long = About::Question { address: "checkout@shop".to_string(), text: "Why? ".repeat(400), recommended: None };
         let notice = long.notice(&"M".repeat(64), vec!["q-1".to_string()]);
         assert_eq!(notice.body.chars().count(), MAX_NOTICE_BODY_CHARS);
         assert!(notice.body.ends_with('…'));
@@ -691,11 +691,11 @@ mod tests {
     #[test]
     fn a_collapse_tag_names_the_subject_by_digest_per_machine_and_kind() {
         let (mac, devbox) = (Id::ulid(Prefix::Machine, 1, [1; 10]).unwrap(), Id::ulid(Prefix::Machine, 1, [2; 10]).unwrap());
-        let tagged = tag(&mac, Subject::Question, "billing@greenhouse");
-        assert!(tagged.starts_with("q-") && tagged.len() == 26 && !tagged.contains("billing"), "{tagged}");
-        assert_eq!(tagged, tag(&mac, Subject::Question, "billing@greenhouse"));
-        assert_ne!(tagged, tag(&devbox, Subject::Question, "billing@greenhouse"));
-        assert_ne!(tagged, tag(&mac, Subject::Ready, "billing@greenhouse"), "a question and a ready on one task are two notices");
+        let tagged = tag(&mac, Subject::Question, "checkout@shop");
+        assert!(tagged.starts_with("q-") && tagged.len() == 26 && !tagged.contains("checkout"), "{tagged}");
+        assert_eq!(tagged, tag(&mac, Subject::Question, "checkout@shop"));
+        assert_ne!(tagged, tag(&devbox, Subject::Question, "checkout@shop"));
+        assert_ne!(tagged, tag(&mac, Subject::Ready, "checkout@shop"), "a question and a ready on one task are two notices");
     }
 
     struct Phone {
@@ -769,10 +769,10 @@ mod tests {
         let posing = AccountKey::new(machine.account.account.clone(), 1, other_keys.public()).unwrap();
         let forged = Phone { key: DeviceKey::generate(), cert: DeviceCert::issue(&other_keys, &posing.account, approved.cert.device.clone(), "iPhone 16", DeviceKind::Web, DeviceKey::generate().public(), 1_000).unwrap() };
         let listing = [listed(&approved, Some(&all)), listed(&waiting, Some(&all)), listed(&denied, Some(&all)), listed(&unknown, Some(&all)), listed(&quiet, Some(&[NoticeCategory::Ready])), listed(&unsubscribed, None), listed(&forged, Some(&all))];
-        let sent = machine.deliver(&listing, &question("billing@greenhouse"), None);
+        let sent = machine.deliver(&listing, &question("checkout@shop"), None);
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].keys.keys().collect::<Vec<_>>(), [&approved.cert.device], "only the approved, subscribed device with questions on");
-        assert_eq!(sent[0].header.collapse.as_deref(), Some(tag(&machine.identity.machine, Subject::Question, "billing@greenhouse").as_str()));
+        assert_eq!(sent[0].header.collapse.as_deref(), Some(tag(&machine.identity.machine, Subject::Question, "checkout@shop").as_str()));
         assert_eq!(sent[0].header.urgency, Some(Urgency::High));
         assert_eq!(sent[0].header.check_shape(), Ok(()));
         assert_eq!(machine.opened(&approved, &sent)[0].body, "Which queue?");
@@ -802,10 +802,10 @@ mod tests {
         let machine = Machine::new();
         let all = NoticeCategory::ALL.to_vec();
         let (phone, tablet) = (machine.phone("iPhone 16", Some(State::Approved)), machine.phone("iPad", Some(State::Approved)));
-        let asked = tag(&machine.identity.machine, Subject::Question, "billing@greenhouse");
-        machine.deliver(&[listed(&phone, Some(&all))], &question("billing@greenhouse"), None);
-        settle_in(&machine.dir, Subject::Question, "billing@greenhouse").unwrap();
-        settle_in(&machine.dir, Subject::Question, "billing@greenhouse").unwrap();
+        let asked = tag(&machine.identity.machine, Subject::Question, "checkout@shop");
+        machine.deliver(&[listed(&phone, Some(&all))], &question("checkout@shop"), None);
+        settle_in(&machine.dir, Subject::Question, "checkout@shop").unwrap();
+        settle_in(&machine.dir, Subject::Question, "checkout@shop").unwrap();
         assert_eq!(ledger(&machine.dir).outstanding.get(&phone.cert.device), Some(&vec![asked.clone()]), "settled once, kept until a notice carries it");
         let both = [listed(&phone, Some(&all)), listed(&tablet, Some(&all))];
         let sent = machine.deliver(&both, &question("search@web"), None);
@@ -817,9 +817,9 @@ mod tests {
         assert_eq!(again.len(), 1, "a newer notice on the same subject replaces the older under one tag");
         assert_eq!(again[0].header.collapse, sent[0].header.collapse);
 
-        machine.deliver(&[listed(&phone, Some(&all))], &question("billing@greenhouse"), None);
-        settle_in(&machine.dir, Subject::Question, "billing@greenhouse").unwrap();
-        let asked_again = machine.deliver(&[listed(&phone, Some(&all))], &question("billing@greenhouse"), None);
+        machine.deliver(&[listed(&phone, Some(&all))], &question("checkout@shop"), None);
+        settle_in(&machine.dir, Subject::Question, "checkout@shop").unwrap();
+        let asked_again = machine.deliver(&[listed(&phone, Some(&all))], &question("checkout@shop"), None);
         assert_eq!(machine.opened(&phone, &asked_again)[0].retract, Vec::<String>::new(), "a notice never retracts its own tag");
         assert!(settle_in(&machine.dir, Subject::Ready, "never@sent").is_ok() && ledger(&machine.dir).outstanding.is_empty(), "settling what was never sent changes nothing");
     }
@@ -859,8 +859,8 @@ mod tests {
         let machine = Machine::new();
         let phone = machine.phone("iPhone 16", Some(State::Approved));
         let all = [listed(&phone, Some(&NoticeCategory::ALL))];
-        machine.deliver(&all, &question("billing@greenhouse"), None);
-        settle_in(&machine.dir, Subject::Question, "billing@greenhouse").unwrap();
+        machine.deliver(&all, &question("checkout@shop"), None);
+        settle_in(&machine.dir, Subject::Question, "checkout@shop").unwrap();
         let refusing = |answer: Unposted| {
             let tried = std::cell::Cell::new(0);
             let wire = Wire { listed: &|| Ok(all.to_vec()), post: &|_| { tried.set(tried.get() + 1); Err(answer.clone()) } };
@@ -897,11 +897,11 @@ mod tests {
         let posted = std::cell::RefCell::new(Vec::new());
         let wire = Wire { listed: &|| listed_from(&identity), post: &|envelope| { posted.borrow_mut().push(envelope.clone()); post_to(&identity, envelope) } };
         let account_trust = Policy { trust: HubTrust::Account, auto: AutoApprove::Day };
-        let delivered = deliver_in(&dir, &identity, &account, &question("billing@greenhouse"), None, account_trust, &wire, crate::messages::now()).unwrap();
+        let delivered = deliver_in(&dir, &identity, &account, &question("checkout@shop"), None, account_trust, &wire, crate::messages::now()).unwrap();
         assert_eq!((delivered.reached, delivered.pushes, delivered.problems.clone()), (1, 1, Vec::<String>::new()), "{delivered:?}");
         let envelope = posted.borrow()[0].clone();
         browser.knows(&identity.machine, identity.public());
-        assert_eq!(browser.open_notice(&envelope, crate::messages::now()).unwrap().title, "billing · greenhouse", "the listed device opens it");
+        assert_eq!(browser.open_notice(&envelope, crate::messages::now()).unwrap().title, "checkout · shop", "the listed device opens it");
         assert!(matches!(post_to(&identity, &envelope), Err(Unposted::Dropped(problem)) if problem.contains("409")), "a replayed envelope is refused and dropped");
         let ready = deliver_in(&dir, &identity, &account, &About::Ready { address: "cache@api".to_string(), does: "Caches it".to_string(), commits: 1, review: None }, None, account_trust, &wire, crate::messages::now()).unwrap();
         assert_eq!(ready, Delivered::default(), "a category the device left off sends nothing");

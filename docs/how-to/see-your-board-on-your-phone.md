@@ -160,7 +160,7 @@ Each machine sends your devices a notification through the hub when something ne
 
 | Kind | Title | Text |
 | --- | --- | --- |
-| A task's question | `billing · greenhouse` | `Round VAT per invoice or per line? The lead recommends per invoice: one rounding, on the total.` |
+| A task's question | `checkout · shop` | `Retry a declined card once or not at all? The lead recommends once: after a minute, then give up.` |
 | An agent's prompt | `wt3 · kebbie` | `Claude asks to run cargo test --workspace. Yes or No.` |
 | The lead's questions on an idea | the item's title | its first question that waits on you, with `(1 of 3)` when there are more |
 | A new device | `iPhone 16 wants to make changes on MacBook` | `Added 14:02. Approve or deny it in kebbie: N on the board.` |
