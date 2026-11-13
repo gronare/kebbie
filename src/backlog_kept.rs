@@ -112,12 +112,17 @@ pub fn answer_text(who: &str, title: &str, wherein: &str, question: &str, answer
 
 // An answer leaves once its question is gone from the item: the lead has folded it in.
 pub fn settle(state: &Path, item: &str, open: &[Question]) -> Vec<Answer> {
-    let answers = answers_in(state);
-    let (kept, folded): (Vec<Answer>, Vec<Answer>) = answers.into_iter().partition(|answer| answer.item != item || open.iter().any(|question| question.text == answer.question));
+    settle_all(state, &[(item, open)]).into_iter().filter(|answer| answer.item == item).collect()
+}
+
+// The same for the whole backlog in one read and at most one write; an item not listed keeps its answers, and every answer still with the lead comes back.
+pub fn settle_all(state: &Path, open: &[(&str, &[Question])]) -> Vec<Answer> {
+    let still_open = |answer: &Answer| open.iter().find(|(item, _)| *item == answer.item).is_none_or(|(_, questions)| questions.iter().any(|question| question.text == answer.question));
+    let (kept, folded): (Vec<Answer>, Vec<Answer>) = answers_in(state).into_iter().partition(still_open);
     if !folded.is_empty() {
         let _ = write_answers(state, &kept);
     }
-    kept.into_iter().filter(|answer| answer.item == item).collect()
+    kept
 }
 
 #[cfg(test)]

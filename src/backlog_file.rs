@@ -229,11 +229,6 @@ pub fn items(dir: &Path) -> Vec<Item> {
     found
 }
 
-pub fn read(dir: &Path) -> Vec<Entry> {
-    let today = crate::backlog::today();
-    items(dir).iter().map(|item| item.entry(today)).collect()
-}
-
 pub fn find(item: &str) -> Option<(PathBuf, Item)> {
     let stem = item.strip_prefix(PREFIX)?;
     let dir = dir();
@@ -546,7 +541,7 @@ mod tests {
         assert_eq!(item.reference(), "local:ship-it");
         add_in(&dir, &quick("Then this", ""), "2026-11-12").unwrap();
         std::fs::write(dir.join(".ship-it.md.1-0.tmp"), "+++\ntitle = \"temp\"\n+++\n").unwrap();
-        let titles: Vec<String> = read(&dir).into_iter().map(|entry| entry.title).collect();
+        let titles: Vec<String> = items(&dir).into_iter().map(|item| item.title).collect();
         assert_eq!(titles, ["Ship it", "Then this"]);
         assert!(add_in(&dir, &quick("Ship it", ""), "2026-11-12").unwrap_err().contains("already in the backlog"));
         std::fs::remove_dir_all(dir).unwrap();

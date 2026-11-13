@@ -197,6 +197,7 @@ pub fn handle(dir: &Path, identity: &Identity, account: &AccountKey, accepts: &[
     let secret = identity.secret();
     let _ledger_lock = Locked::wait(dir, LEDGER_LOCK)?;
     let mut ledger = ledger(dir);
+    let read = ledger.clone();
     ledger.applied.prune(now);
     ledger.started.retain(|_, started| started.at + AppliedCommands::KEEP_SECONDS > now);
     let (outcome, asking, approved) = devices::change(dir, |known| {
@@ -208,7 +209,7 @@ pub fn handle(dir: &Path, identity: &Identity, account: &AccountKey, accepts: &[
         };
         let machine = Machine { id: &identity.machine, keys: &secret, account, accepts, trust: &trust };
         let outcome = authorize(&machine, &ledger.applied, envelope, now);
-        let asking: Vec<(Id, String)> = asked.into_inner().into_iter().filter(|device| known.seen(policy, device, now)).map(|device| (device.id().clone(), device.cert().name.clone())).collect();
+        let asking: Vec<(Id, String)> = asked.into_inner().into_iter().filter(|device| known.seen(policy, device, header.at, now)).map(|device| (device.id().clone(), device.cert().name.clone())).collect();
         Ok((outcome, asking, approved))
     })?;
     devices::settled(dir, &approved);
@@ -223,7 +224,9 @@ pub fn handle(dir: &Path, identity: &Identity, account: &AccountKey, accepts: &[
         Err(Refusal::Waiting(verified)) => {
             let device = verified.device.id().clone();
             ledger.held.entry(header.id.clone()).or_insert_with(|| Held { envelope: envelope.clone(), device: device.clone(), asked: Asked::of(&verified.payload, devices::question_label) });
-            save_ledger(dir, &ledger)?;
+            if ledger != read {
+                save_ledger(dir, &ledger)?;
+            }
             return Ok(Handled::Held(device));
         }
         Err(Refusal::Answer(reason)) => {
@@ -477,6 +480,7 @@ fn watch(state: &Path, dir: &Path) {
     let log = |text: &str| crate::keeper::log_line(state, text);
     keeper_hands(state, |hands| {
         let mut seen = modified(&dir.join(devices::FILE));
+        let mut decided = devices::load(dir).decisions();
         while !crate::keeper::stopping() {
             std::thread::sleep(Duration::from_secs(1));
             let now = modified(&dir.join(devices::FILE));
@@ -484,6 +488,11 @@ fn watch(state: &Path, dir: &Path) {
                 continue;
             }
             seen = now;
+            let decisions = devices::load(dir).decisions();
+            if decisions == decided {
+                continue;
+            }
+            decided = decisions;
             match released(dir, hands) {
                 Ok(notes) if notes.is_empty() => {}
                 Ok(notes) => {
@@ -850,6 +859,28 @@ mod tests {
         assert!(ledger(&machine.dir).held.is_empty());
         let later = phone.send(&machine.account, &machine.identity, &push(), now());
         assert!(matches!(machine.handle(&seen, DEVICE, &later, now()), Handled::Applied(_)), "an approved device's next command goes in at once");
+    }
+
+    #[test]
+    fn a_held_command_authorized_again_rewrites_neither_devices_json_nor_the_ledger() {
+        let machine = Machine::new();
+        let seen = Seen::new();
+        let phone = machine.phone("iPhone 16");
+        let sent = phone.send(&machine.account, &machine.identity, &answer(), now());
+        assert_eq!(machine.handle(&seen, DEVICE, &sent, now()), Handled::Held(phone.id().clone()));
+        let stamp = |file: &str| std::fs::metadata(machine.dir.join(file)).and_then(|metadata| metadata.modified()).unwrap();
+        let (devices_at, ledger_at, decided) = (stamp(devices::FILE), stamp(LEDGER), devices::load(&machine.dir).decisions());
+        for later in [now() + 1, now() + 30, now() + 600] {
+            assert!(machine.release(&seen, DEVICE, later).is_empty(), "still waiting");
+        }
+        assert_eq!(machine.handle(&seen, DEVICE, &sent, now() + 900), Handled::Held(phone.id().clone()), "the inbox bringing it again");
+        assert_eq!((stamp(devices::FILE), stamp(LEDGER)), (devices_at, ledger_at), "each write would wake the keeper's watch into another round");
+        assert_eq!(devices::load(&machine.dir).decisions(), decided);
+        let later = phone.send(&machine.account, &machine.identity, &push(), now() + 60);
+        machine.handle(&seen, DEVICE, &later, now() + 60);
+        assert_eq!(devices::load(&machine.dir).decisions(), decided, "a new command from the waiting device is no decision, so the watch releases nothing");
+        devices::answer(&machine.dir, "iPhone 16", Decision::Approve, now() + 61).unwrap();
+        assert_ne!(devices::load(&machine.dir).decisions(), decided, "an approval is");
     }
 
     #[test]

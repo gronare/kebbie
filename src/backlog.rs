@@ -59,12 +59,27 @@ fn entry(value: &Value) -> Option<Entry> {
 }
 
 pub fn load() -> Backlog {
+    let (updated, items) = read_all();
+    Backlog { updated, entries: items.into_iter().map(|(entry, _)| entry).collect() }
+}
+
+// Each entry with its item's markdown where kebbie has it, from the same single read the Backlog column takes.
+pub fn with_bodies() -> Vec<(Entry, Option<String>)> {
+    read_all().1
+}
+
+fn read_all() -> (Option<u64>, Vec<(Entry, Option<String>)>) {
     let sources = config::sources().unwrap_or_default();
     let value: Value = file().ok().and_then(|path| fs::read_to_string(path).ok()).and_then(|raw| serde_json::from_str(&raw).ok()).unwrap_or_default();
     let mut entries: Vec<Entry> = value["entries"].as_array().into_iter().flatten().filter_map(entry).filter(|entry| entry.source != "local").collect();
+    let mut local = std::collections::HashMap::new();
     if sources.contains(&Source::Local) {
         crate::backlog_file::migrate_once();
-        entries.extend(crate::backlog_file::read(&crate::backlog_file::dir()));
+        let today = today();
+        for item in crate::backlog_file::items(&crate::backlog_file::dir()) {
+            entries.push(item.entry(today));
+            local.insert(item.reference(), item);
+        }
     }
     let index = crate::vault::Index::open().ok();
     if let Some(index) = index.as_ref().filter(|_| sources.contains(&Source::Vault)) {
@@ -73,17 +88,16 @@ pub fn load() -> Backlog {
     }
     let status = |key: &str| index.as_ref().map_or(Some("backlog".to_string()), |index| index.status_of(key));
     entries = still_backlog(entries, status, &crate::tasks::started_items());
+    let mut items: Vec<(Entry, Option<String>)> = entries.into_iter().map(|entry| (entry, None)).collect();
     if let Ok(state) = crate::lead::state_dir() {
         if config::filing(&sources) == Some(Source::Vault) {
             let now = crate::messages::now();
-            entries.extend(crate::backlog_kept::kept_in(&state).iter().map(|kept| kept.entry(now)));
+            items.extend(crate::backlog_kept::kept_in(&state).iter().map(|kept| (kept.entry(now), None)));
         }
-        for entry in &mut entries {
-            shape(entry, index.as_ref(), &state);
-        }
+        shape_all(&mut items, &local, index.as_ref(), &state);
     }
-    sort(&mut entries, |entry| index.as_ref().filter(|_| entry.source == "vault").and_then(|index| index.changed_at(&entry.reference)));
-    Backlog { updated: value["updated"].as_u64(), entries }
+    sort(&mut items, |(entry, _)| entry, |entry| index.as_ref().filter(|_| entry.source == "vault").and_then(|index| index.changed_at(&entry.reference)));
+    (value["updated"].as_u64(), items)
 }
 
 fn bodies_file(state: &Path) -> PathBuf {
@@ -131,28 +145,46 @@ pub fn fetch_vault_bodies() {
     }
 }
 
-// An item's state, its questions waiting on the user and the answers of theirs still with the lead.
-fn shape(entry: &mut Entry, index: Option<&crate::vault::Index>, state: &Path) {
+struct ItemRead {
+    state: crate::backlog_file::State,
+    body: String,
+    filed: String,
+    open: Vec<crate::backlog_file::Question>,
+}
+
+// An item's state and markdown: a local one from the file already read, a vault one from the index or kebbie's copy.
+fn read_item(entry: &Entry, local: &std::collections::HashMap<String, crate::backlog_file::Item>, index: Option<&crate::vault::Index>, state: &Path) -> Option<ItemRead> {
     let (state_now, body, filed) = match entry.source.as_str() {
-        "local" => match crate::backlog_file::find(&entry.reference) {
-            Some((_, item)) => (item.state(), item.body, item.filed),
-            None => return,
-        },
+        "local" => {
+            let item = local.get(&entry.reference).cloned().or_else(|| crate::backlog_file::find(&entry.reference).map(|(_, item)| item))?;
+            (item.state(), item.body, item.filed)
+        }
         "vault" => {
             let drafting = index.and_then(|index| index.status_of(&entry.reference)).as_deref() == Some("draft");
             match vault_body(index, state, &entry.reference) {
                 Some(body) => (crate::backlog_file::state_of(drafting, false, &body), body, String::new()),
                 None if drafting => (crate::backlog_file::State::Drafting, String::new(), String::new()),
-                None => return,
+                None => return None,
             }
         }
-        _ => return,
+        _ => return None,
     };
-    let open = crate::backlog_file::questions_in(&body);
-    let answered: Vec<String> = crate::backlog_kept::settle(state, &entry.reference, &open).into_iter().map(|answer| answer.question).collect();
-    entry.shape = crate::backlog_file::shape_of(state_now, &body, &answered, &filed);
-    if entry.summary.is_empty() && state_now == crate::backlog_file::State::Ready {
-        entry.summary = crate::backlog_file::first_line(&body);
+    Some(ItemRead { state: state_now, open: crate::backlog_file::questions_in(&body), body, filed })
+}
+
+// Each item's state, its questions waiting on the user and the answers of theirs still with the lead, settling the answers once for the whole backlog.
+fn shape_all(items: &mut [(Entry, Option<String>)], local: &std::collections::HashMap<String, crate::backlog_file::Item>, index: Option<&crate::vault::Index>, state: &Path) {
+    let read: Vec<Option<ItemRead>> = items.iter().map(|(entry, _)| read_item(entry, local, index, state)).collect();
+    let open: Vec<(&str, &[crate::backlog_file::Question])> = items.iter().zip(&read).filter_map(|((entry, _), read)| Some((entry.reference.as_str(), read.as_ref()?.open.as_slice()))).collect();
+    let kept = crate::backlog_kept::settle_all(state, &open);
+    for ((entry, body), read) in items.iter_mut().zip(read) {
+        let Some(read) = read else { continue };
+        let answered: Vec<String> = kept.iter().filter(|answer| answer.item == entry.reference).map(|answer| answer.question.clone()).collect();
+        entry.shape = crate::backlog_file::shape_of(read.state, &read.body, &answered, &read.filed);
+        if entry.summary.is_empty() && read.state == crate::backlog_file::State::Ready {
+            entry.summary = crate::backlog_file::first_line(&read.body);
+        }
+        *body = Some(read.body);
     }
 }
 
@@ -191,10 +223,11 @@ pub(crate) fn epoch_day(date: &str) -> Option<i64> {
 }
 
 // By priority, then newest first: by age in days, and within a day by when the note last changed.
-fn sort(entries: &mut [Entry], changed_at: impl Fn(&Entry) -> Option<f64>) {
+fn sort<T: Clone>(entries: &mut [T], entry_of: impl Fn(&T) -> &Entry, changed_at: impl Fn(&Entry) -> Option<f64>) {
     let days = |entry: &Entry| entry.age.split_whitespace().next().and_then(|days| days.parse::<u64>().ok()).unwrap_or(u64::MAX);
-    let mut keyed: Vec<(usize, u64, f64, Entry)> = entries.iter().map(|entry| {
-        (PRIORITIES.iter().position(|priority| *priority == entry.priority).unwrap_or(PRIORITIES.len()), days(entry), -changed_at(entry).unwrap_or(0.0), entry.clone())
+    let mut keyed: Vec<(usize, u64, f64, T)> = entries.iter().map(|item| {
+        let entry = entry_of(item);
+        (PRIORITIES.iter().position(|priority| *priority == entry.priority).unwrap_or(PRIORITIES.len()), days(entry), -changed_at(entry).unwrap_or(0.0), item.clone())
     }).collect();
     keyed.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.total_cmp(&b.2)));
     for (slot, (_, _, _, entry)) in entries.iter_mut().zip(keyed) {
@@ -510,6 +543,26 @@ mod tests {
     }
 
     #[test]
+    fn the_backlog_is_shaped_from_the_files_read_once_and_its_answers_settled_in_one_pass() {
+        let state = crate::sh::test_dir("backlog-one-pass");
+        let item = |stem: &str, questions: &str| crate::backlog_file::parse(stem, &format!("+++\ntitle = \"{stem}\"\npriority = \"high\"\nrepo = \"app\"\nstatus = \"backlog\"\nfiled = \"2026-11-01\"\n+++\n\n## Background\n\nB.\n\n## Goal\n\nG.\n\n## What we know\n\nK.\n\n## Open questions\n\n{questions}\n\n## Out of scope\n\nO.\n\n## Source\n\nS.\n")).unwrap();
+        let (one, two) = (item("not-on-disk-one", "- [ ] Which job?"), item("not-on-disk-two", "- [ ] Which repo?"));
+        let given = |item: &str, question: &str| crate::backlog_kept::Answer { item: item.to_string(), question: question.to_string(), answer: "e2e".to_string(), at: 1 };
+        for answer in [given(&one.reference(), "Which job?"), given(&two.reference(), "Folded already?"), given("local:elsewhere", "Kept?")] {
+            crate::backlog_kept::answer(&state, answer).unwrap();
+        }
+        let local: std::collections::HashMap<String, crate::backlog_file::Item> = [one.clone(), two.clone()].into_iter().map(|item| (item.reference(), item)).collect();
+        let mut items = vec![(one.entry(today()), None), (two.entry(today()), None)];
+        shape_all(&mut items, &local, None, &state);
+        assert_eq!(items[0].1.as_deref(), Some(one.body.as_str()), "the body comes from the file the listing read, not a second read: these files are not on disk");
+        assert_eq!((items[0].0.shape.waiting, items[0].0.shape.with_lead), (0, 1), "{:?}", items[0].0.shape);
+        assert_eq!((items[1].0.shape.waiting, items[1].0.shape.with_lead), (1, 0), "{:?}", items[1].0.shape);
+        let left: Vec<String> = crate::backlog_kept::answers_in(&state).into_iter().map(|answer| answer.question).collect();
+        assert_eq!(left, ["Which job?", "Kept?"], "the folded answer leaves; one not in the backlog stays");
+        let _ = std::fs::remove_dir_all(state);
+    }
+
+    #[test]
     fn the_refresh_prompt_names_only_the_configured_sources() {
         let both = refresh_prompt(&[Source::Vault, Source::Linear]).unwrap();
         assert!(both.starts_with("Refresh the kebbie backlog: take the vault backlog and my open Linear issues and pipe"));
@@ -605,7 +658,7 @@ mod tests {
     fn the_newest_comes_first_within_a_priority() {
         let note = |reference: &str, priority: &str, age: &str| Entry { reference: reference.to_string(), priority: priority.to_string(), age: age.to_string(), ..entry("vault") };
         let mut entries = vec![note("old", "high", "9 d"), note("today-early", "high", "0 d"), note("low", "low", "0 d"), note("today-late", "high", "0 d")];
-        sort(&mut entries, |entry| Some(match entry.reference.as_str() { "today-early" => 100.0, "today-late" => 200.0, _ => 50.0 }));
+        sort(&mut entries, |entry| entry, |entry| Some(match entry.reference.as_str() { "today-early" => 100.0, "today-late" => 200.0, _ => 50.0 }));
         let order: Vec<&str> = entries.iter().map(|entry| entry.reference.as_str()).collect();
         assert_eq!(order, ["today-late", "today-early", "old", "low"]);
     }

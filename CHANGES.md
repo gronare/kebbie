@@ -22,6 +22,8 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A backlog row shows whether the item is to write, drafting or waits on your answers, and g asks once before starting one that waits.
 
 ### Fixed
+- A command waiting for a device's approval no longer has the keeper rewrite its files and check the command again every second; it is checked again when you approve or deny the device.
+- The keeper's hub round reads the backlog once and writes its notice record only when something changed.
 - A config.toml that does not parse closes the hub to your devices: no commands, and no device let in by time or by account, until it parses again.
 - Approvals, accepted commits and reviews read the stored commits against the remote-tracking branch, with file contents as text, so they match what a push sends.
 - The board and the keeper read each task's git state with about a third of the git calls, and redraw the board only when something on it changes.

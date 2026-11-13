@@ -100,9 +100,12 @@ fn section(body: &str, heading: &str) -> String {
 
 // The item's questions as the phone shows them, each with the user's answer while it waits with the lead.
 pub fn open_questions(body: &str, reference: &str, state: &Path) -> Vec<OpenQuestion> {
-    let answers: Vec<crate::backlog_kept::Answer> = crate::backlog_kept::answers_in(state).into_iter().filter(|answer| answer.item == reference).collect();
+    questions_with(body, reference, &crate::backlog_kept::answers_in(state))
+}
+
+fn questions_with(body: &str, reference: &str, answers: &[crate::backlog_kept::Answer]) -> Vec<OpenQuestion> {
     backlog_file::questions_in(body).into_iter().map(|question| {
-        let pending_answer = answers.iter().find(|answer| answer.question == question.text).map(|answer| answer.answer.clone());
+        let pending_answer = answers.iter().find(|answer| answer.item == reference && answer.question == question.text).map(|answer| answer.answer.clone());
         OpenQuestion { text: question.text, blocks: question.blocks, pending_answer }
     }).collect()
 }
@@ -115,10 +118,11 @@ fn waiting(questions: &[OpenQuestion]) -> usize {
 pub fn rows(items: &[(Entry, Option<String>)], state: &Path, root: Option<&Path>, today: i64) -> (Vec<BacklogRow>, Vec<Attachment>) {
     let mut seen = BTreeSet::new();
     let (mut rows, mut bodies) = (Vec::new(), Vec::new());
+    let answers = crate::backlog_kept::answers_in(state);
     for (entry, body) in items {
         let Some(item) = key_of(entry, root).filter(|item| seen.insert(item.clone())) else { continue };
         let body = body.as_deref().filter(|body| !body.trim().is_empty());
-        let questions = body.map(|body| open_questions(body, &entry.reference, state)).unwrap_or_default();
+        let questions = body.map(|body| questions_with(body, &entry.reference, &answers)).unwrap_or_default();
         let goal = body.and_then(|body| section(body, "Goal").lines().map(str::trim).find(|line| !line.is_empty()).map(str::to_string));
         rows.push(BacklogRow {
             item: item.clone(),
@@ -153,12 +157,7 @@ fn body_of(entry: &Entry, index: Option<&crate::vault::Index>, state: &Path) -> 
 }
 
 pub fn gather(state: &Path) -> (Vec<BacklogRow>, Vec<Attachment>) {
-    let index = crate::vault::Index::open().ok();
-    let items: Vec<(Entry, Option<String>)> = crate::backlog::load().entries.into_iter().map(|entry| {
-        let body = body_of(&entry, index.as_ref(), state).map(|(body, _)| body);
-        (entry, body)
-    }).collect();
-    rows(&items, state, crate::vault::root().as_deref(), crate::backlog::today())
+    rows(&crate::backlog::with_bodies(), state, crate::vault::root().as_deref(), crate::backlog::today())
 }
 
 // An item the phone named, as this machine's backlog has it now.

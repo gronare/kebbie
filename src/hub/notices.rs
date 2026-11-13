@@ -226,9 +226,12 @@ pub fn ledger(dir: &Path) -> Ledger {
 
 fn change<T>(dir: &Path, change: impl FnOnce(&mut Ledger) -> Result<T>) -> Result<T> {
     let _locked = Locked::wait(dir, LOCK)?;
-    let mut ledger = ledger(dir);
+    let before = ledger(dir);
+    let mut ledger = before.clone();
     let done = change(&mut ledger)?;
-    crate::state::write(&dir.join(FILE), serde_json::to_string_pretty(&ledger).map_err(|error| error.to_string())?)?;
+    if ledger != before {
+        crate::state::write(&dir.join(FILE), serde_json::to_string_pretty(&ledger).map_err(|error| error.to_string())?)?;
+    }
     Ok(done)
 }
 
@@ -796,6 +799,9 @@ mod tests {
         let two = [body(&key, &[("Which red runs count as flaky?", true, None), ("How long to wait?", false, None), ("Show a rerun on the row?", true, None)])];
         assert_eq!(items_in(&machine.dir, &board, &two).unwrap(), [About::ItemQuestions { item: key.clone(), title: "Retry flaky red runs".to_string(), first: "Which red runs count as flaky?".to_string(), count: 2 }]);
         assert!(items_in(&machine.dir, &board, &two).unwrap().is_empty(), "told once");
+        let written = std::fs::metadata(machine.dir.join(FILE)).and_then(|metadata| metadata.modified()).unwrap();
+        items_in(&machine.dir, &board, &two).unwrap();
+        assert_eq!(std::fs::metadata(machine.dir.join(FILE)).and_then(|metadata| metadata.modified()).unwrap(), written, "the hub's tick leaves notices.json alone while nothing changed");
         let phone = machine.phone("iPhone 16", Some(State::Approved));
         machine.deliver(&[listed(&phone, Some(&NoticeCategory::ALL))], &items_in_about(&key), None);
         let answered = [body(&key, &[("Which red runs count as flaky?", true, Some("Only e2e")), ("Show a rerun on the row?", true, Some("Yes"))])];

@@ -100,11 +100,11 @@ impl Devices {
         }
     }
 
-    // Records a device whose command was verified; true when it is a new request to approve.
-    pub fn seen(&mut self, policy: Policy, device: &VerifiedDevice, now: u64) -> bool {
+    // Records a device whose command was verified, seen as of when it sent it so a held command authorized again changes nothing; true when it is a new request to approve.
+    pub fn seen(&mut self, policy: Policy, device: &VerifiedDevice, sent: u64, now: u64) -> bool {
         let cert = device.cert();
         if let Some(known) = self.devices.get_mut(device.id()).filter(|known| known.signing.0 == *device.signing()) {
-            (known.seen, known.name, known.kind) = (now.max(known.seen), cert.name.clone(), cert.kind);
+            (known.seen, known.name, known.kind) = (sent.min(now).max(known.seen), cert.name.clone(), cert.kind);
             return false;
         }
         let state = if policy.trust == HubTrust::Account { State::Approved } else { State::Waiting };
@@ -122,6 +122,11 @@ impl Devices {
             }
         }
         approved
+    }
+
+    // What a decision changes, so the keeper's watch releases held commands on an approval or a denial and on nothing else.
+    pub fn decisions(&self) -> BTreeMap<Id, (State, u64)> {
+        self.devices.iter().map(|(id, device)| (id.clone(), (device.state, device.at))).collect()
     }
 
     fn due(&self, policy: Policy, now: u64) -> bool {
@@ -183,12 +188,15 @@ pub(super) fn save(dir: &Path, devices: &Devices) -> Result<()> {
     crate::state::write(&dir.join(FILE), serde_json::to_string_pretty(devices).map_err(|error| error.to_string())?)
 }
 
-// Every change to the file goes through here, so a decision made on the board or in a terminal is never written over by the bridge.
+// Every change to the file goes through here, so a decision made on the board or in a terminal is never written over by the bridge; an unchanged file is not rewritten, as the keeper's watch fires on each write.
 pub fn change<T>(dir: &Path, change: impl FnOnce(&mut Devices) -> Result<T>) -> Result<T> {
     let _locked = Locked::wait(dir, LOCK)?;
-    let mut devices = load(dir);
+    let before = load(dir);
+    let mut devices = before.clone();
     let done = change(&mut devices)?;
-    save(dir, &devices)?;
+    if devices != before {
+        save(dir, &devices)?;
+    }
     Ok(done)
 }
 
