@@ -35,10 +35,20 @@ pub struct Device {
     pub at: u64,
 }
 
+// A device id that arrives with another key never takes over the record its first key made: each other key is a request of its own, decided apart.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Devices {
     #[serde(default)]
     pub devices: BTreeMap<Id, Device>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rekeyed: Vec<Rekeyed>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Rekeyed {
+    pub id: Id,
+    #[serde(flatten)]
+    pub device: Device,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -82,6 +92,22 @@ impl Device {
 }
 
 impl Devices {
+    pub fn records(&self) -> impl Iterator<Item = (&Id, &Device)> {
+        self.devices.iter().chain(self.rekeyed.iter().map(|rekeyed| (&rekeyed.id, &rekeyed.device)))
+    }
+
+    fn records_mut(&mut self) -> impl Iterator<Item = (&Id, &mut Device)> {
+        self.devices.iter_mut().chain(self.rekeyed.iter_mut().map(|rekeyed| (&rekeyed.id, &mut rekeyed.device)))
+    }
+
+    pub fn record(&self, id: &Id, signing: &[u8; 32]) -> Option<&Device> {
+        self.records().find(|(known, device)| *known == id && device.signing.0 == *signing).map(|(_, device)| device)
+    }
+
+    fn record_mut(&mut self, id: &Id, signing: &[u8; 32]) -> Option<&mut Device> {
+        self.records_mut().find(|(known, device)| *known == id && device.signing.0 == *signing).map(|(_, device)| device)
+    }
+
     pub fn trust(&self, policy: Policy, device: &VerifiedDevice, now: u64) -> Trust {
         self.trust_of(policy, device.id(), device.signing(), now)
     }
@@ -90,7 +116,7 @@ impl Devices {
         if policy.trust == HubTrust::Account {
             return Trust::Approved;
         }
-        match self.devices.get(id).filter(|known| known.signing.0 == *signing) {
+        match self.record(id, signing) {
             None => Trust::Waiting,
             Some(known) => match known.standing(policy, now).0 {
                 State::Approved => Trust::Approved,
@@ -103,19 +129,24 @@ impl Devices {
     // Records a device whose command was verified, seen as of when it sent it so a held command authorized again changes nothing; true when it is a new request to approve.
     pub fn seen(&mut self, policy: Policy, device: &VerifiedDevice, sent: u64, now: u64) -> bool {
         let cert = device.cert();
-        if let Some(known) = self.devices.get_mut(device.id()).filter(|known| known.signing.0 == *device.signing()) {
+        if let Some(known) = self.record_mut(device.id(), device.signing()) {
             (known.seen, known.name, known.kind) = (sent.min(now).max(known.seen), cert.name.clone(), cert.kind);
             return false;
         }
         let state = if policy.trust == HubTrust::Account { State::Approved } else { State::Waiting };
-        self.devices.insert(device.id().clone(), Device { signing: Bytes32(*device.signing()), name: cert.name.clone(), kind: cert.kind, first_seen: now, seen: now, state, at: now });
+        let record = Device { signing: Bytes32(*device.signing()), name: cert.name.clone(), kind: cert.kind, first_seen: now, seen: now, state, at: now };
+        if self.devices.contains_key(device.id()) {
+            self.rekeyed.push(Rekeyed { id: device.id().clone(), device: record });
+        } else {
+            self.devices.insert(device.id().clone(), record);
+        }
         state == State::Waiting
     }
 
     // The waiting devices whose day is up are approved; their ids come back so their notices settle as a manual approval's do.
     pub fn settle(&mut self, policy: Policy, now: u64) -> Vec<Id> {
         let mut approved = Vec::new();
-        for (id, device) in &mut self.devices {
+        for (id, device) in self.records_mut() {
             if device.state == State::Waiting && policy.trust == HubTrust::Device && device.until(policy).is_some_and(|until| now >= until) {
                 (device.state, device.at) = (State::Approved, device.first_seen + DAY);
                 approved.push(id.clone());
@@ -125,14 +156,15 @@ impl Devices {
     }
 
     // What a decision changes, so the keeper's watch releases held commands on an approval or a denial and on nothing else.
-    pub fn decisions(&self) -> BTreeMap<Id, (State, u64)> {
-        self.devices.iter().map(|(id, device)| (id.clone(), (device.state, device.at))).collect()
+    pub fn decisions(&self) -> Vec<(Id, String, State, u64)> {
+        self.records().map(|(id, device)| (id.clone(), device.fingerprint(), device.state, device.at)).collect()
     }
 
     fn due(&self, policy: Policy, now: u64) -> bool {
-        policy.trust == HubTrust::Device && self.devices.values().any(|device| device.state == State::Waiting && device.until(policy).is_some_and(|until| now >= until))
+        policy.trust == HubTrust::Device && self.records().any(|(_, device)| device.state == State::Waiting && device.until(policy).is_some_and(|until| now >= until))
     }
 
+    // The phone's board carries one standing per id, its first key's; another key under that id is decided at the machine.
     pub fn standings(&self, policy: Policy, now: u64) -> BTreeMap<Id, DeviceStanding> {
         self.devices.iter().map(|(id, device)| {
             let fingerprint = device.fingerprint();
@@ -145,17 +177,21 @@ impl Devices {
         }).collect()
     }
 
-    pub fn find(&self, who: &str) -> Result<Id> {
+    // A device named by "<id> <key>", its key, its id or its name; any that names two records is refused with what tells them apart.
+    pub fn find(&self, who: &str) -> Result<(Id, [u8; 32])> {
         let who = who.trim();
-        if let Some((id, _)) = self.devices.iter().find(|(id, _)| id.as_str() == who) {
-            return Ok(id.clone());
+        let all: Vec<(&Id, &Device)> = self.records().collect();
+        let matching = |test: &dyn Fn(&Id, &Device) -> bool| all.iter().filter(|(id, device)| test(id, device)).copied().collect::<Vec<_>>();
+        let mut found = matching(&|id, device| format!("{} {}", id.as_str(), device.fingerprint()) == who);
+        for test in [&(|_: &Id, device: &Device| device.fingerprint() == who) as &dyn Fn(&Id, &Device) -> bool, &|id, _| id.as_str() == who, &|_, device| device.name == who, &|_, device| device.name.eq_ignore_ascii_case(who)] {
+            if found.is_empty() {
+                found = matching(test);
+            }
         }
-        let named: Vec<&Id> = self.devices.iter().filter(|(_, device)| device.name == who).map(|(id, _)| id).collect();
-        let named = if named.is_empty() { self.devices.iter().filter(|(_, device)| device.name.eq_ignore_ascii_case(who)).map(|(id, _)| id).collect() } else { named };
-        match named.as_slice() {
-            [one] => Ok((*one).clone()),
+        match found.as_slice() {
+            [(id, device)] => Ok(((*id).clone(), device.signing.0)),
             [] => Err(format!("No device {who:?} has sent this machine a command; kebbie hub devices lists them")),
-            many => Err(format!("{} devices are named {who:?}; name one by its id: {}", many.len(), many.iter().map(|id| id.as_str()).collect::<Vec<_>>().join(", "))),
+            many => Err(format!("{} devices answer to {who:?}; name one by its id and key, compared with the key under Account on the device: {}", many.len(), many.iter().map(|(id, device)| format!("{} ({} {})", device.name, id.as_str(), device.fingerprint())).collect::<Vec<_>>().join(", "))),
         }
     }
 }
@@ -284,12 +320,20 @@ pub struct Request {
     pub sent: Vec<Sent>,
 }
 
+impl Request {
+    // The board names a request by its id and key together, as two can share an id.
+    pub fn key(&self) -> String {
+        format!("{} {}", self.id.as_str(), self.fingerprint)
+    }
+}
+
 pub fn requests_in(dir: &Path, policy: Policy, now: u64) -> Vec<Request> {
     let Some(identity) = identity::load_at(dir).ok().flatten() else { return Vec::new() };
     let held = super::commands::ledger(dir).held;
-    load(dir).devices.into_iter().filter(|(_, device)| device.standing(policy, now).0 == State::Waiting).map(|(id, device)| {
-        let sent = held.values().filter(|held| held.device == id).map(|held| Sent { asked: held.asked.clone(), at: held.envelope.header.at, expires: held.envelope.header.exp }).collect();
-        Request { dir: dir.to_path_buf(), machine: identity.name.clone(), until: device.until(policy), fingerprint: device.fingerprint(), name: device.name, kind: device.kind, first_seen: device.first_seen, id, sent }
+    let devices = load(dir);
+    devices.records().filter(|(_, device)| device.standing(policy, now).0 == State::Waiting).map(|(id, device)| {
+        let sent = held.values().filter(|held| held.device == *id).map(|held| Sent { asked: held.asked.clone(), at: held.envelope.header.at, expires: held.envelope.header.exp }).collect();
+        Request { dir: dir.to_path_buf(), machine: identity.name.clone(), until: device.until(policy), fingerprint: device.fingerprint(), name: device.name.clone(), kind: device.kind, first_seen: device.first_seen, id: id.clone(), sent }
     }).collect()
 }
 
@@ -349,10 +393,10 @@ pub fn trust_line(policy: Policy) -> [String; 2] {
 
 pub fn list(devices: &Devices, policy: Policy, now: u64, offset: &dyn Fn(i64) -> i64) -> String {
     let mut lines = trust_line(policy).to_vec();
-    if devices.devices.is_empty() {
+    if devices.records().next().is_none() {
         lines.push("  No device has sent this machine a command yet.".to_string());
     }
-    let mut shown: Vec<&Device> = devices.devices.values().collect();
+    let mut shown: Vec<&Device> = devices.records().map(|(_, device)| device).collect();
     shown.sort_by_key(|device| (device.standing(policy, now).0 != State::Waiting, std::cmp::Reverse(device.seen)));
     let rows: Vec<[String; 6]> = shown.iter().map(|device| {
         let (state, at) = device.standing(policy, now);
@@ -384,8 +428,8 @@ pub enum Decision {
 
 pub fn decide(dir: &Path, who: &str, decision: Decision, now: u64) -> Result<(Id, Device)> {
     let decided = change(dir, |devices| {
-        let id = devices.find(who)?;
-        let device = devices.devices.get_mut(&id).expect("find returns a known id");
+        let (id, signing) = devices.find(who)?;
+        let device = devices.record_mut(&id, &signing).expect("find returns a known record");
         (device.state, device.at) = (if decision == Decision::Approve { State::Approved } else { State::Denied }, now);
         Ok((id, device.clone()))
     })?;
@@ -412,7 +456,7 @@ pub fn settle_due(dir: &Path, policy: Policy, now: u64) -> Result<()> {
 // A decision sent from another device names the waiting device by id and the fingerprint its user compared; anything else matches nothing.
 pub fn decide_waiting(dir: &Path, id: &Id, fingerprint: &str, decision: Decision, policy: Policy, now: u64) -> Result<Option<Device>> {
     let decided = change(dir, |devices| {
-        let Some(device) = devices.devices.get_mut(id).filter(|device| device.fingerprint() == fingerprint && device.standing(policy, now).0 == State::Waiting) else { return Ok(None) };
+        let Some((_, device)) = devices.records_mut().find(|(known, device)| *known == id && device.fingerprint() == fingerprint && device.standing(policy, now).0 == State::Waiting) else { return Ok(None) };
         (device.state, device.at) = (if decision == Decision::Approve { State::Approved } else { State::Denied }, now);
         Ok(Some(device.clone()))
     })?;
@@ -497,14 +541,14 @@ mod tests {
             device("iPhone 16", at(11, 11, 13, 58), at(11, 11, 14, 9), State::Waiting, at(11, 11, 13, 58)),
             device("iPad", at(10, 2, 10, 0), at(11, 10, 9, 14), State::Approved, at(10, 2, 10, 5)),
             device("Chrome on Mac", at(9, 28, 8, 0), at(9, 30, 8, 0), State::Denied, at(9, 28, 8, 1)),
-        ].into_iter().collect() }
+        ].into_iter().collect(), ..Devices::default() }
     }
 
     #[test]
     fn a_config_that_does_not_parse_lets_no_device_in_by_time_or_by_account() {
         let dir = crate::sh::test_dir("hub-gates-broken");
         let file = dir.join("config.toml");
-        let waiting = || Devices { devices: [device("iPhone 16", at(11, 1, 9, 0), at(11, 1, 9, 0), State::Waiting, at(11, 1, 9, 0))].into_iter().collect() };
+        let waiting = || Devices { devices: [device("iPhone 16", at(11, 1, 9, 0), at(11, 1, 9, 0), State::Waiting, at(11, 1, 9, 0))].into_iter().collect(), ..Devices::default() };
         let policy_in = |text: &str| {
             std::fs::write(&file, text).unwrap();
             let (gates, error) = crate::config::hub_gates_in(&file);
@@ -521,7 +565,7 @@ idle_minutes = \"soon\"
         assert!(super::super::commands::accepted(gates.commands, gates.from).is_empty(), "no command kind and no device decision from a phone");
         assert!(waiting().settle(policy, at(11, 3, 9, 0)).is_empty(), "a device two days in waits on");
         let (id, device) = waiting().devices.into_iter().next().unwrap();
-        assert_eq!(Devices { devices: [(id.clone(), device.clone())].into_iter().collect() }.trust_of(policy, &id, &device.signing.0, at(11, 3, 9, 0)), Trust::Waiting, "trust = \"account\" in a broken file lets nothing in");
+        assert_eq!(Devices { devices: [(id.clone(), device.clone())].into_iter().collect(), ..Devices::default() }.trust_of(policy, &id, &device.signing.0, at(11, 3, 9, 0)), Trust::Waiting, "trust = \"account\" in a broken file lets nothing in");
         let (policy, _, error) = policy_in("[hub]
 auto_approve = \"24h\"
 ");

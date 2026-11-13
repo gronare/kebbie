@@ -301,7 +301,7 @@ fn device_row(request: &crate::hub::devices::Request, now: u64) -> Row {
     };
     Row {
         part: Part::Device,
-        address: request.id.as_str().to_string(),
+        address: request.key(),
         name: request.name.clone(),
         icon: '?',
         what: format!("{} · wants to make changes · {wait}", crate::hub::devices::kind_name(request.kind)),

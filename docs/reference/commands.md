@@ -870,7 +870,7 @@ new:      approved automatically 24 h after its first command (hub.auto_approve 
 kebbie hub devices approve <name> lets one in, deny <name> keeps it out; N on the board asks too.
 ```
 
-- `approve` and `deny` take the device's name, or its id when two devices share the name; a shared name is refused with their ids.
+- `approve` and `deny` take the device's name, its id or its key. When a name or an id answers to two devices, it is refused with each one's id and key; name one as `<id> <key>`, as in `kebbie hub devices approve dev_… 7F3A-91C2`.
 - `approve` answers with the device's key, to compare with the one under **Account** on the device:
 
   ```
@@ -880,7 +880,7 @@ kebbie hub devices approve <name> lets one in, deny <name> keeps it out; N on th
   ```
 
 - The keeper applies what the device sent as soon as the device is approved. With the keeper stopped, it does so once the keeper runs.
-- A device whose key changed is listed again as waiting.
+- A device whose key changed is listed again as waiting, beside the device it was. It never takes over that device's approval.
 
 ### `kebbie hub connect`
 

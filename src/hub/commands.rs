@@ -951,9 +951,36 @@ mod tests {
         let rekeyed = Phone::with_id(&machine.keys, &machine.account, "iPhone 16", phone.id().clone());
         let sent = rekeyed.send(&machine.account, &machine.identity, &answer(), now() + 60);
         assert_eq!(machine.handle(&seen, DEVICE, &sent, now() + 60), Handled::Held(phone.id().clone()), "approval holds for the key it was given");
-        let device = &devices::load(&machine.dir).devices[phone.id()];
-        assert_eq!((device.state, device.first_seen, device.signing.0), (State::Waiting, now() + 60, rekeyed.key.public().signing));
+        let known = devices::load(&machine.dir);
+        let device = known.record(phone.id(), &rekeyed.key.public().signing).expect("the new key is a request of its own");
+        assert_eq!((device.state, device.first_seen), (State::Waiting, now() + 60));
+        assert_eq!(known.record(phone.id(), &phone.key.public().signing).map(|device| device.state), Some(State::Approved), "the first key's record is left as it was decided");
         assert_eq!(seen.told.borrow().len(), 2, "the user is asked again");
+        assert!(matches!(machine.handle(&seen, DEVICE, &phone.send(&machine.account, &machine.identity, &push(), now() + 90), now() + 90), Handled::Applied(_)), "the approved device still makes changes");
+    }
+
+    #[test]
+    fn another_key_under_a_known_id_never_takes_over_its_record_and_approving_by_name_asks_which() {
+        let machine = Machine::new();
+        let seen = Seen::new();
+        let phone = machine.phone("iPhone 16");
+        machine.handle(&seen, DEVICE, &phone.send(&machine.account, &machine.identity, &answer(), now()), now());
+        let posing = Phone::with_id(&machine.keys, &machine.account, "iPhone 16", phone.id().clone());
+        machine.handle(&seen, DEVICE, &posing.send(&machine.account, &machine.identity, &answer(), now() + 60), now() + 60);
+        let known = devices::load(&machine.dir);
+        assert_eq!(known.records().count(), 2, "two requests, neither merged into the other");
+        assert_eq!(known.record(phone.id(), &phone.key.public().signing).map(|device| device.first_seen), Some(now()), "the first key's record keeps its own day");
+        let refused = devices::answer(&machine.dir, "iPhone 16", Decision::Approve, now() + 120).unwrap_err();
+        let (real, other) = (phone.cert.fingerprint(), posing.cert.fingerprint());
+        assert!(refused.starts_with("2 devices answer to \"iPhone 16\"") && refused.contains(&real) && refused.contains(&other), "{refused}");
+        assert!(devices::answer(&machine.dir, phone.id().as_str(), Decision::Approve, now() + 120).is_err(), "the id alone names both");
+        devices::answer(&machine.dir, &format!("{} {real}", phone.id().as_str()), Decision::Approve, now() + 120).unwrap();
+        let known = devices::load(&machine.dir);
+        assert_eq!(known.record(phone.id(), &phone.key.public().signing).map(|device| device.state), Some(State::Approved));
+        assert_eq!(known.record(phone.id(), &posing.key.public().signing).map(|device| device.state), Some(State::Waiting), "the other key is still to decide");
+        let requests = devices::requests_in(&machine.dir, DEVICE, now() + 120);
+        assert_eq!(requests.iter().map(|request| request.fingerprint.clone()).collect::<Vec<_>>(), [other], "the board's Next asks about the other key only");
+        assert!(matches!(machine.handle(&seen, DEVICE, &posing.send(&machine.account, &machine.identity, &push(), now() + 130), now() + 130), Handled::Held(_)), "its commands still wait");
     }
 
     #[test]
@@ -977,7 +1004,7 @@ mod tests {
             machine.handle(&seen, DEVICE, &phone.send(&machine.account, &machine.identity, &answer(), now()), now());
         }
         let refused = devices::answer(&machine.dir, "iPhone", Decision::Approve, now()).unwrap_err();
-        assert!(refused.starts_with("2 devices are named \"iPhone\"; name one by its id: ") && refused.contains(one.id().as_str()) && refused.contains(two.id().as_str()), "{refused}");
+        assert!(refused.starts_with("2 devices answer to \"iPhone\"; name one by its id and key") && refused.contains(one.id().as_str()) && refused.contains(two.id().as_str()) && refused.contains(&one.cert.fingerprint()), "{refused}");
         assert_eq!((machine.state(&one), machine.state(&two)), (Some(State::Waiting), Some(State::Waiting)), "neither was decided");
         assert!(devices::answer(&machine.dir, one.id().as_str(), Decision::Approve, now()).is_ok());
         assert!(devices::answer(&machine.dir, "iPad", Decision::Approve, now()).unwrap_err().starts_with("No device \"iPad\" has sent this machine a command"));

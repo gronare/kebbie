@@ -304,10 +304,10 @@ impl App {
     }
 
     fn decide_device(&mut self, id: &str, decision: Decision) {
-        let Some(request) = self.devices.iter().find(|request| request.id.as_str() == id).cloned() else { return self.mode = Mode::Normal };
-        self.devices.retain(|known| known.id != request.id);
+        let Some(request) = self.devices.iter().find(|request| request.key() == id).cloned() else { return self.mode = Mode::Normal };
+        self.devices.retain(|known| known.key() != request.key());
         let label = format!("{} {}…", if decision == Decision::Approve { "Approving" } else { "Denying" }, request.name);
-        self.in_background(label, move || devices::answer(&request.dir, request.id.as_str(), decision, crate::messages::now()));
+        self.in_background(label, move || devices::answer(&request.dir, &request.key(), decision, crate::messages::now()));
     }
 
     pub(super) fn open_next(&mut self) {
@@ -614,13 +614,13 @@ mod tests {
         app.devices = vec![phone.clone()];
         app.open_next();
         app.handle_key(key(KeyCode::Enter), None);
-        assert!(matches!(&app.mode, Mode::Device { id, .. } if id == phone.id.as_str()), "⏎ opens the device's window");
+        assert!(matches!(&app.mode, Mode::Device { id, .. } if *id == phone.key()), "⏎ opens the device's window");
         let screen = render(&mut app, 100, 40).0.join("\n");
         println!("{screen}");
         assert!(screen.contains("iPhone 16 wants to make changes") && screen.contains("a approve · x deny · esc later"), "{screen}");
         app.handle_key(key(KeyCode::Esc), None);
         assert!(matches!(app.mode, Mode::Next(_)), "esc leaves it waiting under Next");
-        app.mode = Mode::Device { id: phone.id.as_str().to_string(), back: Window::default() };
+        app.mode = Mode::Device { id: phone.key(), back: Window::default() };
         app.handle_key(key(KeyCode::Char('x')), None);
         let Mode::Working { result, .. } = &app.mode else { panic!("deciding runs in the background") };
         let said = result.recv().unwrap().unwrap();
