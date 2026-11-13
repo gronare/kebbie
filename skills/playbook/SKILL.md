@@ -19,7 +19,7 @@ Every recipe ends at the user's push, or yours under a push permission they gave
 
 Three pages hold what happens between the start and the push. Read the one your moment calls for:
 
-- [OBSTACLE.md](OBSTACLE.md): when a task meets an **obstacle** on its own path, or a review finding questions scope or intent. The task's side and the lead's, with the investigator's four decisions.
+- [OBSTACLE.md](OBSTACLE.md): when a task meets an **obstacle** on its own path, or a review finding questions scope or intent. The task's side, and how kebbie and the lead carry out the investigator's four decisions.
 - [PLAN.md](PLAN.md): when a task's plan changes: the loop of plan, build, finding and revision, and when a revision is the user's question.
 - [CARD.md](CARD.md): when a task writes its sign-off card.
 

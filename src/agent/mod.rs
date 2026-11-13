@@ -242,6 +242,13 @@ impl Agent {
         }
     }
 
+    pub fn investigator_command(self, reviewer: &Reviewer, kebbie: &str) -> (&'static str, Vec<String>) {
+        match self {
+            Agent::Claude => ("claude", claude::investigator_args(reviewer, kebbie)),
+            Agent::Codex => ("codex", codex::investigator_args(reviewer)),
+        }
+    }
+
     // Claude reads its role as a system prompt from a file; Codex's exec has none, so the role leads the brief.
     pub fn reviewer_input(self, prompt: &Path, input: &str) -> Result<String> {
         match self {

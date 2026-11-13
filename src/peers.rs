@@ -288,7 +288,7 @@ pub fn lead_keeps_note(note: Option<&str>, kebbie: &str, template: Option<&crate
 
 // The {noticed} section of roles/task.md; vault is whether the task's Claude has the vault plugin's tools.
 pub fn noticed_section(choice: AlsoNoticed, vault: bool, kebbie: &str) -> String {
-    let intro = "As you work you will notice things outside this task: a bug nearby, a stale doc, a refactor worth doing. Something on your own path is an obstacle, raised as Questions says, and not one of these.";
+    let intro = format!("As you work you will notice things outside this task: a bug nearby, a stale doc, a refactor worth doing. Something on your own path is an obstacle, raised as Questions says, and not one of these. kebbie files each line under **Also noticed** on your card under {} on the board, with this task as its source; when `{kebbie} found` lists the thing already, end your line with its `(found:<id>)`, so it counts as found again rather than twice.", crate::found::SECTION);
     let file = if vault {
         format!("search the backlog for it first, and when it is filed already add this task to its Source; else file it in the vault's backlog as a task note written out by the skill `{}`, with this task as its Source", crate::backlog_file::SKILL)
     } else {

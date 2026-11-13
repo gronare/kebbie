@@ -443,6 +443,26 @@ fn done_as(caller: &Caller, state: &Path, task: &Task) -> Result<()> {
     save(state, task.address, &plan)
 }
 
+// A preparatory step goes in ahead of the step in progress, holding nothing yet, and the steps after keep the commits they hold; its 1-based number, or none for a task without steps.
+pub(crate) fn insert_first(state: &Path, path: &Path, address: &str, title: &str) -> Result<Option<usize>> {
+    let title = one_line(title);
+    if title.is_empty() {
+        return Err("a preparatory step needs a title".to_string());
+    }
+    let Some(mut plan) = load(state, address).filter(|plan| !plan.titles.is_empty()) else { return Ok(None) };
+    let repo = main_checkout(path)?;
+    let upstream = default_branch(&repo)?;
+    let (steps, held) = current(state, &Task { path, upstream: &upstream, address }, &plan, false)?;
+    plan.held = held;
+    let at = in_progress(&plan.held, steps.pushed).min(plan.titles.len());
+    plan.titles.insert(at, title);
+    if at <= plan.held.len() {
+        plan.held.insert(at, Held::default());
+    }
+    save(state, address, &plan)?;
+    Ok(Some(at + 1))
+}
+
 pub fn mark(state: &State) -> &'static str {
     match state {
         State::Planned => "○",

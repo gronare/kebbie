@@ -455,6 +455,20 @@ pub(crate) fn reviewer_args(reviewer: &super::Reviewer) -> Vec<String> {
     args
 }
 
+// The investigator keeps the user's Codex config, so its MCP servers (the vault among them) load, and searches the web; its commands run read-only.
+pub(crate) fn investigator_args(reviewer: &super::Reviewer) -> Vec<String> {
+    let mut args: Vec<String> = ["exec", "--sandbox", "read-only", "--ephemeral", "--color", "never", "-c", NO_UPDATE_CHECK, "-c", "web_search=\"live\""].map(str::to_string).to_vec();
+    args.extend(["--output-last-message".to_string(), reviewer.answer.to_string_lossy().to_string()]);
+    if let Some(model) = reviewer.model {
+        args.extend(["--model".to_string(), model.to_string()]);
+    }
+    if let Some(effort) = reviewer.effort {
+        args.extend(["-c".to_string(), format!("model_reasoning_effort={}", toml_string(effort))]);
+    }
+    args.push("-".to_string());
+    args
+}
+
 const SWITCHES: [&str; 8] = ["--approve-for-me", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust", "--search", "--no-alt-screen", "--oss", "--strict-config", "--no-daemon"];
 const VALUES: [&str; 18] = ["-c", "--config", "-m", "--model", "-s", "--sandbox", "-a", "--ask-for-approval", "-p", "--profile", "--enable", "--disable", "-C", "--cd", "--add-dir", "--local-provider", "--remote", "--remote-auth-token-env"];
 const REFUSED: [&str; 6] = ["-h", "--help", "-V", "--version", "-i", "--image"];

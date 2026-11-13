@@ -637,6 +637,8 @@ It is yours, or the lead's on your explicit choice. The lead's settings do not a
 | `kebbie steps done` | The step in progress is finished and ready for you. See [`kebbie steps done`](#kebbie-steps-name-done). |
 | `kebbie routine ok <summary>` | A routine's task, when all is well: records the run as ok with the summary and closes the task as `drop` does. |
 | `kebbie ask --option "<label>: <meaning>" … --recommend <n> <question>` | Ask you what you want: scope, behaviour, a trade-off that is yours. |
+| `kebbie obstacle [--on <work>] <text>` | Raise an obstacle on the task's own path. See [below](#kebbie-obstacle---on-work-text). |
+| `kebbie found` | What tasks noticed outside their work, under Found by tasks. See [below](#kebbie-found---json). |
 | `kebbie answered <task>` | The task's question was settled elsewhere, dropped, or sent back to be asked again. |
 | `kebbie tell <to> <text>` | Message another session: a task (every half of it), `task@repo`, or `lead`. Held while the receiver waits for an answer, and logged. |
 
@@ -651,11 +653,38 @@ It is yours, or the lead's on your explicit choice. The lead's settings do not a
 
 `kebbie answered` marks the question `answered through the lead`, and a `kebbie tell` to that task is no longer held. The question stays on the board, and your answer there still reaches the task as yours, until the task reports anything but `needs-you` or a turn starts after its turn on that message.
 
+### `kebbie obstacle [--on <work>] <text>`
+
+The task's Claude raises what stops a piece of its work as planned: what the work needs, what is there instead with `file:line`, what it read, and each way it sees.
+
+- kebbie keeps it, and the task's row reads `obstacle · investigating`.
+- The keeper starts kebbie's investigator ([`investigate.profile`](configuration.md#investigation)), which decides `workaround`, `subtask`, `task` or `ask`. kebbie carries the decision out and sends it to the task. See [Obstacles and findings](../explanation/obstacles-and-findings.md).
+- `--on` names the work it blocks; left out, the step in progress.
+- The same text raised again answers with its decision. A second obstacle on the same work, or the task's third, asks you whether the plan holds.
+
+### `kebbie obstacles [name] [--json]`
+
+Every obstacle tasks raised, or one task's, with its state (`investigating`, `asked you`, `with the lead`, `decided`) and its decision with who took it: `investigator`, `lead` or `you`.
+
+`kebbie obstacles decide <task> [--id <id>] <decision>` is the lead's word, or yours, on the task's newest open obstacle, or the one `--id` names. It closes the obstacle's question and goes to the task.
+
+### `kebbie found [--json]`
+
+Found by tasks: what tasks listed under Also noticed on their card, one item each with the tasks that found it and how often. A card line ending `(found:<id>)` counts on that item.
+
+| Command | What it does |
+| --- | --- |
+| `kebbie found start <id> [name]` | Start a task from the item in its repo, the item and who found it as the prompt. |
+| `kebbie found add <id> <task>` | Give the item to a running task, as more work from you. |
+| `kebbie found dismiss <id>` | Drop it from Found by tasks. |
+
+Each is yours or the lead's.
+
 ### `kebbie report`
 
 `<state>` is `needs-you`, `ready`, `working` or `blocked`.
 
-- With `ready`, `--card <file>` is the sign-off card the push window shows: a headline, then `Built:`, `Decisions:` with who took each, and `Also noticed:` when the task found things outside its task. See [Obstacles and findings](../explanation/obstacles-and-findings.md#the-card-asks-you-nothing).
+- With `ready`, `--card <file>` is the sign-off card the push window shows: a headline, then `Built:`, `Decisions:` with who took each, and `Also noticed:` when the task found things outside its task. kebbie files each Also noticed line under [Found by tasks](#kebbie-found---json) and ends it with its item. See [Obstacles and findings](../explanation/obstacles-and-findings.md#the-card-asks-you-nothing).
 - With `ready`, `--after <task[@repo]>` names a task to push before this one, such as the other half of a task across repos; repeat it for several. A bare name is a task in the same repo. Next's push group puts that task first and this one says `after <task>` until it is pushed. The lead's push of this task waits in the push line until that task has landed, letting the pushes behind it go first; your own push goes out and its notice warns that it went first.
 - With `ready`, `--after-push "<check>"` names what the task verifies once the push lands, such as `the old key gets 401` after a deploy on push. The task stays open through the push and CI; once CI is green (or the push landed, without CI to watch), kebbie sends the task the check to run, and the row reads `checking after push: <check>`. The task's next report is the outcome: `ready` with nothing left to push closes it as done, `needs-you` puts it under Needs you with what failed as its next step. The check is kept until the task ends; a later `--after-push` replaces it.
 - A routine's task also lists its findings on a card with `needs-you`.
@@ -753,7 +782,7 @@ The review lists each write under the tool whose files it changes:
 | `herdr` | `keys` (`prefix+space`, `prefix+f` and `prefix+t` at the end of herdr's `config.toml`) and `herdr` when kebbie's herdr plugin is disabled. |
 
 - Nothing is written or run before `⏎` on the last step. Then each line turns `done`, `already`, `skipped` or `failed` as it runs, followed by `Setup done · doctor: <n> ok`, with `, <m> to look at` when warnings remain, and the [next steps](#next-steps-after-setup).
-- A line whose value is already there reads `already` and changes nothing. The `runs:` lines under the list say what a write does to another tool's files, such as `writes ~/.codex/rules/kebbie.rules, 30 lines` or `adds [mcp_servers.vault] to the end of ~/.codex/config.toml; the rest of the file stays as it is`.
+- A line whose value is already there reads `already` and changes nothing. The `runs:` lines under the list say what a write does to another tool's files, such as `writes ~/.codex/rules/kebbie.rules, 36 lines` or `adds [mcp_servers.vault] to the end of ~/.codex/config.toml; the rest of the file stays as it is`.
 - The Agents step judges kebbie's plugin by the same checks as `kebbie doctor`; one it calls out of date is rewritten on apply.
 - `rules/kebbie.rules` holds one `prefix_rule(pattern=[…], decision="allow")` for each of kebbie's task commands, in each form a task calls kebbie by: its full path, `~/.local/bin/kebbie` and `kebbie`.
 - Codex's vault server runs `vault.command` itself. When that is the Claude vault plugin's own command, it takes the plugin's settings with it, its S3 keys named by `env_vars` and never written.

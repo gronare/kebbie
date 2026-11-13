@@ -147,6 +147,19 @@ pub(super) fn ongoing_entry(note: &Ongoing) -> Entry {
     }
 }
 
+// What a task found outside its own work: a task of its own, more work for a running task, or nothing.
+pub(super) fn found_choices(item: &crate::found::Item, target: Option<&str>) -> Vec<Choice> {
+    let add = match target {
+        Some(task) => choice(Act::Chat, &format!("Add to {task}"), "that task gets it as more work from you, and plans it in (asks for the task, filled in)"),
+        None => choice(Act::Chat, "Add to a running task", "the task you name gets it as more work from you"),
+    };
+    vec![
+        choice(Act::Go, "Start a task", &format!("a worktree, a Space and Claude in {}, with it and who found it as the prompt", item.repo)),
+        add,
+        choice(Act::Drop, "Dismiss", "it leaves Found by tasks; nothing is started"),
+    ]
+}
+
 pub(super) fn backlog_choices(sources: &[Source]) -> Vec<Choice> {
     let mut choices = vec![
         choice(Act::Go, "Start as task", "a worktree, a Space and Claude with this as its prompt"),
@@ -185,6 +198,7 @@ impl App {
             }
             Column::Backlog => match self.backlog_row(self.backlog_selected) {
                 Some(super::BacklogRow::Ongoing(note)) => ongoing_choices(&self.ongoing[note]),
+                Some(super::BacklogRow::Found(found)) => found_choices(&self.found[found], self.found_target(&self.found[found]).as_deref()),
                 _ => backlog_choices(&self.sources),
             },
         }

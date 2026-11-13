@@ -21,6 +21,7 @@ mod evidence;
 #[cfg(test)]
 mod executable;
 mod fetch;
+mod found;
 mod herdr;
 mod herdr_link;
 mod hooks;
@@ -41,6 +42,7 @@ mod messages;
 mod next;
 mod notice;
 mod notify;
+mod obstacle;
 mod peers;
 mod phase;
 mod permit;
@@ -177,6 +179,27 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   --plan vault:<note> or --plan <file> asks you to approve a plan instead. It waits on
                                   the board, where you answer it, the lead gets a copy, and the answer reaches the task
                                   as a message from you
+  kebbie obstacle [--on <work>] <what stands in the way>
+                                  run by a task's Claude when something on its own path stops a piece of its work as
+                                  planned (a missing precondition, a step that cannot be built as planned, a trap, a red
+                                  test it did not cause, a check it cannot run): kebbie keeps it, the task's row shows
+                                  obstacle · investigating, and the keeper starts kebbie's investigator (investigate.profile),
+                                  which reads the code, the vault and the web and decides once per obstacle: workaround
+                                  (with what replaces it, or kebbie files the real fix), subtask (put first in its steps),
+                                  task (queued to start now, or a running one named) or ask (a question to you); the
+                                  decision reaches the task from kebbie; the same text again gets its decision, and a
+                                  second obstacle on the same work (--on, by default the step in progress) or a task's
+                                  third asks you whether the plan holds
+  kebbie obstacles [name] [--json]
+                                  the obstacles tasks raised, each with its state and its decision and who took it
+                                  (investigator, lead or you); kebbie obstacles decide <task> [--id <id>] <decision> is the
+                                  lead's or your word on its open obstacle, which goes to the task
+  kebbie found [--json]           Found by tasks: what tasks listed under Also noticed on their card, filed once each with
+                                  the tasks that found it and how often; the same thing from another task counts up
+                                  instead of a new item, and a card line ending (found:<id>) names its item;
+                                  kebbie found start <id> [name] starts a task from it, kebbie found add <id> <task>
+                                  gives it to a running task, kebbie found dismiss <id> drops it; yours or the lead's,
+                                  as on the board's backlog
   kebbie answered <task>          a task's question is settled elsewhere (in its Space, dropped, or sent back to be asked again): it
                                   leaves the board, so a kebbie tell to that task is no longer held
   kebbie notify <text>            run notify.command with this text (KEBBIE_EVENT=summary): the lead's word to the user
@@ -459,7 +482,7 @@ impl Arguments {
                 arguments.positionals.extend(input.by_ref());
                 break;
             }
-            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--after-push", "--profile", "--why", "--name", "--until", "--recipe", "--step"].contains(&argument.as_str()) {
+            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--after-push", "--profile", "--why", "--name", "--until", "--recipe", "--step", "--on", "--id"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
                 arguments.flags.push(argument);
@@ -655,6 +678,14 @@ fn run(arguments: &Arguments) -> Result<String> {
         }
         Some("release") => messages::tell_forced(name.ok_or("kebbie release needs the task whose held messages go through")?, None),
         Some("report") => report::report(&cwd, arguments.value("--state"), arguments.value("--next"), arguments.value("--card"), &arguments.values_of("--after"), arguments.value("--after-push"), &arguments.rest(1).join(" ")),
+        Some("obstacle") if arguments.flag("--investigate") => obstacle::run(&cwd),
+        Some("obstacle") => arguments.only("obstacle", &["--on"]).and_then(|_| obstacle::raise(&cwd, arguments.value("--on"), &arguments.rest(1).join(" "))),
+        Some("obstacles") if name == Some("decide") => {
+            let task = arguments.positional(2).ok_or("kebbie obstacles decide needs the task: kebbie obstacles decide <task> [--id <id>] \"<decision>\"")?;
+            obstacle::decide(task, arguments.value("--id"), &arguments.rest(3).join(" "))
+        }
+        Some("obstacles") => obstacle::list(name, arguments.flag("--json")),
+        Some("found") => found::command(arguments.rest(1), arguments.flag("--json")),
         Some("ask") => questions::ask(&cwd, &arguments.values_of("--option"), arguments.value("--recommend"), arguments.value("--plan"), &arguments.rest(1).join(" ")),
         Some("notify") => {
             let text: Vec<String> = std::env::args().skip_while(|argument| argument != "notify").skip(1).collect();

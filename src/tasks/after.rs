@@ -619,6 +619,11 @@ fn starts_when(wait: &Wait, now: u64) -> String {
 
 // None means every task it names is done already, so the caller starts it as usual.
 pub fn queue(repos: &[PathBuf], asked: &Asked) -> Result<Option<String>> {
+    queue_as(&crate::permit::caller(), repos, asked)
+}
+
+// kebbie's own start of a task it decided on, such as the investigator's task, goes the lead's way.
+pub(crate) fn queue_as(caller: &Caller, repos: &[PathBuf], asked: &Asked) -> Result<Option<String>> {
     asked.mode.map(crate::config::permission_mode).transpose().map_err(|error| format!("--mode: {error}"))?;
     asked.profile.map(|profile| crate::profiles::for_task(&crate::profiles::dir(), profile)).transpose().map_err(|error| format!("--profile: {error}"))?;
     let state = crate::lead::state_dir()?;
@@ -626,7 +631,7 @@ pub fn queue(repos: &[PathBuf], asked: &Asked) -> Result<Option<String>> {
     let known = known(&state, &repos);
     let title = asked.title.map(str::to_string).or_else(|| asked.backlog.and_then(crate::backlog::title_of));
     let why = asked.why.map(str::trim).filter(|why| !why.is_empty());
-    queue_in(&state, &crate::permit::caller(), &repos, &Asked { title: title.as_deref(), why, ..*asked }, &known, messages::now())
+    queue_in(&state, caller, &repos, &Asked { title: title.as_deref(), why, ..*asked }, &known, messages::now())
 }
 
 fn halves(state: &Path, name: &str) -> Result<Vec<Wait>> {

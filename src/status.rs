@@ -193,6 +193,7 @@ pub struct Item {
     pub parked: Option<tasks::Parked>,
     pub assessment: Option<crate::assessment::Word>,
     pub recipe: Option<crate::recipe::Recipe>,
+    pub obstacle: Option<crate::obstacle::Shown>,
     pub built: Built,
 }
 
@@ -237,7 +238,7 @@ impl Item {
             name: wait.task.clone(), title, place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
             report: None, question: None, ci: None, recover: None, routine: None, push_waits: None,
             queued: Some(Queued { after, blocked: wait.blocked.clone(), waiting, names, base, at, backlog: wait.backlog.is_some() }),
-            held_by_draft: None, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), unrecorded: None, push_left: None, staged: false, steps: tasks::Steps::default(), to_accept: None, parked: None, assessment: None, recipe: None, built: Built::default(),
+            held_by_draft: None, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), unrecorded: None, push_left: None, staged: false, steps: tasks::Steps::default(), to_accept: None, parked: None, assessment: None, recipe: None, obstacle: None, built: Built::default(),
         }
     }
 
@@ -460,6 +461,7 @@ impl Item {
         }
         match phase {
             Phase::Starting | Phase::Working | Phase::Closing => Group::Working,
+            Phase::Idle if self.obstacle.as_ref().is_some_and(|obstacle| obstacle.state != crate::obstacle::State::Asked) => Group::Working,
             Phase::Idle => Group::Idle,
             Phase::NeedsYou(_) | Phase::CiRed { .. } => Group::NeedsYou,
             Phase::Ready { .. } if self.awaiting_review() => Group::InReview,
@@ -669,7 +671,7 @@ impl Item {
             let dirty = if git.uncommitted > 0 { format!(" · {}", plural(git.uncommitted, "uncommitted file")) } else { String::new() };
             return format!("{} · ready to push{dirty}{behind}{review}{turn}", plural(git.ahead, "commit"));
         }
-        let mut parts: Vec<String> = self.git_error().map(|_| GIT_UNREAD.to_string()).into_iter().chain(self.staged.then(|| STAGED.to_string())).chain(self.phase_note()).chain(self.ci_note()).chain(self.recover_note()).chain(self.push_note()).chain(self.landed.filter(|why| !why.waits_for_you()).and(self.landed_note())).collect();
+        let mut parts: Vec<String> = self.git_error().map(|_| GIT_UNREAD.to_string()).into_iter().chain(self.obstacle.as_ref().map(crate::obstacle::Shown::note)).chain(self.staged.then(|| STAGED.to_string())).chain(self.phase_note()).chain(self.ci_note()).chain(self.recover_note()).chain(self.push_note()).chain(self.landed.filter(|why| !why.waits_for_you()).and(self.landed_note())).collect();
         if git.ahead > 0 {
             parts.push(plural(git.ahead, "commit"));
         }
@@ -698,6 +700,7 @@ impl Item {
         shown["assessment"] = json!(self.assessment.as_ref().map(crate::assessment::Word::text));
         shown["second_opinion"] = json!(self.second.as_ref().map(crate::review::SecondShown::to_json));
         shown["recipe"] = self.recipe.as_ref().map_or(Value::Null, crate::recipe::Recipe::to_json);
+        shown["obstacle"] = self.obstacle.as_ref().map_or(Value::Null, |obstacle| json!({ "id": obstacle.id, "state": obstacle.state.word(), "text": obstacle.text }));
         shown["parked_until"] = self.parked.map_or(Value::Null, |parked| parked.until.map_or(json!(tasks::UNPARKED), |at| json!(at)));
         shown
     }
@@ -1118,7 +1121,7 @@ fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>,
                 agent,
                 git: Some(Git { upstream: upstream.clone(), ahead, behind, changed, uncommitted, approved, approved_by, head, error, uncommitted_files }),
                 report: reports.get(&address).map(|report| messages::shown_report(&log, report)),
-                question: questions.iter().find(|question| question.from == address).or_else(|| questions.iter().find(|question| question.about.as_deref() == Some(&crate::review::question_about(&address)))).map(|question| (*question).clone()),
+                question: questions.iter().find(|question| question.from == address).or_else(|| questions.iter().find(|question| question.about.as_deref() == Some(&crate::review::question_about(&address)) || crate::obstacle::is_question_of(question.about.as_deref(), &address))).map(|question| (*question).clone()),
                 ci: state.as_deref().and_then(|state| crate::ci::load(state, &address)),
                 recover: state.as_deref().and_then(|state| crate::recover::load(state, &address)),
                 routine: state.as_deref().and_then(|state| crate::routines::run_of(state, &address)).map(|(id, _)| id),
@@ -1136,6 +1139,7 @@ fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>,
                 parked: state.as_deref().and_then(|state| tasks::park_of(state, &address, began)),
                 assessment: state.as_deref().and_then(|state| crate::assessment::word_in(state, &address)),
                 recipe: state.as_deref().and_then(|state| crate::recipe::load(state, &address)),
+                obstacle: state.as_deref().and_then(|state| crate::obstacle::shown_in(state, &address)),
                 built: match shas.as_ref().filter(|_| ahead > 0) { Some(shas) => built(&slot.path, shas), None => Built::default() },
                 phase: None,
                 title: state.as_deref().and_then(|state| title_of(state, &address, agent_title.as_deref(), &name_of(repo), &task, &name_of(&slot.path))),
@@ -1210,6 +1214,7 @@ fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>,
             parked: None,
             assessment: None,
             recipe: None,
+            obstacle: None,
             built: Built::default(),
         });
     }
@@ -1283,6 +1288,7 @@ pub(crate) mod tests {
             parked: None,
             assessment: None,
             recipe: None,
+            obstacle: None,
             built: Built::default(),
         };
         rederive(&mut item);
@@ -2110,6 +2116,20 @@ pub(crate) mod tests {
         crate::state::write(&state.join("after").join("web-billing@web.json"), wait.to_string()).unwrap();
         assert_eq!(shown(Some("kube")), [Some("designer".to_string())], "its own --profile wins");
         std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_task_with_an_obstacle_being_investigated_shows_it_under_working_and_one_asked_waits_with_its_question() {
+        let mut item = task(Some("idle"), Some("blocked"), 1);
+        moved(&mut item, &Event::Reported { state: "blocked", head: None, committed: false, pushing: false });
+        assert_eq!(item.group(), Group::Idle, "a blocked report alone hides under Idle");
+        item.obstacle = Some(crate::obstacle::Shown { id: "o1".to_string(), state: crate::obstacle::State::Investigating, text: "the index stores titles only".to_string() });
+        assert_eq!(item.group(), Group::Working, "kebbie works on it, so the row shows");
+        assert!(item.summary().starts_with("obstacle · investigating · 1 commit"), "{}", item.summary());
+        assert_eq!(item.to_json()["obstacle"]["state"], json!("investigating"));
+        item.obstacle = Some(crate::obstacle::Shown { state: crate::obstacle::State::Asked, ..item.obstacle.clone().unwrap() });
+        assert_eq!(item.group(), Group::Idle, "an obstacle that asked you shows under Needs you once its question is on the row");
+        assert!(item.summary().starts_with("obstacle · asked you"));
     }
 
     #[test]

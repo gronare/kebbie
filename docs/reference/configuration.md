@@ -157,6 +157,19 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 
 An assessment with no answer reads as `review not assessed`, a suggestion in every mode. A task you withdraw from review is not assessed again until you send it. See [An assessor judges whether the work needs a review](../explanation/review-gate.md#an-assessor-judges-whether-the-work-needs-a-review).
 
+### Investigation
+
+| Key | Default | Where | What it does |
+| --- | --- | --- | --- |
+| `investigate.profile` | `"investigator"` | either | The profile kebbie's investigator runs with on an obstacle or a review's finding about scope or intent; `"none"` runs none. |
+
+`investigate.profile` names any profile in `~/.config/kebbie/profiles/` or a built-in one, and the investigator takes its agent, model, effort and role: a Claude profile with its model and effort, or a Codex one. The built-in `investigator` is Claude at high effort, with your own settings, plugins and MCP servers. With `"none"`, a raised obstacle goes to the lead, which decides it with [`kebbie obstacles decide`](commands.md#kebbie-obstacles-name---json). See [Obstacles and findings](../explanation/obstacles-and-findings.md#one-investigation-per-obstacle).
+
+```toml
+[investigate]
+profile = "deep-codex"
+```
+
 ### Machine
 
 | Key | Default | Where | What it does |

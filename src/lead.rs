@@ -842,7 +842,7 @@ mod tests {
     #[test]
     fn the_lead_calls_kebbies_own_task_commands_safe_to_let_through_and_recommends_dont_ask_again() {
         let role = role_text(include_str!("../roles/lead.md"), "/opt/kebbie/kebbie", &[Source::Local], false, true);
-        assert!(role.contains("one of kebbie's own task commands (`kebbie peers`, `kebbie tell`, `kebbie ask`, `kebbie report`, `kebbie steps`, `kebbie accepted`, `kebbie routine ok`, `kebbie link`, `kebbie backlog add`, `kebbie config`), that command is safe to let through") && role.contains("recommend the \"don't ask again\" answer for it"), "{role}");
+        assert!(role.contains("one of kebbie's own task commands (`kebbie peers`, `kebbie tell`, `kebbie ask`, `kebbie obstacle`, `kebbie found`, `kebbie report`, `kebbie steps`, `kebbie accepted`, `kebbie routine ok`, `kebbie link`, `kebbie backlog add`, `kebbie config`), that command is safe to let through") && role.contains("recommend the \"don't ask again\" answer for it"), "{role}");
         assert!(!role.contains("{task_commands}"));
         assert!(role.contains("asks to run git in its own worktree outside the sandbox") && role.contains("never \"don't ask again\", which would let that git run outside every later sandbox"), "a git rule in default.rules would run git unsandboxed in every Codex session: {role}");
     }

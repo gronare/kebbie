@@ -559,8 +559,16 @@ fn review(repo: &Path, slot: &Slot, address: &str, state: &Path, which: Which) -
         return Ok((second_said(address, &reviewer.name, short, points, &second_file(state, address)), points == 0));
     }
     let verdict = save(state, address, &recorded, rules_file.is_some(), || tasks::fingerprint_at(&slot.path, &upstream, &sha))?;
-    let asked = ask_confirmation(address, &recorded, &slot.path)?;
-    let waits = if asked { " Its findings only ask for the user's confirmation, so the question waits for them under Needs you, and their answer there passes the review or sends the task to rework." } else { "" };
+    let confirms: Vec<String> = findings_of(&recorded).iter().filter_map(|finding| confirmation(finding).map(str::to_string)).collect();
+    let investigated = crate::obstacle::raise_from_review(state, address, &slot.path, &confirms)?;
+    let asked = if investigated { close_confirmations(address).map(|_| false)? } else { ask_confirmation(address, &recorded, &slot.path)? };
+    let waits = if investigated {
+        " Its findings about scope or intent go to kebbie's investigator first, which reads the task's note, the vault and the code; only what it cannot settle reaches the user."
+    } else if asked {
+        " Its findings only ask for the user's confirmation, so the question waits for them under Needs you, and their answer there passes the review or sends the task to rework."
+    } else {
+        ""
+    };
     Ok((format!("{address} reviewed at {short}: {} — {}{waits}", verdict.summary(), file.display()), verdict.ok))
 }
 
@@ -598,6 +606,39 @@ fn close_confirmations_locked(address: &str) -> Result<()> {
     Ok(())
 }
 
+fn close_confirmations(address: &str) -> Result<()> {
+    let _lock = messages::Lock::take(true)?;
+    close_confirmations_locked(address)
+}
+
+// The investigator could not settle a review's question of scope or intent: a verdict that asks only for confirmation asks the user as a review does, so their answer passes it; false leaves the question to kebbie's own card.
+pub fn investigator_asks(address: &str, worktree: &Path) -> Result<bool> {
+    let recorded = fs::read_to_string(verdict_file(&state_dir()?, address)).unwrap_or_default();
+    if !parse_verdict(&recorded).is_some_and(|verdict| verdict.asks_only_confirmation()) {
+        return Ok(false);
+    }
+    ask_confirmation(address, &recorded, worktree)
+}
+
+// The investigator settled a review's question of scope or intent from what the user said before: a verdict that asked only for that passes on its word, kept in the verdict.
+pub fn investigator_settles(address: &str, worktree: &Path, reason: &str) -> Result<()> {
+    let state = state_dir()?;
+    let recorded = fs::read_to_string(verdict_file(&state, address)).unwrap_or_default();
+    if !parse_verdict(&recorded).is_some_and(|verdict| verdict.asks_only_confirmation()) {
+        return Ok(());
+    }
+    let repo = main_checkout(worktree)?;
+    let slot = tasks::find_task(&repo, None, worktree)?;
+    let upstream = default_branch(&repo)?;
+    let settings = config::resolve(Some(&repo))?.settings;
+    let read_rules = rules_file(&settings.rules_skill.value, &slot.path, &install_root()?).is_some();
+    confirm_as(&state, address, "settled by kebbie's investigator", reason, read_rules, |sha| tasks::fingerprint_at(&slot.path, &upstream, sha))?;
+    if let Err(error) = messages::to_lead(messages::ToLead::ReviewPassed, &format!("{address}'s review asked only about scope or intent, and kebbie's investigator settled it: {reason}. The review passes.")) {
+        eprintln!("Could not tell the lead: {error}");
+    }
+    Ok(())
+}
+
 // A new verdict settles the old question; one whose findings only ask for the user's confirmation waits for them under Needs you.
 fn ask_confirmation(address: &str, recorded: &str, worktree: &Path) -> Result<bool> {
     let _lock = messages::Lock::take(true)?;
@@ -617,6 +658,10 @@ fn ask_confirmation(address: &str, recorded: &str, worktree: &Path) -> Result<bo
 
 // The user's confirmation turns a verdict that asked only for it into a pass of the same code, with their words kept in it.
 pub fn confirm_in(state: &Path, address: &str, words: &str, read_rules: bool, fingerprint: impl FnOnce(&str) -> Result<String>) -> Result<Verdict> {
+    confirm_as(state, address, "confirmed by the user", words, read_rules, fingerprint)
+}
+
+fn confirm_as(state: &Path, address: &str, by: &str, words: &str, read_rules: bool, fingerprint: impl FnOnce(&str) -> Result<String>) -> Result<Verdict> {
     if running_in(state, address) {
         return Err(format!("{address}'s reviewer is reading it again; answer its new verdict"));
     }
@@ -625,7 +670,7 @@ pub fn confirm_in(state: &Path, address: &str, words: &str, read_rules: bool, fi
     let findings = text.split_once("\n\n").map_or("", |(_, rest)| rest).trim();
     let said = words.split_whitespace().collect::<Vec<_>>().join(" ");
     let said = if said.is_empty() { "confirmed".to_string() } else { said };
-    let confirmed = format!("verdict: ok\nreviewed: {}\nconfirmed by the user: {said}\n\n{findings}\n", verdict.sha);
+    let confirmed = format!("verdict: ok\nreviewed: {}\n{by}: {said}\n\n{findings}\n", verdict.sha);
     save(state, address, &confirmed, read_rules, || fingerprint(&verdict.sha))
 }
 

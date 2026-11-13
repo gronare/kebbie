@@ -1886,3 +1886,28 @@ fn the_lead_names_a_tasks_recipe_to_start_it_and_kebbie_keeps_it_on_the_board_an
     let task = status["items"].as_array().unwrap().iter().find(|item| item["name"] == "billing").unwrap().clone();
     assert_eq!((task["recipe"]["name"].as_str(), task["recipe"]["shown"].as_str(), task["recipe"]["why"].as_str()), (Some("small-fix"), Some("small fix"), Some("one function and its test")), "{task}");
 }
+
+#[test]
+fn a_task_raises_an_obstacle_which_is_kept_queued_listed_and_decided_by_you_and_never_by_the_task() {
+    let lab = Lab::new("obstacle");
+    let (_, slot) = lab.task_fixture();
+    let slot_dir = slot.to_str().unwrap();
+    let raised = lab.run(&["-C", slot_dir, "obstacle", "--on", "Lint from the index", "the lint needs each note's frontmatter; the index stores titles (src/index.py:88)"]);
+    assert!(raised.status.success() && stdout(&raised).starts_with("Raised o1: kebbie's investigator decides it"), "{}{}", stdout(&raised), stderr(&raised));
+    assert!(lab.state.join("investigate/billing@app.wanted").is_file(), "the keeper starts the investigator for it");
+    let again = lab.run(&["-C", slot_dir, "obstacle", "The lint needs each note's frontmatter, the index stores titles: src/index.py:88"]);
+    assert!(stdout(&again).contains("raised already as o1"), "{}", stdout(&again));
+    let listed: serde_json::Value = serde_json::from_str(&stdout(&lab.run(&["obstacles", "--json"]))).unwrap();
+    assert_eq!((listed[0]["task"].as_str(), listed[0]["state"].as_str(), listed[0]["on"].as_str()), (Some("billing@app"), Some("raised"), Some("Lint from the index")));
+    let status: serde_json::Value = serde_json::from_str(&stdout(&lab.run(&["status", "--json"]))).unwrap();
+    let item = status["items"].as_array().unwrap().iter().find(|item| item["name"] == "billing").unwrap().clone();
+    assert!(item["summary"].as_str().unwrap().starts_with("obstacle · investigating"), "{item}");
+    let decided = lab.run(&["obstacles", "decide", "billing", "store", "the", "frontmatter", "in", "the", "index", "first"]);
+    assert!(decided.status.success(), "{}", stderr(&decided));
+    let shown = stdout(&lab.run(&["obstacles", "billing"]));
+    assert!(shown.contains("store the frontmatter in the index first (you)"), "{shown}");
+    assert!(stderr(&lab.run(&["obstacles", "decide", "billing", "again"])).contains("No open obstacle of \"billing\""));
+    let found = lab.run(&["found"]);
+    assert!(stdout(&found).starts_with("Nothing under Found by tasks"), "{}", stdout(&found));
+    assert!(!lab.run(&["obstacle", "outside", "a", "task"]).status.success(), "a raise outside a task's worktree is refused");
+}

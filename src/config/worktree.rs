@@ -26,6 +26,7 @@ pub struct Worktree {
     pub review_auto: Option<ReviewAuto>,
     pub review_profile: Option<String>,
     pub review_second: Option<Second>,
+    pub investigate_profile: Option<String>,
     pub notify_command: Option<String>,
     pub vault_command: Option<String>,
     pub server_name: Option<String>,
@@ -59,6 +60,7 @@ fn worktree(table: &Table) -> Result<Worktree> {
         review_auto: None,
         review_profile: None,
         review_second: None,
+        investigate_profile: None,
         notify_command: None,
         vault_command: None,
         server_name: text(worktree, "server_name", "worktree.server_name")?,
@@ -126,6 +128,9 @@ fn with_review(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
         worktree.review_auto = review_auto(review)?;
         worktree.review_profile = profile(review, "review.profile")?;
         worktree.review_second = text(review, "second", "review.second")?.map(|text| Second::parse(&text)).transpose()?;
+    }
+    if let Some(investigate) = subtable(table, "investigate", "investigate")? {
+        worktree.investigate_profile = profile(investigate, "investigate.profile")?;
     }
     Ok(worktree)
 }

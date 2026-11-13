@@ -44,10 +44,11 @@ fn says(text: &str, needed: &[&str], situation: &str) {
 fn a_plan_step_that_needs_what_the_code_lacks_stops_and_is_raised_as_an_obstacle_with_every_way_listed() {
     let role = task_role();
     let questions = section(&role, "## Questions");
-    says(questions, &["**obstacle**", "a precondition the work needs is missing", "only by a workaround", "Stop the work it blocks", "/bin/kebbie tell lead \"obstacle: ", "each way you see, the workaround among them", "go on with work it does not touch", "`--state blocked`", "kebbie:playbook"], "a planned step reads a field the index does not store");
+    says(questions, &["**obstacle**", "a precondition the work needs is missing", "only by a workaround", "Stop the work it blocks", "/bin/kebbie obstacle --on \"<the work it blocks>\" \"", "each way you see, the workaround among them", "go on with work it does not touch", "`--state blocked`", "kebbie:playbook"], "a planned step reads a field the index does not store");
     says(&playbook("OBSTACLE.md"), &["Done when", "file:line", "what you read to know it", "workaround", "the decision"], "the task writes the obstacle so the investigator decides without asking back");
     let rules = section(&role, "## Rules");
-    assert!(rules.contains("its decision on an obstacle you raised"), "the lead's decision on an obstacle is the call the task follows, not information to weigh");
+    assert!(rules.contains("the decision on an obstacle you raised (`[from kebbie]`, or the lead's)"), "the decision on an obstacle is the call the task follows, not information to weigh");
+    assert!(!questions.contains("tell lead \"obstacle:"), "an obstacle is raised as kebbie's state, not as a message the lead may miss");
 }
 
 #[test]
@@ -94,7 +95,9 @@ fn a_finding_seen_in_another_task_is_added_to_its_item_and_the_lead_raises_it_on
     let role = task_role();
     says(section(&role, "## What you notice outside your task"), &["search the backlog for it first", "add this task to its Source"], "the same failing suite was filed four ways");
     says(&file("skills/write-backlog-item/SKILL.md"), &["Search first", "add your source to its Source"], "the backlog skill searches before it files");
-    says(&lead_role(), &["seen in a second task", "its own problem", "once"], "the lead heard about it once and two tasks skipped it");
+    says(&lead_role(), &["seen in a second task", "its own problem", "once", "found twice"], "the lead heard about it once and two tasks skipped it");
+    says(section(&role, "## What you notice outside your task"), &["Found by tasks", "/bin/kebbie found", "(found:<id>)", "counts as found again"], "a repeat counts on its item instead of filing a second one");
+    says(&playbook("CARD.md"), &["(found:<id>)", "kebbie found"], "the card's Also noticed lines link to their item");
     says(&investigator(), &["seen before", "root cause"], "a recurring obstacle gets a task for its cause");
 }
 
@@ -102,8 +105,8 @@ fn a_finding_seen_in_another_task_is_added_to_its_item_and_the_lead_raises_it_on
 fn an_obstacle_goes_to_the_investigator_and_the_lead_never_picks_a_way_from_memory() {
     let lead = lead_role();
     let obstacles = section(&lead, "## Obstacles and findings");
-    says(obstacles, &["not a question of method", "from memory", "kebbie:investigate", "subagent", "effort"], "an obstacle reached the lead as a question");
-    says(&playbook("OBSTACLE.md"), &["`workaround`", "`subtask`", "`task`", "`ask`", "kebbie start", "--after", "kebbie ask"], "the lead carries out each decision");
+    says(obstacles, &["kebbie obstacle", "obstacle · investigating", "its own investigator", "investigate.profile", "not a question of method", "from memory", "kebbie obstacles decide", "kebbie recipe"], "an obstacle reached the lead as a question");
+    says(&playbook("OBSTACLE.md"), &["`workaround`", "`subtask`", "`task`", "`ask`", "kebbie files the real fix", "first among the task's unpushed steps", "queues the task", "asks the user on the board", "kebbie:investigate", "subagent", "effort", "kebbie obstacles decide"], "kebbie carries out each decision, and the lead the ones that reach it");
     says(section(&lead, "## Questions from tasks"), &["An obstacle is not a question of method"], "the method rule names its exception");
 }
 
@@ -118,7 +121,7 @@ fn the_investigator_decides_in_line_with_the_goal_and_the_codes_quality_with_its
 #[test]
 fn a_review_finding_about_scope_or_intent_is_resolved_through_the_investigator_and_only_the_uncertain_reaches_the_user() {
     let lead = lead_role();
-    says(section(&lead, "## Obstacles and findings"), &["scope", "intent", "investigat", "still uncertain"], "a confirm finding whose answer was in the task's note went to the user");
+    says(section(&lead, "## Obstacles and findings"), &["scope or intent", "`confirm:` lines", "to its investigator itself", "cannot settle reaches the user"], "a confirm finding whose answer was in the task's note went to the user");
     says(&file("skills/review/SKILL.md"), &["resolved", "investigat"], "the reviewer's findings are for resolving");
 }
 
@@ -145,4 +148,23 @@ fn the_playbook_points_each_branch_at_its_page() {
 #[test]
 fn away_mode_investigates_obstacles_as_ever_and_only_a_question_waits() {
     says(section(&lead_role(), "## Away mode"), &["obstacle", "investigat", "`ask`", "kept"], "the user away");
+}
+
+#[test]
+fn the_answer_block_the_investigator_is_taught_is_the_one_kebbie_parses() {
+    let skill = investigator();
+    let block = &skill[skill.find("```\ndecision:").expect("the skill shows its answer block") + 4..];
+    let block = &block[..block.find("```").unwrap()];
+    let keys: Vec<&str> = block.lines().filter_map(|line| line.split_once(':').map(|(key, _)| key.trim())).collect();
+    assert_eq!(keys, ["decision", "reason", "plan", "replaced by", "subtask", "task", "repo", "prompt", "question", "option", "recommend"], "every field kebbie reads, in the skill's order");
+    let filled = "decision: task\nreason: another repo owns the index (notes/src/index.py:88)\nplan: the lint waits\ntask: index-frontmatter\nrepo: notes\nprompt: Store each note's frontmatter in the index";
+    let parsed = crate::obstacle::parse(filled).expect("a filled block parses");
+    assert_eq!((parsed.task.as_deref(), parsed.repo.as_deref()), (Some("index-frontmatter"), Some("notes")));
+    says(&skill, &["Use when kebbie or the lead runs you", "kebbie records it as the investigator's", "kebbie obstacles <task> --json", "kebbie found", "kebbie files the real fix"], "the investigator is kebbie's own agent");
+}
+
+#[test]
+fn a_decision_kebbie_sends_is_the_tasks_to_follow_and_the_same_obstacle_raised_again_is_not_investigated_twice() {
+    let page = playbook("OBSTACLE.md");
+    says(&page, &["comes from kebbie", "kebbie puts it in your steps", "decided before is your decision", "without a second investigation", "a task's third, asks the user whether the plan holds"], "a task kept raising the same obstacle until it got the answer it wanted");
 }

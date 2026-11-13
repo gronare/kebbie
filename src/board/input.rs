@@ -31,6 +31,8 @@ pub(super) enum Purpose {
     CommentWords(u64),
     CommentReply(u64),
     CommentAnswer(u64),
+    FoundName(String),
+    FoundAdd(String),
 }
 
 impl App {
@@ -56,6 +58,16 @@ impl App {
             Purpose::StartAt(name) => self.in_background(format!("Setting when {name} starts…"), move || tasks::start_at(&name, &text)),
             Purpose::BacklogLaterName(entry) => {
                 self.mode = Mode::Input { purpose: Purpose::BacklogLaterAt(entry, text), label: START_AT_LABEL.to_string(), buffer: String::new() };
+            }
+            Purpose::FoundName(_) | Purpose::FoundAdd(_) if text.is_empty() => {}
+            Purpose::FoundName(id) => self.in_background(format!("Starting {text}…"), move || crate::found::start(&crate::lead::state_dir()?, &crate::permit::Caller::User, &id, Some(&text))),
+            Purpose::FoundAdd(id) => {
+                let result = crate::lead::state_dir().and_then(|state| crate::found::add(&state, &crate::permit::Caller::User, &id, &text));
+                self.subject = Some(super::notices::Subject::plain("backlog"));
+                if result.is_ok() {
+                    self.found.retain(|item| item.id != id);
+                }
+                self.show(result);
             }
             Purpose::BacklogItem => {
                 let label = "Priority: urgent, high, medium or low (empty for none)".to_string();

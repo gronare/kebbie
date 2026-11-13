@@ -386,6 +386,33 @@ fn ongoing_rows(app: &App, order: &[BacklogRow], focused: bool, width: usize, li
     selected_line
 }
 
+fn found_rows(app: &App, order: &[BacklogRow], focused: bool, width: usize, lines: &mut Vec<Line<'static>>, rows: &mut Rows) -> Option<usize> {
+    let mut selected_line = None;
+    lines.push(Line::from(vec![Span::styled(crate::found::SECTION.to_uppercase(), bold(PEACH)), Span::styled(format!("  {}", app.found.len()), style(FAINT)), Span::styled("  noticed outside their own work", style(MUTED))]));
+    for (found_index, item) in app.found.iter().enumerate() {
+        let index = row_index(order, BacklogRow::Found(found_index));
+        if !app.shown(Column::Backlog, index) {
+            continue;
+        }
+        let selected = index == app.backlog_selected;
+        if selected {
+            selected_line = Some(lines.len());
+        }
+        let icon = Span::styled(if item.count > 1 { "◆" } else { "◇" }, style(if item.count > 1 { YELLOW } else { PEACH }));
+        let start = lines.len();
+        if selected && focused {
+            lines.extend(wrapped_row(icon, &item.line, "", width));
+            lines.push(chips(vec![(item.repo.clone(), TEAL), (item.found_by(), SUBTEXT)]));
+            lines.push(options_hint());
+        } else {
+            let times = if item.count > 1 { format!("{}×", item.count) } else { String::new() };
+            lines.push(row(selected, focused, icon, &item.line, None, &times, width));
+        }
+        rows.push((start, lines.len(), Hit::Entry(index)));
+    }
+    selected_line
+}
+
 fn row_index(order: &[BacklogRow], wanted: BacklogRow) -> usize {
     order.iter().position(|row| *row == wanted).unwrap_or(usize::MAX)
 }
@@ -394,7 +421,7 @@ pub(super) fn backlog_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usi
     let focused = app.column == Column::Backlog && !app.in_messages;
     let right = match app.filter_of(Column::Backlog) {
         Some(filter) => format!("{} / {filter}", plural((0..app.backlog_len()).filter(|index| app.shown(Column::Backlog, *index)).count(), "item")),
-        None => format!("{} items", app.backlog.entries.len()),
+        None => format!("{} items", app.backlog.entries.len() + app.found.len()),
     };
     let mut lines = column_title("BACKLOG", right, focused, width);
     let mut rows = Vec::new();
@@ -402,6 +429,12 @@ pub(super) fn backlog_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usi
     let mut selected_line = 0;
     if app.ongoing_at == OngoingAt::Top && !app.ongoing.is_empty() {
         selected_line = ongoing_rows(app, &order, focused, width, &mut lines, &mut rows).unwrap_or(0);
+        lines.push(Line::default());
+    }
+    if !app.found.is_empty() {
+        if let Some(line) = found_rows(app, &order, focused, width, &mut lines, &mut rows) {
+            selected_line = line;
+        }
         lines.push(Line::default());
     }
     let mut current: Option<&str> = None;
@@ -468,6 +501,26 @@ mod tests {
     use crate::board::test_support::*;
     use crate::keys::Act;
     use crate::status::Checkout;
+
+    #[test]
+    fn found_by_tasks_heads_the_backlog_with_how_often_and_by_whom_and_its_options() {
+        let mut app = test_app(Vec::new());
+        let item = |id: &str, line: &str, sources: &[&str]| crate::found::Item { id: id.to_string(), line: line.to_string(), repo: "app".to_string(), sources: sources.iter().map(|source| source.to_string()).collect(), count: sources.len() as u32, first_at: 0, last_at: 0, state: crate::found::State::Open, outcome: None };
+        app.found = vec![item("f1", "The VAT rounding test is flaky on main", &["billing@app", "search@app"]), item("f2", "The README's install step names an old flag", &["billing@app"])];
+        app.column = Column::Backlog;
+        app.backlog_selected = 0;
+        let (rows, _) = render(&mut app, 120, 30);
+        let screen = rows.join("\n");
+        println!("{screen}");
+        assert!(screen.contains("FOUND BY TASKS  2  noticed outside their own work"), "{screen}");
+        assert!(screen.contains("BACKLOG") && screen.contains("2 items"), "{screen}");
+        assert!(screen.contains("◆ The VAT rounding test is flaky on main") && screen.contains("app") && screen.contains("found 2× · by billing, search"), "the selected item shows whole, with its repo and who found it: {screen}");
+        assert!(screen.contains("◇ The README's install step names"), "{screen}");
+        let labels: Vec<String> = app.choices().into_iter().map(|choice| choice.label).collect();
+        assert_eq!(labels, ["Start a task", "Add to a running task", "Dismiss"], "no task of the item's is running here");
+        app.act(Act::Go);
+        assert!(matches!(&app.mode, crate::board::Mode::Input { purpose: crate::board::input::Purpose::FoundName(id), buffer, .. } if id == "f1" && buffer == "the-vat-rounding"), "start asks for a name, suggested from the line");
+    }
     use crate::board::input::Purpose;
     use crate::board::{Column, Mode, Ongoing};
     use ratatui::crossterm::event::KeyCode;

@@ -454,6 +454,25 @@ pub(crate) fn reviewer_args(reviewer: &super::Reviewer) -> Vec<String> {
     args
 }
 
+const INVESTIGATOR_ALLOWED: [&str; 10] = ["Read", "Grep", "Glob", "WebSearch", "WebFetch", "mcp__plugin_vault_vault", "Bash(git log:*)", "Bash(git diff:*)", "Bash(git show:*)", "Bash(git grep:*)"];
+const INVESTIGATOR_KEBBIE: [&str; 8] = ["status", "messages", "obstacles", "steps", "backlog", "found", "peers", "docs"];
+
+// The investigator runs with the user's own settings, plugins and MCP servers, as every agent here does: the code, the vault and the web, and kebbie's reading commands.
+pub(crate) fn investigator_args(reviewer: &super::Reviewer, kebbie: &str) -> Vec<String> {
+    let super::Reviewer { model, effort, prompt, .. } = *reviewer;
+    let mut args: Vec<String> = ["-p", "--output-format", "text", "--no-session-persistence", "--permission-mode", "dontAsk", "--allowedTools"].map(str::to_string).to_vec();
+    args.extend(INVESTIGATOR_ALLOWED.map(str::to_string));
+    args.extend(INVESTIGATOR_KEBBIE.map(|command| format!("Bash({kebbie} {command}:*)")));
+    args.extend(["--append-system-prompt-file".to_string(), prompt.to_string_lossy().to_string()]);
+    if let Some(model) = model {
+        args.extend(["--model".to_string(), model.to_string()]);
+    }
+    if let Some(effort) = effort {
+        args.extend(["--effort".to_string(), effort.to_string()]);
+    }
+    args
+}
+
 pub(crate) fn reviewer_settings(kebbie: &str, sandbox: bool) -> String {
     let mut written = json!({ "hooks": { "PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("{} hook --review", crate::sh::quote(kebbie)) }] }] } });
     written["env"] = crate::review::READER_ENV.iter().map(|(name, value)| (name.to_string(), json!(value))).collect::<serde_json::Map<String, Value>>().into();
@@ -782,7 +801,7 @@ mod tests {
             assert!(excluded.iter().any(|pattern| excluded_matches(pattern, &line)) || user_only || ["done", "docs"].contains(&command.as_str()), "a task is told to run {line}, which the sandbox would cut off from kebbie's state");
             seen.push(command);
         }
-        for command in ["report", "ask", "tell", "peers", "routine ok", "link", "backlog add"] {
+        for command in ["report", "ask", "obstacle", "found", "tell", "peers", "routine ok", "link", "backlog add"] {
             assert!(seen.iter().any(|seen| seen == command), "{command} is no longer in the task's instructions; drop it from TASK_COMMANDS");
         }
     }

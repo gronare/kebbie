@@ -218,16 +218,18 @@ pub fn save_card(state: &Path, address: &str, sha: &str, text: &str) -> Result<(
     crate::state::write(&file, format!("card: {sha}\n\n{text}\n"))
 }
 
-// An untracked card left in the worktree would count as an uncommitted change and stop the push, so kebbie keeps the card and removes the file.
+// An untracked card left in the worktree would count as an uncommitted change and stop the push, so kebbie keeps the card and removes the file; its Also noticed lines are filed as it is taken.
 fn take_card(cwd: &Path, file: &Path, state: &Path, address: &str, text: &str) -> Result<String> {
-    save_card(state, address, &git(cwd, &["rev-parse", "HEAD"])?, text)?;
+    let text = crate::found::file_card(state, address, text, messages::now())?;
+    save_card(state, address, &git(cwd, &["rev-parse", "HEAD"])?, &text)?;
     let untracked = !crate::sh::succeeds("git", &["ls-files", "--error-unmatch", &file.to_string_lossy()], Some(cwd));
     let top = git(cwd, &["rev-parse", "--show-toplevel"])?;
     let inside = file.canonicalize().is_ok_and(|file| Path::new(&top).canonicalize().is_ok_and(|top| file.starts_with(top)));
     if untracked && inside {
         fs::remove_file(file).map_err(|error| format!("{}: {error}", file.display()))?;
     }
-    Ok(" The card is kept for the push dialog.".to_string())
+    let filed = if text.contains("(found:") { format!(" Its Also noticed lines are filed under {} on the board's backlog, each line ending with its item.", crate::found::SECTION) } else { String::new() };
+    Ok(format!(" The card is kept for the push dialog.{filed}"))
 }
 
 pub fn card_in(state: &Path, address: &str) -> Option<Card> {

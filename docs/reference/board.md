@@ -71,6 +71,8 @@ Work:
 - A folded row, the parked line, the comments or the bugs and wishes to send, is selected like a task: `⏎` or a click on it once selected opens it, and `esc` on a row inside folds it back with the selection on the row.
 - After an update's recheck fixed some bugs, `✓ Fixed in kebbie <version>: N bugs you ran into` with their titles. `i` shows the list and clears the line.
 
+Backlog: FOUND BY TASKS lists what tasks noticed outside their work. A `◆` and `2×` mark one found more than once; the selected item shows whole, with its repo and who found it (`found 2× · by billing, search`). See [`kebbie found`](commands.md#kebbie-found---json).
+
 Backlog: ONGOING lists vault project notes in progress (status active, or draft without a priority) when the vault is on. It sits above the items, below them or nowhere, by [`board.backlog.ongoing`](configuration.md).
 
 A backlog item's row shows its state in the right field:
@@ -91,6 +93,7 @@ A task row shows its commits, uncommitted and untracked files, and how far it is
 | `follows main` | On the open task, while it is kept rebased on main. |
 | `bypass` | Its Claude runs in bypass permissions mode. The open task says `bypass permissions: Claude asks for no permission`. |
 | `you:` | Your next step, from the task's last report. |
+| `obstacle · investigating` | The task raised an [obstacle](../explanation/obstacles-and-findings.md) and kebbie's investigator is on it; the task shows under Working. `obstacle · asked you` while its question waits, `obstacle · with the lead` when the lead decides it. |
 | `web` | While its dev server runs: the server's address as a link. |
 | `push waits for tests · you` | A push waits for the task's Claude to test the files the default branch changed under it. `· lead` when the lead pushed. kebbie pushes once the task reports ready with the same commits. |
 | `recipe: small fix`, muted | Under the row: how the task is done, by the [recipe](commands.md#kebbie-recipe-task-recipe-why) the lead named; the open task adds its why. The assessor's word follows it on the same line. |
@@ -414,6 +417,7 @@ For an older Claude Code, or when the inbox refuses a message, kebbie types it i
 | `⏎` | The item's card. A row kept by kebbie or a Linear issue has no card: `⏎` is its options. | On an item. |
 | `o` | The item's options, each one explained. | On an item. |
 | `g` | Go to the task working on this note, or resume the note as a new task. | On an ONGOING note. |
+| `o` | Start a task (a name, suggested from the line), Add to the running task that found it (a task name, filled in), or Dismiss. | On a FOUND BY TASKS item. |
 | `⏎` | The note's card. | On an ONGOING note. |
 | `l` | Start the item as a task later: a name, then a time. It waits under Queued until then, as with [`kebbie start --at`](commands.md#kebbie-start-name-prompt). | On an item. |
 | `R` | Ask the lead to refresh the backlog. | On an item. |

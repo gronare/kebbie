@@ -64,6 +64,7 @@ pub struct Settings {
     pub review_auto: Setting<ReviewAuto>,
     pub review_profile: Setting<String>,
     pub review_second: Setting<Second>,
+    pub investigate_profile: Setting<String>,
     pub notify_command: Setting<Option<String>>,
     pub vault_command: Setting<Option<String>>,
     pub server_name: Setting<String>,
@@ -137,6 +138,7 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         review_profile: or_default(pick(repo.review_profile.as_ref(), machine.worktree.review_profile.as_ref()), crate::profiles::REVIEWER.to_string())
             .map(|name| if name == NONE { crate::profiles::REVIEWER.to_string() } else { name }),
         review_second: or_default(pick(repo.review_second.as_ref(), machine.worktree.review_second.as_ref()), Second::default()),
+        investigate_profile: or_default(pick(repo.investigate_profile.as_ref(), machine.worktree.investigate_profile.as_ref()), crate::obstacle::INVESTIGATOR.to_string()),
         notify_command: optional(pick(None, machine.worktree.notify_command.as_ref())),
         vault_command: optional(pick(None, machine.worktree.vault_command.as_ref())),
         server_name: or_default(pick(None, machine.worktree.server_name.as_ref()), DEFAULT_SERVER_NAME.to_string()),

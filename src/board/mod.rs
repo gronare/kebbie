@@ -163,6 +163,7 @@ struct App {
     tasks: Vec<Item>,
     checkouts: Vec<Checkout>,
     backlog: Backlog,
+    found: Vec<crate::found::Item>,
     work_selected: usize,
     backlog_selected: usize,
     mode: Mode,
@@ -253,6 +254,7 @@ type Updater = std::sync::Arc<dyn Fn() -> Result<String> + Send + Sync>;
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum BacklogRow {
     Ongoing(usize),
+    Found(usize),
     Entry(usize),
 }
 
@@ -284,7 +286,7 @@ impl App {
     // The Backlog column's rows top to bottom; backlog_selected and Hit::Entry index into this.
     fn backlog_rows(&self) -> Vec<BacklogRow> {
         let ongoing = (0..self.ongoing.len()).map(BacklogRow::Ongoing);
-        let entries = (0..self.backlog.entries.len()).map(BacklogRow::Entry);
+        let entries = (0..self.found.len()).map(BacklogRow::Found).chain((0..self.backlog.entries.len()).map(BacklogRow::Entry));
         match self.ongoing_at {
             OngoingAt::Top => ongoing.chain(entries).collect(),
             OngoingAt::Bottom => entries.chain(ongoing).collect(),
@@ -299,6 +301,39 @@ impl App {
     fn selected_entry(&self) -> Option<Entry> {
         let Some(BacklogRow::Entry(entry)) = self.backlog_row(self.backlog_selected) else { return None };
         self.backlog.entries.get(entry).filter(|_| self.shown(Column::Backlog, self.backlog_selected)).cloned()
+    }
+
+    fn selected_found(&self) -> Option<crate::found::Item> {
+        let Some(BacklogRow::Found(found)) = self.backlog_row(self.backlog_selected) else { return None };
+        self.found.get(found).filter(|_| self.shown(Column::Backlog, self.backlog_selected)).cloned()
+    }
+
+    // A running task the item suits: one that found it, else one in its repo.
+    fn found_target(&self, item: &crate::found::Item) -> Option<String> {
+        let running = |item_task: &Item| item_task.agent.is_some() && item_task.queued.is_none();
+        self.tasks.iter().filter(|task| running(task)).map(|task| peers::address(&task.name, &task.place)).find(|address| item.sources.contains(address))
+            .or_else(|| self.tasks.iter().filter(|task| running(task) && task.place == item.repo).map(|task| peers::address(&task.name, &task.place)).next())
+    }
+
+    fn act_on_found(&mut self, act: Act, item: crate::found::Item) {
+        match act {
+            Act::Go => self.mode = Mode::Input { purpose: Purpose::FoundName(item.id.clone()), label: "Start as task: name".to_string(), buffer: item.name() },
+            Act::Chat => {
+                let buffer = self.found_target(&item).unwrap_or_default();
+                self.mode = Mode::Input { purpose: Purpose::FoundAdd(item.id), label: "Add to running task: name".to_string(), buffer };
+            }
+            Act::Drop => {
+                let result = crate::lead::state_dir().and_then(|state| crate::found::dismiss_in(&state, &crate::permit::Caller::User, &item.id));
+                self.subject = Some(notices::Subject::plain("backlog"));
+                if result.is_ok() {
+                    self.found.retain(|found| found.id != item.id);
+                    self.backlog_selected = self.backlog_selected.min(self.backlog_len().saturating_sub(1));
+                }
+                self.show(result);
+            }
+            Act::Refresh => self.refresh_backlog(),
+            _ => {}
+        }
     }
 
     fn selected_ongoing(&self) -> Option<Ongoing> {
@@ -343,6 +378,7 @@ impl App {
             Column::Backlog => match self.backlog_row(index) {
                 Some(BacklogRow::Ongoing(note)) => self.ongoing.get(note).is_some_and(|note| has(&note.title) || has(&note.area)),
                 Some(BacklogRow::Entry(entry)) => self.backlog.entries.get(entry).is_some_and(|entry| has(&entry.title) || has(&entry.area)),
+                Some(BacklogRow::Found(found)) => self.found.get(found).is_some_and(|item| has(&item.line) || has(&item.repo)),
                 None => false,
             },
         }
@@ -780,6 +816,9 @@ impl App {
             }
             return;
         }
+        if self.column == Column::Backlog && let Some(item) = self.selected_found() {
+            return self.act_on_found(act, item);
+        }
         match self.column {
             Column::Backlog => match act {
                 Act::Go => {
@@ -1075,7 +1114,7 @@ fn renewal(path: &Path, state: &str) -> Command {
 impl App {
     fn new(sources: Vec<Source>, backlog: Backlog, overlay: bool, refresh: Sender<()>) -> Self {
         App {
-            column: Column::Work, tasks: Vec::new(), checkouts: Vec::new(), backlog, work_selected: 0, backlog_selected: 0,
+            column: Column::Work, tasks: Vec::new(), checkouts: Vec::new(), backlog, found: Vec::new(), work_selected: 0, backlog_selected: 0,
             mode: Mode::Normal, overlay, loaded: false, error: None, screens: HashMap::new(), refresh, quit: false, wanted_task: None, hits: Vec::new(), links: Vec::new(),
             page: Page::Work, areas: area_page::Page::new(sources.clone()), routines: routine_page::Page::new(config::path(), config::repos_dir()), settings: settings_page::Page::new(settings_page::Paths::current(), None), sources, fetch_failures: Vec::new(), away: false,
             messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), answering: None, sending: None, offers: Vec::new(), offer_panel: Default::default(), reporter: Default::default(), fixed: None, fixed_seen: 0, usage: None, ongoing: Vec::new(), groups: Group::ALL.to_vec(), ongoing_at: OngoingAt::default(), parked_open: false,
@@ -1180,6 +1219,7 @@ pub fn run(overlay: bool) -> Result<String> {
                             app.sources = sources;
                         }
                         app.backlog = backlog::load();
+                        app.found = crate::lead::state_dir().map(|state| crate::found::open_in(&state)).unwrap_or_default();
                         if let (Mode::ItemCard(card), Ok(state)) = (&mut app.mode, crate::lead::state_dir()) {
                             card.reload(&state);
                         }
