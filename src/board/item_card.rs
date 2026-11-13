@@ -118,7 +118,7 @@ impl ItemCard {
             }
             _ => return None,
         }
-        self.answers = crate::backlog_kept::settle(state, &self.entry.reference, &questions_in(&self.body));
+        self.answers = crate::backlog_kept::settle(state, &self.entry.reference, &self.body);
         self.pick = self.pick.min(self.questions().len().saturating_sub(1));
         Some(())
     }
@@ -499,10 +499,10 @@ mod tests {
         let sent = screen(&mut shown).join("\n");
         assert!(sent.contains("?  with the lead: \"Only the e2e job.\"") || sent.contains("? with the lead: \"Only the e2e job.\""), "{sent}");
         assert!(sent.contains("state     drafting: 1 question waits on you · 1 answer with the lead") && sent.contains("▌? Should a rerun show on the row?"), "{sent}");
-        let kept = crate::backlog_kept::settle(&state, "Projects/answer.md", &questions_in(BODY));
+        let kept = crate::backlog_kept::settle(&state, "Projects/answer.md", BODY);
         assert_eq!(kept.len(), 1, "kept while the question stands");
         let folded = BODY.replace("- [ ] Which red runs count as flaky?\n", "");
-        assert!(crate::backlog_kept::settle(&state, "Projects/answer.md", &questions_in(&folded)).is_empty(), "folded in, it leaves");
+        assert!(crate::backlog_kept::settle(&state, "Projects/answer.md", &folded).is_empty(), "folded in, it leaves");
         let mut after = ItemCard::new(entry("Projects/answer.md", drafting(1)), folded, Vec::new());
         assert!(screen(&mut after).join("\n").contains("state     drafting: 1 question waits on you\n") || screen(&mut after).join("\n").contains("drafting: 1 question waits on you "));
     }

@@ -22,6 +22,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A backlog row shows whether the item is to write, drafting or waits on your answers, and g asks once before starting one that waits.
 
 ### Fixed
+- An answer you gave on a backlog item stays with the lead when the board reads the item while the lead is still writing it, and answers or kept items saved at the same moment from the board, the keeper and the CLI are all kept.
 - A device that comes back with another key is a request of its own and never takes over the approval of the device it was; a name or id two devices answer to is refused with each one's key.
 - A command waiting for a device's approval no longer has the keeper rewrite its files and check the command again every second; it is checked again when you approve or deny the device.
 - The keeper's hub round reads the backlog once and writes its notice record only when something changed.

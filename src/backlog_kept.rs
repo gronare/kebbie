@@ -1,3 +1,4 @@
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
@@ -34,6 +35,28 @@ fn answers_file(state: &Path) -> PathBuf {
     state.join("backlog-answers.json")
 }
 
+// Held across each read, change and write of one of the two files, so the board, the keeper and the CLI never drop each other's change.
+struct Locked(std::fs::File);
+
+impl Locked {
+    fn take(file: &Path) -> Result<Locked> {
+        let path = file.with_extension("lock");
+        let lock = crate::state::append_to(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+        // SAFETY: flock on a descriptor this File owns.
+        match unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } {
+            0 => Ok(Locked(lock)),
+            _ => Err(format!("{}: {}", path.display(), std::io::Error::last_os_error())),
+        }
+    }
+}
+
+impl Drop for Locked {
+    fn drop(&mut self) {
+        // SAFETY: unlocks the descriptor this value owns.
+        unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
 fn read(path: &Path) -> Vec<Value> {
     std::fs::read_to_string(path).ok().and_then(|text| serde_json::from_str::<Value>(&text).ok()).and_then(|value| value.as_array().cloned()).unwrap_or_default()
 }
@@ -53,6 +76,7 @@ fn write_kept(state: &Path, kept: &[Kept]) -> Result<()> {
 }
 
 pub fn keep(state: &Path, line: &str, priority: &str, repo: &str, at: u64) -> Result<String> {
+    let _locked = Locked::take(&kept_file(state))?;
     let mut kept = kept_in(state);
     let id = (0u32..).map(|attempt| sha1_smol::Sha1::from(format!("{line}\n{at}\n{attempt}")).digest().to_string()[..6].to_string())
         .find(|id| !kept.iter().any(|other| &other.id == id)).unwrap_or_default();
@@ -63,6 +87,7 @@ pub fn keep(state: &Path, line: &str, priority: &str, repo: &str, at: u64) -> Re
 
 pub fn release(state: &Path, id: &str) -> Result<bool> {
     let id = id.strip_prefix(PREFIX).unwrap_or(id);
+    let _locked = Locked::take(&kept_file(state))?;
     let mut kept = kept_in(state);
     let before = kept.len();
     kept.retain(|other| other.id != id);
@@ -100,6 +125,7 @@ fn write_answers(state: &Path, answers: &[Answer]) -> Result<()> {
 }
 
 pub fn answer(state: &Path, given: Answer) -> Result<()> {
+    let _locked = Locked::take(&answers_file(state))?;
     let mut answers = answers_in(state);
     answers.retain(|other| !(other.item == given.item && other.question == given.question));
     answers.push(given);
@@ -111,13 +137,19 @@ pub fn answer_text(who: &str, title: &str, wherein: &str, question: &str, answer
 }
 
 // An answer leaves once its question is gone from the item: the lead has folded it in.
-pub fn settle(state: &Path, item: &str, open: &[Question]) -> Vec<Answer> {
-    settle_all(state, &[(item, open)]).into_iter().filter(|answer| answer.item == item).collect()
+pub fn settle(state: &Path, item: &str, body: &str) -> Vec<Answer> {
+    settle_all(state, &[(item, body)]).into_iter().filter(|answer| answer.item == item).collect()
 }
 
-// The same for the whole backlog in one read and at most one write; an item not listed keeps its answers, and every answer still with the lead comes back.
-pub fn settle_all(state: &Path, open: &[(&str, &[Question])]) -> Vec<Answer> {
+// The same for the whole backlog, given each item's body; an item not listed, or one read without its Open questions heading (half written as it was read), keeps its answers. Every answer still with the lead comes back.
+pub fn settle_all(state: &Path, bodies: &[(&str, &str)]) -> Vec<Answer> {
+    let open: Vec<(&str, Vec<Question>)> = bodies.iter().filter(|(_, body)| !crate::backlog_file::missing_sections(body).contains(&"Open questions")).map(|(item, body)| (*item, crate::backlog_file::questions_in(body))).collect();
     let still_open = |answer: &Answer| open.iter().find(|(item, _)| *item == answer.item).is_none_or(|(_, questions)| questions.iter().any(|question| question.text == answer.question));
+    let (kept, folded): (Vec<Answer>, Vec<Answer>) = answers_in(state).into_iter().partition(still_open);
+    if folded.is_empty() {
+        return kept;
+    }
+    let Ok(_locked) = Locked::take(&answers_file(state)) else { return kept };
     let (kept, folded): (Vec<Answer>, Vec<Answer>) = answers_in(state).into_iter().partition(still_open);
     if !folded.is_empty() {
         let _ = write_answers(state, &kept);
@@ -143,6 +175,50 @@ mod tests {
         assert!(kept_in(&state).is_empty() && !release(&state, &id).unwrap(), "released once");
     }
 
+    fn body(questions: &str) -> String {
+        format!("## Background\n\nB.\n\n## Goal\n\nG.\n\n## What we know\n\nK.\n\n## Open questions\n\n{questions}\n\n## Out of scope\n\nO.\n\n## Source\n\nS.\n")
+    }
+
+    #[test]
+    fn an_item_read_half_written_keeps_its_answers() {
+        let state = crate::sh::test_dir("backlog-answers-half");
+        answer(&state, Answer { item: "local:x".to_string(), question: "Which job?".to_string(), answer: "e2e".to_string(), at: 1 }).unwrap();
+        let whole = body("- [ ] Which job?");
+        let cut = &whole[..whole.find("## Open questions").unwrap()];
+        assert_eq!(settle(&state, "local:x", cut).len(), 1, "read while the lead was writing it, its questions only look gone");
+        assert_eq!(answers_in(&state).len(), 1);
+        assert!(settle(&state, "local:x", &body("")).is_empty(), "read whole without the question, the answer was folded in");
+        let _ = std::fs::remove_dir_all(state);
+    }
+
+    #[test]
+    fn a_note_in_another_shape_with_its_open_questions_folds_its_answers() {
+        let state = crate::sh::test_dir("backlog-answers-shape");
+        answer(&state, Answer { item: "Projects/old.md".to_string(), question: "Which job?".to_string(), answer: "e2e".to_string(), at: 1 }).unwrap();
+        let older = "## Background\n\nB.\n\n## Open questions\n\n- [ ] Which repo?\n";
+        assert!(settle(&state, "Projects/old.md", older).is_empty(), "no Goal or Source heading, yet its questions are all there: the answer was folded in");
+        assert!(answers_in(&state).is_empty());
+        let _ = std::fs::remove_dir_all(state);
+    }
+
+    #[test]
+    fn answers_and_kept_rows_written_at_once_are_all_kept() {
+        let state = crate::sh::test_dir("backlog-kept-race");
+        std::thread::scope(|scope| {
+            for writer in 0..8 {
+                let state = &state;
+                scope.spawn(move || {
+                    for round in 0..10 {
+                        answer(state, Answer { item: format!("local:{writer}"), question: format!("Q{round}?"), answer: "a".to_string(), at: 1 }).unwrap();
+                        keep(state, &format!("idea {writer} {round}"), "low", "", 1_000).unwrap();
+                    }
+                });
+            }
+        });
+        assert_eq!((answers_in(&state).len(), kept_in(&state).len()), (80, 80), "no writer's change was lost to another's");
+        let _ = std::fs::remove_dir_all(state);
+    }
+
     #[test]
     fn an_answer_waits_with_the_lead_until_its_question_leaves_the_item() {
         let state = crate::sh::test_dir("backlog-answers");
@@ -150,9 +226,8 @@ mod tests {
         answer(&state, given("Which job?")).unwrap();
         answer(&state, given("Which job?")).unwrap();
         answer(&state, Answer { item: "local:y".to_string(), ..given("Other?") }).unwrap();
-        let open = [Question { text: "Which job?".to_string(), blocks: true }];
-        assert_eq!(settle(&state, "local:x", &open).len(), 1, "a second answer to one question replaces the first");
-        assert!(settle(&state, "local:x", &[]).is_empty());
+        assert_eq!(settle(&state, "local:x", &body("- [ ] Which job?")).len(), 1, "a second answer to one question replaces the first");
+        assert!(settle(&state, "local:x", &body("")).is_empty());
         assert_eq!(answers_in(&state).len(), 1, "folded in, it leaves; another item's answer stays");
     }
 }

@@ -149,7 +149,6 @@ struct ItemRead {
     state: crate::backlog_file::State,
     body: String,
     filed: String,
-    open: Vec<crate::backlog_file::Question>,
 }
 
 // An item's state and markdown: a local one from the file already read, a vault one from the index or kebbie's copy.
@@ -169,14 +168,14 @@ fn read_item(entry: &Entry, local: &std::collections::HashMap<String, crate::bac
         }
         _ => return None,
     };
-    Some(ItemRead { state: state_now, open: crate::backlog_file::questions_in(&body), body, filed })
+    Some(ItemRead { state: state_now, body, filed })
 }
 
 // Each item's state, its questions waiting on the user and the answers of theirs still with the lead, settling the answers once for the whole backlog.
 fn shape_all(items: &mut [(Entry, Option<String>)], local: &std::collections::HashMap<String, crate::backlog_file::Item>, index: Option<&crate::vault::Index>, state: &Path) {
     let read: Vec<Option<ItemRead>> = items.iter().map(|(entry, _)| read_item(entry, local, index, state)).collect();
-    let open: Vec<(&str, &[crate::backlog_file::Question])> = items.iter().zip(&read).filter_map(|((entry, _), read)| Some((entry.reference.as_str(), read.as_ref()?.open.as_slice()))).collect();
-    let kept = crate::backlog_kept::settle_all(state, &open);
+    let bodies: Vec<(&str, &str)> = items.iter().zip(&read).filter_map(|((entry, _), read)| Some((entry.reference.as_str(), read.as_ref()?.body.as_str()))).collect();
+    let kept = crate::backlog_kept::settle_all(state, &bodies);
     for ((entry, body), read) in items.iter_mut().zip(read) {
         let Some(read) = read else { continue };
         let answered: Vec<String> = kept.iter().filter(|answer| answer.item == entry.reference).map(|answer| answer.question.clone()).collect();
