@@ -150,7 +150,7 @@ A listed test command inside a loop, a condition or `xargs` is not recorded eith
 | Working | Tasks at work since their prompt, their last report or your answer. |
 | In review | Reported ready and sent to the reviewer, waiting for a pass on its current code. The row says who acts next: `review running · waits on the reviewer`, or, with findings and its Claude idle, `withdraw with v to push without a pass`. With no reviewer running, the line under it shows the verdict's first finding, as `review asks for changes: <finding> (+N more)`. |
 | Ready to push | Reported ready with its commits, and pushes under way. |
-| CI running | Pushed, with its worktree kept until every workflow run for the pushed commit is green; then it closes as done. A cancelled run waits for a later run on the default branch to pass. |
+| CI running | Pushed, with its worktree kept until every workflow run for the pushed commit is green and the task's check after the push holds; then it closes as done. A cancelled run waits for a later run on the default branch to pass. |
 | Waiting for work | Started without work, blocked on something outside you, or kept open with nothing left on top. |
 | Queued | Waiting to start after other tasks or at a time, with no worktree, Space or Claude. |
 | Parked | Tasks you set aside until later, folded into one line under the other groups. See [Parked](#parked). |
@@ -208,7 +208,9 @@ A task on local main stays here too, marked `on local main · waiting for your p
 
 ### CI running
 
-A report its Claude writes meanwhile keeps it here unless it says needs-you or blocked. The row names the runs, and the open task links each run's page. See [`kebbie ci`](commands.md#kebbie-ci---json).
+A report its Claude writes meanwhile keeps it here unless it says needs-you or blocked. The row names the runs, and the open task links each run's page.
+
+A task that named a check for after its push (`kebbie report --after-push`) adds `then checks: <check>`, muted, while CI runs. Once CI is green its Claude runs the check, marked `checking after push: <check>`; the task closes as done when it reports the check held, and moves to Needs you with what failed when it did not. See [`kebbie ci`](commands.md#kebbie-ci---json).
 
 ### Waiting for work
 

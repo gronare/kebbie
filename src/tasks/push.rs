@@ -703,12 +703,30 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out
     let headline = |through: bool| if through { format!("Pushed {} through {short} to {main}", plural(count, "commit")) } else { format!("Pushed {} to {main}", plural(count, "commit")) };
     let said = |notice: Notice| notice.detail("task", &task).detail("commit", short).detail("ci", &ci).detail("log", &logged);
     if !keep_open {
+        let check = crate::report::check_in(state, &address);
         if matches!(watch, crate::ci::Begin::Watching) {
-            if let Err(error) = messages::to_lead(messages::ToLead::Pushed, &format!("{}: {} to {target}. kebbie watches CI for {short} and closes the task once every run is green; you hear what landed then.", who_pushed(pusher, &address), plural(count, "commit"))) {
+            let then = check.as_ref().map(|check| format!(" and the check it named for after the push holds ({check})")).unwrap_or_default();
+            if let Err(error) = messages::to_lead(messages::ToLead::Pushed, &format!("{}: {} to {target}. kebbie watches CI for {short} and closes the task once every run is green{then}; you hear what landed then.", who_pushed(pusher, &address), plural(count, "commit"))) {
                 eprintln!("Could not tell the lead about the push: {error}");
             }
-            let notice = Notice::new(Tone::Done, headline(false)).next("CI runs now; kebbie closes the task when it is green.").detail("task", &task).detail("commit", short).detail("log", &logged);
+            let next = match &check {
+                Some(check) => format!("CI runs now; once it is green the task checks {check}, and kebbie closes it when that holds."),
+                None => "CI runs now; kebbie closes the task when it is green.".to_string(),
+            };
+            let notice = Notice::new(Tone::Done, headline(false)).next(next).detail("task", &task).detail("commit", short).detail("log", &logged);
             return Ok(notice.detail("checkout", follow_upstream(repo, upstream, &super::stage::load(state, repo))?).to_string());
+        }
+        if let Some(check) = check {
+            let pushed = crate::ci::Pushed { pusher: pusher.to_string(), target: target.clone(), commits: pushed.clone(), note: note.clone(), logged: log.as_ref().map(|log| matches!(log, Ok(Some(_)))), check: Some(crate::ci::Check::new(&check)) };
+            let watch = crate::ci::Watch { address: address.clone(), repo: repo.to_path_buf(), slug: String::new(), sha: sha.clone(), started_at: messages::now(), checked_at: None, close: true, runs: Vec::new(), state: crate::ci::State::Running, error: None, erring_since: None, pushed };
+            match crate::ci::ask_check(state, &watch, &format!("{short} is on {target}"), messages::now()) {
+                Ok(_) => {
+                    crate::phase::record(state, &address, "push", &crate::phase::Event::PushOut { sha: &sha });
+                    let notice = said(Notice::new(Tone::Done, headline(false)).next(format!("The task checks {check} now; kebbie closes it when that holds.")));
+                    return Ok(notice.detail("checkout", follow_upstream(repo, upstream, &super::stage::load(state, repo))?).to_string());
+                }
+                Err(error) => eprintln!("kebbie could not ask {address} to run its check after the push, so it closes the task without it: {error}"),
+            }
         }
         return Ok(match close_pushed(state, &task, "push", vault.as_ref(), told, |said, commits| close_task(repo, Some(&task), vault.as_ref(), said, Some(commits))) {
             Close::Waits(waits) => {
@@ -758,7 +776,8 @@ fn kept_open(state: &Path, slot: &Slot, upstream: &str, address: &str, sha: &str
 #[allow(clippy::too_many_arguments)]
 fn send(state: &Path, repo: &Path, slot: &Slot, upstream: &str, address: &str, task: &str, pusher: &str, went: &Went, watch: Watch) -> Result<(usize, crate::ci::Begin)> {
     let sha = &went.sha;
-    let told_ci = crate::ci::Pushed { pusher: pusher.to_string(), target: went.target.clone(), commits: went.pushed.clone(), note: went.note.clone(), logged: None };
+    let check = crate::report::check_in(state, address).filter(|_| !went.keep_open).map(|check| crate::ci::Check::new(&check));
+    let told_ci = crate::ci::Pushed { pusher: pusher.to_string(), target: went.target.clone(), commits: went.pushed.clone(), note: went.note.clone(), logged: None, check };
     let before = crate::ci::load(state, address);
     let phase_before = crate::phase::load(state, address);
     let watch = watch(state, repo, address, sha, !went.keep_open, told_ci);
@@ -1081,6 +1100,34 @@ mod tests {
         let told = told_lead(&address);
         assert_eq!(told.len(), 1, "{told:?}");
         assert!(told[0].fyi && told[0].kind.is_none() && told[0].text.starts_with(&format!("The user pushed {address}: 1 commit to {}. kebbie watches CI", upstream.trim_start_matches("origin/"))), "the push under CI watch is a notice for the digest, not a turn of the lead's: {:?}", told[0]);
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_push_carries_the_tasks_check_to_its_watch_and_without_ci_asks_for_it_rather_than_closing() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let address = crate::peers::address("billing", &name_of(&dir));
+        crate::report::save_check(&state, &address, "the old key gets 401").unwrap();
+        let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head, rebased: false }, "the user", &state, &watching).unwrap();
+        assert!(said.contains("once it is green the task checks the old key gets 401"), "{said}");
+        assert_eq!(crate::ci::load(&state, &address).and_then(|watch| watch.pushed.check), Some(crate::ci::Check::new("the old key gets 401")), "asked only once CI is green");
+        cleanup(dir, origin, &slot);
+        let (dir, origin, slot, upstream) = task_in_another_repo("rates");
+        let state = state_of(&dir);
+        let address = crate::peers::address("rates", &name_of(&dir));
+        crate::report::save_check(&state, &address, "the rates page shows 2027").unwrap();
+        let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        let unwatched = |_: &Path, _: &Path, _: &str, _: &str, _: bool, _: crate::ci::Pushed| crate::ci::Begin::Off;
+        let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head.clone(), rebased: false }, "the user", &state, &unwatched).unwrap();
+        assert!(said.contains("The task checks the rates page shows 2027 now"), "{said}");
+        assert!(find_task(&dir, Some("rates"), &dir).is_ok(), "with no CI to wait for, the check runs at once and the task stays open for it");
+        let watch = crate::ci::load(&state, &address).unwrap();
+        assert!(watch.checking().is_some_and(|check| check.what == "the rates page shows 2027" && !check.passed) && watch.close, "{watch:?}");
+        assert_eq!(crate::phase::load(&state, &address).map(|record| record.phase), Some(crate::phase::Phase::CiRunning { sha: head }));
+        assert!(messages::load().iter().any(|message| message.to == address && message.text.contains("Run the check you named for after the push now: the rates page shows 2027")));
+        crate::ci::forget(&state, &address);
         cleanup(dir, origin, &slot);
     }
 

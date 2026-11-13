@@ -5,6 +5,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- A task names a check to run after its push with kebbie report --after-push; once CI is green it runs the check itself and closes when it holds, or waits under Needs you with what failed.
 - When a hub refuses the board, kebbie says the hub has not enabled answering for your account, with the hub's link.
 - The phone answers an agent's prompt on a task's screen with one tap, while that prompt still shows; update the hub first.
 - hub.commands lists what a machine takes through the hub, every kind by default, and only from your account.

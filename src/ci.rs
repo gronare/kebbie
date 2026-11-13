@@ -72,6 +72,29 @@ pub struct Pushed {
     pub commits: String,
     pub note: Option<String>,
     pub logged: Option<bool>,
+    pub check: Option<Check>,
+}
+
+// What the task named to verify once its push lands; asked is when kebbie told it to run it, passed once it reported that it held.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Check {
+    pub what: String,
+    pub asked: Option<u64>,
+    pub passed: bool,
+}
+
+impl Check {
+    pub fn new(what: &str) -> Check {
+        Check { what: what.to_string(), asked: None, passed: false }
+    }
+
+    fn to_json(&self) -> Value {
+        json!({ "what": self.what, "asked": self.asked, "passed": self.passed })
+    }
+
+    fn from_json(value: &Value) -> Option<Check> {
+        Some(Check { what: value["what"].as_str()?.to_string(), asked: value["asked"].as_u64(), passed: value["passed"].as_bool().unwrap_or(false) })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -111,6 +134,15 @@ impl Watch {
         self.state == State::Running
     }
 
+    // CI is green and the task runs the check it named for after the push; the rounds ask gh nothing more.
+    pub fn checking(&self) -> Option<&Check> {
+        self.pushed.check.as_ref().filter(|check| check.asked.is_some() && self.running())
+    }
+
+    fn then_checks(&self) -> String {
+        self.pushed.check.as_ref().map(|check| format!(" · then checks: {}", check.what)).unwrap_or_default()
+    }
+
     // The workflows that were cancelled once every run is done and none failed: the watch then waits on a later run of the branch.
     pub fn cancelled(&self) -> Vec<String> {
         if self.runs.is_empty() || !self.runs.iter().all(Run::done) || self.runs.iter().any(Run::failed) {
@@ -127,11 +159,13 @@ impl Watch {
         let cancelled = self.cancelled();
         match &self.state {
             State::Failed { what, .. } => format!("CI failed: {what}"),
-            State::Running if !cancelled.is_empty() => format!("CI running: {} cancelled, waits for the next run on {} to pass{}", cancelled.join(", "), self.branch(), self.unread()),
+            State::Running if self.checking().is_some_and(|check| check.passed) => "the check after the push held · kebbie closes it".to_string(),
+            State::Running if self.checking().is_some() => format!("checking after push: {}", self.checking().map_or("", |check| check.what.as_str())),
+            State::Running if !cancelled.is_empty() => format!("CI running: {} cancelled, waits for the next run on {} to pass{}{}", cancelled.join(", "), self.branch(), self.then_checks(), self.unread()),
             State::Running if self.runs.is_empty() && self.unseen_for() >= UNSEEN_AFTER => format!("no CI run of {} seen in {} min, though {} has workflows; check they run on a push{}, or kebbie done{}", self.short(), UNSEEN_AFTER / 60, self.slug, if self.pushed.target.is_empty() { String::new() } else { format!(" to {}", self.pushed.target) }, self.unread()),
-            State::Running if self.runs.is_empty() && self.unseen_for() >= APPEAR_SECONDS => format!("CI running: no run of {} seen for {} min, though {} has workflows{}", self.short(), self.unseen_for() / 60, self.slug, self.unread()),
-            State::Running if self.runs.is_empty() => format!("CI running: waiting for runs of {}{}", self.short(), self.unread()),
-            State::Running => format!("CI running: {}{}", self.runs.iter().map(Run::title).collect::<Vec<_>>().join(", "), self.unread()),
+            State::Running if self.runs.is_empty() && self.unseen_for() >= APPEAR_SECONDS => format!("CI running: no run of {} seen for {} min, though {} has workflows{}{}", self.short(), self.unseen_for() / 60, self.slug, self.then_checks(), self.unread()),
+            State::Running if self.runs.is_empty() => format!("CI running: waiting for runs of {}{}{}", self.short(), self.then_checks(), self.unread()),
+            State::Running => format!("CI running: {}{}{}", self.runs.iter().map(Run::title).collect::<Vec<_>>().join(", "), self.then_checks(), self.unread()),
         }
     }
 
@@ -153,7 +187,7 @@ impl Watch {
             "started_at": self.started_at, "checked_at": self.checked_at, "close": self.close,
             "runs": self.runs.iter().map(Run::to_json).collect::<Vec<_>>(),
             "state": state, "failed_at": failed_at, "failure": failure, "failure_url": failure_url, "error": self.error, "erring_since": self.erring_since,
-            "pushed": { "pusher": self.pushed.pusher, "target": self.pushed.target, "commits": self.pushed.commits, "note": self.pushed.note, "logged": self.pushed.logged },
+            "pushed": { "pusher": self.pushed.pusher, "target": self.pushed.target, "commits": self.pushed.commits, "note": self.pushed.note, "logged": self.pushed.logged, "check": self.pushed.check.as_ref().map(Check::to_json) },
         })
     }
 
@@ -171,7 +205,7 @@ impl Watch {
             started_at: value["started_at"].as_u64()?, checked_at: value["checked_at"].as_u64(), close: value["close"].as_bool().unwrap_or(true),
             runs: value["runs"].as_array().map(|runs| runs.iter().filter_map(Run::from_json).collect()).unwrap_or_default(),
             state, error: text("error"), erring_since: value["erring_since"].as_u64(),
-            pushed: Pushed { pusher: pushed_text("pusher"), target: pushed_text("target"), commits: pushed_text("commits"), note: pushed["note"].as_str().map(str::to_string), logged: pushed["logged"].as_bool() },
+            pushed: Pushed { pusher: pushed_text("pusher"), target: pushed_text("target"), commits: pushed_text("commits"), note: pushed["note"].as_str().map(str::to_string), logged: pushed["logged"].as_bool(), check: Check::from_json(&pushed["check"]) },
         })
     }
 }
@@ -480,6 +514,14 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
     let Some(_lock) = Lock::take(state) else { return Vec::new() };
     let mut events = Vec::new();
     for mut watch in all(state).into_iter().filter(|watch| watch.running() && !pushing(state, &watch.address, now)) {
+        if let Some(check) = watch.checking() {
+            if !watch.close {
+                forget(state, &watch.address);
+            } else if check.passed {
+                events.push(checked(state, &watch));
+            }
+            continue;
+        }
         if !watch.cancelled().is_empty() && watch.checked_at.is_some_and(|at| now.saturating_sub(at) < CANCELLED_POLL) {
             continue;
         }
@@ -512,9 +554,9 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
             Verdict::Pending => {
                 let _ = save(state, &watch);
             }
-            Verdict::Green => events.push(green(state, &watch, format!("CI is green for {}", watch.short()))),
+            Verdict::Green => events.push(green(state, &watch, format!("CI is green for {}", watch.short()), now)),
             Verdict::NoneRan => match crate::sh::run(gh, &["workflow", "list", "-R", &watch.slug, "--json", "state", "--limit", "100"], Some(&watch.repo)).and_then(|text| has_workflows(&text)) {
-                Ok(false) => events.push(green(state, &watch, format!("No CI ran for {}", watch.short()))),
+                Ok(false) => events.push(green(state, &watch, format!("No CI ran for {}", watch.short()), now)),
                 Ok(true) => {
                     let _ = save(state, &watch);
                     if now.saturating_sub(watch.started_at) >= UNSEEN_AFTER {
@@ -529,9 +571,9 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
             Verdict::Cancelled(cancelled) => {
                 let waited = now.saturating_sub(watch.started_at);
                 if crate::tasks::passed_after_cancel(&watch, &cancelled, gh) {
-                    events.push(green(state, &watch, format!("CI is green for {}: {} was cancelled and a later run on {} that holds it passed", watch.short(), cancelled.join(", "), watch.branch())));
+                    events.push(green(state, &watch, format!("CI is green for {}: {} was cancelled and a later run on {} that holds it passed", watch.short(), cancelled.join(", "), watch.branch()), now));
                 } else if waited >= CANCELLED_WAIT {
-                    events.push(green(state, &watch, format!("No CI passed for {}: {} was cancelled and no later run on {} passed in {} days", watch.short(), cancelled.join(", "), watch.branch(), CANCELLED_WAIT / 86_400)));
+                    events.push(green(state, &watch, format!("No CI passed for {}: {} was cancelled and no later run on {} passed in {} days", watch.short(), cancelled.join(", "), watch.branch(), CANCELLED_WAIT / 86_400), now));
                 } else {
                     let _ = save(state, &watch);
                 }
@@ -542,8 +584,48 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
     events
 }
 
+// A task that named a check for after its push runs it now, and closes once it reports that the check held.
+fn green(state: &Path, watch: &Watch, what: String, now: u64) -> Event {
+    if watch.close && watch.pushed.check.as_ref().is_some_and(|check| check.asked.is_none()) {
+        let text = ask_check(state, watch, &what, now).unwrap_or_else(|error| {
+            let _ = save(state, watch);
+            format!("{what}, but kebbie could not ask {} to run its check after the push, and tries again: {error}", watch.address)
+        });
+        return Event { address: watch.address.clone(), kind: Kind::Green, text };
+    }
+    landed(state, watch, what)
+}
+
+pub fn check_message(landed: &str, what: &str) -> String {
+    format!(
+        "{landed}. Run the check you named for after the push now: {what}\n\
+         When it holds, run kebbie report --state ready --next nothing \"<what you saw>\": kebbie then closes this task as done. \
+         When it does not hold, change nothing and run kebbie report --state needs-you --next \"<what failed, in the user's words>\" \"<what you saw>\": the user decides what follows."
+    )
+}
+
+// The check message goes to the task before the watch says so, so a round that dies between them asks again rather than never.
+pub fn ask_check(state: &Path, watch: &Watch, landed: &str, now: u64) -> Result<String> {
+    let check = watch.pushed.check.clone().ok_or("the task named no check")?;
+    messages::hand_to(&watch.address, &check_message(landed, &check.what))?;
+    save(state, &Watch { pushed: Pushed { check: Some(Check { asked: Some(now), ..check.clone() }), ..watch.pushed.clone() }, ..watch.clone() })?;
+    let text = format!("{landed}. {} runs the check it named for after the push: {}; kebbie closes it once that holds.", watch.address, check.what);
+    if let Err(error) = messages::to_lead(messages::ToLead::CiGreen, &text) {
+        eprintln!("Could not tell the lead: {error}");
+    }
+    crate::hub::notices::settle(crate::hub::notices::Subject::Ci, &watch.address);
+    notify::send(&watch.repo, &Notice::from(NotifyEvent::CiGreen, &watch.address, format!("{}: {text}", crate::status::with_titles(&watch.address))));
+    Ok(text)
+}
+
+// The task reported that its check held: it closes as a green push does.
+fn checked(state: &Path, watch: &Watch) -> Event {
+    let what = format!("The check after the push of {} held: {}", watch.short(), watch.checking().map_or("", |check| check.what.as_str()));
+    landed(state, watch, what)
+}
+
 // The watch goes only once the task is closed, so the task never shows between CI running and gone.
-fn green(state: &Path, watch: &Watch, what: String) -> Event {
+fn landed(state: &Path, watch: &Watch, what: String) -> Event {
     let named = crate::status::with_titles(&watch.address);
     let text = if watch.close {
         match crate::tasks::after_ci(&watch.repo, watch.task(), &watch.address, &watch.pushed) {
@@ -785,7 +867,7 @@ mod tests {
         let mut watch = Watch {
             address: "billing@app".to_string(), repo: PathBuf::from("/src/app"), slug: "acme/app".to_string(), sha: "abcdef0123".to_string(),
             started_at: 100, checked_at: Some(130), close: true, runs: vec![run("in_progress", "")], state: State::Running, error: None, erring_since: None,
-            pushed: Pushed { pusher: "the user".to_string(), target: "main".to_string(), commits: "abc Add refunds".to_string(), note: Some("Projects/x.md".to_string()), logged: Some(true) },
+            pushed: Pushed { pusher: "the user".to_string(), target: "main".to_string(), commits: "abc Add refunds".to_string(), note: Some("Projects/x.md".to_string()), logged: Some(true), check: Some(Check { what: "the old key gets 401".to_string(), asked: Some(120), passed: false }) },
         };
         save(&state, &watch).unwrap();
         assert_eq!(load(&state, "billing@app").as_ref(), Some(&watch));
@@ -982,9 +1064,44 @@ mod tests {
     }
 
     #[test]
+    fn a_green_push_with_a_check_asks_the_task_to_run_it_and_closes_only_once_it_held() {
+        let (dir, origin, slot, _) = crate::tasks::test_support::task_with_a_commit("billing");
+        let state = crate::tasks::test_support::state_of(&dir);
+        let address = crate::peers::address("billing", &crate::repo::name_of(&dir));
+        let gh = state.join("gh");
+        crate::executable::write(&gh, "#!/bin/sh\necho '[{\"databaseId\":1,\"name\":\"CI\",\"workflowName\":\"CI\",\"status\":\"completed\",\"conclusion\":\"success\",\"url\":\"u\"}]'\n").unwrap();
+        let pushed = Pushed { target: "main".to_string(), check: Some(Check::new("the old key gets 401")), ..Pushed::default() };
+        let watch = Watch { address: address.clone(), repo: dir.clone(), slug: "acme/app".to_string(), sha: "abcdef0123".to_string(), started_at: 0, checked_at: None, close: true, runs: Vec::new(), state: State::Running, error: None, erring_since: None, pushed };
+        save(&state, &watch).unwrap();
+        assert_eq!(watch.note(), "CI running: waiting for runs of abcdef0 · then checks: the old key gets 401");
+        let events = tick_with(&state, &gh.to_string_lossy(), 100);
+        assert!(events.len() == 1 && events[0].text.starts_with(&format!("CI is green for abcdef0. {address} runs the check it named for after the push: the old key gets 401")), "{events:?}");
+        let checking = load(&state, &address).unwrap();
+        assert_eq!(checking.checking(), Some(&Check { what: "the old key gets 401".to_string(), asked: Some(100), passed: false }));
+        assert_eq!(checking.note(), "checking after push: the old key gets 401");
+        assert!(crate::tasks::find_task(&dir, Some("billing"), &dir).is_ok(), "the task stays open, with its session, for the check");
+        let asked: Vec<messages::Message> = messages::load().into_iter().filter(|message| message.to == address).collect();
+        assert!(asked.iter().any(|message| message.text.contains("Run the check you named for after the push now: the old key gets 401")), "{asked:?}");
+        assert!(tick_with(&state, "false", 200).is_empty(), "while the task checks, the rounds ask gh nothing");
+        assert_eq!(load(&state, &address).unwrap().checked_at, Some(100));
+        save(&state, &Watch { pushed: Pushed { check: Some(Check { passed: true, ..checking.pushed.check.clone().unwrap() }), ..checking.pushed.clone() }, ..checking.clone() }).unwrap();
+        assert_eq!(load(&state, &address).unwrap().note(), "the check after the push held · kebbie closes it");
+        let events = tick_with(&state, "false", 300);
+        assert!(events.len() == 1 && events[0].text.starts_with("The check after the push of abcdef0 held: the old key gets 401"), "{events:?}");
+        assert!(load(&state, &address).is_none());
+        save(&state, &Watch { close: false, ..checking }).unwrap();
+        assert!(tick_with(&state, "false", 400).is_empty());
+        assert!(load(&state, &address).is_none(), "a task closed while it checked leaves no watch behind");
+        let _ = crate::tasks::find_task(&dir, Some("billing"), &dir).map(|_| crate::tasks::test_support::cleanup(dir.clone(), origin.clone(), &slot));
+        let _ = fs::remove_dir_all(&state);
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&origin);
+    }
+
+    #[test]
     fn green_closes_the_task_before_the_watch_goes() {
         let source = include_str!("ci.rs");
-        let green = &source[source.find("\nfn green(").unwrap()..];
+        let green = &source[source.find("\nfn landed(").unwrap()..];
         let green = &green[..green.find("\n}\n").unwrap()];
         assert!(green.find("after_ci(").unwrap() < green.find("forget(").unwrap(), "a watch forgotten before the close leaves the task under Needs you until it is gone");
     }

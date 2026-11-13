@@ -336,6 +336,7 @@ pub(super) fn forget_address(state: &Path, address: &str) {
     crate::decisions::archive(state, address, messages::now());
     super::landed::forget(state, address);
     super::stage::forget(state, address);
+    crate::report::forget_check_in(state, address);
     crate::status::forget_title(state, address);
 }
 

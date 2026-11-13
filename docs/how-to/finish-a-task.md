@@ -18,6 +18,8 @@ Each one frees the worktree for the next task. Run without a name from inside th
 
 When origin is on GitHub and `gh` is logged in, a push does not close the task straight away. The task waits under CI running until every workflow run for the pushed commit is green, then closes as done.
 
+When the task named a check for after the push, such as a production endpoint answering as it should after the deploy, its Claude runs that check once CI is green and the task closes when it holds. A check that fails puts the task under Needs you with what failed. Without CI to watch, the check runs as soon as the push lands.
+
 A run that GitHub cancelled, because a deploy window refused it or a newer push superseded it, is no failure: the task stays under CI running until a later run of that workflow on the default branch passes with the pushed commit in it.
 
 If a run fails, the task moves to Needs you with the workflow and job that failed, and its Claude gets the end of the failing log to fix it. Push the fix the usual way, or close the task with `d` if you choose to leave CI red.

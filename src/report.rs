@@ -13,7 +13,8 @@ use crate::tasks;
 
 pub const STATES: [&str; 4] = ["needs-you", "ready", "working", "blocked"];
 
-const USAGE: &str = "kebbie report --state needs-you|ready|working|blocked --next \"<what the user should do next, or nothing>\" [--card <file>, with ready] [--after <task[@repo]>, with ready] \"<where the task stands>\"";
+const USAGE: &str = "kebbie report --state needs-you|ready|working|blocked --next \"<what the user should do next, or nothing>\" [--card <file>, with ready] [--after <task[@repo]>, with ready] [--after-push \"<what you verify once the push lands>\", with ready] \"<where the task stands>\"";
+const CHECK_LIMIT: usize = 300;
 
 pub fn parse(state: Option<&str>, next: Option<&str>, card: bool, summary: &str) -> Result<(Report, String)> {
     let state = state.ok_or(format!("kebbie report needs --state: {USAGE}"))?;
@@ -31,12 +32,19 @@ pub fn parse(state: Option<&str>, next: Option<&str>, card: bool, summary: &str)
     Ok((Report { state: state.to_string(), next: next.split_whitespace().collect::<Vec<_>>().join(" "), head: None, after: Vec::new() }, summary))
 }
 
-pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<&str>, after: &[&str], summary: &str) -> Result<String> {
+pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<&str>, after: &[&str], after_push: Option<&str>, summary: &str) -> Result<String> {
     let (mut report, summary) = parse(state, next, card.is_some(), summary)?;
+    let check = check_goes_with(&report.state, after_push)?;
     report.head = crate::repo::git(cwd, &["rev-parse", "HEAD"]).ok();
     let me = peers::me(cwd).filter(|me| me != LEAD_LABEL).ok_or("kebbie report runs in a task's worktree")?;
     report.after = push_after(&report.state, &me, after)?;
     card_goes_with(&report.state, card.is_some(), crate::routines::routine_of(&me).is_some())?;
+    if let Some(watch) = crate::ci::load(&state_dir()?, &me).filter(|watch| watch.close && watch.checking().is_some()) {
+        let ahead = main_checkout(cwd).and_then(|repo| default_branch(&repo)).and_then(|upstream| crate::repo::ahead_behind(cwd, &upstream)).map_or(0, |(ahead, _)| ahead);
+        if let Some(said) = check_reported(&state_dir()?, &me, &watch, &report, &summary, ahead)? {
+            return Ok(said);
+        }
+    }
     if report.state == "ready" {
         crate::rules_check::refuse_unformed(cwd)?;
     }
@@ -47,10 +55,14 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
     tasks::steps_seen_in(&state, cwd);
     let pushing = tasks::pending_push(&state, &me).is_some();
     crate::phase::record(&state, &me, "report", &crate::phase::Event::Reported { state: &report.state, head: report.head.as_deref(), committed: crate::status::committed_at(cwd), pushing });
-    let kept = match (&card, &text) {
+    let mut kept = match (&card, &text) {
         (Some(file), Some(text)) => take_card(cwd, file, &state, &me, text)?,
         _ => String::new(),
     };
+    if let Some(check) = &check {
+        save_check(&state, &me, check)?;
+        kept.push_str(" kebbie asks you to run your check once the push lands, and closes the task when it holds.");
+    }
     show_in_sidebar(&report);
     if report.state == "ready" && crate::task_note::linked(&state, &me).is_some() && let Some(cli) = crate::vault_cli::detect() {
         crate::task_note::heartbeat(&cli, &state, &me);
@@ -66,6 +78,70 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
     }
     let check = if report.state == "ready" { review_again(cwd) + &crate::assessment::on_ready(cwd) + &rules_check(cwd) } else { String::new() };
     Ok(format!("Reported to the lead and the board as {me}.{kept}{check}"))
+}
+
+// While its check after the push runs, a task's report is the check's outcome: ready with nothing left to push is that it held, needs-you that it did not.
+fn check_reported(state: &Path, me: &str, watch: &crate::ci::Watch, report: &Report, summary: &str, ahead: usize) -> Result<Option<String>> {
+    let check = watch.checking().map(|check| check.what.clone()).unwrap_or_default();
+    match report.state.as_str() {
+        "ready" if ahead == 0 => {
+            let passed = crate::ci::Check { passed: true, ..watch.pushed.check.clone().unwrap_or_default() };
+            crate::ci::save(state, &crate::ci::Watch { pushed: crate::ci::Pushed { check: Some(passed), ..watch.pushed.clone() }, ..watch.clone() })?;
+            messages::log_report(me, report, summary)?;
+            show_in_sidebar(report);
+            Ok(Some("Reported that the check after the push held; kebbie closes the task as done.".to_string()))
+        }
+        "ready" => {
+            crate::ci::forget(state, me);
+            let head = report.head.clone();
+            crate::phase::update(state, me, "report", |_| Some(crate::phase::Phase::Ready { head }));
+            Ok(None)
+        }
+        "needs-you" => {
+            crate::ci::forget(state, me);
+            if let Err(error) = messages::to_lead(messages::ToLead::CiHanded, &format!("The check {me} ran after its push did not hold ({check}): {}. It waits for the user under Needs you.", report.next)) {
+                eprintln!("Could not tell the lead: {error}");
+            }
+            Ok(None)
+        }
+        _ => {
+            messages::log_report(me, report, summary)?;
+            show_in_sidebar(report);
+            Ok(Some("Reported; kebbie waits for the check's outcome: report ready when it held, needs-you when it did not.".to_string()))
+        }
+    }
+}
+
+// A check after the push is the task's to run, so it goes with a ready report, one line the board shows under CI running.
+pub fn check_goes_with(state: &str, after_push: Option<&str>) -> Result<Option<String>> {
+    let Some(check) = after_push else { return Ok(None) };
+    if state != "ready" {
+        return Err(format!("--after-push goes with --state ready: it names what you verify once the push lands. {USAGE}"));
+    }
+    let check = check.split_whitespace().collect::<Vec<_>>().join(" ");
+    if check.is_empty() {
+        return Err(format!("--after-push needs what you verify once the push lands: {USAGE}"));
+    }
+    if check.chars().count() > CHECK_LIMIT {
+        return Err(format!("--after-push is over {CHECK_LIMIT} characters; the board shows it on one line, so name the check, not its steps"));
+    }
+    Ok(Some(check))
+}
+
+fn check_file(state: &Path, address: &str) -> PathBuf {
+    state.join("checks").join(address)
+}
+
+pub fn save_check(state: &Path, address: &str, check: &str) -> Result<()> {
+    crate::state::write(&check_file(state, address), check)
+}
+
+pub fn check_in(state: &Path, address: &str) -> Option<String> {
+    fs::read_to_string(check_file(state, address)).ok().map(|text| text.trim().to_string()).filter(|text| !text.is_empty())
+}
+
+pub fn forget_check_in(state: &Path, address: &str) {
+    let _ = fs::remove_file(check_file(state, address));
 }
 
 fn ready_notice(cwd: &Path, state: &Path, me: &str, summary: &str) -> crate::hub::notices::About {
@@ -364,6 +440,56 @@ mod tests {
         forget_card_in(&state, "billing@app");
         assert!(card_in(&state, "billing@app").is_none());
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_check_after_the_push_goes_with_a_ready_report_and_is_kept_until_the_task_ends() {
+        assert_eq!(check_goes_with("ready", Some("  the old key\n gets 401 ")), Ok(Some("the old key gets 401".to_string())));
+        assert_eq!(check_goes_with("needs-you", None), Ok(None));
+        assert!(check_goes_with("needs-you", Some("the old key gets 401")).unwrap_err().contains("--after-push goes with --state ready"));
+        assert!(check_goes_with("ready", Some(" ")).unwrap_err().contains("needs what you verify"));
+        assert!(check_goes_with("ready", Some(&"x".repeat(CHECK_LIMIT + 1))).unwrap_err().contains("name the check, not its steps"));
+        let state = crate::sh::test_dir("report-check");
+        assert_eq!(check_in(&state, "billing@app"), None);
+        save_check(&state, "billing@app", "the old key gets 401").unwrap();
+        assert_eq!(check_in(&state, "billing@app").as_deref(), Some("the old key gets 401"));
+        assert_eq!(check_in(&state, "billing@web"), None);
+        forget_check_in(&state, "billing@app");
+        assert_eq!(check_in(&state, "billing@app"), None);
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn while_the_check_runs_a_report_is_its_outcome() {
+        use crate::ci::{Check, Pushed, State, Watch};
+        use crate::phase::Phase;
+        let state = crate::sh::test_dir("report-checked");
+        let me = format!("checked-{}@app", std::process::id());
+        let check = Check { what: "the old key gets 401".to_string(), asked: Some(10), passed: false };
+        let watch = Watch { address: me.clone(), repo: PathBuf::from("/src/app"), slug: String::new(), sha: "abcdef0".to_string(), started_at: 0, checked_at: None, close: true, runs: Vec::new(), state: State::Running, error: None, erring_since: None, pushed: Pushed { check: Some(check.clone()), ..Pushed::default() } };
+        let report = |state: &str, next: &str| Report { state: state.to_string(), next: next.to_string(), head: Some("abc".to_string()), after: Vec::new() };
+        let begin = || {
+            crate::ci::save(&state, &watch).unwrap();
+            crate::phase::record(&state, &me, "ci", &crate::phase::Event::PushOut { sha: "abcdef0" });
+        };
+        let phase = || crate::phase::load(&state, &me).map(|record| record.phase);
+        begin();
+        assert!(check_reported(&state, &me, &watch, &report("working", "nothing"), "calling the API", 0).unwrap().is_some());
+        assert_eq!(crate::ci::load(&state, &me).and_then(|watch| watch.checking().cloned()), Some(check.clone()), "a turn under way keeps it checking");
+        assert_eq!(check_reported(&state, &me, &watch, &report("blocked", "nothing"), "waits for the deploy", 0).unwrap().map(|said| said.contains("waits for the check's outcome")), Some(true));
+        assert_eq!(phase(), Some(Phase::CiRunning { sha: "abcdef0".to_string() }), "and under CI running");
+        assert!(check_reported(&state, &me, &watch, &report("ready", "nothing"), "401 for the old key", 0).unwrap().unwrap().contains("held"));
+        assert_eq!(crate::ci::load(&state, &me).and_then(|watch| watch.pushed.check).map(|check| check.passed), Some(true), "the keeper closes it on its next round");
+        begin();
+        assert_eq!(check_reported(&state, &me, &watch, &report("needs-you", "the old key still gets 200"), "200 for the old key", 0).unwrap(), None);
+        assert!(crate::ci::load(&state, &me).is_none(), "a check that failed is no longer CI running");
+        let told = messages::load().into_iter().filter(|message| message.to == crate::status::LEAD_LABEL && message.text.contains(&format!("The check {me} ran after its push did not hold"))).count();
+        assert_eq!(told, 1);
+        begin();
+        assert_eq!(check_reported(&state, &me, &watch, &report("ready", "nothing"), "fixed the key rotation", 1).unwrap(), None, "a fix to push is a ready report as any other");
+        assert!(crate::ci::load(&state, &me).is_none());
+        assert_eq!(phase(), Some(Phase::Ready { head: Some("abc".to_string()) }));
+        fs::remove_dir_all(state).unwrap();
     }
 
     #[test]

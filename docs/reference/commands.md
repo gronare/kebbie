@@ -237,7 +237,7 @@ How far the task is behind the default branch does not matter. The rebase at its
 - While its Claude runs the tests or resolves the conflict, the task keeps the head of the line and the pushes behind it wait.
 - It leaves the line for Needs you, marked `out of the push line: <why>`, when its Claude reports needs-you, or when 30 minutes pass without a ready report (or, after one, without a rules approval of the changed commits). The next push in line goes on then.
 
-When origin is on GitHub and `gh` is logged in, the task stays open under CI running instead, and closes as `done` once every workflow run for the pushed commit is green. See `kebbie ci`. Otherwise the push result ends with `CI not watched:` and the reason.
+When origin is on GitHub and `gh` is logged in, the task stays open under CI running instead, and closes as `done` once every workflow run for the pushed commit is green and the check the task named with `report --after-push` holds. See `kebbie ci`. Otherwise the push result ends with `CI not watched:` and the reason.
 
 ### `kebbie stage [name]`
 
@@ -650,6 +650,7 @@ It is yours, or the lead's on your explicit choice. The lead's settings do not a
 
 - With `ready`, `--card <file>` is the sign-off card the push window shows, with an Also noticed list when the task found things outside its task.
 - With `ready`, `--after <task[@repo]>` names a task to push before this one, such as the other half of a task across repos; repeat it for several. A bare name is a task in the same repo. Next's push group puts that task first and this one says `after <task>` until it is pushed. The lead's push of this task waits in the push line until that task has landed, letting the pushes behind it go first; your own push goes out and its notice warns that it went first.
+- With `ready`, `--after-push "<check>"` names what the task verifies once the push lands, such as `the old key gets 401` after a deploy on push. The task stays open through the push and CI; once CI is green (or the push landed, without CI to watch), kebbie sends the task the check to run, and the row reads `checking after push: <check>`. The task's next report is the outcome: `ready` with nothing left to push closes it as done, `needs-you` puts it under Needs you with what failed as its next step. The check is kept until the task ends; a later `--after-push` replaces it.
 - A routine's task also lists its findings on a card with `needs-you`.
 - With `kebbie:work-rules` as the rules skill, `ready` is refused while a commit lacks a subject, a blank line and a body.
 
