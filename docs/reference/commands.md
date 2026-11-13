@@ -38,7 +38,7 @@ Without a name, `land`, `follow`, `review`, `evidence`, `push`, `stage`, `unstag
 | [`kebbie review`](#kebbie-review-name) | Send a task to the reviewer. |
 | [`kebbie evidence`](#kebbie-evidence-name---json) | The test runs kebbie recorded for a task. |
 | [`kebbie approve`](#kebbie-approve-name) | Push a task's commits past the rules check. |
-| [`kebbie accept`](#kebbie-accept-name-sha) | Accept one of a task's commits. |
+| [`kebbie accept`](#kebbie-accept-name-sha) | Accept one of a task's commits, or a whole step. |
 | [`kebbie accepted`](#kebbie-accepted-name) | Which of a task's commits are accepted. |
 | [`kebbie steps`](#kebbie-steps-name-step-) | A task's steps and the state of each. |
 
@@ -439,15 +439,17 @@ Your word or the lead's that a task's commits hold to the rules skill. It overri
 
 ### `kebbie accept <name> <sha>`
 
-Your word that one of the task's commits is right. Only you may run it: kebbie refuses it to the lead and to every task, whose settings deny it too. `kebbie steps` shows the commit as accepted (`✓`). It marks the commit and blocks nothing, with `task.steps` on or off.
+Your word that one of the task's commits is right. Only you may run it: kebbie refuses it to the lead and to every task, whose settings deny it too. `kebbie steps` shows a step as accepted (`✓`) once every commit in it is. It marks the commit and blocks nothing, with `task.steps` on or off.
 
 - It belongs to the commit's code: a clean rebase or a reworded message keeps it, a changed line takes it back. Two commits with the same change, such as two empty commits, are accepted one at a time.
 - `<sha>` is one of the task's commits not yet pushed.
+- `kebbie accept <name> --step <n>` accepts every commit of step `n` at once. The step must be ready: its task's Claude ran `kebbie steps done` on it.
 - `kebbie accepted` reads which commits are accepted.
 
 | Option | What it does |
 | --- | --- |
-| `--withdraw` | Take the acceptance back. |
+| `--step <n>` | Accept every commit of step `n`, in place of one `<sha>`. |
+| `--withdraw` | Take the acceptance back, of the commit or of every commit in the step. |
 
 ### `kebbie accepted [name]`
 
@@ -459,27 +461,31 @@ The task's commits not yet pushed, each marked `✓` when you accepted it. It on
 
 ### `kebbie steps [name] ["<step>" ...]`
 
-The task's steps, in the order they go out, one commit each. It needs [`task.steps`](configuration.md#tasks) on for the task's repo, the default, and refuses with how to turn it on when it is off.
+The task's steps, in the order they go out. A step is a slice of the work holding one or more small commits, each deployable on its own. It needs [`task.steps`](configuration.md#tasks) on for the task's repo, the default, and refuses with how to turn it on when it is off.
 
 - In a task's worktree, every word is a step's title. Elsewhere, the first word names the task.
 - Put `--` before the titles when one starts with `-`: `kebbie steps -- "-v prints the version"`. Without it, kebbie refuses a word it would read as an option, so no title is dropped.
 - With titles, it writes the list, then shows it. A task's Claude runs it before its first line of code; you or the lead may run it too, but a task writes only its own steps.
-- Writing it again changes every step not pushed yet. The pushed ones stay first; a list that starts with them again is taken as the whole list.
+- Writing it again changes every step not pushed yet. The pushed ones stay first, and each commit stays in the step it is in, by position; a list that starts with the pushed ones again is taken as the whole list.
 - Without titles, it shows the steps.
 
-The task's commits not yet pushed are its next steps, in order. A commit beyond the list shows as a step of its own, titled by its subject. A step counts as pushed once its commit's change is on the default branch, however it got there: `kebbie push`, a staged task you pushed with main, or a push from elsewhere. A clean rebase or a reworded message keeps it the same step.
+### `kebbie steps [name] done`
+
+Marks the step in progress ready: its slice of the work is finished and waits for you to review and accept it. The task's next commits go to the next step. A task's Claude runs it in its worktree; you or the lead name the task. It is refused while the step in progress holds no commit.
+
+A commit goes to the step in progress when it is made. A step keeps its commits by their change: a clean rebase, a reworded message or a squash keeps them in it, and a fixup folded into a commit stays in that commit's step. A step counts as pushed once all its commits' changes are on the default branch, however they got there: `kebbie push`, a staged task you pushed with main, or a push from elsewhere. Steps an older kebbie recorded read as one commit each, ready.
 
 | Mark | Means |
 | --- | --- |
 | `↑ 2 pushed` | The steps on the default branch, as a count. |
-| `✓` | Committed, and you accepted it. |
-| `●` | Committed, waiting for you to accept it. |
-| `◐` | In progress: the next one while the task's Claude is at work. |
+| `✓` | Accepted: you accepted every commit in it. |
+| `●` | Ready, with its commits: waiting for you to accept it. |
+| `◐` | In progress, with the commits it holds so far. |
 | `○` | Planned. |
 
 | Option | What it does |
 | --- | --- |
-| `--json` | The steps as `task`, `listed`, `pushed`, `last_accepted` (the last commit of the run of accepted ones from the first unpushed one, or `null`) and `steps`, each with `index`, `title`, `state` (`planned`, `in-progress` or `committed`), `extra`, and with a commit its `sha`, `subject` and `accepted`. |
+| `--json` | The steps as `task`, `listed`, `pushed`, `last_accepted` (the last commit of the run of accepted ones from the first unpushed one, or `null`) and `steps`, each with `index`, `title`, `state` (`planned`, `in-progress`, `ready` or `accepted`), `extra` and `commits`, each with `sha`, `subject` and `accepted`. |
 
 ## Seeing what is going on
 
@@ -628,6 +634,7 @@ It is yours, or the lead's on your explicit choice. The lead's settings do not a
 | --- | --- |
 | `kebbie report --state <state> --next <step> <summary>` | Where the task stands and what you should do next. See [below](#kebbie-report). |
 | `kebbie steps "<step>" …` | The task's steps before its first line of code, with `task.steps` on. See [`kebbie steps`](#kebbie-steps-name-step-). |
+| `kebbie steps done` | The step in progress is finished and ready for you. See [`kebbie steps done`](#kebbie-steps-name-done). |
 | `kebbie routine ok <summary>` | A routine's task, when all is well: records the run as ok with the summary and closes the task as `drop` does. |
 | `kebbie ask --option "<label>: <meaning>" … --recommend <n> <question>` | Ask you what you want: scope, behaviour, a trade-off that is yours. |
 | `kebbie answered <task>` | The task's question was settled elsewhere, dropped, or sent back to be asked again. |
@@ -916,7 +923,7 @@ Once the machine has pinned an account key, the keeper posts the board every 15 
 - The revision is at least the current Unix time, so it keeps rising when `hub/relay.json` is lost.
 - Nothing is pushed to a phone: notifications through the hub are not available in this version, and [`notify.command`](configuration.md#notify-command) is how the machine tells you a task needs you.
 
-The board carries tasks with their group, summary, your next step, report, question and options, git counts, head, review verdict, CI, a task's steps with their number, title, state and commit, the checkouts' free and busy worktrees, the routines and away mode. It never carries a path, a pane, a Space, a host name, a dev server address or a commit's message.
+The board carries tasks with their group, summary, your next step, report, question and options, git counts, head, review verdict, CI, a task's steps with their number, title, state and commits (each its sha and subject), the checkouts' free and busy worktrees, the routines and away mode. It never carries a path, a pane, a Space, a host name, a dev server address or a commit's body.
 
 - A queued task waiting for its time is left out; a blocked one shows under Needs you.
 - A plan to approve shows as its question, without the plan.

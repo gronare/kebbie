@@ -1,13 +1,14 @@
 ---
 name: work-rules
-description: kebbie's default commit rules for a task's branch: steps in the order they go out, preparatory ones first, a subject and a body that says why, one logical change per commit, staging by explicit file list, the push left to the user. Use when kebbie's task role names it, when you plan, commit or reshape commits, and when a ready task's commits are checked.
+description: kebbie's default commit rules for a task's branch: steps in the order they go out, each a slice of the work in small deployable commits, preparatory ones first, a subject and a body that says why, one logical change per commit, staging by explicit file list, the push left to the user. Use when kebbie's task role names it, when you plan, commit or reshape commits, and when a ready task's commits are checked.
 ---
 
 # Work rules
 
-The branch is the task's **history**: what a reviewer reads, one commit at a time, to learn why the code is the way it is. It is cut into **steps**, one commit each, in the order they go out:
+The branch is the task's **history**: what a reviewer reads, one commit at a time, to learn why the code is the way it is. It is cut into **steps** in the order they go out. A step is a **slice** of the work: one sub-problem, or one part of the work in its order. It holds one or more small commits, each deployable on its own, trunk-based:
 
 - **Make the change easy, then make the easy change.** The preparatory commits come first and change no behaviour: a migration, an interface, a move, a rename. The change itself comes last, and small. A branch is pushed from its start, so each commit stands on the ones before it.
+- **A step ends on your word.** Commits go to the step in progress; when its slice is finished, `kebbie steps done` makes it ready for review and the next commits go to the next step. The list is living: when the work turns out another shape, `kebbie steps "<step>" …` rewrites it.
 
 Every commit on the branch holds to all four rules below; the branch is ready when each of its commits does.
 

@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::sh::{Result, quote};
 use super::terminal::{init_terminal, restore_terminal};
-use super::review_data::{self as data, Entries, File, Mark, Marks, Runner, Stamp};
+use super::review_data::{self as data, Entries, File, Mark, Marks, Range, Runner, Stamp};
 use super::review_draw as draw;
 use super::review_nvim::{self as nvim, LOAD, Next, RPC};
 use super::widgets::{GREEN, RED, YELLOW};
@@ -50,8 +50,24 @@ impl Layout {
 pub enum Hit {
     All,
     Entry(usize),
+    Commit(usize, usize),
     File(usize),
     Panel(Panel),
+}
+
+// What the review shows: a step by its number, whole, or one commit of it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Sel {
+    Step(usize),
+    Commit(usize, String),
+}
+
+impl Sel {
+    pub fn number(&self) -> usize {
+        match self {
+            Sel::Step(number) | Sel::Commit(number, _) => *number,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -68,7 +84,7 @@ pub struct View {
     pub branch: String,
     pub entries: Entries,
     pub uncommitted: bool,
-    pub selected: Option<String>,
+    pub selected: Option<Sel>,
     pub files: Vec<File>,
     pub file: usize,
     pub scroll: usize,
@@ -180,21 +196,29 @@ impl View {
         true
     }
 
-    // A selected commit that left the branch, by a rebase or an amend, gives way to the whole branch.
+    // A selected step that holds no commit now, or a selected commit that left its step, by a rebase or an amend, gives way to the whole branch.
     pub fn refresh(&mut self) {
         if !self.load() {
             return;
         }
-        if self.selected.as_ref().is_some_and(|sha| self.entries.find(sha).is_none()) {
+        if self.selected.is_some() && self.selected_entry().is_none() {
             self.selected = None;
             self.file = 0;
         }
         self.reload_files(true);
     }
 
+    pub fn range(&self) -> Option<Range> {
+        let (_, entry) = self.selected_entry()?;
+        match self.selected.as_ref()? {
+            Sel::Step(_) => entry.range(),
+            Sel::Commit(_, sha) => Some(Range::commit(sha)),
+        }
+    }
+
     fn reload_files(&mut self, keep: bool) {
         let path = self.current().map(|file| file.path.clone()).filter(|_| keep);
-        self.files = data::files(&self.dir, &self.root, &self.base, self.selected.as_deref());
+        self.files = data::files(&self.dir, &self.root, &self.base, self.range().as_ref());
         self.file = path.and_then(|path| self.visible().iter().position(|file| file.path == path)).unwrap_or(self.file.min(self.visible().len().saturating_sub(1)));
         self.show();
     }
@@ -212,22 +236,43 @@ impl View {
     }
 
     pub fn selected_entry(&self) -> Option<(usize, &data::Entry)> {
-        let sha = self.selected.as_deref()?;
-        self.entries.find(sha).map(|index| (index, &self.entries.items[index]))
+        let selected = self.selected.as_ref()?;
+        let index = self.entries.numbered(selected.number())?;
+        let entry = &self.entries.items[index];
+        match selected {
+            Sel::Commit(_, sha) if !entry.holds(sha) => None,
+            _ => Some((index, entry)),
+        }
     }
 
-    fn first_waiting(&self) -> Option<String> {
+    pub fn selected_commit(&self) -> Option<&data::Commit> {
+        let Some(Sel::Commit(_, sha)) = &self.selected else { return None };
+        self.selected_entry()?.1.commits.iter().find(|commit| commit.sha == *sha)
+    }
+
+    // Without steps an entry is one commit, picked by its sha, so a commit that left the branch gives way.
+    pub fn sel_of(&self, entry: &data::Entry) -> Sel {
+        match entry.head().filter(|_| !self.entries.steps) {
+            Some(sha) => Sel::Commit(entry.number, sha.to_string()),
+            None => Sel::Step(entry.number),
+        }
+    }
+
+    fn first_waiting(&self) -> Option<Sel> {
         self.entries.task.as_ref()?;
-        self.entries.items.iter().find(|entry| entry.mark == Mark::Committed).and_then(|entry| entry.sha.clone())
+        self.entries.items.iter().find(|entry| entry.mark == Mark::Ready && !entry.commits.is_empty()).map(|entry| self.sel_of(entry))
     }
 
-    fn waiting_after(&self, index: usize) -> Option<String> {
-        let waiting = |entry: &&data::Entry| entry.mark == Mark::Committed;
-        self.entries.items.iter().skip(index + 1).find(waiting).or_else(|| self.entries.items.iter().take(index).find(waiting)).and_then(|entry| entry.sha.clone())
+    fn waiting_after(&self, index: usize) -> Option<Sel> {
+        let waiting = |entry: &&data::Entry| entry.mark == Mark::Ready && !entry.commits.is_empty();
+        self.entries.items.iter().skip(index + 1).find(waiting).or_else(|| self.entries.items.iter().take(index).find(waiting)).map(|entry| self.sel_of(entry))
     }
 
     pub fn title(&self) -> String {
         let noun = if self.entries.steps { "step" } else { "commit" };
+        if let Some(commit) = self.selected_commit().filter(|_| self.entries.steps) {
+            return format!("{noun} {} · {}", self.selected.as_ref().map_or(0, Sel::number), data::short(&commit.sha));
+        }
         match self.selected_entry() {
             Some((_, entry)) => format!("{noun} {}", entry.number),
             None => {
@@ -241,17 +286,29 @@ impl View {
         }
     }
 
-    pub fn select(&mut self, sha: Option<String>) {
-        if self.selected != sha {
-            self.selected = sha;
+    pub fn select(&mut self, selected: Option<Sel>) {
+        if self.selected != selected {
+            self.selected = selected;
             self.file = 0;
             self.scroll = 0;
             self.reload_files(false);
         }
     }
 
-    fn tabs(&self) -> Vec<Option<String>> {
-        std::iter::once(None).chain(self.entries.committed().map(|(_, entry)| entry.sha.clone())).collect()
+    // A step of more than one commit, once picked, opens its commits as tabs after it.
+    pub fn expanded(&self, entry: &data::Entry) -> bool {
+        entry.commits.len() > 1 && self.selected.as_ref().is_some_and(|selected| selected.number() == entry.number)
+    }
+
+    fn tabs(&self) -> Vec<Option<Sel>> {
+        let mut tabs = vec![None];
+        for (_, entry) in self.entries.committed() {
+            tabs.push(Some(self.sel_of(entry)));
+            if self.expanded(entry) {
+                tabs.extend(entry.commits.iter().map(|commit| Some(Sel::Commit(entry.number, commit.sha.clone()))));
+            }
+        }
+        tabs
     }
 
     pub fn step(&mut self, forward: bool) {
@@ -279,7 +336,7 @@ impl View {
         }
     }
 
-    // kebbie accept is the user's alone, and this pane runs under their own shell, so kebbie takes it from here.
+    // kebbie accept is the user's alone, and this pane runs under their own shell, so kebbie takes it from here; a step goes by its number, so every commit in it is accepted at once.
     pub fn accept(&mut self) {
         let Some(task) = self.entries.task.clone() else {
             self.note = Some(("Accepting is for a task's commits; this review is not a task's".to_string(), YELLOW));
@@ -289,9 +346,16 @@ impl View {
             self.note = Some(("Pick a step first: ← →".to_string(), YELLOW));
             return;
         };
-        let sha = entry.sha.clone().unwrap_or_default();
-        let withdraw = entry.mark == Mark::Accepted;
-        let mut argv = vec![data::kebbie_bin(), "accept".into(), task, sha.clone()];
+        let (target, what, withdraw) = match self.selected_commit() {
+            Some(commit) => (vec![commit.sha.clone()], data::short(&commit.sha).to_string(), commit.accepted),
+            None => (vec!["--step".to_string(), entry.number.to_string()], format!("step {}", entry.number), entry.mark == Mark::Accepted),
+        };
+        if self.entries.steps && self.selected_commit().is_none() && !withdraw && entry.mark != Mark::Ready {
+            self.note = Some((format!("Step {} is still in progress; its Claude marks it ready", entry.number), YELLOW));
+            return;
+        }
+        let mut argv = vec![data::kebbie_bin(), "accept".into(), task];
+        argv.extend(target);
         if withdraw {
             argv.push("--withdraw".into());
         }
@@ -299,9 +363,9 @@ impl View {
         self.stamp = None;
         self.refresh();
         match result {
-            Ok(_) if withdraw => self.note = Some((format!("Acceptance withdrawn: {}", data::short(&sha)), YELLOW)),
+            Ok(_) if withdraw => self.note = Some((format!("Acceptance withdrawn: {what}"), YELLOW)),
             Ok(_) => {
-                self.note = Some((format!("✓ accepted {}", data::short(&sha)), GREEN));
+                self.note = Some((format!("✓ accepted {what}"), GREEN));
                 if let Some(next) = self.waiting_after(index) {
                     self.select(Some(next));
                 }
@@ -312,7 +376,7 @@ impl View {
 
     pub fn toggle_read(&mut self) {
         let Some(file) = self.current().cloned() else { return };
-        if let Err(error) = data::set_read(&self.root, &file.path, self.selected.as_deref(), !file.read) {
+        if let Err(error) = data::set_read(&self.root, &file.path, self.range().as_ref(), !file.read) {
             self.note = Some((error, RED));
             return;
         }
@@ -330,9 +394,10 @@ impl View {
 
     // nvim reads shown.json at its start too, so a view faster than nvim's socket loses nothing.
     pub fn show(&mut self) {
+        let range = self.range();
         let shown = match self.current() {
-            Some(file) => data::shown(&file.path, &self.title(), self.selected.as_deref(), self.file + 1, self.visible().len(), data::diff_argv(&self.root, &self.base, &file.path, self.selected.as_deref())),
-            None => data::shown("", &self.title(), self.selected.as_deref(), 0, 0, Vec::new()),
+            Some(file) => data::shown(&file.path, &self.title(), range.as_ref(), self.file + 1, self.visible().len(), data::diff_argv(&self.root, &self.base, &file.path, range.as_ref())),
+            None => data::shown("", &self.title(), range.as_ref(), 0, 0, Vec::new()),
         };
         if self.sent.as_ref() == Some(&shown) {
             return;
@@ -463,8 +528,14 @@ impl View {
                 }
                 Some(Hit::Entry(index)) => {
                     self.focus = Panel::Steps;
-                    if let Some(sha) = self.entries.items.get(index).and_then(|entry| entry.sha.clone()) {
-                        self.select(Some(sha));
+                    if let Some(selected) = self.entries.items.get(index).filter(|entry| !entry.commits.is_empty()).map(|entry| self.sel_of(entry)) {
+                        self.select(Some(selected));
+                    }
+                }
+                Some(Hit::Commit(index, at)) => {
+                    self.focus = Panel::Steps;
+                    if let Some(entry) = self.entries.items.get(index) && let Some(commit) = entry.commits.get(at) {
+                        self.select(Some(Sel::Commit(entry.number, commit.sha.clone())));
                     }
                 }
                 Some(Hit::File(index)) => {

@@ -230,16 +230,16 @@ pub fn docs_line(agent: crate::agent::Agent, required: bool) -> String {
 // The plan step of roles/task.md: the task's note when kebbie keeps one, else with the vault as a backlog source a note there, else a plan file outside the worktree (plan_file); never a file in the worktree, where it would land in the repo.
 pub fn plan_step(sources: &[crate::config::Source], note: Option<&str>, kebbie: &str, task: &str, plans: &Path) -> String {
     if let Some(note) = note {
-        return format!("Write your plan into your note `{note}` with the vault tools, and put it to the user with `{kebbie} ask --plan vault:{note} \"<one line on what the plan does>\"`; the board shows them the note.");
+        return format!("Write your plan into your note `{note}` with the vault tools, and put it to the user with `{kebbie} ask --plan vault:{note} \"<one line on what it builds and what it leaves out>\"`; the board shows them the note.");
     }
     if sources.contains(&crate::config::Source::Vault) {
         return format!(
             "Write your plan into this task's note in the vault with the vault tools: the note you were started from, or else a new task note under `Projects/` with status `active`, tied to this task with `{kebbie} link {task} Projects/<note>.md`. \
-             Put it to the user with `{kebbie} ask --plan vault:Projects/<note>.md \"<one line on what the plan does>\"`; the board shows them the note.",
+             Put it to the user with `{kebbie} ask --plan vault:Projects/<note>.md \"<one line on what it builds and what it leaves out>\"`; the board shows them the note.",
         );
     }
     let plans = plans.display();
-    format!("Write your plan as markdown to `{plans}`, kebbie's place for it outside your worktree, and put it to the user with `{kebbie} ask --plan {plans} \"<one line on what the plan does>\"`; the board shows them the file.")
+    format!("Write your plan as markdown to `{plans}`, kebbie's place for it outside your worktree, and put it to the user with `{kebbie} ask --plan {plans} \"<one line on what it builds and what it leaves out>\"`; the board shows them the file.")
 }
 
 // With a vault that has note templates, the note is written to the task template, whose required sections the edits and done wait for.
@@ -323,10 +323,11 @@ pub fn steps_section(on: bool, kebbie: &str) -> String {
         return String::new();
     }
     format!(
-        "## Steps\n\nBefore your first line of code, list your steps with `{kebbie} steps \"<step>\" \"<step>\" …`: this task's steps in the order they must go out, preparatory ones first and a migration as a step of its own; put `--` before the steps when one starts with `-`. \
-         A step is one commit, finished and pushable on its own. \
-         The user may accept each commit and push the accepted ones while you build the next step, or push them together later, so keep building without waiting for them. \
-         When the user says the split is wrong, run `{kebbie} steps` again with the new split before your next commit: every step not pushed yet is yours to reshape. \
+        "## Steps\n\nBefore your first line of code, list your steps with `{kebbie} steps \"<step>\" \"<step>\" …`: this task's work in the order it must go out, preparatory steps first and a migration as a step of its own; put `--` before the steps when one starts with `-`. \
+         A step is a slice of the work, one sub-problem or one part of it in order, holding one or more small commits, each deployable on its own: make the change easy, then make the easy change. \
+         Your commits go to the step in progress. When its slice is finished, run `{kebbie} steps done`: the step is ready for the user, and your next commits go to the next step. \
+         The user may accept each ready step and push it while you build the next, or push them together later, so keep building without waiting for them. \
+         The list is living: when the work turns out another shape, or the user says the split is wrong, run `{kebbie} steps` again with the new list before your next commit; every step not pushed yet is yours to reshape. \
          A step can go out on its own the moment the user pushes it: make each one finished and pushable on its own.\n"
     )
 }
@@ -611,7 +612,7 @@ mod tests {
         let off = fill(include_str!("../roles/task.md"), &[("steps", &steps_section(false, "/bin/kebbie"))]);
         assert!(!off.contains("## Steps") && !off.contains("kebbie steps") && !off.contains("{steps}"), "off, a task commits its own way");
         let on = fill(include_str!("../roles/task.md"), &[("steps", &steps_section(true, "/bin/kebbie"))]);
-        for needed in ["## Steps\n\nBefore your first line of code, list your steps with `/bin/kebbie steps \"<step>\"", "A step is one commit, finished and pushable on its own.", "every step not pushed yet is yours to reshape", "make each one finished and pushable on its own.\n\n## What you notice outside your task"] {
+        for needed in ["## Steps\n\nBefore your first line of code, list your steps with `/bin/kebbie steps \"<step>\"", "A step is a slice of the work", "run `/bin/kebbie steps done`: the step is ready for the user", "every step not pushed yet is yours to reshape", "make each one finished and pushable on its own.\n\n## What you notice outside your task"] {
             assert!(on.contains(needed), "{needed}: {on}");
         }
         let source = include_str!("peers.rs");

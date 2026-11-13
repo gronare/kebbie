@@ -7,7 +7,7 @@ description: The lead's recipes for how a task gets done, from its start to its 
 
 A **recipe** is the shape of a task: its phases and where the user is needed. You pick one before you start a task, kebbie shows it under the task's row and writes it to the task's note, and the user reads it there when they ask why a task went the way it did. Your recipe and its why are the record a correction from the user is measured against, so make the why the signal you saw.
 
-Every recipe ends at the user's push, or yours under a push permission they gave. Accepting each commit before it goes is the user's option, never a gate a recipe adds.
+Every recipe ends at the user's push, or yours under a push permission they gave. Accepting each step before it goes is the user's option, never a gate a recipe adds.
 
 ## Steps
 
@@ -28,7 +28,7 @@ The task's note is where the why lives: kebbie writes the recipe and the assesso
 ### `small-fix`
 
 - **When**: the prompt settles what changes and how it behaves; one behaviour in a few files, no screen to design, nothing for the user to choose.
-- **Phases**: one commit, with the test that goes red without it, listed as its one step when the task works in steps. No mockup and no plan beyond that step.
+- **Phases**: one step: the fix and the test that goes red without it, in one commit or a preparatory one first. No mockup and no plan beyond that step.
 - **The user**: the push.
 
 ### `feature-with-ui`
@@ -37,7 +37,7 @@ The task's note is where the why lives: kebbie writes the recipe and the assesso
 - **Phases**:
   1. **Mockup.** The task publishes a mockup and puts it to the user as a plan holding its link, with `kebbie ask --plan`. Their yes is the only gate on what is built: it revises the mockup until they say yes.
   2. **Plan.** The task researches the code and lists its steps with `kebbie steps`. The plan is the task's own; it goes on without the user's approval.
-  3. **Build.** Preparatory commits first, then bite-size steps, each finished and pushable, trunk-based. When the code contradicts the plan, the task rewrites its steps and says why in the commit that changes course, and in its vault note when it has one.
+  3. **Build.** Steps in order, each a slice of the work in small deployable commits, preparatory commits first, trunk-based; `kebbie steps done` hands each finished step to review. When the code contradicts the plan, the task rewrites its steps with `kebbie steps` and says why in the commit that changes course, and in its vault note when it has one.
 - **The user**: the mockup's yes, then the push.
 
 ### `task-after-task`
@@ -50,7 +50,7 @@ The task's note is where the why lives: kebbie writes the recipe and the assesso
 
 - **When**: the change must reach production in stages with a deploy between them: an expand and contract column rename, a backfill before a constraint, a flag turned on before the old code goes.
 - **Phases**: one task, its steps in stage order. The prompt says where each stage ends and what must be live before the next starts; the task builds on while a stage is out.
-- **The user**: the push. For now each stage goes out as a push of its own, `kebbie push --through <sha>` on its last commit, once the stage before it is live.
+- **The user**: the push. Each stage goes out as a push of its own, through its step's last commit (`p` on that step in the push window, or push through the step from the phone), once the stage before it is live.
 
 ### `follow-up`
 

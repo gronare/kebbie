@@ -1,6 +1,6 @@
 # Work in steps
 
-Have a task list its work as steps, one commit each, and push them while the task builds the next: one at a time or together, accepting each first if you want to.
+Have a task list its work as steps, each a slice of the work in one or more small commits, and push them while the task builds the next: one at a time or together, accepting each first if you want to.
 
 Tasks work in steps by default. Turned off, a task commits its own way and you push it as a whole or in part (see [Push part of a task](push-part-of-a-task.md)).
 
@@ -12,33 +12,39 @@ Tasks work in steps by default. Turned off, a task commits its own way and you p
    kebbie steps "Add the refunds table" "Refund an invoice" "Document refunds"
    ```
 
-2. See them with `kebbie steps billing`:
+2. It commits each step in small commits, each deployable on its own. When a step's work is finished, it marks the step ready, and its next commits go to the next step:
+
+   ```bash
+   kebbie steps done
+   ```
+
+3. See them with `kebbie steps billing`:
 
    ```
    billing@app's steps:
-     ● 1. Add the refunds table  a1b2c3d
-     ◐ 2. Refund an invoice
+     ● 1. Add the refunds table  ready · 2 commits
+     ◐ 2. Refund an invoice  in progress · 1 commit
      ○ 3. Document refunds
    ```
 
-   `○` is planned, `◐` in progress, `●` committed and waiting for you to accept it, `✓` accepted, and `↑ 2 pushed` counts the steps already on the default branch.
+   `○` is planned, `◐` in progress with the commits it holds so far, `●` ready and waiting for you to accept it, `✓` accepted, and `↑ 2 pushed` counts the steps already on the default branch.
 
-- If the split is wrong, tell the task. It lists its steps again, and every step not pushed yet can change.
-- If a commit is not in the list, it shows as a step of its own, titled by its subject.
+- If the split is wrong, tell the task. It lists its steps again: every step not pushed yet can change, and each commit stays in the step it is in.
+- If the task rebases, rewords or squashes its commits, they stay in their steps; a fixup folded into a commit stays in that commit's step.
 
 ## Accept and push
 
 Accepting a step marks it as read and lets the push window start there. It is up to you: a step you did not accept pushes all the same, unless you [require every step accepted](#require-every-step-accepted).
 
-1. Read a step's commit in review and accept it. From the command line:
+1. Read a ready step in review, the whole step or one commit at a time, and accept it. From the command line:
 
    ```bash
-   kebbie accept billing a1b2c3d
+   kebbie accept billing --step 1
    ```
 
-   Only you can accept a commit. The acceptance belongs to the commit's code: a clean rebase or a new message keeps it, a changed line takes it back. `kebbie accept billing a1b2c3d --withdraw` takes it back too.
+   Only you can accept a step. The acceptance belongs to each commit's code: a clean rebase or a new message keeps it, a changed line takes it back. `kebbie accept billing a1b2c3d` accepts one commit, and `--withdraw` takes either back.
 
-2. Push the accepted steps. The push window starts at the last accepted commit, or run:
+2. Push the accepted steps. In the push window, `p` on a commit pushes through the end of its step, or run `kebbie push` through the step's last commit:
 
    ```bash
    kebbie push billing --through a1b2c3d
@@ -60,7 +66,7 @@ Turn on `task.require_accept` when no commit should leave without you accepting 
 
    Or press space on `task.require_accept` on the board's [Settings page](../reference/board.md#settings-page).
 
-2. Accept each step as it is committed. A ready task with a step to accept waits under Needs you, with `accept step 2 · r review` under its row, and `N` lists it under Stopped on you instead of Push, in this order.
+2. Accept each step once it is ready. A ready task with a step to accept waits under Needs you, with `accept step 2 · r review` under its row, and `N` lists it under Stopped on you instead of Push, in this order.
 
 3. Push as before. A push that would take a commit you did not accept is refused, and says which:
 

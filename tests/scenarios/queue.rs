@@ -51,13 +51,14 @@ fn a_task_in_steps_pushes_each_accepted_step_while_it_builds_the_next_and_withou
     let planned = lab.run_as("billing@app", &["-C", slot, "steps", "Add refunds", "Document refunds"]);
     assert!(planned.status.success(), "{}", stderr(&planned));
     let first = lab.work(&billing, "refunds.rb", "Add refunds");
+    assert!(lab.run_as("billing@app", &["-C", slot, "steps", "done"]).status.success(), "the first step is ready");
     let second = lab.work(&billing, "refunds.md", "Document refunds");
     let refused = lab.run_as("lead", &["-C", lab.app(), "accept", "billing", &first]);
     assert!(!refused.status.success() && stderr(&refused).contains("accepting a commit is the user's call"), "{}", stderr(&refused));
     let accepted = lab.run_as_user(&["-C", lab.app(), "accept", "billing", &first]);
     assert!(accepted.status.success(), "{}", stderr(&accepted));
     let steps: serde_json::Value = serde_json::from_str(&lab.ok(&["-C", lab.app(), "steps", "billing", "--json"])).unwrap();
-    assert_eq!((steps["steps"][0]["accepted"].as_bool(), steps["steps"][1]["accepted"].as_bool(), steps["last_accepted"].as_str()), (Some(true), Some(false), Some(first.as_str())), "{steps}");
+    assert_eq!((steps["steps"][0]["state"].as_str(), steps["steps"][1]["commits"][0]["accepted"].as_bool(), steps["last_accepted"].as_str()), (Some("accepted"), Some(false), Some(first.as_str())), "{steps}");
     let through = lab.run_as_user(&["-C", lab.app(), "push", "billing", "--through", &first]);
     assert!(through.status.success(), "{}\n{}", stdout(&through), stderr(&through));
     assert_eq!(git(&lab.root.join("origin.git"), &["log", "-1", "--format=%s", "main"]), "Add refunds", "only the accepted step went out");
@@ -86,6 +87,7 @@ fn with_require_accept_a_push_takes_only_accepted_steps_and_the_task_waits_on_yo
     let slot = billing.to_str().unwrap();
     assert!(lab.run_as("billing@app", &["-C", slot, "steps", "Add refunds", "Document refunds"]).status.success());
     let first = lab.work(&billing, "refunds.rb", "Add refunds");
+    assert!(lab.run_as("billing@app", &["-C", slot, "steps", "done"]).status.success(), "the first step is ready");
     let second = lab.work(&billing, "refunds.md", "Document refunds");
     lab.ok(&["-C", slot, "report", "--state", "ready", "--next", "push", "refunds done"]);
     let item = lab.item("billing");

@@ -392,7 +392,7 @@ pub(crate) fn push_as(caller: &Caller, address: &str, step: Option<ThroughStep>)
     device_push(&state, caller, &repo, &slot, step, &super::line::live_read(), &mut live_push(&state))
 }
 
-// The open commits up to and including step N's, while its commit is still the one the phone showed; a step on the default branch already is settled.
+// The open commits up to and including step N's last, while that is still the commit the phone showed as the step's head; a step on the default branch already is settled.
 fn through_step(state: &Path, slot: &Slot, address: &str, upstream: &str, step: ThroughStep) -> std::result::Result<Through, DevicePush> {
     let task = task_of(slot);
     let steps = super::plan::read_now(state, &slot.path, upstream, address);
@@ -403,13 +403,10 @@ fn through_step(state: &Path, slot: &Slot, address: &str, upstream: &str, step: 
         return Err(DevicePush::Settled(Notice::new(Tone::NotNow, format!("Nothing to push: step {} is on {} already", step.number, main_of(upstream))).detail("task", task).detail("commit", short).to_string()));
     }
     let open = open_shas(&slot.path, upstream).map_err(DevicePush::Failed)?;
-    let current = steps.items.iter().find(|listed| listed.index == index).and_then(|listed| match &listed.state {
-        super::plan::State::Committed { sha, .. } => Some(sha.as_str()),
-        _ => None,
-    });
+    let current = steps.items.iter().find(|listed| listed.index == index).and_then(super::plan::Step::head);
     match open.iter().position(|sha| Some(sha.as_str()) == current && sha == step.head) {
         Some(at) => Ok(Through::First { count: at + 1, of: open.len() }),
-        None => Err(DevicePush::HeadMoved(Notice::new(Tone::You, format!("Not pushed: step {} is not the commit you saw", step.number)).you("Look at its steps again and push from there.").detail("task", task).detail("commit", short).to_string())),
+        None => Err(DevicePush::HeadMoved(Notice::new(Tone::You, format!("Not pushed: step {} is not the step you saw", step.number)).you("Look at its steps again and push from there.").detail("task", task).detail("commit", short).to_string())),
     }
 }
 
@@ -1640,14 +1637,15 @@ mod tests {
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         let pushing = Pushing::new(&dir);
         let first = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        super::super::plan::list_at(&pushing.state, &slot.path, &upstream, &pushing.address, &["Model", "Command"]).unwrap();
+        super::super::plan::done_at(&pushing.state, &slot.path, &upstream, &pushing.address).unwrap();
         commit(&slot.path, "e", "fifth");
         let second = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
-        super::super::plan::list_at(&pushing.state, &slot.path, &upstream, &pushing.address, &["Model", "Command"]).unwrap();
         let (_, hand) = handed();
         let phone = Caller::hub("acc_01");
         let through = |number: u32, head: &str| device_push(&pushing.state, &phone, &dir, &slot, Some(ThroughStep { number, head }), &|_, _| None, &mut device_pushes(&pushing.state, &hand));
         let moved = through(1, &second);
-        assert!(matches!(&moved, DevicePush::HeadMoved(said) if said.contains("step 1 is not the commit you saw")), "step 1 is not the second commit: {moved:?}");
+        assert!(matches!(&moved, DevicePush::HeadMoved(said) if said.contains("step 1 is not the step you saw")), "step 1 does not end at the second commit: {moved:?}");
         assert!(matches!(through(3, &second), DevicePush::HeadMoved(_)), "there is no step 3");
         let main = main_of(&upstream).to_string();
         super::super::plan::listed_at(&pushing.state, &slot.path, &upstream, &pushing.address);
@@ -1658,7 +1656,7 @@ mod tests {
         assert!(matches!(&settled, DevicePush::Settled(said) if said.contains("step 1 is on")), "{settled:?}");
         let steps = super::super::plan::read_now(&pushing.state, &slot.path, &upstream, &pushing.address);
         assert_eq!((steps.pushed, steps.items.len(), steps.items[0].index), (1, 1, 1), "the board shows the next step as it stands");
-        assert!(matches!(&steps.items[0].state, super::super::plan::State::Committed { sha, .. } if *sha == second));
+        assert_eq!(steps.items[0].head(), Some(second.as_str()));
         cleanup(dir, origin, &slot);
     }
 
@@ -1754,17 +1752,18 @@ mod tests {
 
     #[test]
     fn a_push_through_a_commit_counts_its_steps_as_pushed_and_the_rest_map_onto_the_list_after_them() {
-        use crate::tasks::plan::{State, list_at, listed_at, load};
+        use crate::tasks::plan::{done_at, list_at, listed_at, load};
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
-        commit(&slot.path, "e", "fifth");
         let state = state_of(&dir);
         let address = crate::peers::address("billing", &name_of(&dir));
         list_at(&state, &slot.path, &upstream, &address, &["Model", "Command", "Docs"]).unwrap();
+        done_at(&state, &slot.path, &upstream, &address).unwrap();
+        commit(&slot.path, "e", "fifth");
         assert_eq!(listed_at(&state, &slot.path, &upstream, &address).pushed, 0);
         deliver(&dir, &slot, &upstream, Through::First { count: 1, of: 2 }, &Out { sha: git(&slot.path, &["rev-parse", "HEAD~1"]).unwrap(), rebased: false }, "the user", &state, &crate::ci::begin).unwrap();
         let shown = listed_at(&state, &slot.path, &upstream, &address);
         assert_eq!((shown.pushed, shown.items[0].index, shown.items[0].title.as_str()), (1, 1, "Command"), "one commit went out: the first step");
-        assert!(matches!(&shown.items[0].state, State::Committed { subject, .. } if subject == "fifth"));
+        assert_eq!(shown.items[0].commits.iter().map(|commit| commit.subject.as_str()).collect::<Vec<_>>(), ["fifth"]);
         list_at(&state, &slot.path, &upstream, &address, &["Command, again"]).unwrap();
         assert_eq!(load(&state, &address).unwrap().titles[0], "Model", "the pushed step stays first");
         assert_eq!(listed_at(&state, &slot.path, &upstream, &address).pushed, 1);

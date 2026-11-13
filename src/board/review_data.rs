@@ -11,16 +11,52 @@ pub type Runner = dyn FnMut(&[String]) -> std::result::Result<String, String>;
 pub enum Mark {
     Planned,
     InProgress,
-    Committed,
+    Ready,
     Accepted,
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct Commit {
+    pub sha: String,
+    pub subject: String,
+    pub accepted: bool,
+}
+
+// A step with its commits, or with task.steps off one commit as a step of its own.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Entry {
-    pub sha: Option<String>,
+    pub commits: Vec<Commit>,
     pub mark: Mark,
     pub number: usize,
     pub title: String,
+}
+
+impl Entry {
+    pub fn head(&self) -> Option<&str> {
+        self.commits.last().map(|commit| commit.sha.as_str())
+    }
+
+    pub fn holds(&self, sha: &str) -> bool {
+        self.commits.iter().any(|commit| commit.sha == sha)
+    }
+
+    // The step's whole diff: from under its first commit to its last.
+    pub fn range(&self) -> Option<Range> {
+        Some(Range { from: format!("{}^", self.commits.first()?.sha), to: self.head()?.to_string() })
+    }
+}
+
+// What a review of a step or a commit compares: from `from` to `to`, both commits; a file's read mark holds for its contents at `to`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Range {
+    pub from: String,
+    pub to: String,
+}
+
+impl Range {
+    pub fn commit(sha: &str) -> Range {
+        Range { from: format!("{sha}^"), to: sha.to_string() }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -33,11 +69,11 @@ pub struct Entries {
 
 impl Entries {
     pub fn committed(&self) -> impl Iterator<Item = (usize, &Entry)> {
-        self.items.iter().enumerate().filter(|(_, entry)| entry.sha.is_some())
+        self.items.iter().enumerate().filter(|(_, entry)| !entry.commits.is_empty())
     }
 
-    pub fn find(&self, sha: &str) -> Option<usize> {
-        self.items.iter().position(|entry| entry.sha.as_deref() == Some(sha))
+    pub fn numbered(&self, number: usize) -> Option<usize> {
+        self.items.iter().position(|entry| entry.number == number && !entry.commits.is_empty())
     }
 
     pub fn count(&self, mark: Mark) -> usize {
@@ -111,13 +147,17 @@ pub fn kebbie_bin() -> String {
         .unwrap_or_else(|| "kebbie".to_string())
 }
 
-fn mark_of(state: &str, accepted: bool) -> Mark {
-    match (state, accepted) {
-        ("planned", _) => Mark::Planned,
-        ("in-progress", _) => Mark::InProgress,
-        (_, true) => Mark::Accepted,
-        _ => Mark::Committed,
+fn mark_of(state: &str) -> Mark {
+    match state {
+        "planned" => Mark::Planned,
+        "in-progress" => Mark::InProgress,
+        "accepted" => Mark::Accepted,
+        _ => Mark::Ready,
     }
+}
+
+fn commit_of(commit: &Value) -> Option<Commit> {
+    Some(Commit { sha: commit["sha"].as_str()?.to_string(), subject: commit["subject"].as_str().unwrap_or_default().to_string(), accepted: commit["accepted"] == true })
 }
 
 pub fn from_steps(json: &Value, task: &str) -> Option<Entries> {
@@ -125,8 +165,8 @@ pub fn from_steps(json: &Value, task: &str) -> Option<Entries> {
         return None;
     }
     let items = json["steps"].as_array()?.iter().map(|step| Entry {
-        sha: step["sha"].as_str().map(str::to_string),
-        mark: mark_of(step["state"].as_str().unwrap_or_default(), step["accepted"] == true),
+        commits: step["commits"].as_array().map(|commits| commits.iter().filter_map(commit_of).collect()).unwrap_or_default(),
+        mark: mark_of(step["state"].as_str().unwrap_or_default()),
         number: step["index"].as_u64().unwrap_or_default() as usize + 1,
         title: step["title"].as_str().unwrap_or_default().to_string(),
     }).collect();
@@ -134,11 +174,11 @@ pub fn from_steps(json: &Value, task: &str) -> Option<Entries> {
 }
 
 pub fn from_commits(json: &Value, task: &str) -> Option<Entries> {
-    let items = json["commits"].as_array()?.iter().enumerate().map(|(index, commit)| Entry {
-        sha: commit["sha"].as_str().map(str::to_string),
-        mark: if commit["accepted"] == true { Mark::Accepted } else { Mark::Committed },
+    let items = json["commits"].as_array()?.iter().filter_map(commit_of).enumerate().map(|(index, commit)| Entry {
+        mark: if commit.accepted { Mark::Accepted } else { Mark::Ready },
         number: index + 1,
-        title: commit["subject"].as_str().unwrap_or_default().to_string(),
+        title: commit.subject.clone(),
+        commits: vec![commit],
     }).collect();
     Some(Entries { pushed: 0, items, steps: false, task: Some(task.to_string()) })
 }
@@ -158,7 +198,7 @@ pub fn read_entries(root: &Path, base: &str, marks: &mut Marks) -> Entries {
         return entries;
     }
     let log = git(root, &["log", "--reverse", "--format=%H%x09%s", &format!("{base}..HEAD")]).unwrap_or_default();
-    let items = log.lines().filter_map(|line| line.split_once('\t')).enumerate().map(|(index, (sha, subject))| Entry { sha: Some(sha.to_string()), mark: Mark::Committed, number: index + 1, title: subject.to_string() }).collect();
+    let items = log.lines().filter_map(|line| line.split_once('\t')).enumerate().map(|(index, (sha, subject))| Entry { commits: vec![Commit { sha: sha.to_string(), subject: subject.to_string(), accepted: false }], mark: Mark::Ready, number: index + 1, title: subject.to_string() }).collect();
     Entries { items, ..Entries::default() }
 }
 
@@ -238,9 +278,9 @@ fn untracked(root: &Path) -> Vec<(String, String, String, bool)> {
     }).collect()
 }
 
-pub fn changes(root: &Path, base: &str, commit: Option<&str>) -> Vec<(String, String, String, bool)> {
-    match commit {
-        Some(sha) => numstat(root, &[&format!("{sha}^"), sha]),
+pub fn changes(root: &Path, base: &str, range: Option<&Range>) -> Vec<(String, String, String, bool)> {
+    match range {
+        Some(range) => numstat(root, &[&range.from, &range.to]),
         None => [numstat(root, &[base]), untracked(root)].concat(),
     }
 }
@@ -249,18 +289,18 @@ pub fn marks_file(root: &Path) -> Option<PathBuf> {
     Some(crate::lead::state_location().ok()?.join(root.to_string_lossy().replace('/', "_")))
 }
 
-// In a commit a file's contents are its blob there, so the last commit's marks carry over to the whole branch; any edit brings a file back.
-pub fn fingerprint(root: &Path, path: &str, commit: Option<&str>) -> String {
-    let found = match commit {
-        Some(sha) => git(root, &["rev-parse", "--verify", "--quiet", &format!("{sha}:{path}")]),
+// In a commit or a step a file's contents are its blob at the end, so the last commit's marks carry over to the step and the whole branch; any edit brings a file back.
+pub fn fingerprint(root: &Path, path: &str, range: Option<&Range>) -> String {
+    let found = match range {
+        Some(range) => git(root, &["rev-parse", "--verify", "--quiet", &format!("{}:{path}", range.to)]),
         None if root.join(path).exists() => git(root, &["hash-object", "--", path]),
         None => None,
     };
     found.unwrap_or_else(|| "deleted".to_string())
 }
 
-fn mark_line(root: &Path, path: &str, commit: Option<&str>) -> String {
-    format!("{path}\t{}", fingerprint(root, path, commit))
+fn mark_line(root: &Path, path: &str, range: Option<&Range>) -> String {
+    format!("{path}\t{}", fingerprint(root, path, range))
 }
 
 fn marks(root: &Path) -> Vec<String> {
@@ -268,15 +308,15 @@ fn marks(root: &Path) -> Vec<String> {
 }
 
 #[cfg(test)]
-pub fn is_read(root: &Path, path: &str, commit: Option<&str>) -> bool {
-    let line = mark_line(root, path, commit);
+pub fn is_read(root: &Path, path: &str, range: Option<&Range>) -> bool {
+    let line = mark_line(root, path, range);
     marks(root).contains(&line)
 }
 
 // The board's split and the keeper's phone reviews both set marks, so each rewrite holds the marks' lock.
-pub fn set_read(root: &Path, path: &str, commit: Option<&str>, read: bool) -> crate::sh::Result<()> {
+pub fn set_read(root: &Path, path: &str, range: Option<&Range>, read: bool) -> crate::sh::Result<()> {
     let file = marks_file(root).ok_or("kebbie has no state dir for read marks")?;
-    let line = mark_line(root, path, commit);
+    let line = mark_line(root, path, range);
     let _locked = crate::state::Locked::wait(&PathBuf::from(format!("{}.lock", file.display())))?;
     let mut kept: Vec<String> = marks(root).into_iter().filter(|kept| *kept != line).collect();
     if read {
@@ -290,8 +330,8 @@ fn sort_by_mtime(root: &Path, mut paths: Vec<String>) -> Vec<String> {
     paths
 }
 
-pub fn files(dir: &Path, root: &Path, base: &str, commit: Option<&str>) -> Vec<File> {
-    let changes = changes(root, base, commit);
+pub fn files(dir: &Path, root: &Path, base: &str, range: Option<&Range>) -> Vec<File> {
+    let changes = changes(root, base, range);
     let scope: Option<Vec<String>> = fs::read_to_string(dir.join("scope")).ok().map(|text| {
         let mut seen = Vec::new();
         for path in text.lines().map(|line| line.trim().trim_start_matches("./").to_string()).filter(|line| !line.is_empty()) {
@@ -301,7 +341,7 @@ pub fn files(dir: &Path, root: &Path, base: &str, commit: Option<&str>) -> Vec<F
         }
         seen
     });
-    let baseline = fs::read_to_string(dir.join("baseline")).ok().filter(|_| commit.is_none() && scope.is_none());
+    let baseline = fs::read_to_string(dir.join("baseline")).ok().filter(|_| range.is_none() && scope.is_none());
     let order: Vec<(String, bool)> = match (&scope, &baseline) {
         (Some(scope), _) => scope.iter().filter(|path| changes.iter().any(|change| &change.0 == *path)).map(|path| (path.clone(), false))
             .chain(changes.iter().filter(|change| !scope.contains(&change.0)).map(|change| (change.0.clone(), true))).collect(),
@@ -316,7 +356,7 @@ pub fn files(dir: &Path, root: &Path, base: &str, commit: Option<&str>) -> Vec<F
     let read_marks = marks(root);
     order.into_iter().filter_map(|(path, other)| {
         let (_, added, deleted, new) = changes.iter().find(|change| change.0 == path)?.clone();
-        let read = read_marks.contains(&mark_line(root, &path, commit));
+        let read = read_marks.contains(&mark_line(root, &path, range));
         Some(File { path, added, deleted, new, other, read })
     }).collect()
 }
@@ -325,18 +365,20 @@ fn tracked(root: &Path, base: &str, path: &str) -> bool {
     git_ok(root, &["ls-files", "--error-unmatch", "--", path]) || git_ok(root, &["cat-file", "-e", &format!("{base}:{path}")])
 }
 
-pub fn diff_argv(root: &Path, base: &str, path: &str, commit: Option<&str>) -> Vec<String> {
+pub fn diff_argv(root: &Path, base: &str, path: &str, range: Option<&Range>) -> Vec<String> {
     let mut argv: Vec<String> = ["git", "--no-replace-objects", "-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "--text", "--no-textconv"].map(str::to_string).to_vec();
-    match commit {
-        Some(sha) => argv.extend([format!("{sha}^"), sha.to_string(), "--".into(), path.to_string()]),
+    match range {
+        Some(range) => argv.extend([range.from.clone(), range.to.clone(), "--".into(), path.to_string()]),
         None if tracked(root, base, path) => argv.extend([base.to_string(), "--".into(), path.to_string()]),
         None => argv.extend(["--no-index".into(), "/dev/null".into(), path.to_string()]),
     }
     argv
 }
 
-pub fn shown(path: &str, title: &str, commit: Option<&str>, index: usize, count: usize, diff: Vec<String>) -> Value {
-    json!({ "path": path, "title": title, "sha": commit.unwrap_or_default(), "short": commit.map(short).unwrap_or_default(), "index": index, "count": count, "diff": diff })
+// A comment typed from a step's diff names the step's last commit, where the lines it shows stand.
+pub fn shown(path: &str, title: &str, range: Option<&Range>, index: usize, count: usize, diff: Vec<String>) -> Value {
+    let sha = range.map(|range| range.to.as_str());
+    json!({ "path": path, "title": title, "sha": sha.unwrap_or_default(), "short": sha.map(short).unwrap_or_default(), "index": index, "count": count, "diff": diff })
 }
 
 #[cfg(test)]
@@ -396,7 +438,7 @@ pub mod tests {
         let repo = repo("files");
         let base = resolve_base(&repo.slot, "fork");
         assert_eq!(paths(&files(&repo.dir, &repo.slot, &base, None)), ["a", "b", "c"]);
-        assert_eq!(paths(&files(&repo.dir, &repo.slot, &base, Some(&repo.shas[1]))), ["b"]);
+        assert_eq!(paths(&files(&repo.dir, &repo.slot, &base, Some(&Range::commit(&repo.shas[1])))), ["b"]);
         fs::write(repo.slot.join("d"), "x\ny\n").unwrap();
         let all = files(&repo.dir, &repo.slot, &base, None);
         let new = all.iter().find(|file| file.path == "d").unwrap();
@@ -429,14 +471,14 @@ pub mod tests {
     fn a_file_read_in_a_commit_stays_read_in_the_whole_branch_while_its_contents_are_the_same() {
         let repo = repo("read");
         let base = resolve_base(&repo.slot, "fork");
-        set_read(&repo.slot, "a", Some(&repo.shas[0]), true).unwrap();
-        assert!(is_read(&repo.slot, "a", Some(&repo.shas[0])));
+        set_read(&repo.slot, "a", Some(&Range::commit(&repo.shas[0])), true).unwrap();
+        assert!(is_read(&repo.slot, "a", Some(&Range::commit(&repo.shas[0]))));
         assert!(is_read(&repo.slot, "a", None), "no later commit changed a");
         assert!(files(&repo.dir, &repo.slot, &base, None)[0].read);
         fs::write(repo.slot.join("a"), "base\none\nedited\n").unwrap();
         assert!(!is_read(&repo.slot, "a", None), "an edit brings it back");
-        set_read(&repo.slot, "a", Some(&repo.shas[0]), false).unwrap();
-        assert!(!is_read(&repo.slot, "a", Some(&repo.shas[0])));
+        set_read(&repo.slot, "a", Some(&Range::commit(&repo.shas[0])), false).unwrap();
+        assert!(!is_read(&repo.slot, "a", Some(&Range::commit(&repo.shas[0]))));
         let file = marks_file(&repo.slot).unwrap();
         assert!(file.starts_with(crate::lead::state_location().unwrap()), "marks live in kebbie's state dir: {}", file.display());
         let _ = fs::remove_dir_all(&repo.root);
@@ -449,10 +491,10 @@ pub mod tests {
         std::thread::scope(|scope| {
             for n in 0..8 {
                 let (slot, sha) = (&repo.slot, &sha);
-                scope.spawn(move || set_read(slot, &format!("p{n}"), Some(sha), true).unwrap());
+                scope.spawn(move || set_read(slot, &format!("p{n}"), Some(&Range::commit(sha)), true).unwrap());
             }
         });
-        assert!((0..8).all(|n| is_read(&repo.slot, &format!("p{n}"), Some(&sha))), "{:?}", marks(&repo.slot));
+        assert!((0..8).all(|n| is_read(&repo.slot, &format!("p{n}"), Some(&Range::commit(&sha)))), "{:?}", marks(&repo.slot));
         let _ = fs::remove_dir_all(&repo.root);
     }
 
@@ -461,7 +503,7 @@ pub mod tests {
         let repo = repo("diff");
         let base = resolve_base(&repo.slot, "fork");
         let shown = |argv: Vec<String>| { let args: Vec<&str> = argv[1..].iter().map(String::as_str).collect(); crate::sh::attempt("git", &args, Some(&repo.slot)).unwrap().unwrap_or_else(|out| out) };
-        let own = diff_argv(&repo.slot, &base, "a", Some(&repo.shas[0]));
+        let own = diff_argv(&repo.slot, &base, "a", Some(&Range::commit(&repo.shas[0])));
         assert_eq!(own[own.len() - 4..], [format!("{}^", repo.shas[0]), repo.shas[0].clone(), "--".to_string(), "a".to_string()]);
         assert!(shown(own).contains("+one"));
         commit(&repo.slot, "a", "base\none\nfour\n", "Change a again");
@@ -481,7 +523,7 @@ pub mod tests {
         let forged_tree = sh(&repo.slot, &["rev-parse", &format!("{}^^{{tree}}", repo.shas[0])]);
         let forged = sh(&repo.slot, &["commit-tree", &forged_tree, "-p", &format!("{}^", repo.shas[0]), "-m", "Change a"]);
         sh(&repo.slot, &["replace", &repo.shas[0], &forged]);
-        let own = shown(diff_argv(&repo.slot, &base, "a", Some(&repo.shas[0])));
+        let own = shown(diff_argv(&repo.slot, &base, "a", Some(&Range::commit(&repo.shas[0]))));
         assert!(own.contains("+one"), "{own}");
         let whole = shown(diff_argv(&repo.slot, &base, "a", None));
         assert!(whole.contains("+one"), "{whole}");
@@ -491,16 +533,30 @@ pub mod tests {
     #[test]
     fn steps_and_commits_read_kebbies_marks() {
         let steps = json!({ "listed": true, "pushed": 1, "steps": [
-            { "index": 1, "title": "Change a", "state": "committed", "sha": "aaa", "accepted": true },
-            { "index": 2, "title": "Write docs", "state": "in-progress" },
-            { "index": 3, "title": "Release", "state": "planned" },
+            { "index": 1, "title": "Change a", "state": "accepted", "commits": [{ "sha": "aaa", "subject": "One", "accepted": true }, { "sha": "bbb", "subject": "Two", "accepted": true }] },
+            { "index": 2, "title": "Write docs", "state": "in-progress", "commits": [{ "sha": "ccc", "subject": "Three", "accepted": false }] },
+            { "index": 3, "title": "Release", "state": "planned", "commits": [] },
         ] });
         let entries = from_steps(&steps, "billing").unwrap();
         assert_eq!(entries.pushed, 1);
-        assert_eq!(entries.items.iter().map(|entry| (entry.number, entry.mark)).collect::<Vec<_>>(), [(2, Mark::Accepted), (3, Mark::InProgress), (4, Mark::Planned)]);
+        assert_eq!(entries.items.iter().map(|entry| (entry.number, entry.mark, entry.commits.len())).collect::<Vec<_>>(), [(2, Mark::Accepted, 2), (3, Mark::InProgress, 1), (4, Mark::Planned, 0)]);
+        assert_eq!((entries.items[0].holds("bbb"), entries.items[0].head(), entries.items[0].range()), (true, Some("bbb"), Some(Range { from: "aaa^".to_string(), to: "bbb".to_string() })), "a step's diff runs from under its first commit to its last");
         assert_eq!(from_steps(&json!({ "listed": false, "steps": [] }), "billing"), None, "a task without steps lists its commits");
         let commits = from_commits(&json!({ "commits": [{ "sha": "aaa", "subject": "One", "accepted": false }, { "sha": "bbb", "subject": "Two", "accepted": true }] }), "billing").unwrap();
-        assert_eq!(commits.items.iter().map(|entry| (entry.number, entry.mark)).collect::<Vec<_>>(), [(1, Mark::Committed), (2, Mark::Accepted)]);
+        assert_eq!(commits.items.iter().map(|entry| (entry.number, entry.mark, entry.commits.len())).collect::<Vec<_>>(), [(1, Mark::Ready, 1), (2, Mark::Accepted, 1)]);
         assert_eq!(commits.task.as_deref(), Some("billing"));
+    }
+
+    #[test]
+    fn a_steps_files_and_diff_span_its_commits_and_its_read_marks_hold_at_its_last() {
+        let repo = repo("step-range");
+        let step = Range { from: format!("{}^", repo.shas[1]), to: repo.shas[2].clone() };
+        assert_eq!(paths(&files(&repo.dir, &repo.slot, "HEAD", Some(&step))), ["b", "c"]);
+        let argv = diff_argv(&repo.slot, "HEAD", "b", Some(&step));
+        assert_eq!(argv[argv.len() - 4..], [format!("{}^", repo.shas[1]), repo.shas[2].clone(), "--".to_string(), "b".to_string()]);
+        set_read(&repo.slot, "b", Some(&step), true).unwrap();
+        assert!(is_read(&repo.slot, "b", Some(&Range::commit(&repo.shas[1]))), "b is the same in its own commit and at the step's end");
+        assert_eq!(shown("b", "step 2", Some(&step), 1, 2, Vec::new())["sha"], json!(repo.shas[2]));
+        let _ = fs::remove_dir_all(&repo.root);
     }
 }

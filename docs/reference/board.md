@@ -22,7 +22,7 @@ The status line shows:
 | --- | --- |
 | `⚠N` on Routines | N routine runs wait for you with findings. |
 | Counts | What needs you (tasks, and devices waiting for your approval), tasks that are working, are in review, are ready to push and wait for CI, and waiting questions. |
-| `◆ N to accept`, yellow | N commits of tasks working in steps wait for you to accept them. |
+| `◆ N to accept`, yellow | N steps of tasks working in steps wait for you to accept them. |
 | `! N bugs to send` | Bugs and wishes about kebbie, saved here, wait for you to send them to its maintainers, on their row under Work, such as `! 1 bug and 2 wishes to send`. |
 | Plan usage | How much of the plan is used. |
 | `↻ N stale` | Claude sessions or Codex tasks wait to be restarted. |
@@ -106,20 +106,20 @@ With [`task.steps`](configuration.md) on and steps listed, the task's steps not 
 ```
 ◐ Switch the payment provider to Stripe        billing · 1 to accept
     ↑ 1 pushed
-    ● 2 Charge through a PaymentGateway        committed
-    ◐ 3 Add Stripe as the gateway              in progress
+    ● 2 Charge through a PaymentGateway        ready · 2 commits
+    ◐ 3 Add Stripe as the gateway              in progress · 1 commit
     ○ 4 Remove the old payment client
    accept 2 · r review
 ```
 
 | Line or mark | Means |
 | --- | --- |
-| `N to accept`, yellow | On the row, in place of its commit count: N committed steps wait for you to accept them. |
+| `N to accept`, yellow | On the row, in place of its commit count: N ready steps wait for you to accept them. |
 | `↑ N pushed`, muted | N steps are on the default branch already. |
 | `○`, muted | Planned. |
-| `◐ … in progress`, blue | Its Claude is at work on it. |
-| `● … committed`, yellow | Committed, waiting for you to accept it, followed by the task's rules check in short while it is not passed: `· project rules not checked`, `· checking project rules` while the reviewer or the lead checks, `· breaks N project rules` when it found some, `· pushed past the rules check by you` (or `by the lead`) after `kebbie approve`. A passed check adds nothing. |
-| `✓ … accepted`, green | Committed, and you accepted it. |
+| `◐ … in progress · N commits`, blue | Its Claude is at work on it, with the commits it holds so far; without commits, just `in progress`. |
+| `● … ready · N commits`, yellow | Its Claude ran `kebbie steps done` on it: finished, waiting for you to accept it, followed by the task's rules check in short while it is not passed: `· project rules not checked`, `· checking project rules` while the reviewer or the lead checks, `· breaks N project rules` when it found some, `· pushed past the rules check by you` (or `by the lead`) after `kebbie approve`. A passed check adds nothing. |
+| `✓ … accepted`, green | You accepted every commit in it. |
 | `accept N · r review` | Under the steps: the first step waiting for you. `r` opens the review, and [`kebbie accept`](commands.md#kebbie-accept-name-sha) accepts it. |
 | `accept step N · r review` | With [`task.require_accept`](configuration.md) on, a ready task with a step to accept waits under Needs you with this line: it cannot be pushed until step N is accepted. |
 
@@ -531,10 +531,10 @@ Opened by `p`. The window is in four parts, each under a header on a rule:
 | --- | --- |
 | `CARD` | The task's sign-off card, marked current at its commit or written before the code changed. Its images are listed by file name; `s` on the board shows them. |
 | `TESTS` | The latest recorded test run, as on the task's row. A run before a clean rebase, a reworded message or a squash still counts as current. |
-| `COMMITS` | The commits that will land, with their count. A commit you accepted is marked `✓`, green. With steps, each commit carries its step's mark and number, and the steps not committed yet follow, muted: `in progress, stays` or `planned`. |
+| `COMMITS` | The commits that will land, with their count. A commit you accepted is marked `✓`, green. With steps, the commits are grouped by step, each step's mark and number on its first commit, and the steps without commits follow, muted: `in progress, stays` or `planned`; `p` pushes through the end of the selected commit's step. |
 | `MESSAGE` | The selected commit's full message, set off by a bar so it does not read as part of the card. |
 
-With accepted commits, the window opens on the last of the accepted ones from the first commit on, marked `◂ through here`, and `p` reads `p push N accepted, the task keeps working` while it is selected. Without any, it opens on the first commit. While the task's Claude is working, `p` opens the window only once it has accepted commits from the first one on, and the window then pushes only those: `↑` `↓` stop at the last of them, and `y`, `e` and `s` wait until the task reports.
+With accepted commits, the window opens on the last of the accepted ones from the first commit on, marked `◂ through here`, and `p` reads `p push N accepted, the task keeps working` while it is selected. With steps, that run ends with the last accepted step. Without any, it opens on the first commit. While the task's Claude is working, `p` opens the window only once it has accepted commits from the first one on, and the window then pushes only those: `↑` `↓` stop at the last of them, and `y`, `e` and `s` wait until the task reports.
 
 The keys sit under a rule at the bottom and stay there. A window taller than the screen scrolls the parts above them, keeping the selected commit in view.
 
@@ -545,7 +545,7 @@ The keys sit under a rule at the bottom and stay there. A window taller than the
 | `e` | Edit the selected commit's message. |
 | `s` | Squash all commits into one. Claude drafts the message in the background, ready to edit. Needs two or more commits. |
 | `y` | Push every commit shown and close the task. |
-| `p` | Push the commits up to the selected one and keep the task open. |
+| `p` | Push the commits up to the selected one and keep the task open. With steps, through the end of the selected commit's step: `p push through step N and keep it open`. |
 | `esc`, `q` | Close without pushing. |
 
 In the message editor: `ctrl-s` saves, `ctrl-o` opens your `$EDITOR`, `esc` goes back.

@@ -10,12 +10,19 @@ use crate::repo::{default_branch, git, main_checkout, name_of};
 use crate::sh::Result;
 use super::pool::{Slot, find_task, task_of};
 
-// The task's steps in order, one commit each, the default branch's head when they were first listed, and the change each step's commit made when last seen.
+// The task's steps in order, the default branch's head when they were first listed, and the commits each step held when last seen, by their change.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Plan {
     pub titles: Vec<String>,
     pub base: String,
+    pub held: Vec<Held>,
+}
+
+// A step's commits by their change, and whether its Claude said with kebbie steps done that the step's work is finished.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Held {
     pub seen: Vec<Seen>,
+    pub done: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -28,7 +35,15 @@ pub struct Seen {
 pub enum State {
     Planned,
     InProgress,
-    Committed { sha: String, subject: String, accepted: bool },
+    Ready,
+    Accepted,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Commit {
+    pub sha: String,
+    pub subject: String,
+    pub accepted: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -36,7 +51,18 @@ pub struct Step {
     pub index: usize,
     pub title: String,
     pub state: State,
+    pub commits: Vec<Commit>,
     pub extra: bool,
+}
+
+impl Step {
+    pub fn head(&self) -> Option<&str> {
+        self.commits.last().map(|commit| commit.sha.as_str())
+    }
+
+    pub fn holds(&self, sha: &str) -> bool {
+        self.commits.iter().any(|commit| commit.sha == sha)
+    }
 }
 
 // The unpushed steps; a task without a plan has none and no pushed count, so callers show what they show today.
@@ -49,6 +75,10 @@ pub struct Steps {
 impl Steps {
     pub fn listed(&self) -> bool {
         self.pushed > 0 || !self.items.is_empty()
+    }
+
+    pub fn holding(&self, sha: &str) -> Option<&Step> {
+        self.items.iter().find(|step| step.holds(sha))
     }
 }
 
@@ -69,16 +99,25 @@ fn head_file(state: &Path, address: &str) -> PathBuf {
     state.join("steps").join(format!("{address}.head"))
 }
 
+fn seen_of(value: &Value) -> Seen {
+    Seen { code: value["code"].as_str().unwrap_or_default().to_string(), subject: value["subject"].as_str().unwrap_or_default().to_string() }
+}
+
+// Steps an older kebbie noted as one commit each read as that commit, done.
 pub fn load(state: &Path, address: &str) -> Option<Plan> {
     let value: Value = serde_json::from_str(&fs::read_to_string(file(state, address)).ok()?).ok()?;
     let titles: Vec<String> = value["titles"].as_array()?.iter().filter_map(|title| title.as_str().map(str::to_string)).collect();
-    let seen = value["seen"].as_array().map(|seen| seen.iter().map(|one| Seen { code: one["code"].as_str().unwrap_or_default().to_string(), subject: one["subject"].as_str().unwrap_or_default().to_string() }).collect()).unwrap_or_default();
-    Some(Plan { titles, base: value["base"].as_str().unwrap_or_default().to_string(), seen })
+    let held = match (value["held"].as_array(), value["seen"].as_array()) {
+        (Some(held), _) => held.iter().map(|step| Held { seen: step["seen"].as_array().map(|seen| seen.iter().map(seen_of).collect()).unwrap_or_default(), done: step["done"] == true }).collect(),
+        (None, Some(seen)) => seen.iter().map(|one| Held { seen: vec![seen_of(one)], done: true }).collect(),
+        (None, None) => Vec::new(),
+    };
+    Some(Plan { titles, base: value["base"].as_str().unwrap_or_default().to_string(), held })
 }
 
 fn save(state: &Path, address: &str, plan: &Plan) -> Result<()> {
-    let seen: Vec<Value> = plan.seen.iter().map(|one| json!({ "code": one.code, "subject": one.subject })).collect();
-    crate::state::write(&file(state, address), json!({ "titles": plan.titles, "base": plan.base, "seen": seen }).to_string())
+    let held: Vec<Value> = plan.held.iter().map(|step| json!({ "seen": step.seen.iter().map(|one| json!({ "code": one.code, "subject": one.subject })).collect::<Vec<_>>(), "done": step.done })).collect();
+    crate::state::write(&file(state, address), json!({ "titles": plan.titles, "base": plan.base, "held": held }).to_string())
 }
 
 pub fn forget(task: &str, repo: &Path) {
@@ -93,43 +132,98 @@ fn one_line(title: &str) -> String {
     title.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-// The first `pushed` steps stay first as they were, a pushed commit beyond the list under its subject; a list that starts with them again takes them as said.
+// The first `pushed` steps stay first as they were, a pushed step beyond the list under its first commit's subject; a list that starts with them again takes them as said; every step keeps the commits it holds, by position.
 pub fn rewritten(old: Option<&Plan>, pushed: usize, base: &str, titles: &[String]) -> Result<Plan> {
     let titles: Vec<String> = titles.iter().map(|title| one_line(title)).collect();
     if titles.is_empty() || titles.iter().any(String::is_empty) {
         return Err(format!("kebbie steps needs each step as a one-line title: {USAGE}"));
     }
-    let Some(old) = old else { return Ok(Plan { titles, base: base.to_string(), seen: Vec::new() }) };
-    let pushed = pushed.min(old.seen.len());
-    let kept: Vec<String> = (0..pushed).map(|at| old.titles.get(at).cloned().unwrap_or_else(|| old.seen[at].subject.clone())).collect();
+    let Some(old) = old else { return Ok(Plan { titles, base: base.to_string(), held: Vec::new() }) };
+    let pushed = pushed.min(old.held.len());
+    let kept: Vec<String> = (0..pushed).map(|at| old.titles.get(at).cloned().unwrap_or_else(|| first_subject(&old.held[at]))).collect();
     let rest = if titles.starts_with(&kept) { titles[kept.len()..].to_vec() } else { titles };
-    Ok(Plan { titles: kept.into_iter().chain(rest).collect(), base: old.base.clone(), seen: old.seen[..pushed].to_vec() })
+    Ok(Plan { titles: kept.into_iter().chain(rest).collect(), base: old.base.clone(), held: old.held.clone() })
 }
 
-// Pushed are the leading steps whose last seen change the default branch gained since base, however it got there; landed holds those changes.
-pub fn derive(plan: Option<&Plan>, landed: &[String], commits: &[Unpushed], working: bool) -> (Steps, Vec<Seen>) {
+fn first_subject(held: &Held) -> String {
+    held.seen.first().map(|one| one.subject.clone()).unwrap_or_default()
+}
+
+// The step new commits go to: the first after the pushed ones not done, else the one after the last.
+fn in_progress(held: &[Held], pushed: usize) -> usize {
+    (pushed..held.len()).find(|at| !held[*at].done).unwrap_or(held.len().max(pushed))
+}
+
+// Each open commit's step: the step that held its change, else, for a change rewritten by an amend or a squash, the step around it that lost one, else the step in progress; steps never interleave along the branch.
+fn placed(held: &[Held], pushed: usize, open: &[&Unpushed]) -> Vec<usize> {
+    let mut wanted: Vec<Vec<&str>> = held.iter().enumerate().map(|(at, step)| if at < pushed { Vec::new() } else { step.seen.iter().map(|one| one.code.as_str()).collect() }).collect();
+    let matched: Vec<Option<usize>> = open.iter().map(|commit| (pushed..wanted.len()).find(|at| taken(&mut wanted[*at], &commit.code))).collect();
+    let lost: Vec<bool> = wanted.iter().map(|left| !left.is_empty()).collect();
+    let current = in_progress(held, pushed);
+    let mut steps: Vec<usize> = Vec::with_capacity(open.len());
+    for (at, found) in matched.iter().enumerate() {
+        let before = steps.last().copied();
+        let step = found.unwrap_or_else(|| match (before, matched[at + 1..].iter().flatten().next().copied()) {
+            (Some(earlier), Some(later)) if earlier != later && lost[later] && !lost[earlier] => later,
+            (Some(earlier), Some(_)) => earlier,
+            (Some(earlier), None) if earlier == current || lost[earlier] => earlier,
+            (None, Some(later)) => later,
+            _ => current,
+        });
+        steps.push(before.map_or(step, |before| step.max(before)));
+    }
+    steps
+}
+
+// Pushed are the leading steps whose every commit's change the default branch gained since base, however it got there; landed holds those changes.
+pub fn derive(plan: Option<&Plan>, landed: &[String], commits: &[Unpushed], working: bool) -> (Steps, Vec<Held>) {
     let Some(plan) = plan.filter(|plan| !plan.titles.is_empty()) else { return (Steps::default(), Vec::new()) };
     let mut landed: Vec<&str> = landed.iter().map(String::as_str).collect();
-    let pushed = plan.seen.iter().take_while(|seen| !seen.code.is_empty() && taken(&mut landed, &seen.code)).count();
-    let mut gone: Vec<&str> = plan.seen[..pushed].iter().map(|seen| seen.code.as_str()).collect();
+    let pushed = plan.held.iter().take_while(|step| !step.seen.is_empty() && step.seen.iter().all(|one| !one.code.is_empty()) && taken_all(&mut landed, &step.seen)).count();
+    let mut gone: Vec<&str> = plan.held[..pushed].iter().flat_map(|step| step.seen.iter().map(|one| one.code.as_str())).collect();
     let open: Vec<&Unpushed> = commits.iter().filter(|commit| !taken(&mut gone, &commit.code)).collect();
-    let mut items: Vec<Step> = open.iter().enumerate().map(|(at, commit)| Step {
-        index: pushed + at,
-        title: plan.titles.get(pushed + at).cloned().unwrap_or_else(|| commit.subject.clone()),
-        state: State::Committed { sha: commit.sha.clone(), subject: commit.subject.clone(), accepted: commit.accepted },
-        extra: pushed + at >= plan.titles.len(),
+    let steps = placed(&plan.held, pushed, &open);
+    let count = steps.iter().map(|step| step + 1).max().unwrap_or(0).max(plan.held.len());
+    let mut held: Vec<Held> = (0..count).map(|at| {
+        if at < pushed {
+            return plan.held[at].clone();
+        }
+        let seen: Vec<Seen> = open.iter().zip(&steps).filter(|(_, step)| **step == at).map(|(commit, _)| Seen { code: commit.code.clone(), subject: commit.subject.clone() }).collect();
+        Held { done: !seen.is_empty() && plan.held.get(at).is_some_and(|step| step.done), seen }
     }).collect();
-    for index in (pushed + open.len())..plan.titles.len() {
-        let state = if working && index == pushed + open.len() { State::InProgress } else { State::Planned };
-        items.push(Step { index, title: plan.titles[index].clone(), state, extra: false });
+    while held.len() > pushed && held.last().is_some_and(|step| step.seen.is_empty()) {
+        held.pop();
     }
-    let seen = plan.seen[..pushed].iter().cloned().chain(open.iter().map(|commit| Seen { code: commit.code.clone(), subject: commit.subject.clone() })).collect();
-    (Steps { pushed, items }, seen)
+    let current = in_progress(&held, pushed);
+    let items = (pushed..plan.titles.len().max(held.len())).map(|index| {
+        let commits: Vec<Commit> = open.iter().zip(&steps).filter(|(_, step)| **step == index).map(|(commit, _)| Commit { sha: commit.sha.clone(), subject: commit.subject.clone(), accepted: commit.accepted }).collect();
+        let done = held.get(index).is_some_and(|step| step.done);
+        let state = match (commits.is_empty(), done) {
+            (true, _) if working && index == current => State::InProgress,
+            (true, _) => State::Planned,
+            (false, false) => State::InProgress,
+            (false, true) if commits.iter().all(|commit| commit.accepted) => State::Accepted,
+            (false, true) => State::Ready,
+        };
+        let title = plan.titles.get(index).cloned().or_else(|| commits.first().map(|commit| commit.subject.clone())).unwrap_or_default();
+        Step { index, title, state, commits, extra: index >= plan.titles.len() }
+    }).collect();
+    (Steps { pushed, items }, held)
 }
 
 // Takes one of code out of codes, so a change made twice is counted twice.
 fn taken(codes: &mut Vec<&str>, code: &str) -> bool {
     codes.iter().position(|one| *one == code).map(|at| codes.remove(at)).is_some()
+}
+
+// Takes every one of a step's changes, or none of them.
+fn taken_all(codes: &mut Vec<&str>, seen: &[Seen]) -> bool {
+    let mut left = codes.clone();
+    let all = seen.iter().all(|one| taken(&mut left, &one.code));
+    if all {
+        *codes = left;
+    }
+    all
 }
 
 struct Task<'a> {
@@ -174,11 +268,11 @@ fn landed(path: &Path, base: &str, tips: &Tips) -> Vec<String> {
     super::accept::landed_between(path, base, &tips.upstream)
 }
 
-fn current_at(state: &Path, path: &Path, address: &str, plan: &Plan, tips: &Tips, working: bool) -> Result<(Steps, Vec<Seen>)> {
+fn current_at(state: &Path, path: &Path, address: &str, plan: &Plan, tips: &Tips, working: bool) -> Result<(Steps, Vec<Held>)> {
     Ok(derive(Some(plan), &landed(path, &plan.base, tips), &unpushed(state, path, address, tips)?, working))
 }
 
-fn current(state: &Path, task: &Task, plan: &Plan, working: bool) -> Result<(Steps, Vec<Seen>)> {
+fn current(state: &Path, task: &Task, plan: &Plan, working: bool) -> Result<(Steps, Vec<Held>)> {
     current_at(state, task.path, task.address, plan, &tips_of(task)?, working)
 }
 
@@ -199,12 +293,12 @@ pub(super) fn read_now(state: &Path, path: &Path, upstream: &str, address: &str)
     tips_of(&Task { path, upstream, address }).map(|tips| read_at(state, path, address, &tips, false)).unwrap_or_default()
 }
 
-// Records what each step's commit is now, so a step still counts once its commit reaches the default branch by any road.
+// Records which commits each step holds now, so a step keeps them through a rebase and still counts once they reach the default branch by any road.
 fn listed_in(state: &Path, task: &Task, working: bool) -> Result<Steps> {
     let Some(mut plan) = load(state, task.address) else { return Ok(Steps::default()) };
-    let (steps, seen) = current(state, task, &plan, working)?;
-    if seen != plan.seen && steps.listed() {
-        plan.seen = seen;
+    let (steps, held) = current(state, task, &plan, working)?;
+    if held != plan.held && steps.listed() {
+        plan.held = held;
         save(state, task.address, &plan)?;
     }
     Ok(steps)
@@ -272,7 +366,7 @@ pub fn shown_at(path: &Path) -> Option<Value> {
     Some(to_json(&address, &steps, super::accept::last_accepted(&slot.path).as_deref()))
 }
 
-const USAGE: &str = "kebbie steps \"<step>\" \"<step>\" … in the task's worktree, or kebbie steps <name> \"<step>\" … elsewhere; kebbie steps [name] [--json] shows them";
+const USAGE: &str = "kebbie steps \"<step>\" \"<step>\" … in the task's worktree, or kebbie steps <name> \"<step>\" … elsewhere; kebbie steps [name] done marks the step in progress ready; kebbie steps [name] [--json] shows them";
 
 fn off_line(repo: &Path) -> String {
     format!("kebbie steps is off for {}: set task.steps = true in {} or {}, or on the board's Settings page.", name_of(repo), crate::config::path().display(), crate::config::repo_file(repo).display())
@@ -300,7 +394,11 @@ pub fn steps(cwd: &Path, words: &[String], as_json: bool) -> Result<String> {
     let mut working = crate::phase::load(&state, &address).is_some_and(|record| matches!(record.phase, crate::phase::Phase::Working | crate::phase::Phase::Starting));
     if !titles.is_empty() {
         let caller = crate::permit::caller();
-        write_as(&caller, &state, &task, titles)?;
+        if titles == ["done"] {
+            done_as(&caller, &state, &task)?;
+        } else {
+            write_as(&caller, &state, &task, titles)?;
+        }
         working |= caller == Caller::Task(address.clone());
     }
     let steps = listed_in(&state, &task, working)?;
@@ -312,32 +410,70 @@ pub fn steps(cwd: &Path, words: &[String], as_json: bool) -> Result<String> {
 }
 
 // A task writes its own steps only; the lead and the user write any task's.
-fn write_as(caller: &Caller, state: &Path, task: &Task, titles: &[String]) -> Result<()> {
-    if let Caller::Task(own) = caller && own != task.address {
-        return Err(format!("the task {own} writes its own steps, not {}'s", task.address));
+fn writes(caller: &Caller, task: &Task) -> Result<()> {
+    match caller {
+        Caller::Task(own) if own != task.address => Err(format!("the task {own} writes its own steps, not {}'s", task.address)),
+        _ => Ok(()),
     }
+}
+
+fn write_as(caller: &Caller, state: &Path, task: &Task, titles: &[String]) -> Result<()> {
+    writes(caller, task)?;
     let old = load(state, task.address);
-    let (pushed, seen) = match &old {
-        Some(plan) => current(state, task, plan, false).map(|(steps, seen)| (steps.pushed, seen))?,
+    let (pushed, held) = match &old {
+        Some(plan) => current(state, task, plan, false).map(|(steps, held)| (steps.pushed, held))?,
         None => (0, Vec::new()),
     };
     let base = git(task.path, &["rev-parse", &crate::repo::tracking(task.upstream)])?;
-    let old = old.map(|plan| Plan { seen, ..plan });
+    let old = old.map(|plan| Plan { held, ..plan });
     save(state, task.address, &rewritten(old.as_ref(), pushed, &base, titles)?)
+}
+
+// kebbie steps done: the step in progress is ready, and the commits after it go to the next step.
+fn done_as(caller: &Caller, state: &Path, task: &Task) -> Result<()> {
+    writes(caller, task)?;
+    let mut plan = load(state, task.address).filter(|plan| !plan.titles.is_empty()).ok_or_else(|| format!("{} has no steps to finish: {USAGE}", task.address))?;
+    let (steps, held) = current(state, task, &plan, false)?;
+    plan.held = held;
+    let at = in_progress(&plan.held, steps.pushed);
+    match plan.held.get_mut(at) {
+        Some(step) if !step.seen.is_empty() => step.done = true,
+        _ => return Err(format!("Step {} holds no commit yet: commit its work, then kebbie steps done", at + 1)),
+    }
+    save(state, task.address, &plan)
 }
 
 pub fn mark(state: &State) -> &'static str {
     match state {
         State::Planned => "○",
         State::InProgress => "◐",
-        State::Committed { accepted: false, .. } => "●",
-        State::Committed { accepted: true, .. } => "✓",
+        State::Ready => "●",
+        State::Accepted => "✓",
+    }
+}
+
+pub fn word(state: &State) -> &'static str {
+    match state {
+        State::Planned => "planned",
+        State::InProgress => "in progress",
+        State::Ready => "ready",
+        State::Accepted => "accepted",
+    }
+}
+
+// What a step's row says after its title: its state and, once it holds any, how many commits.
+pub fn label(step: &Step) -> String {
+    match (&step.state, step.commits.len()) {
+        (State::Planned, _) => String::new(),
+        (state, 0) => word(state).to_string(),
+        (state, 1) => format!("{} · 1 commit", word(state)),
+        (state, many) => format!("{} · {many} commits", word(state)),
     }
 }
 
 fn shown(address: &str, steps: &Steps) -> String {
     if !steps.listed() {
-        return format!("{address} has no steps: kebbie steps \"<step>\" … lists them, a commit per step.");
+        return format!("{address} has no steps: kebbie steps \"<step>\" … lists them, and kebbie steps done marks each one ready.");
     }
     let mut lines = vec![format!("{address}'s steps:")];
     if steps.pushed > 0 {
@@ -345,31 +481,32 @@ fn shown(address: &str, steps: &Steps) -> String {
     }
     for item in &steps.items {
         let mut line = format!("  {} {}. {}", mark(&item.state), item.index + 1, item.title);
-        if let State::Committed { sha, .. } = &item.state {
-            line.push_str(&format!("  {}", &sha[..7.min(sha.len())]));
+        let label = label(item);
+        if !label.is_empty() {
+            line.push_str(&format!("  {label}"));
         }
         if item.extra {
             line.push_str("  (not in the list)");
         }
         lines.push(line);
+        lines.extend(item.commits.iter().map(|commit| format!("       {} {}", &commit.sha[..7.min(commit.sha.len())], commit.subject)));
     }
     lines.join("\n")
 }
 
+fn state_name(state: &State) -> &'static str {
+    match state {
+        State::Planned => "planned",
+        State::InProgress => "in-progress",
+        State::Ready => "ready",
+        State::Accepted => "accepted",
+    }
+}
+
 fn to_json(address: &str, steps: &Steps, last_accepted: Option<&str>) -> Value {
     let items: Vec<Value> = steps.items.iter().map(|item| {
-        let mut value = json!({ "index": item.index, "title": item.title, "extra": item.extra });
-        match &item.state {
-            State::Planned => value["state"] = json!("planned"),
-            State::InProgress => value["state"] = json!("in-progress"),
-            State::Committed { sha, subject, accepted } => {
-                value["state"] = json!("committed");
-                value["sha"] = json!(sha);
-                value["subject"] = json!(subject);
-                value["accepted"] = json!(accepted);
-            }
-        }
-        value
+        let commits: Vec<Value> = item.commits.iter().map(|commit| json!({ "sha": commit.sha, "subject": commit.subject, "accepted": commit.accepted })).collect();
+        json!({ "index": item.index, "title": item.title, "extra": item.extra, "state": state_name(&item.state), "commits": commits })
     }).collect();
     json!({ "task": address, "listed": steps.listed(), "pushed": steps.pushed, "steps": items, "last_accepted": last_accepted })
 }
@@ -378,6 +515,11 @@ fn to_json(address: &str, steps: &Steps, last_accepted: Option<&str>) -> Value {
 pub(crate) fn list_at(state: &Path, path: &Path, upstream: &str, address: &str, titles: &[&str]) -> Result<()> {
     let titles: Vec<String> = titles.iter().map(|title| title.to_string()).collect();
     write_as(&Caller::User, state, &Task { path, upstream, address }, &titles)
+}
+
+#[cfg(test)]
+pub(crate) fn done_at(state: &Path, path: &Path, upstream: &str, address: &str) -> Result<()> {
+    done_as(&Caller::User, state, &Task { path, upstream, address })
 }
 
 #[cfg(test)]
@@ -402,72 +544,118 @@ mod tests {
         codes.iter().map(|code| Seen { code: code.to_string(), subject: format!("subject of {code}") }).collect()
     }
 
-    fn plan(words: &[&str], seen: Vec<Seen>) -> Plan {
-        Plan { titles: titles(words), base: "base".to_string(), seen }
+    fn done(groups: &[&[&str]]) -> Vec<Held> {
+        groups.iter().map(|codes| Held { seen: seen(codes), done: true }).collect()
     }
 
-    fn subjects(steps: &Steps) -> Vec<(usize, String)> {
-        steps.items.iter().map(|item| (item.index, match &item.state { State::Committed { subject, .. } => subject.clone(), _ => String::new() })).collect()
+    fn plan(words: &[&str], held: Vec<Held>) -> Plan {
+        Plan { titles: titles(words), base: "base".to_string(), held }
+    }
+
+    fn shas(steps: &Steps) -> Vec<(usize, Vec<&str>)> {
+        steps.items.iter().map(|item| (item.index, item.commits.iter().map(|commit| commit.sha.as_str()).collect())).collect()
+    }
+
+    fn states(steps: &Steps) -> Vec<State> {
+        steps.items.iter().map(|item| item.state.clone()).collect()
+    }
+
+    fn rewritten_code(sha: &str, code: &str) -> Unpushed {
+        Unpushed { code: code.to_string(), ..commit_of(sha, &format!("subject {sha}"), false) }
     }
 
     #[test]
-    fn a_rewrite_changes_what_is_not_pushed_and_keeps_the_pushed_steps_first() {
+    fn a_rewrite_changes_the_titles_not_pushed_and_every_step_keeps_its_commits() {
         let first = rewritten(None, 0, "base", &titles(&["Add the model", "  Wire\nthe command ", "Document it"])).unwrap();
         assert_eq!(first, plan(&["Add the model", "Wire the command", "Document it"], Vec::new()), "each title is one line");
-        let pushed = Plan { seen: seen(&["a", "b"]), ..first };
-        assert_eq!(rewritten(Some(&pushed), 1, "later", &titles(&["Wire it differently", "Test it"])).unwrap(), plan(&["Add the model", "Wire it differently", "Test it"], seen(&["a"])), "the base stays the one the steps were first listed on");
-        assert_eq!(rewritten(Some(&pushed), 1, "later", &titles(&["Add the model", "Test it"])).unwrap().titles, titles(&["Add the model", "Test it"]), "a list that repeats the pushed ones first is taken as the whole list");
-        assert_eq!(rewritten(Some(&pushed), 1, "later", &titles(&["Add the model"])).unwrap().titles, titles(&["Add the model"]), "a list of just the pushed ones is the whole list, not them twice");
-        let beyond = Plan { titles: titles(&["Model"]), base: "base".to_string(), seen: seen(&["a", "b"]) };
-        assert_eq!(rewritten(Some(&beyond), 2, "base", &titles(&["Docs"])).unwrap().titles, titles(&["Model", "subject of b", "Docs"]), "a pushed commit beyond the list keeps its subject");
-        assert!(rewritten(Some(&pushed), 1, "base", &[]).is_err() && rewritten(None, 0, "base", &titles(&["ok", " "])).is_err(), "no empty list and no empty title");
+        let held = Plan { held: done(&[&["a"], &["b", "c"]]), ..first };
+        assert_eq!(rewritten(Some(&held), 1, "later", &titles(&["Wire it differently", "Test it"])).unwrap(), plan(&["Add the model", "Wire it differently", "Test it"], done(&[&["a"], &["b", "c"]])), "the base stays the one the steps were first listed on, and the commits stay where they are");
+        assert_eq!(rewritten(Some(&held), 1, "later", &titles(&["Add the model", "Test it"])).unwrap().titles, titles(&["Add the model", "Test it"]), "a list that repeats the pushed ones first is taken as the whole list");
+        assert_eq!(rewritten(Some(&held), 1, "later", &titles(&["Add the model"])).unwrap().titles, titles(&["Add the model"]), "a list of just the pushed ones is the whole list, not them twice");
+        let beyond = Plan { titles: titles(&["Model"]), base: "base".to_string(), held: done(&[&["a"], &["b", "c"]]) };
+        assert_eq!(rewritten(Some(&beyond), 2, "base", &titles(&["Docs"])).unwrap().titles, titles(&["Model", "subject of b", "Docs"]), "a pushed step beyond the list keeps its first commit's subject");
+        assert!(rewritten(Some(&held), 1, "base", &[]).is_err() && rewritten(None, 0, "base", &titles(&["ok", " "])).is_err(), "no empty list and no empty title");
     }
 
     #[test]
-    fn steps_map_the_commits_in_order_after_the_pushed_ones_and_the_next_is_in_progress_only_while_at_work() {
-        let listed = plan(&["Model", "Command", "Docs", "Tests"], seen(&["landed"]));
-        let commits = [commit_of("aaa", "Add the command", true)];
-        let (at_work, seen_now) = derive(Some(&listed), &["landed".to_string()], &commits, true);
-        assert_eq!(at_work.pushed, 1);
-        assert_eq!(at_work.items, vec![
-            Step { index: 1, title: "Command".to_string(), state: State::Committed { sha: "aaa".to_string(), subject: "Add the command".to_string(), accepted: true }, extra: false },
-            Step { index: 2, title: "Docs".to_string(), state: State::InProgress, extra: false },
-            Step { index: 3, title: "Tests".to_string(), state: State::Planned, extra: false },
-        ]);
-        assert_eq!(seen_now.iter().map(|one| one.code.as_str()).collect::<Vec<_>>(), ["landed", "code of aaa"], "each step's commit is noted as it is now");
-        assert_eq!(derive(Some(&listed), &["landed".to_string()], &commits, false).0.items[1].state, State::Planned, "nobody is at work on it");
-        assert_eq!(derive(Some(&listed), &[], &commits, true).0.pushed, 0, "a change the default branch did not gain is not pushed");
+    fn commits_go_to_the_step_in_progress_until_it_is_done_and_then_to_the_next() {
+        let listed = plan(&["Model", "Command", "Docs"], Vec::new());
+        let (fresh, _) = derive(Some(&listed), &[], &[], true);
+        assert_eq!(states(&fresh), [State::InProgress, State::Planned, State::Planned], "the first step is under way while its Claude works");
+        assert_eq!(states(&derive(Some(&listed), &[], &[], false).0), [State::Planned, State::Planned, State::Planned], "and planned while nobody works on it");
+        let two = [commit_of("aaa", "Add the model", true), commit_of("bbb", "Test the model", false)];
+        let (working, held) = derive(Some(&listed), &[], &two, false);
+        assert_eq!((shas(&working), states(&working)), (vec![(0, vec!["aaa", "bbb"]), (1, vec![]), (2, vec![])], vec![State::InProgress, State::Planned, State::Planned]), "commits made with no step marked done go to the step in progress");
+        assert_eq!(label(&working.items[0]), "in progress · 2 commits");
+        let mut marked = Plan { held, ..listed.clone() };
+        marked.held[0].done = true;
+        let three = [two[0].clone(), two[1].clone(), commit_of("ccc", "Add the command", false)];
+        let (next, _) = derive(Some(&marked), &[], &three, true);
+        assert_eq!((shas(&next), states(&next)), (vec![(0, vec!["aaa", "bbb"]), (1, vec!["ccc"]), (2, vec![])], vec![State::Ready, State::InProgress, State::Planned]), "once done, the next commit opens the next step");
+        let accepted: Vec<Unpushed> = three.iter().map(|commit| Unpushed { accepted: commit.sha != "ccc", ..commit.clone() }).collect();
+        assert_eq!(derive(Some(&marked), &[], &accepted, true).0.items[0].state, State::Accepted, "a done step whose every commit is accepted is accepted");
     }
 
     #[test]
-    fn a_landed_step_counts_once_even_while_its_commit_is_still_on_the_branch_and_only_a_leading_run_counts() {
-        let listed = plan(&["Model", "Command", "Docs"], seen(&["code of aaa", "code of bbb"]));
-        let commits = [commit_of("aaa", "Add the model", false), commit_of("bbb", "Add the command", false)];
+    fn a_rebase_keeps_each_commit_in_its_step_and_a_change_folded_into_a_commit_stays_in_that_commits_step() {
+        let listed = plan(&["Model", "Command", "Docs"], vec![Held { seen: seen(&["a1", "a2"]), done: true }, Held { seen: seen(&["b1", "b2"]), done: false }]);
+        let rebased = [rewritten_code("x1", "a1"), rewritten_code("x2", "a2"), rewritten_code("x3", "b1"), rewritten_code("x4", "b2")];
+        assert_eq!(shas(&derive(Some(&listed), &[], &rebased, false).0)[..2], [(0, vec!["x1", "x2"]), (1, vec!["x3", "x4"])], "new shas, the same changes");
+        let into_last_of_first = [rewritten_code("x1", "a1"), rewritten_code("x2", "a2+fix"), rewritten_code("x3", "b1"), rewritten_code("x4", "b2")];
+        assert_eq!(shas(&derive(Some(&listed), &[], &into_last_of_first, false).0)[..2], [(0, vec!["x1", "x2"]), (1, vec!["x3", "x4"])]);
+        let into_first_of_second = [rewritten_code("x1", "a1"), rewritten_code("x2", "a2"), rewritten_code("x3", "b1+fix"), rewritten_code("x4", "b2")];
+        assert_eq!(shas(&derive(Some(&listed), &[], &into_first_of_second, false).0)[..2], [(0, vec!["x1", "x2"]), (1, vec!["x3", "x4"])]);
+        let finished = plan(&["Model", "Command"], done(&[&["a1", "a2"]]));
+        let amended = [rewritten_code("x1", "a1"), rewritten_code("x2", "a2+fix")];
+        let (steps, held) = derive(Some(&finished), &[], &amended, false);
+        assert_eq!((shas(&steps), held[0].done), (vec![(0, vec!["x1", "x2"]), (1, vec![])], true), "an amend of a done step's last commit stays in it");
+        let after = [rewritten_code("x1", "a1"), rewritten_code("x2", "a2+fix"), rewritten_code("x3", "new")];
+        assert_eq!(shas(&derive(Some(&Plan { held, ..finished }), &[], &after, false).0), [(0, vec!["x1", "x2"]), (1, vec!["x3"])], "and the next new commit goes to the step in progress");
+    }
+
+    #[test]
+    fn a_step_counts_as_pushed_once_the_default_branch_gained_every_one_of_its_changes() {
+        let listed = plan(&["Model", "Command", "Docs"], done(&[&["code of aaa", "code of bbb"], &["code of ccc"]]));
+        let commits = [commit_of("aaa", "Add the model", false), commit_of("bbb", "Test it", false), commit_of("ccc", "Add the command", false)];
+        let (steps, _) = derive(Some(&listed), &["code of aaa".to_string(), "code of bbb".to_string()], &commits, false);
+        assert_eq!((steps.pushed, shas(&steps)), (1, vec![(1, vec!["ccc"]), (2, vec![])]), "cherry-picked copies on main take the step out of sight");
         let (steps, _) = derive(Some(&listed), &["code of aaa".to_string()], &commits, false);
-        assert_eq!((steps.pushed, subjects(&steps)), (1, vec![(1, "Add the command".to_string()), (2, String::new())]), "a cherry-picked copy on main takes its step out of sight");
-        let (steps, _) = derive(Some(&listed), &["code of bbb".to_string()], &commits, false);
-        assert_eq!(steps.pushed, 0, "the second step alone on main is no pushed run");
-        assert_eq!(steps.items.len(), 3, "and nothing is hidden");
+        assert_eq!((steps.pushed, steps.items[0].commits.len()), (0, 2), "half a step on main is no pushed step");
+        let (steps, _) = derive(Some(&listed), &["code of ccc".to_string()], &commits, false);
+        assert_eq!((steps.pushed, steps.items.len()), (0, 3), "the second step alone on main is no pushed run, and nothing is hidden");
     }
 
     #[test]
     fn an_open_commit_with_the_same_change_as_a_pushed_step_stays_in_sight() {
         let same = |sha: &str| Unpushed { sha: sha.to_string(), subject: format!("subject {sha}"), code: "same".to_string(), accepted: false };
-        let listed = plan(&["Model", "Again"], seen(&["same", "same"]));
+        let listed = plan(&["Model", "Again"], done(&[&["same"], &["same"]]));
         let (steps, _) = derive(Some(&listed), &["same".to_string()], &[same("aaa"), same("bbb")], false);
-        assert_eq!((steps.pushed, subjects(&steps)), (1, vec![(1, "subject bbb".to_string())]), "one landed copy pushes one step and hides one commit");
+        assert_eq!((steps.pushed, shas(&steps)), (1, vec![(1, vec!["bbb"])]), "one landed copy pushes one step and hides one commit");
         let (steps, _) = derive(Some(&listed), &["same".to_string(), "same".to_string()], &[same("aaa"), same("bbb")], false);
         assert_eq!((steps.pushed, steps.items.len()), (2, 0), "two landed copies push both");
     }
 
     #[test]
-    fn commits_beyond_the_list_show_as_extra_steps_titled_by_their_subject() {
-        let listed = plan(&["Model"], Vec::new());
-        let (found, _) = derive(Some(&listed), &[], &[commit_of("aaa", "Add the model", false), commit_of("bbb", "Fix a typo", false)], true);
-        assert_eq!(found.items.len(), 2, "nothing is hidden");
-        assert_eq!((found.items[1].index, found.items[1].title.as_str(), found.items[1].extra), (1, "Fix a typo", true));
+    fn commits_after_every_listed_step_is_done_make_one_extra_step_titled_by_its_first_subject() {
+        let listed = plan(&["Model"], done(&[&["code of aaa"]]));
+        let (found, held) = derive(Some(&listed), &[], &[commit_of("aaa", "Add the model", false), commit_of("bbb", "Fix a typo", false), commit_of("ccc", "Fix another", false)], true);
+        assert_eq!(shas(&found), [(0, vec!["aaa"]), (1, vec!["bbb", "ccc"])], "nothing is hidden");
+        assert_eq!((found.items[1].title.as_str(), found.items[1].extra, &found.items[1].state), ("Fix a typo", true, &State::InProgress));
         assert!(!found.items[0].extra && found.items[0].title == "Model");
-        assert!(!found.items.iter().any(|item| item.state == State::InProgress), "no planned step is left to be under way");
+        assert_eq!(held.len(), 2, "the extra step is noted with its commits");
+    }
+
+    #[test]
+    fn steps_an_older_kebbie_noted_one_commit_each_read_as_done_steps() {
+        let dir = crate::sh::test_dir("plan-older");
+        crate::state::write(&file(&dir, "billing@app"), json!({ "titles": ["Model", "Command", "Docs"], "base": "base", "seen": [{ "code": "code of aaa", "subject": "Add the model" }, { "code": "code of bbb", "subject": "Add the command" }] }).to_string()).unwrap();
+        let old = load(&dir, "billing@app").unwrap();
+        assert_eq!(old.held, vec![Held { seen: vec![Seen { code: "code of aaa".to_string(), subject: "Add the model".to_string() }], done: true }, Held { seen: vec![Seen { code: "code of bbb".to_string(), subject: "Add the command".to_string() }], done: true }]);
+        let (steps, _) = derive(Some(&old), &[], &[commit_of("aaa", "Add the model", false), commit_of("bbb", "Add the command", true), commit_of("ccc", "Write the docs", false)], false);
+        assert_eq!((shas(&steps), states(&steps)), (vec![(0, vec!["aaa"]), (1, vec!["bbb"]), (2, vec!["ccc"])], vec![State::Ready, State::Accepted, State::InProgress]));
+        save(&dir, "billing@app", &old).unwrap();
+        assert_eq!(load(&dir, "billing@app").unwrap(), old, "written back in the new shape and read the same");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -476,22 +664,23 @@ mod tests {
         assert_eq!(none, Steps::default());
         assert!(!none.listed(), "callers fall back to the rows they show today");
         assert!(!derive(Some(&Plan::default()), &[], &[commit_of("aaa", "x", false)], true).0.listed());
-        assert!(derive(Some(&plan(&["Model"], seen(&["a"]))), &["a".to_string()], &[], false).0.listed(), "a list pushed in full is still a list");
+        assert!(derive(Some(&plan(&["Model"], done(&[&["a"]]))), &["a".to_string()], &[], false).0.listed(), "a list pushed in full is still a list");
     }
 
     fn landed_task() -> (PathBuf, PathBuf, crate::tasks::Slot, String, PathBuf, String) {
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         let fourth = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
-        commit(&slot.path, "e", "fifth");
         let state = state_of(&dir);
         list_at(&state, &slot.path, &upstream, "billing@app", &["Model", "Command"]).unwrap();
+        done_at(&state, &slot.path, &upstream, "billing@app").unwrap();
+        commit(&slot.path, "e", "fifth");
         assert_eq!(listed_at(&state, &slot.path, &upstream, "billing@app").pushed, 0);
         (dir, origin, slot, upstream, state, fourth)
     }
 
     fn after_landing(state: &Path, slot: &crate::tasks::Slot, upstream: &str) -> (usize, Vec<(usize, String)>) {
         let steps = listed_at(state, &slot.path, upstream, "billing@app");
-        (steps.pushed, subjects(&steps))
+        (steps.pushed, steps.items.iter().map(|item| (item.index, item.commits.first().map(|commit| commit.subject.clone()).unwrap_or_default())).collect())
     }
 
     #[test]
@@ -537,12 +726,13 @@ mod tests {
     fn a_commit_noted_by_the_bash_hook_counts_as_pushed_after_a_plain_push_with_nothing_else_listing_the_steps() {
         let (dir, origin, slot, upstream, state, address) = hooked_task();
         let fourth = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        done_at(&state, &slot.path, &upstream, &address).unwrap();
         commit(&slot.path, "e", "fifth");
         assert!(noted_after(&state, &address, &bash_in(&slot.path, "git commit -m fifth")));
         git(&dir, &["push", "--quiet", "origin", &format!("{fourth}:refs/heads/{}", upstream.trim_start_matches("origin/"))]).unwrap();
         git(&dir, &["fetch", "--quiet", "origin"]).unwrap();
         let steps = listed_at(&state, &slot.path, &upstream, &address);
-        assert_eq!((steps.pushed, subjects(&steps)), (1, vec![(1, "fifth".to_string())]), "the step after the pushed one keeps its own commit");
+        assert_eq!((steps.pushed, steps.items.iter().map(|item| (item.index, item.commits.iter().map(|commit| commit.subject.as_str()).collect::<Vec<_>>())).collect::<Vec<_>>()), (1, vec![(1, vec!["fifth"])]), "the step after the pushed one keeps its own commit");
         cleanup(dir, origin, &slot);
     }
 
@@ -550,17 +740,36 @@ mod tests {
     fn the_bash_hook_notes_nothing_while_head_stays_where_it_was_noted() {
         let (dir, origin, slot, _, state, address) = hooked_task();
         let noted = load(&state, &address).unwrap();
-        assert_eq!(noted.seen.len(), 1);
-        save(&state, &address, &Plan { seen: Vec::new(), ..noted }).unwrap();
+        assert_eq!(noted.held.len(), 1);
+        save(&state, &address, &Plan { held: Vec::new(), ..noted }).unwrap();
         assert!(!noted_after(&state, &address, &bash_in(&slot.path, "ls -la")), "an unchanged HEAD notes nothing");
-        assert!(load(&state, &address).unwrap().seen.is_empty(), "and leaves the steps as they were");
+        assert!(load(&state, &address).unwrap().held.is_empty(), "and leaves the steps as they were");
         commit(&slot.path, "e", "fifth");
         let mut edit = bash_in(&slot.path, "git commit -m fifth");
         edit["tool_name"] = json!("Edit");
         assert!(!noted_after(&state, &address, &edit), "only Bash is noted after");
         assert!(!noted_after(&state, "search@app", &bash_in(&slot.path, "git commit -m fifth")), "a task without steps notes nothing");
         assert!(noted_after(&state, &address, &bash_in(&slot.path, "git commit -m fifth")));
-        assert_eq!(load(&state, &address).unwrap().seen.len(), 2);
+        assert_eq!(load(&state, &address).unwrap().held[0].seen.len(), 2, "both commits are the step in progress's");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn steps_done_marks_the_step_in_progress_ready_once_it_holds_a_commit_and_only_by_its_own_task() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let task = Task { path: &slot.path, upstream: &upstream, address: "billing@app" };
+        assert!(done_as(&Caller::User, &state, &task).unwrap_err().contains("has no steps"));
+        list_at(&state, &slot.path, &upstream, "billing@app", &["Model", "Command"]).unwrap();
+        assert!(done_as(&Caller::Task("search@app".to_string()), &state, &task).unwrap_err().contains("writes its own steps"));
+        done_as(&Caller::Task("billing@app".to_string()), &state, &task).unwrap();
+        let steps = listed_at(&state, &slot.path, &upstream, "billing@app");
+        assert_eq!((&steps.items[0].state, steps.items[0].commits.len(), &steps.items[1].state), (&State::Ready, 1, &State::Planned));
+        let refused = done_as(&Caller::Lead, &state, &task).unwrap_err();
+        assert!(refused.contains("Step 2 holds no commit yet"), "{refused}");
+        commit(&slot.path, "e", "fifth");
+        done_as(&Caller::Lead, &state, &task).unwrap();
+        assert_eq!(states(&listed_at(&state, &slot.path, &upstream, "billing@app")), [State::Ready, State::Ready]);
         cleanup(dir, origin, &slot);
     }
 
@@ -572,10 +781,10 @@ mod tests {
         let before = load(&state, "billing@app").unwrap();
         let tips = tips_of(&Task { path: &slot.path, upstream: &upstream, address: "billing@app" }).unwrap();
         let read = read_at(&state, &slot.path, "billing@app", &tips, false);
-        assert_eq!((read.items.len(), &read.items[0].state), (2, &State::Committed { sha: tips.head.clone(), subject: "fourth".to_string(), accepted: false }));
+        assert_eq!((read.items.len(), &read.items[0].state, &read.items[0].commits), (2, &State::InProgress, &vec![Commit { sha: tips.head.clone(), subject: "fourth".to_string(), accepted: false }]));
         assert_eq!(load(&state, "billing@app").unwrap(), before, "a read writes no plan");
         assert_eq!(listed_at(&state, &slot.path, &upstream, "billing@app"), read, "kebbie steps reads the same");
-        assert_ne!(load(&state, "billing@app").unwrap().seen, before.seen, "and it notes the commit");
+        assert_ne!(load(&state, "billing@app").unwrap().held, before.held, "and it notes the commit");
         cleanup(dir, origin, &slot);
     }
 
@@ -596,13 +805,15 @@ mod tests {
     }
 
     #[test]
-    fn the_shown_steps_mark_each_state_and_say_when_there_are_none() {
-        let listed = plan(&["Model", "Command", "Docs"], seen(&["a"]));
+    fn the_shown_steps_mark_each_state_with_its_commits_and_say_when_there_are_none() {
+        let listed = plan(&["Model", "Command", "Docs", "Tests"], vec![Held { seen: seen(&["a"]), done: true }, Held { seen: vec![Seen { code: "code of abcdef0123".to_string(), subject: String::new() }, Seen { code: "code of 1234567890".to_string(), subject: String::new() }], done: true }]);
         let landed = ["a".to_string()];
-        let text = shown("billing@app", &derive(Some(&listed), &landed, &[commit_of("abcdef0123", "Add the command", false)], true).0);
-        assert_eq!(text, "billing@app's steps:\n  ↑ 1 pushed\n  ● 2. Command  abcdef0\n  ◐ 3. Docs");
+        let commits = [commit_of("abcdef0123", "Add the command", false), commit_of("1234567890", "Wire the command", true), commit_of("fedcba9876", "Write the docs", false)];
+        let text = shown("billing@app", &derive(Some(&listed), &landed, &commits, true).0);
+        assert_eq!(text, "billing@app's steps:\n  ↑ 1 pushed\n  ● 2. Command  ready · 2 commits\n       abcdef0 Add the command\n       1234567 Wire the command\n  ◐ 3. Docs  in progress · 1 commit\n       fedcba9 Write the docs\n  ○ 4. Tests");
         assert!(shown("billing@app", &Steps::default()).contains("has no steps"));
-        let value = to_json("billing@app", &derive(Some(&listed), &landed, &[commit_of("abc", "Add the command", true)], false).0, Some("abc"));
-        assert_eq!((value["pushed"].as_u64(), value["last_accepted"].as_str(), value["steps"][0]["state"].as_str(), value["steps"][0]["accepted"].as_bool(), value["steps"][1]["state"].as_str()), (Some(1), Some("abc"), Some("committed"), Some(true), Some("planned")));
+        let value = to_json("billing@app", &derive(Some(&listed), &landed, &commits, false).0, Some("abc"));
+        assert_eq!((value["pushed"].as_u64(), value["last_accepted"].as_str(), value["steps"][0]["state"].as_str(), value["steps"][1]["state"].as_str(), value["steps"][2]["state"].as_str()), (Some(1), Some("abc"), Some("ready"), Some("in-progress"), Some("planned")));
+        assert_eq!(value["steps"][0]["commits"], json!([{ "sha": "abcdef0123", "subject": "Add the command", "accepted": false }, { "sha": "1234567890", "subject": "Wire the command", "accepted": true }]));
     }
 }

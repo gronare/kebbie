@@ -805,7 +805,7 @@ mod tests {
     fn a_review_goes_up_sealed_before_the_result_that_names_it_and_nothing_waiting_names_none() {
         let mut account = Account::connected();
         let seen = Seen::new();
-        let sent = account.send(&Payload::ReviewOpen(ReviewOpen { address: "retry@shop".to_string() }));
+        let sent = account.send(&Payload::ReviewOpen(ReviewOpen { address: "retry@shop".to_string(), step: None }));
         account.round(&seen, HubCommands::default());
         let result = account.result(&sent);
         assert_eq!((result.outcome, result.text.as_str()), (Outcome::Done, "The review of retry@shop is ready"));
@@ -814,7 +814,7 @@ mod tests {
         let ciphertext = account.hub.runtime.block_on(account.browser.blob(&blob.id)).unwrap();
         let review: kebbie_hub_protocol::Review = serde_json::from_slice(&kebbie_hub_protocol::open_blob(&blob, &ciphertext).unwrap()).unwrap();
         assert_eq!(review, review_of("retry@shop"));
-        let gone = account.send(&Payload::ReviewOpen(ReviewOpen { address: "gone@shop".to_string() }));
+        let gone = account.send(&Payload::ReviewOpen(ReviewOpen { address: "gone@shop".to_string(), step: None }));
         account.round(&seen, HubCommands::default());
         let settled = account.result(&gone);
         assert_eq!((settled.outcome, settled.blob), (Outcome::Refused { reason: Reason::AlreadySettled }, None));
@@ -824,7 +824,7 @@ mod tests {
     }
 
     fn opened(account: &mut Account, seen: &Seen) -> BlobRef {
-        let sent = account.send(&Payload::ReviewOpen(ReviewOpen { address: "retry@shop".to_string() }));
+        let sent = account.send(&Payload::ReviewOpen(ReviewOpen { address: "retry@shop".to_string(), step: None }));
         account.round(seen, HubCommands::default());
         account.result(&sent).blob.expect("a done review names its blob")
     }
@@ -1383,8 +1383,8 @@ mod tests {
         let refused = crate::notice::Notice::new(crate::notice::Tone::NotNow, "Not pushed: the review is still running").next("Push it once it is done.").to_string();
         assert_eq!(pushed(DevicePush::Refused(refused)), (Outcome::Refused { reason: Reason::NotAllowed }, "Not pushed: the review is still running. Push it once it is done.".to_string()));
         assert_eq!(pushed(DevicePush::UnknownTask("No task \"x\" in shop's worktrees".to_string())).0, Outcome::Refused { reason: Reason::UnknownRepo });
-        let moved = crate::notice::Notice::new(crate::notice::Tone::You, "Not pushed: step 2 is not the commit you saw").to_string();
-        assert_eq!(pushed(DevicePush::HeadMoved(moved)), (Outcome::Refused { reason: Reason::HeadMoved }, "Not pushed: step 2 is not the commit you saw".to_string()), "a push through a step whose commit changed");
+        let moved = crate::notice::Notice::new(crate::notice::Tone::You, "Not pushed: step 2 is not the step you saw").to_string();
+        assert_eq!(pushed(DevicePush::HeadMoved(moved)), (Outcome::Refused { reason: Reason::HeadMoved }, "Not pushed: step 2 is not the step you saw".to_string()), "a push through a step whose commit changed");
         assert_eq!(pushed(DevicePush::Settled("Nothing to push".to_string())).0, Outcome::Refused { reason: Reason::AlreadySettled });
         let elsewhere = Answer { address: "refunds@shop".to_string(), question: "no-such-question".to_string(), choice: Some(0), comment: String::new() };
         assert_eq!(answered(&Caller::hub("acc_01"), &elsewhere).0, Outcome::Refused { reason: Reason::AlreadySettled });

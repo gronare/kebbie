@@ -49,6 +49,7 @@ impl Fake {
     fn kebbie(&self, args: &[String]) -> std::result::Result<String, String> {
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         match args.as_slice() {
+            ["accept", _, "--step", _] | ["accept", _, "--step", _, "--withdraw"] => Ok("Accepted the step".to_string()),
             ["accept", _, sha, "--withdraw"] => {
                 let kept: Vec<String> = self.accepted().into_iter().filter(|kept| kept != sha).collect();
                 accept_elsewhere(&self.root, &kept.join("\n"));
@@ -155,12 +156,15 @@ fn open(repo: Repo) -> Opened {
     open_with(repo, Panes::default())
 }
 
+// Step 2 holds the first commit, step 3 the next two, step 4 is in progress and step 5 planned.
 fn with_steps(repo: &Repo, accepted_first: bool) {
-    let step = |index: usize, title: &str, sha: Option<&str>, accepted: bool| match sha {
-        Some(sha) => json!({ "index": index, "title": title, "extra": false, "state": "committed", "sha": sha, "subject": title, "accepted": accepted }),
-        None => json!({ "index": index, "title": title, "extra": false, "state": if index == 4 { "in-progress" } else { "planned" } }),
-    };
-    let steps = [step(1, "Change a", Some(&repo.shas[0]), accepted_first), step(2, "Add b", Some(&repo.shas[1]), false), step(3, "Add c", Some(&repo.shas[2]), false), step(4, "Write the docs", None, false), step(5, "Release", None, false)];
+    let commit = |sha: &str, subject: &str, accepted: bool| json!({ "sha": sha, "subject": subject, "accepted": accepted });
+    let steps = [
+        json!({ "index": 1, "title": "Change a", "extra": false, "state": if accepted_first { "accepted" } else { "ready" }, "commits": [commit(&repo.shas[0], "Change a", accepted_first)] }),
+        json!({ "index": 2, "title": "Add b and c", "extra": false, "state": "ready", "commits": [commit(&repo.shas[1], "Add b", false), commit(&repo.shas[2], "Add c", false)] }),
+        json!({ "index": 3, "title": "Write the docs", "extra": false, "state": "in-progress", "commits": [] }),
+        json!({ "index": 4, "title": "Release", "extra": false, "state": "planned", "commits": [] }),
+    ];
     fs::write(repo.root.join("steps.json"), json!({ "task": "billing@app", "listed": true, "pushed": 1, "steps": steps }).to_string()).unwrap();
 }
 
@@ -169,20 +173,37 @@ fn row<'a>(screen: &'a [String], text: &str) -> &'a str {
 }
 
 #[test]
-fn a_narrow_review_with_steps_opens_on_the_first_step_to_accept_with_its_message_and_files() {
+fn a_narrow_review_with_steps_opens_on_the_first_ready_step_with_its_commits_and_the_files_of_the_whole_step() {
     let repo = repo("narrow-steps");
     with_steps(&repo, true);
     let mut opened = open(repo);
-    assert_eq!(opened.view.selected.as_deref(), Some(opened.repo.shas[1].as_str()), "step 2 is accepted, so it opens on step 3");
+    let shas = opened.repo.shas.clone();
+    assert_eq!(opened.view.selected, Some(Sel::Step(3)), "step 2 is accepted, so it opens on step 3");
     let screen = opened.screen(80, 20);
-    assert!(row(&screen, "review").contains("review billing · since origin/main · 1 accepted · 2 to accept") && row(&screen, "review").trim_end().ends_with("? keys"), "{}", screen.join("\n"));
-    assert!(row(&screen, "all").contains("▕ all ▏ ▕ ↑ 1 pushed ▏ ▕ ✓ 2 ▏ ▕ ● 3 ▏ ▕ ● 4 ▏ ▕ ◐ 5 ▏ ▕ ○ 6 ▏"), "{}", screen.join("\n"));
-    assert!(row(&screen, "Add b").contains(&format!("▎ Add b  {}", &opened.repo.shas[1][..7])));
-    assert!(row(&screen, "Why b exists.").contains("▎ Why b exists."), "the body under the subject");
-    assert!(row(&screen, "FILES").contains("FILES 1 · step 3"));
+    assert!(row(&screen, "review").contains("review billing · since origin/main · 1 accepted · 1 to accept") && row(&screen, "review").trim_end().ends_with("? keys"), "{}", screen.join("\n"));
+    assert!(row(&screen, "all").contains(&format!("▕ all ▏ ▕ ↑ 1 pushed ▏ ▕ ✓ 2 ▏ ▕ ● 3 ▏ ▕ · {} ▏ ▕ · {} ▏", &shas[1][..7], &shas[2][..7])), "the picked step opens its commits as tabs: {}", screen.join("\n"));
+    assert!(row(&screen, "◐ 4").contains("▕ ◐ 4 ▏") && row(&screen, "○ 5").contains("▕ ○ 5 ▏"), "{}", screen.join("\n"));
+    assert!(row(&screen, "Add b and c").contains("▎ Add b and c  2 commits"), "{}", screen.join("\n"));
+    for (sha, subject) in [(&shas[1], "Add b"), (&shas[2], "Add c")] {
+        assert!(row(&screen, &format!("{} {subject}", &sha[..7])).contains(&format!("▎   {} {subject}", &sha[..7])), "each commit of the step, one line each: {}", screen.join("\n"));
+    }
+    assert!(row(&screen, "FILES").contains("FILES 2 · step 3"), "the whole step: {}", screen.join("\n"));
     assert!(row(&screen, "+1").contains("▌ +1    -0    b"), "{}", screen.join("\n"));
+    let diff: Vec<String> = serde_json::from_value(opened.shown()["diff"].clone()).unwrap();
+    assert_eq!(diff[diff.len() - 4..], [format!("{}^", shas[1]), shas[2].clone(), "--".to_string(), "b".to_string()], "from under its first commit to its last");
+    assert_eq!(opened.shown()["sha"], json!(shas[2]), "a comment names the step's last commit");
     assert!(screen[19].starts_with("← → step · ↑ ↓ file · a accept · r read · / filter · tab to the diff"), "{}", screen[19]);
     assert!(screen.iter().all(|line| line.chars().count() == 80));
+    opened.press(KeyCode::Right);
+    assert_eq!(opened.view.selected, Some(Sel::Commit(3, shas[1].clone())), "right goes into the step's commits");
+    let screen = opened.screen(80, 20);
+    assert!(row(&screen, "FILES").contains(&format!("FILES 1 · step 3 · {}", &shas[1][..7])) && row(&screen, "Why b exists.").contains("▎ Why b exists."), "a commit shows its own files and message: {}", screen.join("\n"));
+    opened.press(KeyCode::Char('r'));
+    assert!(data::is_read(&opened.repo.slot, "b", Some(&data::Range::commit(&shas[1]))));
+    opened.press(KeyCode::Left);
+    assert!(opened.view.files.iter().find(|file| file.path == "b").is_some_and(|file| file.read), "b read in its commit is read in the step, the same contents at its end");
+    opened.press(KeyCode::Char('a'));
+    assert_eq!(opened.sent("accept billing"), [vec![kebbie_bin(), "accept".to_string(), "billing".to_string(), "--step".to_string(), "3".to_string()]], "a on a step accepts it whole");
 }
 
 #[test]
@@ -190,7 +211,7 @@ fn a_wide_review_without_steps_names_its_tabs_after_the_commits_and_the_whole_br
     let repo = repo("wide-commits");
     accept_elsewhere(&repo.root, &repo.shas[0]);
     let mut opened = open(repo);
-    assert_eq!(opened.view.selected.as_deref(), Some(opened.repo.shas[1].as_str()));
+    assert_eq!(opened.view.selected, Some(Sel::Commit(2, opened.repo.shas[1].clone())));
     let screen = opened.screen(160, 30);
     assert!(row(&screen, "all").contains("▕ all ▏ ▕ ✓ 1 ▏ ▕ ● 2 ▏ ▕ ● 3 ▏") && !row(&screen, "all").contains("pushed"), "{}", screen.join("\n"));
     assert!(row(&screen, "FILES").contains("FILES 1 · commit 2"));
@@ -283,17 +304,17 @@ fn m_collapses_the_message_to_the_row_of_tabs_and_the_review_remembers_it() {
 fn a_accepts_the_selected_commit_through_kebbie_moves_to_the_next_waiting_and_withdraws_an_accepted_one() {
     let mut opened = open(repo("accept"));
     let shas = opened.repo.shas.clone();
-    assert_eq!(opened.view.selected.as_deref(), Some(shas[0].as_str()));
+    assert_eq!(opened.view.selected, Some(Sel::Commit(1, shas[0].clone())));
     opened.press(KeyCode::Char('a'));
     let accept = |sha: &str, withdraw: bool| { let mut argv = vec![kebbie_bin(), "accept".to_string(), "billing".to_string(), sha.to_string()]; if withdraw { argv.push("--withdraw".to_string()); } argv };
     assert_eq!(opened.sent("accept billing"), [accept(&shas[0], false)]);
-    assert_eq!(opened.view.selected.as_deref(), Some(shas[1].as_str()), "on to the next commit waiting");
+    assert_eq!(opened.view.selected, Some(Sel::Commit(2, shas[1].clone())), "on to the next commit waiting");
     assert_eq!(opened.view.entries.items[0].mark, data::Mark::Accepted, "the mark is kebbie's, read back");
     opened.press(KeyCode::Left);
     opened.clear();
     opened.press(KeyCode::Char('a'));
     assert_eq!(opened.sent("--withdraw"), [accept(&shas[0], true)]);
-    assert_eq!(opened.view.entries.items[0].mark, data::Mark::Committed);
+    assert_eq!(opened.view.entries.items[0].mark, data::Mark::Ready);
     accept_elsewhere(&opened.repo.root, &shas[2]);
     opened.view.refresh();
     assert_eq!(opened.view.entries.items[2].mark, data::Mark::Accepted, "an acceptance given elsewhere shows here");
@@ -313,11 +334,16 @@ fn with_steps_kebbies_own_mark_decides_and_steps_without_a_commit_are_skipped() 
     for _ in 0..5 {
         opened.press(KeyCode::Right);
     }
-    assert_eq!(opened.view.selected.as_deref(), Some(shas[2].as_str()), "planned steps have no commit to show");
-    opened.press(KeyCode::Left);
-    opened.press(KeyCode::Left);
+    assert_eq!(opened.view.selected, Some(Sel::Commit(3, shas[2].clone())), "steps in progress or planned have no commit to show");
     opened.press(KeyCode::Char('a'));
-    assert_eq!(opened.sent("accept billing")[0].last().map(String::as_str), Some("--withdraw"), "step 2 is accepted by kebbie's steps");
+    assert_eq!(opened.sent("accept billing"), [vec![kebbie_bin(), "accept".to_string(), "billing".to_string(), shas[2].clone()]], "a on a commit accepts that commit");
+    opened.clear();
+    for _ in 0..3 {
+        opened.press(KeyCode::Left);
+    }
+    assert_eq!(opened.view.selected, Some(Sel::Step(2)), "out of the step, its commits fold away");
+    opened.press(KeyCode::Char('a'));
+    assert_eq!(opened.sent("accept billing")[0][3..], ["--step", "2", "--withdraw"].map(String::from), "step 2 is accepted by kebbie's steps");
 }
 
 #[test]
@@ -344,7 +370,7 @@ fn choosing_a_file_shows_it_in_nvim_at_once_with_the_commits_own_diff() {
     let tab_y = screen.iter().position(|line| line.contains("▕ ● 2 ▏")).unwrap();
     let tab_x = screen[tab_y].chars().collect::<Vec<_>>().windows(3).position(|cells| cells.iter().collect::<String>() == "● 2").unwrap();
     opened.click(tab_x as u16, tab_y as u16);
-    assert_eq!(opened.view.selected.as_deref(), Some(shas[1].as_str()), "a click picks the step");
+    assert_eq!(opened.view.selected, Some(Sel::Commit(2, shas[1].clone())), "a click picks the commit");
     assert_eq!(opened.shown()["path"], "b");
 }
 

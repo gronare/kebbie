@@ -17,7 +17,7 @@ disable-model-invocation: true
    The base is the one the user gave, else the commit before the work's first commit when part of it is committed, else `HEAD` when it is all uncommitted. Done when you have the base and the file list, or know to pass neither.
 3. **Open.** From the repo root, run `sh "${CLAUDE_SKILL_DIR}/../../scripts/review.sh" split <base> <path>...` with the work's files as repo-relative paths, specs included, in the order you will present them. Changes outside the scope follow the scope's files, marked other. When a review pane is already open next to you, the same command rescopes it. Done when it prints the pane's id.
 4. **Guide.** Reply with a short review guide, numbered in the order of the paths, a few lines per file at most: what changed and which choice is worth a look; the diff itself is in the split. Name in one line the changes you left out of scope, if any.
-5. **Controls**, one line: ← → pick a step and ↑ ↓ a file, whose diff shows at once below; tab goes to the diff, where c comments and o opens the real file; r marks a file read, a accepts the step; `?` shows every key. Comments are not sent until the user presses Enter here.
+5. **Controls**, one line: ← → pick a step, or one of its commits after it, and ↑ ↓ a file, whose diff shows at once below; a step's diff is the whole step, a commit's its own; tab goes to the diff, where c comments and o opens the real file; r marks a file read, a accepts the step or the commit; `?` shows every key. Comments are not sent until the user presses Enter here.
 
 ## Comments
 

@@ -157,9 +157,11 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   commits against the rules skill: a pass clears the check, a break goes to the task and a
                                   line to the lead, no verdict in 15 minutes leaves the check to the lead
   kebbie steps \"<step>\" …         run by a task's Claude in its worktree, with task.steps on: its work as
-                                  ordered steps, one commit each; a rewrite keeps the pushed ones first.
-                                  kebbie steps <name> \"<step>\" … writes a task's steps from elsewhere, and
-                                  kebbie steps [name] [--json] shows each step's state
+                                  ordered steps, each a slice of the work in one or more small commits; a
+                                  rewrite keeps the pushed ones first and each commit in its step.
+                                  kebbie steps done marks the step in progress ready, and the next commits go to
+                                  the next step. kebbie steps <name> \"<step>\" … or kebbie steps <name> done does
+                                  it from elsewhere, and kebbie steps [name] [--json] shows each step's state
   kebbie ask --option \"<label>: <meaning>\" … --recommend <n> <question>
                                   run by a task's Claude to ask you what you want (scope, behaviour, a trade-off that is
                                   yours); a question of how goes to the lead with kebbie tell lead. The question opens
@@ -235,7 +237,8 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   the reviewer's rules check; until a commit changes, the board shows it ready to push,
                                   pushed past the rules check by you or the lead
   kebbie accept <name> <sha>      yours alone: accept one of a task's commits, by its code, so a clean rebase or a
-                                  reworded message keeps it and a changed line takes it back; --withdraw takes it back
+                                  reworded message keeps it and a changed line takes it back; --withdraw takes it back.
+                                  kebbie accept <name> --step <n> accepts every commit of a ready step
   kebbie accepted [name] [--json] a task's unpushed commits and which are accepted, anyone's to read, a task's too
   kebbie push [name]              put the task in its repo's push line; at the head, fetch, rebase it onto origin's
                                   default branch and push it, then close it as done (once CI is green, when kebbie
@@ -454,7 +457,7 @@ impl Arguments {
                 arguments.positionals.extend(input.by_ref());
                 break;
             }
-            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--after-push", "--profile", "--why", "--name", "--until", "--recipe"].contains(&argument.as_str()) {
+            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--after-push", "--profile", "--why", "--name", "--until", "--recipe", "--step"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
                 arguments.flags.push(argument);
@@ -726,7 +729,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("evidence") => evidence::print(&cwd, name, arguments.flag("--json")),
         Some("steps") => arguments.only("steps", &["--json"]).and_then(|_| tasks::steps(&cwd, arguments.rest(1), arguments.flag("--json"))),
         Some("accepted") => tasks::accepted_shown(&cwd, name, arguments.flag("--json")),
-        Some("accept") => tasks::accept(&cwd, name, arguments.positional(2), !arguments.flag("--withdraw")),
+        Some("accept") => tasks::accept(&cwd, name, arguments.positional(2), arguments.value("--step"), !arguments.flag("--withdraw")),
         Some("approve") => tasks::approve(&cwd, Some(name.ok_or("kebbie approve needs a task name")?)),
         Some("ci") if name == Some("tick") => ci::tick_cli(),
         Some("ci") if name == Some("dismiss") => tasks::dismiss_ci(&cwd, arguments.positional(2), arguments.value("--why")),

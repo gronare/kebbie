@@ -84,7 +84,7 @@ A prompt on a task's agent's screen, such as Codex asking to run a command, show
 
 The open task shows its agent, profile and recipe, its steps, its rules check as on the board, and a review section: the assessment, the reviewer's verdict, whether the push waits for it, and a second opinion's points, which never hold the push.
 
-A task that works in [steps](work-in-steps.md) lists them under its row as on the board: the pushed ones as a count, then each step with its number, title and state, planned, in progress, committed or accepted. With [`task.require_accept`](work-in-steps.md#require-every-step-accepted) on, the row says how many commits wait for your accept and which one is next, and the top of the board counts them across tasks as `◆ N to accept`; without it, the phone says accepting each step is optional and push takes what is committed. You accept on the machine, with `kebbie accept` or in the review split; the phone only shows it.
+A task that works in [steps](work-in-steps.md) lists them under its row as on the board: the pushed ones as a count, then each step with its number, title, state (planned, in progress, ready or accepted) and its commits. With [`task.require_accept`](work-in-steps.md#require-every-step-accepted) on, the row says how many steps wait for your accept and which one is next, and the top of the board counts them across tasks as `◆ N to accept`; without it, the phone says accepting each step is optional and push takes what is committed. You accept a step on the machine, with `kebbie accept` or in the review split, or in its review on the phone.
 
 The board kebbie sends needs a hub whose web app reads it: an older one refuses the board, so update the hub first, then kebbie. An older kebbie keeps working with a newer hub, without Next and the rest.
 
@@ -108,7 +108,7 @@ The task shows the answer as sent, then the machine's own reply once it applied 
 What reaches a machine is its own choice, set by [`hub.commands`](../reference/configuration.md#keys) in its config.toml. **Machines** says it under each one: `takes answers and pushes`, `takes answers, not pushes` or `takes nothing from the hub`.
 
 - If a machine takes answers but not pushes, its task says `Not pushed: devbox takes no pushes from the hub. Push at the machine, or allow pushes in its kebbie settings.`
-- A task in [steps](work-in-steps.md) pushes through one of its committed steps: the steps up to it go out, as `p` in the board's push window takes them, and the later ones stay in the task. If that step's commit changed since your phone showed it, the push is refused; a step on the default branch already says there is nothing to push.
+- A task in [steps](work-in-steps.md) pushes through one of its ready steps: the steps up to it go out whole, through that step's last commit, as `p` in the board's push window takes them, and the later ones stay in the task. If that step's last commit changed since your phone showed it, the push is refused; a step on the default branch already says there is nothing to push.
 - If you turn the switch off, the device sends nothing; the setting stays in that browser alone.
 - If the hub has not enabled answering for your account, the task says so instead.
 
@@ -131,11 +131,11 @@ What reaches a machine is its own choice, set by [`hub.commands`](../reference/c
 
 ### Review a step from your phone
 
-A task whose step waits for your acceptance offers a review on its row. Open it to read the step's commit and every file it changes, in the order the review split shows them. A device that makes changes also:
+A task whose step waits for your acceptance offers a review on its row, and any ready or accepted step opens from its steps. The review shows the step's commits, each with its message and its own diff, and every file the whole step changes, in the order the review split shows them. A device that makes changes also:
 
 - **Comments on a line.** Write a comment under any line, then **Send**. Every waiting comment is typed into the task's Claude as one message, each line shaped `path:line — text` as the review split sends them.
-- **Marks a file read.** The read box in a file's header sets the same read mark the review split shows, until the file changes.
-- **Accepts the step.** **Accept** at the end accepts it as `kebbie accept` does, and the board shows it accepted.
+- **Marks a file read.** The read box in a file's header sets the same read mark the review split shows, in the whole step or in one commit, until the file changes.
+- **Accepts the step.** **Accept** at the end accepts every commit of the step as `kebbie accept --step` does, and the board shows it accepted.
 
 - A binary file, or one too large to send, shows as left out; review it at the machine.
 - If the task's branch moved since you opened it, a read mark or an accept is refused; open the review again.

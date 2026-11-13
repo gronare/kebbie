@@ -1808,11 +1808,22 @@ fn a_task_lists_its_steps_unless_the_setting_is_off_and_only_the_user_accepts_a_
     fs::write(&lab.config, "").unwrap();
     let planned = lab.run_as("billing@app", &["-C", slot, "steps", "Add refunds", "Document refunds"]);
     assert!(planned.status.success(), "{}", stderr(&planned));
-    assert!(stdout(&planned).contains("● 1. Add refunds") && stdout(&planned).contains("◐ 2. Document refunds"), "{}", stdout(&planned));
+    assert!(stdout(&planned).contains("◐ 1. Add refunds  in progress · 1 commit") && stdout(&planned).contains("○ 2. Document refunds"), "the commit so far is the step in progress's: {}", stdout(&planned));
     let sha = git(Path::new(slot), &["rev-parse", "HEAD"]);
     let shown = |lab: &Lab| -> serde_json::Value { serde_json::from_str(&stdout(&lab.run(&["-C", app, "steps", "billing", "--json"]))).unwrap() };
+    let refused = run_as_user(&lab, &["-C", app, "accept", "billing", "--step", "1"]);
+    assert!(!refused.status.success() && stderr(&refused).contains("step 1 is not ready yet"), "{}", stderr(&refused));
+    let done = lab.run_as("billing@app", &["-C", slot, "steps", "done"]);
+    assert!(done.status.success() && stdout(&done).contains("● 1. Add refunds  ready · 1 commit"), "kebbie steps done marks the step ready: {} {}", stdout(&done), stderr(&done));
+    let again = lab.run_as("billing@app", &["-C", slot, "steps", "done"]);
+    assert!(!again.status.success() && stderr(&again).contains("Step 2 holds no commit yet"), "{}", stderr(&again));
     let before = shown(&lab);
-    assert_eq!((before["steps"][0]["sha"].as_str(), before["steps"][0]["accepted"].as_bool(), before["last_accepted"].as_str()), (Some(sha.as_str()), Some(false), None));
+    assert_eq!((before["steps"][0]["state"].as_str(), before["steps"][0]["commits"][0]["sha"].as_str(), before["steps"][0]["commits"][0]["accepted"].as_bool(), before["last_accepted"].as_str()), (Some("ready"), Some(sha.as_str()), Some(false), None));
+    let whole = run_as_user(&lab, &["-C", app, "accept", "billing", "--step", "1"]);
+    assert!(whole.status.success() && stdout(&whole).contains("Accepted step 1"), "{}", stderr(&whole));
+    assert_eq!((shown(&lab)["steps"][0]["state"].as_str(), shown(&lab)["last_accepted"].as_str()), (Some("accepted"), Some(sha.as_str())));
+    run_as_user(&lab, &["-C", app, "accept", "billing", "--step", "1", "--withdraw"]);
+    assert_eq!(shown(&lab)["steps"][0]["state"].as_str(), Some("ready"), "withdrawn whole");
     for role in ["lead", "billing@app"] {
         let refused = lab.run_as(role, &["-C", app, "accept", "billing", &sha]);
         assert!(!refused.status.success() && stderr(&refused).contains("accepting a commit is the user's call"), "{role}: {}", stderr(&refused));
@@ -1820,7 +1831,7 @@ fn a_task_lists_its_steps_unless_the_setting_is_off_and_only_the_user_accepts_a_
     let accepted = run_as_user(&lab, &["-C", app, "accept", "billing", &sha]);
     assert!(accepted.status.success() && stdout(&accepted).contains("Accepted"), "{}", stderr(&accepted));
     let after = shown(&lab);
-    assert_eq!((after["steps"][0]["accepted"].as_bool(), after["last_accepted"].as_str()), (Some(true), Some(sha.as_str())));
+    assert_eq!((after["steps"][0]["commits"][0]["accepted"].as_bool(), after["last_accepted"].as_str()), (Some(true), Some(sha.as_str())));
     let withdrawn = run_as_user(&lab, &["-C", app, "accept", "billing", &sha, "--withdraw"]);
     assert!(withdrawn.status.success() && stdout(&withdrawn).contains("Acceptance withdrawn"), "{}", stderr(&withdrawn));
     assert_eq!(shown(&lab)["last_accepted"], serde_json::Value::Null);

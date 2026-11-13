@@ -922,5 +922,5 @@ fn steps_are_on_until_turned_off_and_a_repo_wins_over_the_machine() {
     assert_eq!(settings(&repo("[task]\nsteps = true\n"), &machine("[task]\nsteps = false\n")).steps, Setting { value: true, layer: Layer::Repo });
     assert!(parse_repo("[task]\nsteps = \"yes\"\n", "app.toml").unwrap_err().contains("task.steps: must be true or false"));
     let shown = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
-    assert!(shown.contains("task.steps = true  (default)\n  Tasks work in steps, one commit each, listed with kebbie steps"), "{shown}");
+    assert!(shown.contains("task.steps = true  (default)\n  Tasks work in steps, each a slice of the work in small commits, listed with kebbie steps"), "{shown}");
 }

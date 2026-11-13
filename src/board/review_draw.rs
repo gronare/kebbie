@@ -4,7 +4,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph};
 
-use super::review::{Hit, Panel, View};
+use super::review::{Hit, Panel, Sel, View};
 use super::review_data::{Entry, File, Mark, short};
 use crate::board::widgets::{BLUE, FAINT, GREEN, LAVENDER, MAUVE, MUTED, PEACH, RED, SUBTEXT, SURFACE, TEAL, TEXT, YELLOW, bold, cut, fill, fit, modal, split_at_width, style, text_width, wrap};
 
@@ -30,7 +30,7 @@ fn tab(parts: &[(String, ratatui::style::Color)], selected: bool) -> Vec<Span<'s
 
 fn mark(entry: &Entry) -> (&'static str, ratatui::style::Color) {
     match entry.mark {
-        Mark::Committed => ("●", YELLOW),
+        Mark::Ready => ("●", YELLOW),
         Mark::Accepted => ("✓", GREEN),
         Mark::InProgress => ("◐", BLUE),
         Mark::Planned => ("○", MUTED),
@@ -44,10 +44,17 @@ fn tabs(view: &View) -> Vec<Tab> {
         out.push((tab(&[(format!("↑ {} pushed", view.entries.pushed), MUTED)], false), None));
     }
     for (index, entry) in view.entries.items.iter().enumerate() {
-        let selected = entry.sha.is_some() && entry.sha == view.selected;
+        let selected = !entry.commits.is_empty() && view.selected == Some(view.sel_of(entry));
         let (symbol, color) = mark(entry);
-        let number = if selected { TEXT } else if entry.sha.is_none() { MUTED } else { SUBTEXT };
-        out.push((tab(&[(symbol.to_string(), color), (entry.number.to_string(), number)], selected), entry.sha.as_ref().map(|_| Hit::Entry(index))));
+        let number = if selected { TEXT } else if entry.commits.is_empty() { MUTED } else { SUBTEXT };
+        out.push((tab(&[(symbol.to_string(), color), (entry.number.to_string(), number)], selected), (!entry.commits.is_empty()).then_some(Hit::Entry(index))));
+        if view.expanded(entry) {
+            for (at, commit) in entry.commits.iter().enumerate() {
+                let picked = view.selected == Some(Sel::Commit(entry.number, commit.sha.clone()));
+                let tick = if commit.accepted { ("✓".to_string(), GREEN) } else { ("·".to_string(), MUTED) };
+                out.push((tab(&[tick, (short(&commit.sha).to_string(), if picked { TEXT } else { SUBTEXT })], picked), Some(Hit::Commit(index, at))));
+            }
+        }
     }
     out
 }
@@ -78,7 +85,18 @@ fn bar() -> Span<'static> {
     Span::styled("▎ ", style(MAUVE))
 }
 
+// A step of several commits lists them, one line each; a commit, or a step of one, shows its message.
 fn message(view: &View, width: usize) -> Vec<Line<'static>> {
+    let room = width.saturating_sub(2);
+    if let Some((_, entry)) = view.selected_entry().filter(|(_, entry)| entry.commits.len() > 1 && view.selected_commit().is_none()) {
+        let count = format!("  {} commits", entry.commits.len());
+        let mut out = vec![Line::from(vec![bar(), Span::styled(cut(&entry.title, room.saturating_sub(count.len())), bold(LAVENDER)), Span::styled(count, style(MUTED))])];
+        out.extend(entry.commits.iter().map(|commit| {
+            let tick = if commit.accepted { Span::styled("✓ ", style(GREEN)) } else { Span::raw("  ") };
+            Line::from(vec![bar(), tick, Span::styled(short(&commit.sha).to_string(), style(PEACH)), Span::raw(" "), Span::styled(cut(&commit.subject, room.saturating_sub(10)), style(SUBTEXT))])
+        }));
+        return out;
+    }
     let Some((_, entry)) = view.selected_entry() else {
         let what = view.title();
         let text = match (view.entries.committed().next().is_some(), view.uncommitted) {
@@ -88,11 +106,10 @@ fn message(view: &View, width: usize) -> Vec<Line<'static>> {
         };
         return vec![Line::from(Span::styled(text, style(MUTED)))];
     };
-    let sha = entry.sha.clone().unwrap_or_default();
+    let sha = view.selected_commit().map(|commit| commit.sha.clone()).or_else(|| entry.head().map(str::to_string)).unwrap_or_default();
     let text = super::review_data::message(&view.root, &sha);
     let mut lines = text.lines();
     let subject = lines.next().unwrap_or(&entry.title).to_string();
-    let room = width.saturating_sub(2);
     let mut out = Vec::new();
     let shown = cut(&subject, room.saturating_sub(9));
     out.push(Line::from(vec![bar(), Span::styled(shown, bold(LAVENDER)), Span::raw("  "), Span::styled(short(&sha).to_string(), style(PEACH))]));
@@ -151,7 +168,7 @@ pub fn reflow(body: &[&str]) -> Vec<Para> {
 fn header(view: &View, width: usize) -> Line<'static> {
     let mut spans = vec![Span::styled("review", bold(MAUVE)), Span::styled(format!(" {}", view.branch), style(SUBTEXT)), Span::styled(format!(" · {}", view.since), style(MUTED))];
     if view.entries.task.is_some() {
-        let (accepted, waiting) = (view.entries.count(Mark::Accepted), view.entries.count(Mark::Committed));
+        let (accepted, waiting) = (view.entries.count(Mark::Accepted), view.entries.count(Mark::Ready));
         if accepted > 0 {
             spans.push(Span::styled(" · ", style(MUTED)));
             spans.push(Span::styled(if waiting == 0 { "all accepted".to_string() } else { format!("{accepted} accepted") }, style(GREEN)));
@@ -223,9 +240,9 @@ fn help() -> Vec<Line<'static>> {
     let key = |key: &str, about: &str| Line::from(vec![Span::styled(format!("  {key:<11}"), bold(TEXT)), Span::styled(about.to_string(), style(SUBTEXT))]);
     vec![
         heading("Steps and files"),
-        key("← →  h l", "the previous or next step; all is the whole branch"),
+        key("← →  h l", "the previous or next step, or a commit of the step picked; all is the whole branch"),
         key("↑ ↓  j k", "the previous or next file; the diff shows it at once"),
-        key("a", "accept the step's commit, or withdraw the acceptance"),
+        key("a", "accept the step, or the commit picked in it; on one accepted, withdraw it"),
         key("r", "mark the file read, or unread"),
         key("/", "filter the files: words to keep, !word to hide; esc clears"),
         key("m", "hide or show the commit message"),

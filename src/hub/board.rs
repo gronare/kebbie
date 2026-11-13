@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Mutex;
 
-use kebbie_hub_protocol::{Agent, AgentStatus, Board, Checkout, Ci, CiState, Counts, Git, Group, Item, Later, LaterState, MAX_RULE_NAMES, NextPart, NextRow, OverrideBy, Prompt, PromptOption, PushPermission, Question, QuestionOption, Recover, Report, RoutineSummary, Rules, RulesOverride, RulesState, SecondOpinion, Step, StepState, Steps, Verdict, VerdictOutcome};
+use kebbie_hub_protocol::{Agent, AgentStatus, Board, Checkout, Ci, CiState, Counts, Git, Group, Item, Later, LaterState, MAX_RULE_NAMES, NextPart, NextRow, OverrideBy, Prompt, PromptOption, PushPermission, Question, QuestionOption, Recover, Report, RoutineSummary, Rules, RulesOverride, RulesState, SecondOpinion, Step, StepCommit, StepState, Steps, Verdict, VerdictOutcome};
 
 use super::blobs::{Attachment, PLAN_LIMIT};
 use crate::menu::Menu;
@@ -155,14 +155,15 @@ fn steps(item: &status::Item, seen: &Seen) -> Option<Steps> {
     }
     let rules = rules(item);
     let items = steps.items.iter().map(|step| {
-        let (state, sha) = match &step.state {
-            crate::tasks::StepState::Planned => (StepState::Planned, None),
-            crate::tasks::StepState::InProgress => (StepState::InProgress, None),
-            crate::tasks::StepState::Committed { sha, accepted: false, .. } => (StepState::Committed, Some(sha.clone())),
-            crate::tasks::StepState::Committed { sha, accepted: true, .. } => (StepState::Accepted, Some(sha.clone())),
+        let state = match &step.state {
+            crate::tasks::StepState::Planned => StepState::Planned,
+            crate::tasks::StepState::InProgress => StepState::InProgress,
+            crate::tasks::StepState::Ready => StepState::Ready,
+            crate::tasks::StepState::Accepted => StepState::Accepted,
         };
-        let rules = sha.as_ref().and(rules.clone());
-        Step { number: count(step.index + 1), title: step.title.clone(), state, sha, rules }
+        let commits: Vec<StepCommit> = step.commits.iter().map(|commit| StepCommit { sha: commit.sha.clone(), subject: commit.subject.clone() }).collect();
+        let rules = (!commits.is_empty()).then(|| rules.clone()).flatten();
+        Step { number: count(step.index + 1), title: step.title.clone(), state, commits, rules }
     }).collect();
     Some(Steps { pushed: count(steps.pushed), items, required: Some(seen.accepting.contains(&item.place)) })
 }
@@ -380,8 +381,8 @@ pub(crate) mod tests {
         use crate::tasks::{Step as Listed, StepState as Listing, Steps as Listings};
         let mut item = task(Some("idle"), Some("ready"), 2);
         item.steps = Listings { pushed: 0, items: vec![
-            Listed { index: 0, title: "Model".to_string(), state: Listing::Committed { sha: "a".repeat(40), subject: "s".to_string(), accepted: true }, extra: false },
-            Listed { index: 1, title: "Docs".to_string(), state: Listing::Planned, extra: false },
+            Listed { index: 0, title: "Model".to_string(), state: Listing::Accepted, commits: vec![crate::tasks::StepCommit { sha: "a".repeat(40), subject: "s".to_string(), accepted: true }], extra: false },
+            Listed { index: 1, title: "Docs".to_string(), state: Listing::Planned, commits: Vec::new(), extra: false },
         ] };
         let sent = |item: &status::Item| {
             let board = build(std::slice::from_ref(item), &[], Vec::new(), None, &Seen::default());
@@ -424,15 +425,15 @@ pub(crate) mod tests {
     #[test]
     fn a_task_with_steps_reaches_the_board_with_each_step_and_a_task_without_them_carries_none() {
         use crate::tasks::{Step as Listed, StepState as Listing, Steps as Listings};
-        let committed = |sha: &str, accepted: bool| Listing::Committed { sha: sha.to_string(), subject: "Route charges through the gateway".to_string(), accepted };
+        let held = |shas: &[&str], accepted: bool| shas.iter().map(|sha| crate::tasks::StepCommit { sha: sha.to_string(), subject: format!("Subject of {sha}"), accepted }).collect::<Vec<_>>();
         let mut item = task(Some("working"), Some("working"), 2);
         item.name = "stripe".to_string();
         item.place = "billing".to_string();
         item.steps = Listings { pushed: 1, items: vec![
-            Listed { index: 1, title: "Charge through a PaymentGateway".to_string(), state: committed("2222222bbbb", true), extra: false },
-            Listed { index: 2, title: "Add Stripe as the gateway".to_string(), state: committed("3333333cccc", false), extra: false },
-            Listed { index: 3, title: "Remove the old payment client".to_string(), state: Listing::InProgress, extra: false },
-            Listed { index: 4, title: "Docs".to_string(), state: Listing::Planned, extra: false },
+            Listed { index: 1, title: "Charge through a PaymentGateway".to_string(), state: Listing::Accepted, commits: held(&["2222222bbbb"], true), extra: false },
+            Listed { index: 2, title: "Add Stripe as the gateway".to_string(), state: Listing::Ready, commits: held(&["3333333cccc", "3333333dddd"], false), extra: false },
+            Listed { index: 3, title: "Remove the old payment client".to_string(), state: Listing::InProgress, commits: held(&["4444444eeee"], false), extra: false },
+            Listed { index: 4, title: "Docs".to_string(), state: Listing::Planned, commits: Vec::new(), extra: false },
         ] };
         let mut plain = task(Some("working"), Some("working"), 2);
         plain.name = "search".to_string();
@@ -440,16 +441,19 @@ pub(crate) mod tests {
         pushed_only.name = "dates".to_string();
         pushed_only.steps = Listings { pushed: 2, items: Vec::new() };
         let board = build(&[item, plain, pushed_only], &[], Vec::new(), None, &Seen::default());
+        board.check().unwrap();
         let steps = board.items[0].steps.as_ref().unwrap();
         assert_eq!(steps.pushed, 1);
-        let shown: Vec<(u32, &str, StepState, Option<&str>)> = steps.items.iter().map(|step| (step.number, step.title.as_str(), step.state, step.sha.as_deref())).collect();
+        let shown: Vec<(u32, &str, StepState, Vec<&str>)> = steps.items.iter().map(|step| (step.number, step.title.as_str(), step.state, step.commits.iter().map(|commit| commit.sha.as_str()).collect())).collect();
         assert_eq!(shown, [
-            (2, "Charge through a PaymentGateway", StepState::Accepted, Some("2222222bbbb")),
-            (3, "Add Stripe as the gateway", StepState::Committed, Some("3333333cccc")),
-            (4, "Remove the old payment client", StepState::InProgress, None),
-            (5, "Docs", StepState::Planned, None),
+            (2, "Charge through a PaymentGateway", StepState::Accepted, vec!["2222222bbbb"]),
+            (3, "Add Stripe as the gateway", StepState::Ready, vec!["3333333cccc", "3333333dddd"]),
+            (4, "Remove the old payment client", StepState::InProgress, vec!["4444444eeee"]),
+            (5, "Docs", StepState::Planned, vec![]),
         ]);
-        assert!(!serde_json::to_string(&board).unwrap().contains("Route charges"), "a commit's subject stays on the machine");
+        assert_eq!((steps.items[1].commits[1].subject.as_str(), steps.items[1].head()), ("Subject of 3333333dddd", Some("3333333dddd")), "each commit goes with its subject, and the step's head is its last");
+        let sent = serde_json::to_value(&board.items[0]).unwrap();
+        assert!(sent["steps"]["items"][1].get("sha").is_none(), "a step names its commits, never one sha");
         assert_eq!(board.items[1].steps, None);
         assert!(!serde_json::to_string(&board.items[1]).unwrap().contains("steps"), "a task without steps sends the board an older hub reads");
         assert_eq!(board.items[2].steps.as_ref().map(|steps| (steps.pushed, steps.items.len())), Some((2, 0)));

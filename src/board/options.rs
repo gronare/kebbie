@@ -340,11 +340,11 @@ mod tests {
 
     #[test]
     fn a_working_task_in_steps_offers_to_push_the_accepted_steps_at_the_front() {
-        use crate::board::steps::tests::{committed, stepped, stripe};
+        use crate::board::steps::tests::{holds, stepped, stripe};
         let keys = |item: &Item| task_choices(Some(item), None, None).iter().map(|choice| choice.key).collect::<String>();
         let mut steps = stripe();
         assert_eq!(keys(&stepped(steps.clone())), "gcrauZzx", "nothing accepted, nothing to push");
-        steps.items[0].state = committed("2222222bbbb", true);
+        holds(&mut steps.items[0], &["2222222bbbb"], true);
         let item = stepped(steps.clone());
         assert!(busy(&item));
         let push = task_choices(Some(&item), None, None).into_iter().find(|choice| choice.act == Some(Act::Push)).expect("push offered while it works");

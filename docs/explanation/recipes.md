@@ -8,7 +8,7 @@ A recipe is the shape of a task: what it does first and where it stops for you. 
 
 | Recipe | When |
 | --- | --- |
-| `small-fix` | The prompt settles the change: one commit with the test that goes red without it, no mockup and no plan. |
+| `small-fix` | The prompt settles the change: one step, the fix with the test that goes red without it, no mockup and no plan. |
 | `feature-with-ui` | A screen to design: a mockup until you say yes, then the task's own plan, then the build in small steps. |
 | `task-after-task` | It builds on another task's change, so it is queued until that one is on main. |
 | `rollout-in-stages` | It must reach production in stages, such as an expand and contract rename: one task, a push per stage. |

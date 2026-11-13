@@ -117,7 +117,7 @@ The second one does not start, and does not go away either, when the first task 
 
 ## A task can land in parts
 
-A task does not have to land all at once. `kebbie push --through <sha>`, or `p` in the push window, pushes the commits up to one and keeps the task open, without touching its worktree: the task's Claude rebases onto the new default branch itself, when its work in progress is committed. A long task can land its safe first steps while it keeps working. See [Push part of a task](../how-to/push-part-of-a-task.md).
+A task does not have to land all at once. `kebbie push --through <sha>`, or `p` in the push window, pushes the commits up to one and keeps the task open, without touching its worktree: the task's Claude rebases onto the new default branch itself, when its work in progress is committed. With steps, a push goes through the end of a step, so each step lands whole. A long task can land its safe first steps while it keeps working. See [Push part of a task](../how-to/push-part-of-a-task.md).
 
 ## You can still open a pull request
 
