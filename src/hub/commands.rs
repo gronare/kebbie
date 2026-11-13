@@ -138,10 +138,10 @@ pub fn accepts(policy: HubCommands) -> Vec<Kind> {
     }).collect()
 }
 
-// What the machine takes with hub.approve_from: a device's decision on another device only under "devices".
+// What the machine takes with hub.approve_from: a device's decision on another device only under "devices", and nothing at all under hub.commands = [].
 pub fn accepted(policy: HubCommands, from: ApproveFrom) -> Vec<Kind> {
     let mut kinds = accepts(policy);
-    if from == ApproveFrom::Devices {
+    if from == ApproveFrom::Devices && !kinds.is_empty() {
         kinds.push(Kind::DeviceDecision);
     }
     kinds
@@ -183,6 +183,7 @@ fn not_taken(kind: Kind, machine: &str, accepts: &[Kind]) -> String {
         Kind::Answer | Kind::ItemAnswer => ("Not answered", "Answer", "answers"),
         Kind::Idea => ("Not added", "Add it", "ideas"),
         Kind::StartItem => ("Not started", "Start it", "starts"),
+        Kind::DeviceDecision if accepts.is_empty() => return format!("Not decided: {machine} takes nothing from the hub. Approve or deny it at the machine: N on the board, or kebbie hub devices."),
         Kind::DeviceDecision => return format!("Not decided: {machine} takes device approvals only at the machine. Approve or deny it there: N on the board, or kebbie hub devices."),
         other => return format!("Not done: {machine} takes no {} from the hub", other.name()),
     };
@@ -1174,7 +1175,11 @@ mod tests {
         let Handled::Refused(result) = machine.handle_taking(&seen, &machine_only, &refused) else { panic!("refused") };
         assert_eq!((result.outcome, result.text.as_str()), (Outcome::Refused { reason: Reason::NotAllowed }, "Not decided: mac takes device approvals only at the machine. Approve or deny it there: N on the board, or kebbie hub devices."));
         assert_eq!(machine.state(&laptop), Some(State::Waiting));
-        assert_eq!(accepted(HubCommands::OFF, ApproveFrom::Devices), [Kind::DeviceDecision], "the board publishes device-decision in accepts only under \"devices\"");
+        assert!(accepted(HubCommands::OFF, ApproveFrom::Devices).is_empty(), "hub.commands = [] takes nothing, device decisions included");
+        let off = phone.send(&machine.account, &machine.identity, &decision(&laptop, &laptop.cert.fingerprint(), true), now());
+        let Handled::Refused(result) = machine.handle_taking(&seen, &accepted(HubCommands::OFF, ApproveFrom::Devices), &off) else { panic!("refused") };
+        assert_eq!((result.outcome, result.text.as_str()), (Outcome::Refused { reason: Reason::NotAllowed }, "Not decided: mac takes nothing from the hub. Approve or deny it at the machine: N on the board, or kebbie hub devices."));
+        assert_eq!(machine.state(&laptop), Some(State::Waiting), "an approved device decides nothing while the machine takes nothing");
         assert!(!accepted(HubCommands::default(), ApproveFrom::Machine).contains(&Kind::DeviceDecision));
     }
 

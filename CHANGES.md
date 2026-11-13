@@ -22,6 +22,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A backlog row shows whether the item is to write, drafting or waits on your answers, and g asks once before starting one that waits.
 
 ### Fixed
+- hub.commands = [] takes nothing from the hub, so a device no longer approves or denies another on that machine.
 - A result for a command your device sent is sent again on the next round when the hub could not take it, instead of being lost.
 - Two devices that send a command with the same id each have it held and applied on their own.
 - A notification the hub cannot take at that moment is sent again on the keeper's next rounds for up to an hour; one with wide characters is cut to fit the hub's size limit instead of being refused; its text never shows in the process list.

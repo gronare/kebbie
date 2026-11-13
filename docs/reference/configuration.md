@@ -206,7 +206,7 @@ commands = ["answer", "prompt", "idea"]
 - A device you deny stays view only on this machine, and its commands are answered `denied`.
 - A device whose key changed is a new device to approve, and the device it was keeps its own approval. Compare the key under Account on the device with the one kebbie shows.
 - `"24h"` for `hub.auto_approve` approves a waiting device 24 hours after its first command unless you deny it first; `"never"` keeps it waiting until you approve it.
-- `"devices"` for `hub.approve_from` lets a device you approved on this machine approve or deny a waiting one, from its notification or the phone's board, as well as `N` and `kebbie hub devices`; `"machine"` takes that decision only here. A waiting device never decides on another. See [Approve a new device from another device](../how-to/see-your-board-on-your-phone.md#approve-a-new-device-from-another-device).
+- `"devices"` for `hub.approve_from` lets a device you approved on this machine approve or deny a waiting one, from its notification or the phone's board, as well as `N` and `kebbie hub devices`; `"machine"` takes that decision only here. A waiting device never decides on another, and under `hub.commands = []` no device does. See [Approve a new device from another device](../how-to/see-your-board-on-your-phone.md#approve-a-new-device-from-another-device).
 - While config.toml does not parse, the machine takes no commands through the hub, lets no device in by time or by account, and takes device decisions only here. The keeper's log, `kebbie hub status` and `kebbie doctor` say so until the file parses again.
 
 ### CI, updates and the keeper
