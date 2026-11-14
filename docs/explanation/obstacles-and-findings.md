@@ -31,9 +31,9 @@ It does not run for a question of method, which is the task's own call, nor for 
 
 ## Review findings are resolved, not passed along
 
-Bugs, broken rules, missing tests and missing docs go to the task as work. A finding about scope or intent goes to the investigator first, since the answer is often your own words in the task's note, which the reviewer never sees. When it settles a verdict that only asked for confirmation, the review passes on its word. What it cannot settle reaches you under Needs you as the review's own question.
+Bugs, broken rules, missing tests and missing docs go to the task as work. A finding the task cannot settle by changing code goes to the investigator first: the reviewer marks it `confirm:` for your intent, `scope:` for work outside the task or an Also noticed line on its own path, and `gap:` for a test or docs gap only someone else can close. The answer is often your own words in the task's note, which the reviewer never sees. When it settles a verdict that only held such findings, the review passes on its word. Only its `ask` reaches you.
 
-A finding seen in a second task is raised once, as its own problem, with the lead's recommendation.
+A thing a second task notices is raised once, as its own obstacle, and the investigator decides its root cause, usually one task for it. Every task that found it hears to stop working around it.
 
 ## The plan is living
 
@@ -41,14 +41,14 @@ A task plans what it knows, builds, learns and revises. It tells the lead each r
 
 ## The card asks you nothing
 
-What needed you was asked before it was built, so the sign-off card has three parts and no confirm list:
+What needed you was asked before it was built, so the sign-off card has three parts and no confirm list. kebbie refuses a card with any other part, and a ready report over a red test run unless the task names the cause it found.
 
 - **Built**: what you can do now and where to see it, including anything changed outside the repo.
-- **Decisions**: each choice taken on the way, its reason and who took it: you, the lead, the task or the investigator.
+- **Decisions**: each choice taken on the way, its reason and who took it: you, the lead, the task or the investigator. Who decided comes from kebbie's own records, never the task's word, and a line no record backs shows as the task's.
 - **Also noticed**: only what lies outside the task. kebbie files each line under Found by tasks on the board's backlog, and the line ends with its item, `(found:f3)`.
 
-The part labels are English; the text under them follows your vault's language. The procedure is in the skill [`kebbie:playbook`](../../skills/playbook/SKILL.md).
+A card the task writes again keeps the version before it, so the board and your phone show what changed. The part labels are English; the text under them follows your vault's language. The procedure is in the skill [`kebbie:playbook`](../../skills/playbook/SKILL.md).
 
 ## What tasks notice is counted, not filed twice
 
-Found by tasks, at the top of the board's backlog, holds what tasks listed under Also noticed: one item per thing, with the tasks that found it and how often. When a second task notices the same thing, the item counts up and adds that task, instead of a new item beside it, so something every task trips over stands out. From it you start a task, hand it to a running task, or dismiss it. See [In the Backlog column](../reference/board.md#in-the-backlog-column).
+Found by tasks, at the top of the board's backlog, holds what tasks listed under Also noticed: one item per thing, with the tasks that found it and how often. When a second task notices the same thing, the item counts up and adds that task, instead of a new item beside it, so something every task trips over stands out. From it you start a task, hand it to a running task, keep it in the backlog, or dismiss it, and the card it came from shows your choice. See [In the Backlog column](../reference/board.md#in-the-backlog-column).

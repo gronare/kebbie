@@ -361,7 +361,7 @@ A question that asks first, as reset, drop and done do, takes `y` to go ahead an
 | `g` | Go to its Space. On a task whose Space or Claude is gone, restart it and resume its conversation. | Always. |
 | `c` | Chat: message its Claude. | Always. |
 | `r` | Open the review split next to its Claude, or go to the one already open in its Space. | Always. |
-| `s` | Show the sign-off card. | It has a card and no open question. |
+| `s` | Show the sign-off card: Built, each decision with who took it, what became of each Also noticed line, and what changed since its last version. | It has a card and no open question. |
 | `w` | Start or stop the dev server. | `worktree.dev_server` is set. |
 | `b` | Start or stop the worker. | `worktree.dev_worker` is set. |
 | `1`–`9` | Open one of its links in the browser, listed under LINKS. | It has that link. |
@@ -425,7 +425,7 @@ For an older Claude Code, or when the inbox refuses a message, kebbie types it i
 | `⏎` | The item's card. A row kept by kebbie or a Linear issue has no card: `⏎` is its options. | On an item. |
 | `o` | The item's options, each one explained. | On an item. |
 | `g` | Go to the task working on this note, or resume the note as a new task. | On an ONGOING note. |
-| `o` | Start a task (a name, suggested from the line), Add to the running task that found it (a task name, filled in), or Dismiss. | On a FOUND BY TASKS item. |
+| `o` | Start a task (a name, suggested from the line), Add to the running task that found it (a task name, filled in), Keep in backlog, or Dismiss. A kept item stays, marked `kept`, and its card shows the choice. | On a FOUND BY TASKS item. |
 | `⏎` | The note's card. | On an ONGOING note. |
 | `l` | Start the item as a task later: a name, then a time. It waits under Queued until then, as with [`kebbie start --at`](commands.md#kebbie-start-name-prompt). | On an item. |
 | `R` | Ask the lead to refresh the backlog. | On an item. |

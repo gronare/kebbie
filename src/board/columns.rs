@@ -402,7 +402,11 @@ fn found_rows(app: &App, order: &[BacklogRow], focused: bool, width: usize, line
         let start = lines.len();
         if selected && focused {
             lines.extend(wrapped_row(icon, &item.line, "", width));
-            lines.push(chips(vec![(item.repo.clone(), TEAL), (item.found_by(), SUBTEXT)]));
+            let mut shown = vec![(item.repo.clone(), TEAL), (item.found_by(), SUBTEXT)];
+            if item.state == crate::found::State::Kept {
+                shown.push(("kept".to_string(), SUBTEXT));
+            }
+            lines.push(chips(shown));
             lines.push(options_hint());
         } else {
             let times = if item.count > 1 { format!("{}×", item.count) } else { String::new() };
@@ -505,7 +509,7 @@ mod tests {
     #[test]
     fn found_by_tasks_heads_the_backlog_with_how_often_and_by_whom_and_its_options() {
         let mut app = test_app(Vec::new());
-        let item = |id: &str, line: &str, sources: &[&str]| crate::found::Item { id: id.to_string(), line: line.to_string(), repo: "app".to_string(), sources: sources.iter().map(|source| source.to_string()).collect(), count: sources.len() as u32, first_at: 0, last_at: 0, state: crate::found::State::Open, outcome: None };
+        let item = |id: &str, line: &str, sources: &[&str]| crate::found::Item { id: id.to_string(), line: line.to_string(), repo: "app".to_string(), sources: sources.iter().map(|source| source.to_string()).collect(), count: sources.len() as u32, first_at: 0, last_at: 0, state: crate::found::State::Open, outcome: None, raised: false };
         app.found = vec![item("f1", "The VAT rounding test is flaky on main", &["billing@app", "search@app"]), item("f2", "The README's install step names an old flag", &["billing@app"])];
         app.column = Column::Backlog;
         app.backlog_selected = 0;
@@ -517,7 +521,7 @@ mod tests {
         assert!(screen.contains("◆ The VAT rounding test is flaky on main") && screen.contains("app") && screen.contains("found 2× · by billing, search"), "the selected item shows whole, with its repo and who found it: {screen}");
         assert!(screen.contains("◇ The README's install step names"), "{screen}");
         let labels: Vec<String> = app.choices().into_iter().map(|choice| choice.label).collect();
-        assert_eq!(labels, ["Start a task", "Add to a running task", "Dismiss"], "no task of the item's is running here");
+        assert_eq!(labels, ["Start a task", "Add to a running task", "Keep in backlog", "Dismiss"], "no task of the item's is running here");
         app.act(Act::Go);
         assert!(matches!(&app.mode, crate::board::Mode::Input { purpose: crate::board::input::Purpose::FoundName(id), buffer, .. } if id == "f1" && buffer == "the-vat-rounding"), "start asks for a name, suggested from the line");
     }

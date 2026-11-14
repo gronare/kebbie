@@ -7,9 +7,10 @@ The card is what the user reads above a task's commits when they push it. They r
 1. **Make the three lists true.** Done when each holds:
    - Every decision you took is recorded where it lives (your note's decisions, or a message to the lead for a Codex task), with its reason and who took it.
    - Everything you noticed outside the task is on the card, each line checked against `kebbie found`.
-   - Nothing waits: no obstacle without its decision, no check only the user can make left unasked, and the latest test run on this code is green, or its red is an obstacle you raised.
+   - Nothing waits: no obstacle without its decision, no check only the user can make left unasked, and the latest test run on this code is green, or its red is an obstacle you raised. A red that stays once its cause is found goes on the report as `--red-cause "<the line that fails and why>"`; kebbie refuses ready over a red run without it.
+   - Before an Also noticed line, `kebbie backlog --search "<words>"` shows whether it is filed already: end the line with the `(found:<id>)` it lists.
 2. **Write the card** in the shape below, to a fresh file. Done when every part holds its rules.
-3. **Report** with `kebbie report --state ready --card <file> …`. Done when kebbie takes the report.
+3. **Report** with `kebbie report --state ready --card <file> …`. Done when kebbie takes the report: it refuses a card with any part beyond the three below, or one asking the user to confirm, and says what to change.
 
 ## The shape
 
@@ -17,7 +18,7 @@ The card is three parts under a headline. Each part opens a paragraph with its l
 
 - **The headline**, in bold: what the user can do now, or what works now, in their words. It carries no commit or subtask counts and no shas: the push window shows those.
 - `Built:` what the user can do now and where to see it (a page, a command, a file), at most six lines, with an image of anything visual as `![what it shows](<absolute path>)`. What the task changed outside the repo goes here too: a tool it installed, a service it restarted, a site that was down while it worked. For work with no commits, this is the whole card.
-- `Decisions:` each choice taken during the work, one line each: the choice, `because` its reason, and who took it in parentheses: `you`, `lead`, `task` or `investigator`. A decision that was reversed stays, with the line that replaced it: `replaced by: …`. Left out when nothing was decided.
+- `Decisions:` each choice taken during the work, one line each: the choice, `because` its reason, and who took it in parentheses: `you`, `lead`, `task` or `investigator`. kebbie takes who decided from its own records (the user's answers to your questions, the lead's calls, the obstacles' decisions) and adds a recorded decision you left out; a line no record backs shows as `task`. A decision that was reversed stays, with the line that replaced it: `replaced by: …`. Left out when nothing was decided.
 - `Also noticed:` only what lies outside the task, one line per item: what it is and where. kebbie files each line under Found by tasks as it takes the card and ends it with its item, `(found:<id>)`; a thing `kebbie found` lists already gets that ending from you, so it counts as found again. Something on the task's own path was an obstacle and has its line under Decisions. Left out when there is nothing.
 
 An example:

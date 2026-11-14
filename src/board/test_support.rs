@@ -28,7 +28,7 @@ pub(super) fn carded(current: bool) -> App {
     let mut app = test_app(vec![served("search-filters")]);
     with_detail(&mut app);
     let text = "Filters show on the search page.\nPrice and size, both kept in the URL.\nA third line stays in the window.\n![the filters](shots/filters.png)\n![empty](shots/empty.png)".to_string();
-    let card = report::Card { sha: "abcdef0123".to_string(), text, file: PathBuf::from("/state/cards/x.md") };
+    let card = report::Card { sha: "abcdef0123".to_string(), text, file: PathBuf::from("/state/cards/x.md"), data: None };
     std::rc::Rc::get_mut(app.details.get_mut(Path::new("/work/wt2.web")).unwrap()).unwrap().card = Some((card, current));
     app
 }
@@ -139,7 +139,7 @@ pub(super) fn imaged(dir: &Path) -> (App, PathBuf, PathBuf) {
     let mut app = test_app(vec![served("search-filters")]);
     with_detail(&mut app);
     let text = format!("Refunds show.\n![wide]({})\n![tall]({})", wide.display(), tall.display());
-    let card = report::Card { sha: "abcdef0123".to_string(), text, file: PathBuf::from("/state/cards/x.md") };
+    let card = report::Card { sha: "abcdef0123".to_string(), text, file: PathBuf::from("/state/cards/x.md"), data: None };
     std::rc::Rc::get_mut(app.details.get_mut(Path::new("/work/wt2.web")).unwrap()).unwrap().card = Some((card, true));
     app.graphics = Graphics::Ready(Picker::halfblocks());
     (app.image_requests, app.image_results) = spawn_decoder().map(|(requests, results)| (Some(requests), Some(results))).unwrap();

@@ -801,7 +801,7 @@ mod tests {
             assert!(excluded.iter().any(|pattern| excluded_matches(pattern, &line)) || user_only || ["done", "docs"].contains(&command.as_str()), "a task is told to run {line}, which the sandbox would cut off from kebbie's state");
             seen.push(command);
         }
-        for command in ["report", "ask", "obstacle", "found", "tell", "peers", "routine ok", "link", "backlog add"] {
+        for command in ["report", "ask", "obstacle", "found", "tell", "peers", "routine ok", "link", "backlog add", "backlog --search"] {
             assert!(seen.iter().any(|seen| seen == command), "{command} is no longer in the task's instructions; drop it from TASK_COMMANDS");
         }
     }

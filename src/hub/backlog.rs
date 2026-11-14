@@ -193,12 +193,13 @@ pub fn found_rows(items: &[crate::found::Item]) -> Vec<BacklogRow> {
     }).collect()
 }
 
-// The phone's start, add or dismiss of a found item, as kebbie found does it from the user.
+// The phone's start, add, keep or dismiss of a found item, as kebbie found does it from the user; the card it came from shows the choice.
 pub fn found_on(state: &Path, caller: &Caller, payload: &Payload, start: impl FnOnce(&str, Option<&str>) -> Result<String>, add: impl FnOnce(&str, &str) -> Result<String>) -> Done {
     let item = match payload {
         Payload::FoundStart(found) => &found.item,
         Payload::FoundAdd(found) => &found.item,
         Payload::FoundDismiss(found) => &found.item,
+        Payload::FoundKeep(found) => &found.item,
         _ => return refused(Reason::BadRequest, "Not a found item's command"),
     };
     let id = item.as_str().trim_start_matches("found:").to_string();
@@ -208,6 +209,7 @@ pub fn found_on(state: &Path, caller: &Caller, payload: &Payload, start: impl Fn
     let outcome = match payload {
         Payload::FoundStart(found) => start(&id, found.name.as_deref()),
         Payload::FoundAdd(found) => add(&id, &found.task),
+        Payload::FoundKeep(_) => crate::found::keep_in(state, caller, &id),
         _ => crate::found::dismiss_in(state, caller, &id),
     };
     match outcome {
@@ -846,6 +848,25 @@ mod tests {
         assert_eq!(found_on(&state, &caller, &Payload::FoundDismiss(FoundDismiss { item: key("f1") }), never, no_add).0, Outcome::Refused { reason: Reason::AlreadySettled }, "settled once");
         assert_eq!(found_on(&state, &caller, &Payload::FoundDismiss(FoundDismiss { item: key("f9") }), never, no_add).0, Outcome::Refused { reason: Reason::AlreadySettled });
         assert!(found_rows(&crate::found::open_in(&state)).iter().all(|row| row.item.as_str() != "found:f1"), "a dismissed item leaves the phone");
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn keep_in_backlog_from_the_phone_leaves_the_item_filed_and_the_card_shows_it_kept() {
+        use kebbie_hub_protocol::FoundKeep;
+        let state = crate::sh::test_dir("hub-found-keep");
+        let card = crate::found::file_card(&state, "billing@app", "**Refunds.**\n\nBuilt:\n- x\n\nAlso noticed:\n- The README names an old flag\n", 100).unwrap().text;
+        let parsed = crate::card::parse(&card).unwrap();
+        let data = crate::card::next_version(&parsed, Vec::new(), None, 100);
+        let key = ItemKey::parse("found:f1").unwrap();
+        let never = |_: &str, _: Option<&str>| -> Result<String> { panic!("not started") };
+        let no_add = |_: &str, _: &str| -> Result<String> { panic!("not added") };
+        assert_eq!(found_on(&state, &hub(), &Payload::FoundKeep(FoundKeep { item: key.clone() }), never, no_add).0, Outcome::Done);
+        assert_eq!(found_rows(&crate::found::open_in(&state)).len(), 1, "a kept item stays on the phone's backlog");
+        let wired = crate::card::wire(&data, &crate::found::load(&state)).unwrap();
+        assert_eq!(wired.noticed[0].chosen, Some(kebbie_hub_protocol::NoticedChoice::Kept), "the card shows the choice, read from the item");
+        let task = Caller::Task("billing@app".to_string());
+        assert_eq!(found_on(&state, &task, &Payload::FoundKeep(FoundKeep { item: key }), never, no_add).0, Outcome::Failed, "a task keeps nothing");
         let _ = std::fs::remove_dir_all(&state);
     }
 }

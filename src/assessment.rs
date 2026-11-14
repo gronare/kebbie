@@ -86,6 +86,12 @@ pub fn word_in(state: &Path, address: &str) -> Option<Word> {
     record_in(state, address).map(|record| record.word)
 }
 
+// When the assessor gave its word: the time its record was written.
+pub fn at_in(state: &Path, address: &str) -> Option<u64> {
+    let modified = fs::metadata(file(state, address)).and_then(|meta| meta.modified()).ok()?;
+    modified.duration_since(std::time::UNIX_EPOCH).ok().map(|at| at.as_secs())
+}
+
 fn write_word(state: &Path, address: &str, word: Word, code: String) -> Result<()> {
     crate::state::write(&file(state, address), serde_json::to_string(&Record { word, code }).map_err(|error| error.to_string())?)
 }

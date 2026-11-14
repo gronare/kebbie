@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use kebbie_hub_protocol::{AcceptSubtask, BLOB_OVERHEAD, DiffLine, FileStatus, Hunk, LineKind, MAX_BLOB_BYTES, Outcome, Reason, Review, ReviewComment, ReviewComments, ReviewCommit, ReviewFile, ReviewOffer, ReviewOpen, ReviewRead, ReviewSubtask, Side};
+use kebbie_hub_protocol::{AcceptSubtask, BLOB_OVERHEAD, DiffLine, FileStatus, Hunk, LineKind, MAX_BLOB_BYTES, Outcome, Reason, Review, ReviewComment, ReviewComments, ReviewCommit, ReviewFile, ReviewOffer, ReviewOpen, ReviewRead, ReviewSend, ReviewSubtask, Side};
 
 use super::commands::{Done, plain};
 use crate::board::review_data::{self as data, Entry, Mark, Range};
@@ -307,6 +307,27 @@ pub fn accept_in(root: &Path, entries: Option<data::Entries>, accept: &AcceptSub
     }
 }
 
+// Send to review from the phone: the full review v starts, of the subtask it names or of the whole task.
+pub fn send(caller: &Caller, send: &ReviewSend) -> Done {
+    match task_path(&send.address) {
+        Ok(path) => send_in(&path, send, |path, subtask| crate::review::request_from(caller, path, subtask)),
+        Err(done) => done,
+    }
+}
+
+fn send_in(path: &Path, send: &ReviewSend, request: impl FnOnce(&Path, Option<&str>) -> crate::sh::Result<String>) -> Done {
+    if let Some(id) = &send.subtask {
+        let subtasks = crate::tasks::subtasks_for(path, true);
+        if !subtasks.items.iter().chain(&subtasks.pushed).any(|subtask| &subtask.id == id) {
+            return refused(Reason::BadRequest, &format!("{} has no subtask {id}", send.address));
+        }
+    }
+    match request(path, send.subtask.as_deref()) {
+        Ok(said) => (Outcome::Done, plain(&said)),
+        Err(error) => (Outcome::Failed, plain(&error)),
+    }
+}
+
 pub fn accept(caller: &Caller, accept: &AcceptSubtask) -> Done {
     match task_path(&accept.address) {
         Ok(path) => accept_in(&path, data::kebbie_marks(&path), accept, |root, task, id| crate::tasks::accept_subtask_from_device(caller, root, task, id)),
@@ -456,5 +477,17 @@ mod tests {
         item.subtasks.items[1] = held("command", "Command", &[&lab.shas[1], &lab.shas[2]], true);
         assert_eq!(offer(&item), None, "every subtask accepted");
         let _ = std::fs::remove_dir_all(&lab.root);
+    }
+
+    #[test]
+    fn send_to_review_from_the_phone_starts_the_full_review_of_the_task_or_of_a_subtask_it_has() {
+        let path = std::env::temp_dir().join(format!("kebbie-send-review-{}", std::process::id()));
+        let asked = std::cell::RefCell::new(Vec::new());
+        let request = |_: &Path, subtask: Option<&str>| { asked.borrow_mut().push(subtask.map(str::to_string)); Ok("Review asked for".to_string()) };
+        let send = |subtask: Option<&str>| ReviewSend { address: "billing@app".to_string(), subtask: subtask.map(str::to_string) };
+        assert_eq!(send_in(&path, &send(None), request), (Outcome::Done, "Review asked for".to_string()));
+        assert_eq!(send_in(&path, &send(Some("gateway")), |_, _| panic!("not asked")).0, Outcome::Refused { reason: Reason::BadRequest }, "a subtask the task does not have");
+        assert_eq!(asked.into_inner(), [None]);
+        assert_eq!(send_in(&path, &send(None), |_, _| Err("A review is already running".to_string())).0, Outcome::Failed);
     }
 }

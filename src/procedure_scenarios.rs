@@ -121,8 +121,13 @@ fn the_investigator_decides_in_line_with_the_goal_and_the_codes_quality_with_its
 #[test]
 fn a_review_finding_about_scope_or_intent_is_resolved_through_the_investigator_and_only_the_uncertain_reaches_the_user() {
     let lead = lead_role();
-    says(section(&lead, "## Obstacles and findings"), &["scope or intent", "`confirm:` lines", "to its investigator itself", "cannot settle reaches the user"], "a confirm finding whose answer was in the task's note went to the user");
-    says(&file("skills/review/SKILL.md"), &["resolved", "investigat"], "the reviewer's findings are for resolving");
+    says(section(&lead, "## Obstacles and findings"), &["scope or intent", "`confirm:`, `scope:` and `gap:` lines", "to its investigator itself", "only the investigator's `ask` reaches the user", "Bugs, broken rules"], "a confirm finding whose answer was in the task's note went to the user");
+    let review = file("skills/review/SKILL.md");
+    says(&review, &["resolved", "investigat", "`scope:`", "`gap:`", "Also noticed line", "A bug or a broken rule never takes a mark"], "the reviewer marks what the task cannot settle, and checks the card's Also noticed lines");
+    for finding in ["confirm: src/links.rs:12 — drops the link", "scope: src/view.rs:88 — renames the export", "**gap:** src/push.rs:40 — only a real iPhone shows it"] {
+        assert!(crate::review::confirmation(finding).is_some(), "{finding} goes to the investigator");
+    }
+    assert!(crate::review::confirmation("src/pay.rs:41 — the refund is booked twice").is_none(), "a bug goes to the task");
 }
 
 #[test]
@@ -167,4 +172,22 @@ fn the_answer_block_the_investigator_is_taught_is_the_one_kebbie_parses() {
 fn a_decision_kebbie_sends_is_the_tasks_to_follow_and_the_same_obstacle_raised_again_is_not_investigated_twice() {
     let page = playbook("OBSTACLE.md");
     says(&page, &["comes from kebbie", "kebbie adds it, sends your next commits to it and tells you its id", "decided before is your decision", "without a second investigation", "a task's third, asks the user whether the plan holds"], "a task kept raising the same obstacle until it got the answer it wanted");
+}
+
+#[test]
+fn the_cards_the_playbook_teaches_are_the_cards_kebbie_takes_and_the_confirm_parts_real_cards_carried_are_refused() {
+    let page = playbook("CARD.md");
+    let example = &page[page.find("```\n**").expect("the card page shows an example") + 4..];
+    let example = &example[..example.find("```").unwrap()];
+    let parsed = crate::card::parse(example).expect("kebbie takes the playbook's own example");
+    assert_eq!((parsed.built.len(), parsed.decisions.len(), parsed.noticed.len()), (1, 2, 1));
+    says(&page, &["kebbie backlog --search", "--red-cause", "a line no record backs shows as `task`", "refuses a card with any part beyond the three"], "ten tasks rewrote their cards and eight went ready over a red test");
+    for (card, situation) in [
+        ("**Local clippy now checks with the same Rust as CI.**\n\nBuilt:\n- `rust-toolchain.toml` pins Rust 1.99.1.\n\nConfirm:\n- Upgrading Rust is now a manual one-line change.\n\nSide effect: rustup updated itself.\n", "a Confirm part under Built"),
+        ("**The installed app starts without the blink.**\n\nBuilt:\n- **Now:** a new worker leaves the page alone.\n- **Please confirm:** reloading a stale app when it goes out of sight.\n", "a confirm lead-in inside a Built line"),
+        ("**Ett vägrat namnserverbyte syns nu på zonsidan.**\n\nBuilt:\n- Banderollen visas.\n\n**Att bekräfta:** knappen finns kvar efter en vägran.\n", "a Swedish confirm part"),
+    ] {
+        assert!(crate::card::parse(card).unwrap_err().contains("asks the user to confirm"), "{situation}");
+    }
+    says(&task_role(), &["--red-cause", "/bin/kebbie backlog --search", "stop working around it", "shows as `(task)`"], "the task role carries the card's rules");
 }

@@ -156,6 +156,7 @@ pub(super) fn found_choices(item: &crate::found::Item, target: Option<&str>) -> 
     vec![
         choice(Act::Go, "Start a task", &format!("a worktree, a Space and Claude in {}, with it and who found it as the prompt", item.repo)),
         add,
+        choice(Act::Park, "Keep in backlog", "it stays under Found by tasks, and the card it came from shows it kept"),
         choice(Act::Drop, "Dismiss", "it leaves Found by tasks; nothing is started"),
     ]
 }

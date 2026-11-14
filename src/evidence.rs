@@ -102,7 +102,7 @@ impl Run {
         })
     }
 
-    fn short(&self) -> String {
+    pub fn short(&self) -> String {
         self.sha.chars().take(7).collect()
     }
 }

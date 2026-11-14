@@ -7,6 +7,7 @@ mod assessment;
 mod backlog;
 mod backlog_file;
 mod backlog_kept;
+mod card;
 mod changes;
 mod board;
 mod ci;
@@ -154,10 +155,13 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
   kebbie tell --force <to> <text> yours or the lead's: deliver now, clearing a draft from its input box (logged word
                                   for word; Ctrl+Y in its pane brings it back), with what is held for it first
   kebbie release <to>             yours or the lead's: deliver what is held for a session now, as tell --force does
-  kebbie report --state <state> --next <step> [--after <task[@repo]>] [--after-push <check>] <summary>
+  kebbie report --state <state> --next <step> [--after <task[@repo]>] [--after-push <check>] [--red-cause <cause>] <summary>
                                   run by a task's Claude at the end of a turn: where it stands (needs-you, ready,
                                   working, blocked) and what you should do next, for the board and the lead;
-                                  with ready, --card <file> is the sign-off card the push dialog shows above the commits;
+                                  with ready, --card <file> is the sign-off card the push dialog shows above the commits:
+                                  a headline, Built:, Decisions: and Also noticed:, refused with any other part, and kept
+                                  as data with who took each decision from kebbie's own records; ready while the latest
+                                  test run is red is refused unless --red-cause names the line that fails and why;
                                   ready is refused while a commit lacks a subject, a blank line and a body (with
                                   kebbie:work-rules), and the keeper then starts a read-only reviewer that checks the
                                   commits against the rules skill: a pass clears the check, a break goes to the task and a
@@ -224,8 +228,9 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   the tasks that found it and how often; the same thing from another task counts up
                                   instead of a new item, and a card line ending (found:<id>) names its item;
                                   kebbie found start <id> [name] starts a task from it, kebbie found add <id> <task>
-                                  gives it to a running task, kebbie found dismiss <id> drops it; yours or the lead's,
-                                  as on the board's backlog
+                                  gives it to a running task, kebbie found keep <id> keeps it in the backlog, kebbie
+                                  found dismiss <id> drops it; yours or the lead's, as on the board's backlog; an item a
+                                  second task finds is raised once as its own obstacle, for its root cause
   kebbie answered <task>          a task's question is settled elsewhere (in its Space, dropped, or sent back to be asked again): it
                                   leaves the board, so a kebbie tell to that task is no longer held
   kebbie notify <text>            run notify.command with this text (KEBBIE_EVENT=summary): the lead's word to the user
@@ -246,6 +251,8 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
   kebbie statusline               Claude Code's statusLine command: reads its JSON on stdin and keeps the plan's session
                                   and week usage for the board; prints nothing, so Claude Code shows no extra line
   kebbie backlog [save]           show the backlog the board shows; save reads the lead's JSON array on stdin
+  kebbie backlog --search <words> the backlog items and Found by tasks holding every word, read-only: a task searches
+                                  before it files
   kebbie backlog add [--priority <p>] [--repo <repo>] \"<Title>\" [-]
                                   add a backlog item: a short one the lead writes out, or with - the
                                   written-out item's sections on stdin
@@ -508,7 +515,7 @@ impl Arguments {
                 arguments.positionals.extend(input.by_ref());
                 break;
             }
-            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--after-push", "--profile", "--why", "--name", "--until", "--recipe", "--step", "--on", "--id", "--subtask", "--because", "--prepares", "--before", "--verify", "--stage"].contains(&argument.as_str()) {
+            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--after-push", "--profile", "--why", "--name", "--until", "--recipe", "--step", "--on", "--id", "--subtask", "--because", "--prepares", "--before", "--verify", "--stage", "--red-cause", "--search"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
                 arguments.flags.push(argument);
@@ -703,7 +710,7 @@ fn run(arguments: &Arguments) -> Result<String> {
             if forced { messages::tell_forced(to, Some(&text)) } else { messages::tell(&cwd, to, &text) }
         }
         Some("release") => messages::tell_forced(name.ok_or("kebbie release needs the task whose held messages go through")?, None),
-        Some("report") => report::report(&cwd, arguments.value("--state"), arguments.value("--next"), arguments.value("--card"), &arguments.values_of("--after"), arguments.value("--after-push"), &arguments.rest(1).join(" ")),
+        Some("report") => report::report(&cwd, arguments.value("--state"), arguments.value("--next"), arguments.value("--card"), &arguments.values_of("--after"), arguments.value("--after-push"), arguments.value("--red-cause"), &arguments.rest(1).join(" ")),
         Some("obstacle") if arguments.flag("--investigate") => obstacle::run(&cwd),
         Some("obstacle") => arguments.only("obstacle", &["--on"]).and_then(|_| obstacle::raise(&cwd, arguments.value("--on"), &arguments.rest(1).join(" "))),
         Some("obstacles") if name == Some("decide") => {
@@ -765,6 +772,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("backlog") if arguments.positional(1) == Some("filed") => backlog_file::filed(arguments.positional(2).unwrap_or_default()),
         Some("backlog") if arguments.positional(1) == Some("template") => item_template::shown(arguments.flag("--local"), arguments.flag("--vault"), arguments.flag("--json")),
         Some("backlog") if arguments.positional(1) == Some("add") => backlog_file::add(arguments.value("--priority"), arguments.value("--repo"), arguments.rest(2), arguments.flag("-")),
+        Some("backlog") if arguments.value("--search").is_some() => backlog::search(arguments.value("--search")),
         Some("backlog") => backlog::show(),
         Some("land") => tasks::land(&cwd, name),
         Some("follow") => tasks::follow(&cwd, arguments.rest(1)),

@@ -322,6 +322,14 @@ impl App {
                 let buffer = self.found_target(&item).unwrap_or_default();
                 self.mode = Mode::Input { purpose: Purpose::FoundAdd(item.id), label: "Add to running task: name".to_string(), buffer };
             }
+            Act::Park => {
+                let result = crate::lead::state_dir().and_then(|state| crate::found::keep_in(&state, &crate::permit::Caller::User, &item.id));
+                self.subject = Some(notices::Subject::plain("backlog"));
+                if result.is_ok() && let Some(kept) = self.found.iter_mut().find(|found| found.id == item.id) {
+                    kept.state = crate::found::State::Kept;
+                }
+                self.show(result);
+            }
             Act::Drop => {
                 let result = crate::lead::state_dir().and_then(|state| crate::found::dismiss_in(&state, &crate::permit::Caller::User, &item.id));
                 self.subject = Some(notices::Subject::plain("backlog"));

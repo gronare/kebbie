@@ -28,6 +28,15 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A plan from an older kebbie keeps its steps as subtasks with their numbers as ids, and kebbie steps still works.
 - The board shows the rules check on its own line under a task: checking, the project rules it breaks by name, or that you or the lead pushed past it; a passed check shows nothing.
 - Your phone shows a task's subtasks, its push order and pushable run, and its latest obstacle with the decision; update the hub first.
+- kebbie keeps a task's sign-off card as data, with who took each decision from its own records and what changed since the version before.
+- kebbie refuses a card with a part asking you to confirm, or any part beyond Built, Decisions and Also noticed.
+- A task reports ready over a red test run only with the cause it found, which its card shows.
+- Review findings marked scope: or gap: go to the investigator with confirm: ones; bugs and broken rules go to the task.
+- The reviewer checks that each Also noticed line on the card lies outside the task.
+- A thing a second task notices is raised once for its root cause, and every task that found it stops working around it.
+- Keep in backlog leaves an item under Found by tasks, and the card shows the choice.
+- A task searches the backlog and Found by tasks with kebbie backlog --search before it files.
+- Your phone shows the card's decisions with who took them, acts on each noticed line, and sends a task or subtask to a full review; update the hub first.
 - From your phone you accept a subtask and push the accepted run, while the rest stays in the task.
 - From your phone you start, add to a task or dismiss what tasks found, listed in the backlog.
 - A task declares stages with kebbie stages, and nothing is pushed past a stage until its deploy, check or your verification holds.

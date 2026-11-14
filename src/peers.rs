@@ -288,11 +288,11 @@ pub fn lead_keeps_note(note: Option<&str>, kebbie: &str, template: Option<&crate
 
 // The {noticed} section of roles/task.md; vault is whether the task's Claude has the vault plugin's tools.
 pub fn noticed_section(choice: AlsoNoticed, vault: bool, kebbie: &str) -> String {
-    let intro = format!("As you work you will notice things outside this task: a bug nearby, a stale doc, a refactor worth doing. Something on your own path is an obstacle, raised as Questions says, and not one of these. kebbie files each line under **Also noticed** on your card under {} on the board, with this task as its source; when `{kebbie} found` lists the thing already, end your line with its `(found:<id>)`, so it counts as found again rather than twice.", crate::found::SECTION);
+    let intro = format!("As you work you will notice things outside this task: a bug nearby, a stale doc, a refactor worth doing. Something on your own path is an obstacle, raised as Questions says, and not one of these. kebbie files each line under **Also noticed** on your card under {} on the board, with this task as its source; when `{kebbie} found` lists the thing already, end your line with its `(found:<id>)`, so it counts as found again rather than twice. When a second task finds the same thing, kebbie raises it once as its own problem and tells each task that found it: from then on you leave it to that decision and stop working around it.", crate::found::SECTION);
     let file = if vault {
-        format!("search the backlog for it first, and when it is filed already add this task to its Source; else file it in the vault's backlog as a task note written out by the skill `{}`, with this task as its Source", crate::backlog_file::SKILL)
+        format!("search the backlog for it first, with `{kebbie} backlog --search \"<words>\"` and the vault's search, and when it is filed already add this task to its Source; else file it in the vault's backlog as a task note written out by the skill `{}`, with this task as its Source", crate::backlog_file::SKILL)
     } else {
-        format!("write it out by the skill `{}`, with this task as its Source, and file it with `{kebbie} backlog add --priority <priority> --repo <repo> \"<Title>\" -`, the item's sections on stdin", crate::backlog_file::SKILL)
+        format!("search the backlog for it first with `{kebbie} backlog --search \"<words>\"`, and when it is there end your card line with its `(found:<id>)` or name its item; else write it out by the skill `{}`, with this task as its Source, and file it with `{kebbie} backlog add --priority <priority> --repo <repo> \"<Title>\" -`, the item's sections on stdin", crate::backlog_file::SKILL)
     };
     let failed = "`not filed` when filing fails, so the lead files it";
     match choice {
@@ -670,7 +670,7 @@ mod tests {
         let backlog = role(AlsoNoticed::Backlog, true);
         assert!(backlog.contains("Keep your commits to this task's change") && backlog.contains("done when everything you noticed is filed and listed") && !backlog.contains("ask --option \"fix"), "{backlog}");
         let fix = role(AlsoNoticed::Fix, false);
-        assert!(fix.contains("fix it in this session as a commit of its own, apart from the task's commits") && fix.contains("Anything bigger, write it out by the skill"), "{fix}");
+        assert!(fix.contains("fix it in this session as a commit of its own, apart from the task's commits") && fix.contains("Anything bigger, search the backlog for it first with `/bin/kebbie backlog --search \"<words>\"`") && fix.contains("else write it out by the skill"), "{fix}");
         let ask = role(AlsoNoticed::Ask, false);
         assert!(ask.contains("/bin/kebbie ask --option \"fix: fix it in this task, as a commit of its own\" --option \"file: file it for later\" --option \"leave: leave it as it is\" --recommend <n>"), "{ask}");
         assert!(ask.contains("before you change anything for it") && ask.contains("has the user's answer"), "{ask}");

@@ -309,7 +309,7 @@ impl Item {
     pub fn verdict_wanted(&self) -> Option<String> {
         let shown = self.verdict.as_ref().filter(|shown| shown.held && !shown.running && !shown.stale)?;
         let verdict = shown.verdict.as_ref().filter(|verdict| !verdict.ok)?;
-        let first = verdict.first.as_deref().map(|first| crate::review::confirmation(first).map_or_else(|| first.to_string(), |asks| format!("confirm: {asks}")));
+        let first = verdict.first.as_deref().map(|first| crate::review::unsettled(first).map_or_else(|| first.to_string(), |(mark, asks)| format!("{mark} {asks}")));
         let more = if verdict.findings > 1 { format!(" (+{} more)", verdict.findings - 1) } else { String::new() };
         Some(match first {
             Some(first) => format!("review asks for changes: {first}{more}"),

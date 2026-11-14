@@ -564,9 +564,43 @@ pub fn show() -> Result<String> {
     Ok(lines.join("\n"))
 }
 
+fn matches_all(text: &str, words: &[String]) -> bool {
+    let text = text.to_lowercase();
+    words.iter().all(|word| text.contains(word.as_str()))
+}
+
+// kebbie backlog --search: the items whose words hold every word asked, from the backlog as kebbie last read it and from Found by tasks; it reads, and fetches or writes nothing.
+pub fn search(query: Option<&str>) -> Result<String> {
+    let query = query.map(str::trim).filter(|query| !query.is_empty()).ok_or("kebbie backlog --search needs the words to look for: kebbie backlog --search \"<words>\"")?;
+    let found = crate::lead::state_dir().map(|state| crate::found::open_in(&state)).unwrap_or_default();
+    Ok(search_in(&load(), &found, query))
+}
+
+pub fn search_in(backlog: &Backlog, found: &[crate::found::Item], query: &str) -> String {
+    let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    let mut lines: Vec<String> = backlog.entries.iter().filter(|entry| matches_all(&format!("{} {} {} {}", entry.title, entry.summary, entry.reference, entry.area), &words))
+        .map(|entry| format!("  [{}] {}  ({} · {})", entry.priority, entry.title, entry.reference, entry.area)).collect();
+    lines.extend(found.iter().filter(|item| matches_all(&format!("{} {}", item.line, item.repo), &words)).map(|item| format!("  [found] {}  (found:{} · {})", item.line, item.id, item.found_by())));
+    if lines.is_empty() {
+        return format!("Nothing in the backlog or under {} holds \"{query}\". Try other words before you file it as new.", crate::found::SECTION);
+    }
+    let head = format!("{} for \"{query}\", from the backlog as kebbie last read it and from {}:", if lines.len() == 1 { "1 item".to_string() } else { format!("{} items", lines.len()) }, crate::found::SECTION);
+    std::iter::once(head).chain(lines).collect::<Vec<_>>().join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_search_lists_the_items_holding_every_word_from_the_backlog_and_found_by_tasks() {
+        let backlog = Backlog { updated: None, entries: vec![Entry { title: "The suite is red inside a task".to_string(), summary: "cargo test fails in a worktree".to_string(), reference: "local:suite-red".to_string(), ..entry("local") }, entry("vault")] };
+        let found = [crate::found::Item { id: "f3".to_string(), line: "The suite is red in a task's sandbox".to_string(), repo: "kebbie".to_string(), sources: vec!["a@kebbie".to_string(), "b@kebbie".to_string()], count: 2, first_at: 0, last_at: 0, state: crate::found::State::Open, outcome: None, raised: true }];
+        let said = search_in(&backlog, &found, "Suite RED");
+        assert_eq!(said, "2 items for \"Suite RED\", from the backlog as kebbie last read it and from Found by tasks:\n  [high] The suite is red inside a task  (local:suite-red · app)\n  [found] The suite is red in a task's sandbox  (found:f3 · found 2× · by a, b)");
+        assert!(search_in(&backlog, &found, "worktree").contains("suite-red"), "the summary counts");
+        assert!(search_in(&backlog, &found, "vault rounding").starts_with("Nothing in the backlog"));
+    }
 
     fn entry(source: &str) -> Entry {
         Entry { source: source.to_string(), title: "Fix it".to_string(), priority: "high".to_string(), area: "app".to_string(), reference: "ABC-1".to_string(), summary: "It broke.".to_string(), age: "3 d".to_string(), shape: Default::default() }

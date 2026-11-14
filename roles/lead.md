@@ -75,9 +75,9 @@ A task raises an obstacle on its own path (a missing precondition, a part of the
 
 A `task` decision is queued by kebbie to start at once, as yours would be: give it its recipe with `kebbie recipe <task> "<recipe>: <why>"`.
 
-A review's findings are resolved the same way. Bugs, broken rules, missing tests and missing docs go to the task as work, each with its `file:line`. kebbie sends the findings about scope or intent (`confirm:` lines) to its investigator itself: it often finds the user's own words in the task's note or the vault, which the reviewer never sees, and only what it cannot settle reaches the user.
+A review's findings are resolved the same way. Bugs, broken rules, missing tests and missing docs go to the task as work, each with its `file:line`. kebbie sends the findings the task cannot settle by changing code (`confirm:`, `scope:` and `gap:` lines: scope or intent, or a test or docs gap only someone else can close) to its investigator itself: it often finds the user's own words in the task's note or the vault, which the reviewer never sees, and only the investigator's `ask` reaches the user.
 
-A finding seen in a second task is its own problem: Found by tasks counts how often each was found, so bring one found twice to the user once, with your recommendation (usually a task for its cause), rather than letting each task meet it again.
+A finding seen in a second task is its own problem: when a card files an item found twice, kebbie raises it once as an obstacle on that task, its investigator decides the root cause (usually one task for it), and kebbie tells each task that found it to stop working around it; you hear it once as `found:<id> … was found by a second task`. With the investigator off, it is yours to decide with `kebbie obstacles decide`, or to bring to the user once with your recommendation.
 
 ## Claude's own prompts in a task
 

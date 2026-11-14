@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use kebbie_hub_protocol::{Agent, AgentStatus, Board, Checkout, Ci, CiState, Counts, Git, Group, Item, Later, LaterState, MAX_RULE_NAMES, NextPart, NextRow, OverrideBy, Prompt, PromptOption, PushPermission, Question, QuestionOption, Recover, Report, RoutineSummary, Rules, RulesOverride, RulesState, SecondOpinion, Verdict, VerdictOutcome};
-use kebbie_hub_protocol::{Added, DecidedBy, DecisionKind, KebbieQuestion, MAX_ADDED_REASON_CHARS, MAX_OBSTACLE_CHARS, Obstacle, ObstacleDecision, ObstacleState, OrderRow, Pushable, Stage, Subtask, SubtaskState};
+use kebbie_hub_protocol::{Added, Assessment, AssessmentWord, Judgement, MAX_ASSESSMENT_REASON_CHARS, DecidedBy, DecisionKind, KebbieQuestion, MAX_ADDED_REASON_CHARS, MAX_OBSTACLE_CHARS, Obstacle, ObstacleDecision, ObstacleState, OrderRow, Pushable, Stage, Subtask, SubtaskState};
 
 use super::blobs::{Attachment, PLAN_LIMIT};
 use crate::menu::Menu;
@@ -23,6 +23,7 @@ pub struct Seen {
     pub accepting: BTreeSet<String>,
     pub obstacles: BTreeMap<String, Obstacle>,
     pub kebbie: BTreeMap<String, Vec<crate::kebbie_questions::Asked>>,
+    pub assessed: BTreeMap<String, u64>,
 }
 
 fn group(group: status::Group) -> Option<Group> {
@@ -264,6 +265,19 @@ pub fn obstacle(found: &crate::obstacle::Obstacle) -> Option<Obstacle> {
     (kebbie_hub_protocol::is_subtask_id(&shown.id) && !shown.text.is_empty() && shown.decision.as_ref().is_none_or(|decided| !decided.text.is_empty())).then_some(shown)
 }
 
+// The assessor's word as the phone offers Send to review on it: a review it recommends says why; one being assessed has no reason or time yet.
+pub fn assessment(word: &crate::assessment::Word, at: Option<u64>) -> Option<Assessment> {
+    use crate::assessment::Word;
+    let reason = |reason: &str| Some(reason.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_ASSESSMENT_REASON_CHARS).collect::<String>()).filter(|reason| !reason.is_empty());
+    let (word, reason) = match word {
+        Word::Assessing => return Some(Assessment::Judged(Judgement { word: AssessmentWord::Assessing, reason: None, at: None })),
+        Word::NotAssessed => return None,
+        Word::NoReview { reason: why } => (AssessmentWord::NotNeeded, reason(why)),
+        Word::Suggested { reason: why } | Word::Review { reason: why } => (AssessmentWord::Recommended, Some(reason(why).unwrap_or_else(|| "the assessor gave no reason".to_string()))),
+    };
+    Some(Assessment::Judged(Judgement { word, reason, at }))
+}
+
 // Only what the protocol allow-lists: no path, pane, Space, dev server address or host leaves the machine.
 pub fn item(item: &status::Item, seen: &Seen) -> Option<Item> {
     if !item.is_task() {
@@ -302,7 +316,7 @@ pub fn item(item: &status::Item, seen: &Seen) -> Option<Item> {
         title: item.title.clone(),
         profile: item.profile.clone(),
         recipe: item.recipe.as_ref().map(|recipe| crate::recipe::shown_name(&recipe.name).to_string()),
-        assessment: item.assessment.as_ref().map(crate::assessment::Word::text),
+        assessment: item.assessment.as_ref().and_then(|word| assessment(word, seen.assessed.get(&address).copied())),
         second_opinion: item.second.as_ref().map(|second| SecondOpinion { by: second.by.clone(), points: second.points.map(count), running: second.running }),
         review: super::review::offer(item),
         address,
@@ -391,14 +405,18 @@ fn seen(items: &[status::Item]) -> Seen {
     let state = crate::lead::state_dir().ok();
     let obstacles = items.iter().filter(|item| item.is_task()).filter_map(|item| {
         let address = crate::peers::address(&item.name, &item.place);
-        let latest = crate::obstacle::load(state.as_deref()?, &address).pop()?;
+        let latest = crate::obstacle::load(state.as_deref()?, &address).into_iter().rev().find(|found| found.source != crate::obstacle::Source::Found)?;
         Some((address, obstacle(&latest)?))
     }).collect();
     let mut kebbie: BTreeMap<String, Vec<crate::kebbie_questions::Asked>> = BTreeMap::new();
     for asked in state.as_deref().map(crate::kebbie_questions::load).unwrap_or_default() {
         kebbie.entry(asked.address.clone()).or_default().push(asked);
     }
-    Seen { menus, models, home: std::env::var("HOME").ok(), accepting, obstacles, kebbie }
+    let assessed = items.iter().filter(|item| item.assessment.is_some()).filter_map(|item| {
+        let address = crate::peers::address(&item.name, &item.place);
+        Some((address.clone(), crate::assessment::at_in(state.as_deref()?, &address)?))
+    }).collect();
+    Seen { menus, models, home: std::env::var("HOME").ok(), accepting, obstacles, kebbie, assessed }
 }
 
 // HEAD still makes the change the card was written for, by the push dialog's rule; the answer is kept per (card, HEAD) so the board loop runs git only when either moves.
@@ -423,7 +441,9 @@ fn card_current(item: &status::Item, sha: &str) -> bool {
     current
 }
 
+// A card kept as data goes up as the structured card with the choices made on its noticed lines; a card written before that, or a routine's findings, as the text it is.
 pub fn attachments(items: &[status::Item], state: &Path) -> Vec<Attachment> {
+    let found = crate::found::load(state);
     items.iter().filter(|item| item.is_task() && group(item.group()).is_some()).flat_map(|item| {
         let address = crate::peers::address(&item.name, &item.place);
         let asked = item.question.as_ref().and_then(|message| message.question.as_ref()).filter(|asked| asked.plan.is_some());
@@ -431,7 +451,10 @@ pub fn attachments(items: &[status::Item], state: &Path) -> Vec<Attachment> {
         let plan = asked.and_then(crate::questions::plan_text).filter(|text| !text.trim().is_empty() && text.len() <= PLAN_LIMIT).map(|text| Attachment::Plan { address: address.clone(), text, at });
         let card = crate::report::card_in(state, &address).filter(|card| !card.text.is_empty() && card.text.len() <= PLAN_LIMIT).map(|card| {
             let current = card_current(item, &card.sha);
-            Attachment::Card { address: address.clone(), text: card.text, sha: card.sha, current }
+            let wired = card.data.as_ref().and_then(|data| crate::card::wire(data, &found)).and_then(|wired| serde_json::to_string(&wired).ok());
+            let data = wired.is_some();
+            let text = wired.unwrap_or(card.text);
+            Attachment::Card { address: address.clone(), text, sha: card.sha, current, data }
         });
         [plan, card].into_iter().flatten()
     }).collect()
@@ -633,7 +656,7 @@ pub(crate) mod tests {
     #[test]
     fn a_tasks_latest_obstacle_reaches_the_phone_with_its_decision_and_who_took_it() {
         use crate::obstacle::{By, Decision, Kind, Obstacle as Kept, Source, State};
-        let kept = |state, decision: Option<Decision>| Kept { id: "o1".to_string(), at: 7, source: Source::Task, text: "the index stores titles only (src/index.py:88)".to_string(), on: String::new(), state, worktree: Default::default(), question: None, decision, replan: false };
+        let kept = |state, decision: Option<Decision>| Kept { id: "o1".to_string(), at: 7, source: Source::Task, text: "the index stores titles only (src/index.py:88)".to_string(), on: String::new(), state, worktree: Default::default(), question: None, decision, replan: false, found: None };
         let decided = |kind| Some(Decision { kind, by: By::Investigator, at: 8, reason: "The index has no frontmatter.".to_string(), plan: String::new(), replaced_by: None, subtask: Some("Store frontmatter".to_string()), task: None });
         assert_eq!(obstacle(&kept(State::Investigating, None)).map(|shown| (shown.state, shown.decision)), Some((ObstacleState::Investigating, None)));
         let shown = obstacle(&kept(State::Decided, decided(Kind::Subtask))).unwrap();
@@ -705,7 +728,7 @@ pub(crate) mod tests {
         agent.kind = crate::agent::Agent::Codex;
         agent.answer = status::answer_in_space(crate::agent::Agent::Codex);
         let menu = crate::menu::parse_for(CODEX_APPROVAL, crate::agent::Agent::Codex).unwrap();
-        let seen = Seen { menus: BTreeMap::from([("hub@kebbie".to_string(), menu.clone())]), models: BTreeMap::from([("task".to_string(), "gpt-6.1-sol".to_string())]), home: Some("/Users/u".to_string()), accepting: BTreeSet::new(), obstacles: BTreeMap::new(), kebbie: BTreeMap::new() };
+        let seen = Seen { menus: BTreeMap::from([("hub@kebbie".to_string(), menu.clone())]), models: BTreeMap::from([("task".to_string(), "gpt-6.1-sol".to_string())]), home: Some("/Users/u".to_string()), accepting: BTreeSet::new(), obstacles: BTreeMap::new(), kebbie: BTreeMap::new(), assessed: BTreeMap::new() };
         let board = build(std::slice::from_ref(&item), &[], Vec::new(), None, &seen);
         let shown = &board.items[0];
         let prompt = shown.prompt.as_ref().unwrap();
@@ -759,7 +782,8 @@ pub(crate) mod tests {
         held.recipe = Some(crate::recipe::Recipe { name: "small-fix".to_string(), why: "one file".to_string(), by: "lead".to_string() });
         held.assessment = Some(crate::assessment::Word::Suggested { reason: "touches money".to_string() });
         assert!(held.summary().ends_with("withdraw with v to push without a pass"), "the board keeps its key: {}", held.summary());
-        let shown = &build(std::slice::from_ref(&held), &[], Vec::new(), None, &Seen::default()).items[0];
+        let assessed = Seen { assessed: BTreeMap::from([(crate::peers::address(&held.name, &held.place), 1_761_069_300)]), ..Seen::default() };
+        let shown = &build(std::slice::from_ref(&held), &[], Vec::new(), None, &assessed).items[0];
         assert!(shown.summary.ends_with("review: 2 findings · the push waits for a pass"), "{}", shown.summary);
         assert_eq!(shown.verdict.as_ref().unwrap().held, Some(true));
         assert_eq!(shown.second_opinion, None);
@@ -767,7 +791,11 @@ pub(crate) mod tests {
         seconded.second = Some(crate::review::SecondShown { by: "codex-review".to_string(), points: Some(2), running: false, stale: false, file: "/state/second/billing@web.md".into() });
         let second = build(&[seconded], &[], Vec::new(), None, &Seen::default()).items[0].second_opinion.clone();
         assert_eq!(second, Some(SecondOpinion { by: "codex-review".to_string(), points: Some(2), running: false }), "the second opinion goes without its file");
-        assert_eq!((shown.recipe.as_deref(), shown.assessment.as_deref(), shown.profile.as_deref()), (Some(crate::recipe::shown_name("small-fix")), Some("review suggested: touches money"), Some("task")));
+        assert_eq!((shown.recipe.as_deref(), shown.profile.as_deref()), (Some(crate::recipe::shown_name("small-fix")), Some("task")));
+        assert_eq!(shown.assessment, Some(Assessment::Judged(Judgement { word: AssessmentWord::Recommended, reason: Some("touches money".to_string()), at: Some(1_761_069_300) })), "the assessor's word as data, with why and when");
+        assert_eq!(assessment(&crate::assessment::Word::Assessing, Some(5)), Some(Assessment::Judged(Judgement { word: AssessmentWord::Assessing, reason: None, at: None })), "a word still being given has no reason or time");
+        assert_eq!(assessment(&crate::assessment::Word::NotAssessed, None), None);
+        assert_eq!(assessment(&crate::assessment::Word::NoReview { reason: "docs only".to_string() }, Some(5)), Some(Assessment::Judged(Judgement { word: AssessmentWord::NotNeeded, reason: Some("docs only".to_string()), at: Some(5) })));
         let mut fixing = task(Some("idle"), Some("ready"), 1);
         fixing.agent.as_mut().unwrap().kind = crate::agent::Agent::Codex;
         fixing.push_waits = Some(crate::tasks::PendingPush { by: crate::tasks::PushBy::User, work: crate::tasks::PushWork::Ci, at: 5, ahead: 0, after: None });

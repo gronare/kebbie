@@ -119,7 +119,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 - A task's shell writes only in its worktree, its temp folder, the package caches (`~/.cargo/registry`, `~/.cargo/git`, `~/.npm`, `~/.cache`) and the repo's shared `.git` folder, except its hooks, config and the other pooled worktrees' git dirs.
 - It reaches only crates.io, static.crates.io, index.crates.io, registry.npmjs.org, github.com, objects.githubusercontent.com, pypi.org and files.pythonhosted.org, and no Unix socket.
 - On macOS it may listen on local ports for a dev server.
-- kebbie's own task commands (`peers`, `tell`, `ask`, `report`, `subtasks`, `order`, `routine ok`, `link`, `backlog add`, `config`) run outside it.
+- kebbie's own task commands (`peers`, `tell`, `ask`, `report`, `subtasks`, `order`, `routine ok`, `link`, `backlog add`, `backlog --search`, `config`) run outside it.
 - On Linux it needs bubblewrap, socat and the seccomp filter (`npm install -g @anthropic-ai/sandbox-runtime`). Without them kebbie refuses to start a task or a review and names what to install.
 - `false` runs them unsandboxed, where a task's shell can pass as you to kebbie's user-only commands. `kebbie doctor`, a task's start and the board's Areas page say so.
 - A profile's `[sandbox] enabled` wins over it.
@@ -161,7 +161,7 @@ An assessment with no answer reads as `review not assessed`, a suggestion in eve
 
 | Key | Default | Where | What it does |
 | --- | --- | --- | --- |
-| `investigate.profile` | `"investigator"` | either | The profile kebbie's investigator runs with on an obstacle or a review's finding about scope or intent; `"none"` runs none. |
+| `investigate.profile` | `"investigator"` | either | The profile kebbie's investigator runs with on an obstacle, a review's `confirm:`, `scope:` or `gap:` finding, or a thing two tasks found; `"none"` runs none. |
 
 `investigate.profile` names any profile in `~/.config/kebbie/profiles/` or a built-in one, and the investigator takes its agent, model, effort and role: a Claude profile with its model and effort, or a Codex one. The built-in `investigator` is Claude at high effort, with your own settings, plugins and MCP servers. With `"none"`, a raised obstacle goes to the lead, which decides it with [`kebbie obstacles decide`](commands.md#kebbie-obstacles-name---json). See [Obstacles and findings](../explanation/obstacles-and-findings.md#one-investigation-per-obstacle).
 
@@ -212,9 +212,9 @@ profile = "deep-codex"
 | `"push"` | Pushes of a task. |
 | `"prompt"` | Choices on an agent's prompt. |
 | `"idea"` | Ideas, added to the backlog as `kebbie backlog add` adds them. |
-| `"start"` | Starts of a backlog item as a task, as `g` on the board starts one. |
+| `"start"` | Starts of a backlog item as a task, as `g` on the board starts one, and what tasks found started, added to a task or kept in the backlog. |
 | `"edit"` | Edits of a backlog item's title or one of its sections. |
-| `"review"` | A task's waiting subtask opened for review, line comments typed into its Claude, files marked read, and the subtask accepted. |
+| `"review"` | A task's waiting subtask opened for review, line comments typed into its Claude, files marked read, the subtask accepted, and a task or subtask sent to a full review. |
 
 ```toml
 [hub]

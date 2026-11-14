@@ -569,6 +569,7 @@ The **push order** is the branch's commits not yet on origin's default branch, o
 | `kebbie peers` | Who you are and the other task sessions, with what each is doing. |
 | `kebbie messages` | The sessions' messages, live. `--print` prints the last 30. |
 | `kebbie backlog` | The backlog the board shows. |
+| `kebbie backlog --search "<words>"` | The backlog items and Found by tasks holding every word, from the backlog as kebbie last read it. It changes nothing, and a task runs it before it files what it noticed. |
 | `kebbie backlog add [--priority <p>] [--repo <repo>] "<line>" [-]` | Add a backlog item where new items go. A line alone is a short item the lead writes out in full; with `-`, the written-out item's sections come on stdin. See [Fill the backlog](../how-to/fill-the-backlog.md#add-an-item). |
 | `kebbie backlog template [--local\|--vault] [--json]` | The sections a backlog item is written in where new items go, the required ones marked: the vault's task template, the file [`board.backlog.template`](configuration.md#backlog-sources) names, or kebbie's own. `--local` or `--vault` shows the other place's. |
 
@@ -753,17 +754,19 @@ Found by tasks: what tasks listed under Also noticed on their card, one item eac
 | --- | --- |
 | `kebbie found start <id> [name]` | Start a task from the item in its repo, the item and who found it as the prompt. |
 | `kebbie found add <id> <task>` | Give the item to a running task, as more work from you. |
+| `kebbie found keep <id>` | Keep it under Found by tasks; the card it came from shows it kept, and you can still start or add it later. |
 | `kebbie found dismiss <id>` | Drop it from Found by tasks. |
 
-Each is yours or the lead's.
+Each is yours or the lead's. When a second task finds the same item, kebbie raises it once as an obstacle on that task, for the investigator to decide its root cause, and tells each task that found it to stop working around it.
 
 ### `kebbie report`
 
 `<state>` is `needs-you`, `ready`, `working` or `blocked`.
 
-- With `ready`, `--card <file>` is the sign-off card the push window shows: a headline, then `Built:`, `Decisions:` with who took each, and `Also noticed:` when the task found things outside its task. kebbie files each Also noticed line under [Found by tasks](#kebbie-found---json) and ends it with its item. See [Obstacles and findings](../explanation/obstacles-and-findings.md#the-card-asks-you-nothing).
+- With `ready`, `--card <file>` is the sign-off card the push window shows: a headline, then `Built:`, `Decisions:` with who took each, and `Also noticed:` when the task found things outside its task. kebbie files each Also noticed line under [Found by tasks](#kebbie-found---json) and ends it with its item. A card with any other part, or one asking you to confirm, is refused with what to change. kebbie keeps the card as data: who took each decision comes from its own records (your answers, the lead's calls, the obstacles' decisions), a line no record backs shows as `task`, and a rewritten card keeps the version before it, so you see what changed. See [Obstacles and findings](../explanation/obstacles-and-findings.md#the-card-asks-you-nothing).
 - With `ready`, `--after <task[@repo]>` names a task to push before this one, such as the other half of a task across repos; repeat it for several. A bare name is a task in the same repo. Next's push group puts that task first and this one says `after <task>` until it is pushed. The lead's push of this task waits in the push line until that task has landed, letting the pushes behind it go first; your own push goes out and its notice warns that it went first.
 - With `ready`, `--after-push "<check>"` names what the task verifies once the push lands, such as `the old key gets 401` after a deploy on push. The task stays open through the push and CI; once CI is green (or the push landed, without CI to watch), kebbie sends the task the check to run, and the row reads `checking after push: <check>`. The task's next report is the outcome: `ready` with nothing left to push closes it as done, `needs-you` puts it under Needs you with what failed as its next step. The check is kept until the task ends; a later `--after-push` replaces it.
+- With `ready`, a report while the task's latest recorded test run is red is refused unless `--red-cause "<the line that fails and why>"` names the cause it found; the card shows it as the task's decision.
 - A routine's task also lists its findings on a card with `needs-you`.
 - With `kebbie:work-rules` as the rules skill, `ready` is refused while a commit lacks a subject, a blank line and a body.
 

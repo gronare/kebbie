@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use kebbie_hub_protocol::{BACKLOG_BODY_MEDIA_TYPE, BlobRef, Board, CardRef, Id, ItemKey, seal_blob, seal_blob_with};
+use kebbie_hub_protocol::{BACKLOG_BODY_MEDIA_TYPE, BlobRef, CARD_MEDIA_TYPE, Board, CardRef, Id, ItemKey, seal_blob, seal_blob_with};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -21,7 +21,7 @@ const NONCE_LEN: usize = 12;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Attachment {
     Plan { address: String, text: String, at: Option<u64> },
-    Card { address: String, text: String, sha: String, current: bool },
+    Card { address: String, text: String, sha: String, current: bool, data: bool },
     Backlog { item: ItemKey, text: String },
 }
 
@@ -35,6 +35,7 @@ impl Attachment {
     fn media_type(&self) -> &'static str {
         match self {
             Attachment::Backlog { .. } => BACKLOG_BODY_MEDIA_TYPE,
+            Attachment::Card { data: true, .. } => CARD_MEDIA_TYPE,
             Attachment::Plan { .. } | Attachment::Card { .. } => MEDIA_TYPE,
         }
     }

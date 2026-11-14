@@ -13,7 +13,7 @@ use crate::tasks;
 
 pub const STATES: [&str; 4] = ["needs-you", "ready", "working", "blocked"];
 
-const USAGE: &str = "kebbie report --state needs-you|ready|working|blocked --next \"<what the user should do next, or nothing>\" [--card <file>, with ready] [--after <task[@repo]>, with ready] [--after-push \"<what you verify once the push lands>\", with ready] \"<where the task stands>\"";
+const USAGE: &str = "kebbie report --state needs-you|ready|working|blocked --next \"<what the user should do next, or nothing>\" [--card <file>, with ready] [--after <task[@repo]>, with ready] [--after-push \"<what you verify once the push lands>\", with ready] [--red-cause \"<the line that fails and why>\", with ready] \"<where the task stands>\"";
 const CHECK_LIMIT: usize = 300;
 
 pub fn parse(state: Option<&str>, next: Option<&str>, card: bool, summary: &str) -> Result<(Report, String)> {
@@ -32,9 +32,13 @@ pub fn parse(state: Option<&str>, next: Option<&str>, card: bool, summary: &str)
     Ok((Report { state: state.to_string(), next: next.split_whitespace().collect::<Vec<_>>().join(" "), head: None, after: Vec::new() }, summary))
 }
 
-pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<&str>, after: &[&str], after_push: Option<&str>, summary: &str) -> Result<String> {
+#[allow(clippy::too_many_arguments)]
+pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<&str>, after: &[&str], after_push: Option<&str>, red_cause: Option<&str>, summary: &str) -> Result<String> {
     let (mut report, summary) = parse(state, next, card.is_some(), summary)?;
     let check = check_goes_with(&report.state, after_push)?;
+    if red_cause.is_some() && report.state != "ready" {
+        return Err(format!("--red-cause goes with --state ready: it names the cause of a red test you leave red. {USAGE}"));
+    }
     report.head = crate::repo::git(cwd, &["rev-parse", "HEAD"]).ok();
     let me = peers::me(cwd).filter(|me| me != LEAD_LABEL).ok_or("kebbie report runs in a task's worktree")?;
     report.after = push_after(&report.state, &me, after)?;
@@ -45,20 +49,32 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
             return Ok(said);
         }
     }
-    if report.state == "ready" {
+    let red = if report.state == "ready" {
         crate::rules_check::refuse_unformed(cwd)?;
-    }
+        red_gate(&crate::evidence::runs_in(&state_dir()?, &me), red_cause)?
+    } else {
+        None
+    };
     let card = card.map(|file| cwd.join(file));
     let text = card.as_deref().map(read_card).transpose()?;
+    let sign_off = report.state == "ready" && crate::routines::routine_of(&me).is_none();
+    if let Some(text) = text.as_deref().filter(|_| sign_off) {
+        crate::card::parse(text)?;
+    }
     messages::log_report(&me, &report, &summary)?;
     let state = state_dir()?;
     tasks::subtasks_seen_in(&state, cwd);
     let pushing = tasks::pending_push(&state, &me).is_some();
     crate::phase::record(&state, &me, "report", &crate::phase::Event::Reported { state: &report.state, head: report.head.as_deref(), committed: crate::status::committed_at(cwd), pushing });
     let mut kept = match (&card, &text) {
-        (Some(file), Some(text)) => take_card(cwd, file, &state, &me, text)?,
+        (Some(file), Some(text)) => take_card(cwd, file, &state, &me, text, sign_off, red.as_deref())?,
         _ => String::new(),
     };
+    if let Some(cause) = &red {
+        let line = format!("the latest test run stays red: {cause} (task)");
+        let note = crate::decisions::write(&state, &me, &line, messages::now())?;
+        kept.push_str(&crate::decisions::for_the_task(&note, &line).map(|write| format!(" {write}")).unwrap_or_default());
+    }
     if let Some(check) = &check {
         save_check(&state, &me, check)?;
         kept.push_str(" kebbie asks you to run your check once the push lands, and closes the task when it holds.");
@@ -135,6 +151,23 @@ fn ask_to_close(cwd: &Path, state: &Path, me: &str, report: &Report, summary: &s
     let task = me.split_once('@').map_or(me, |(task, _)| task);
     if let Err(error) = crate::kebbie_questions::ask_close(state, me, &format!("{task} says it is done: {summary}. Close it?")) {
         eprintln!("kebbie could not ask you to close {me}: {error}");
+    }
+}
+
+// A ready report over a red test run names the cause found, the line that fails and why; one that names a cause for a run that passed is refused too.
+pub fn red_gate(runs: &[crate::evidence::Run], cause: Option<&str>) -> Result<Option<String>> {
+    let cause = cause.map(|cause| cause.split_whitespace().collect::<Vec<_>>().join(" "));
+    let latest = runs.last();
+    let red = latest.filter(|run| run.result == crate::evidence::Outcome::Failed);
+    match (red, cause) {
+        (Some(run), None) => Err(format!(
+            "Your latest test run is red: `{}` failed at {}. Find its cause, the line that fails and why, before you report ready: fix it when your change caused it; raise it with kebbie obstacle when it did not and it blocks your work; or, once the cause is found and it stays red, report ready again with --red-cause \"<the line that fails and why>\", which the card shows as your decision.",
+            run.command, run.short()
+        )),
+        (_, Some(cause)) if cause.is_empty() => Err(format!("--red-cause needs the cause found: the line that fails and why. {USAGE}")),
+        (None, Some(_)) => Err("--red-cause names why the latest test run is red, and it is not red: report ready without it.".to_string()),
+        (Some(_), Some(cause)) => Ok(Some(cause)),
+        (None, None) => Ok(None),
     }
 }
 
@@ -221,6 +254,7 @@ pub struct Card {
     pub sha: String,
     pub text: String,
     pub file: PathBuf,
+    pub data: Option<crate::card::Data>,
 }
 
 const CARD_LIMIT: usize = 4_000;
@@ -246,10 +280,33 @@ pub fn save_card(state: &Path, address: &str, sha: &str, text: &str) -> Result<(
     crate::state::write(&file, format!("card: {sha}\n\n{text}\n"))
 }
 
-// An untracked card left in the worktree would count as an uncommitted change and stop the push, so kebbie keeps the card and removes the file; its Also noticed lines are filed as it is taken.
-fn take_card(cwd: &Path, file: &Path, state: &Path, address: &str, text: &str) -> Result<String> {
-    let text = crate::found::file_card(state, address, text, messages::now())?;
+// An untracked card left in the worktree would count as an uncommitted change and stop the push, so kebbie keeps the card and removes the file; its Also noticed lines are filed as it is taken, and a sign-off card is kept as data with who took each decision from kebbie's own records.
+fn take_card(cwd: &Path, file: &Path, state: &Path, address: &str, text: &str, sign_off: bool, red: Option<&str>) -> Result<String> {
+    let now = messages::now();
+    let filed = crate::found::file_card(state, address, text, now)?;
+    let text = filed.text;
     save_card(state, address, &git(cwd, &["rev-parse", "HEAD"])?, &text)?;
+    let mut said = String::new();
+    if sign_off {
+        let parsed = crate::card::parse(&text)?;
+        let (decisions, unbacked) = crate::card::decisions(&parsed.decisions, &crate::card::records(state, address), red);
+        let data = crate::card::next_version(&parsed, decisions, crate::card::load(state, address), now);
+        crate::card::save(state, address, &data)?;
+        if data.changed_at == Some(now) {
+            said.push_str(&format!(" It replaces your card's version {}; the user sees what changed.", data.version - 1));
+        }
+        if !unbacked.is_empty() {
+            said.push_str(&format!(" kebbie has no record of anyone but you taking these, so the card shows them as (task): {}. A choice that is the user's is asked with kebbie ask; a question of method goes to the lead.", unbacked.join("; ")));
+        }
+    } else {
+        crate::card::forget(state, address);
+    }
+    for item in &filed.recurring {
+        match crate::obstacle::raise_recurring(state, address, cwd, item) {
+            Ok(told) => said.push_str(&told),
+            Err(error) => said.push_str(&format!(" found:{} was found by a second task, and raising it failed: {error}; tell the lead.", item.id)),
+        }
+    }
     let untracked = !crate::sh::succeeds("git", &["ls-files", "--error-unmatch", &file.to_string_lossy()], Some(cwd));
     let top = git(cwd, &["rev-parse", "--show-toplevel"])?;
     let inside = file.canonicalize().is_ok_and(|file| Path::new(&top).canonicalize().is_ok_and(|top| file.starts_with(top)));
@@ -257,7 +314,7 @@ fn take_card(cwd: &Path, file: &Path, state: &Path, address: &str, text: &str) -
         fs::remove_file(file).map_err(|error| format!("{}: {error}", file.display()))?;
     }
     let filed = if text.contains("(found:") { format!(" Its Also noticed lines are filed under {} on the board's backlog, each line ending with its item.", crate::found::SECTION) } else { String::new() };
-    Ok(format!(" The card is kept for the push dialog.{filed}"))
+    Ok(format!(" The card is kept for the push dialog.{filed}{said}"))
 }
 
 pub fn card_in(state: &Path, address: &str) -> Option<Card> {
@@ -265,7 +322,9 @@ pub fn card_in(state: &Path, address: &str) -> Option<Card> {
     let text = fs::read_to_string(&file).ok()?;
     let (first, body) = text.split_once('\n')?;
     let sha = first.strip_prefix("card: ")?.trim().to_string();
-    Some(Card { sha, text: body.trim().to_string(), file })
+    let data = crate::card::load(state, address);
+    let text = data.as_ref().map_or_else(|| body.trim().to_string(), |data| crate::card::render(data, &crate::found::load(state)));
+    Some(Card { sha, text, file, data })
 }
 
 // The card of the task whose worktree this is, and whether HEAD still makes the change it was written for.
@@ -287,6 +346,7 @@ pub fn forget_card(task: &str, repo: &Path) {
 
 pub fn forget_card_in(state: &Path, address: &str) {
     let _ = fs::remove_file(card_file(state, address));
+    crate::card::forget(state, address);
 }
 
 // herdr's sidebar shows the same as the board: the next step as $next, and the state in place of idle or done.
@@ -452,15 +512,15 @@ mod tests {
         fs::write(&source, "\nRefunds show on the billing page.\n\nLook: /billing\n![the refund row](/tmp/refund.png)\n").unwrap();
         let text = read_card(&source).unwrap();
         assert!(card_in(&state, "billing@app").is_none());
-        take_card(&worktree, &source, &state, "billing@app", &text).unwrap();
+        take_card(&worktree, &source, &state, "billing@app", &text, false, None).unwrap();
         assert!(!source.exists(), "a card left in the worktree is an uncommitted file that stops the push");
         fs::create_dir_all(worktree.join("src")).unwrap();
         fs::write(&source, &text).unwrap();
-        take_card(&worktree.join("src"), &source, &state, "billing@app", &text).unwrap();
+        take_card(&worktree.join("src"), &source, &state, "billing@app", &text, false, None).unwrap();
         assert!(!source.exists(), "taken from anywhere in the worktree, whatever folder the report ran in");
         let outside = dir.join("card.md");
         fs::write(&outside, &text).unwrap();
-        take_card(&worktree, &outside, &state, "billing@app", &text).unwrap();
+        take_card(&worktree, &outside, &state, "billing@app", &text, false, None).unwrap();
         assert!(outside.exists(), "a file outside the worktree is the task's own business");
         assert_eq!(git(&worktree, &["status", "--porcelain"]).unwrap(), "");
         let card = card_in(&state, "billing@app").unwrap();
@@ -547,5 +607,20 @@ mod tests {
     fn the_hook_is_quiet_outside_a_task() {
         assert_eq!(hook(r#"{"hook_event_name":"Stop","cwd":"/","stop_hook_active":false}"#), "");
         assert_eq!(hook("not json"), "");
+    }
+
+    #[test]
+    fn a_ready_report_over_a_red_run_names_its_cause_and_one_over_a_green_run_names_none() {
+        let run = |result: crate::evidence::Outcome| crate::evidence::Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result, why: String::new(), exit: None, duration_ms: None, summary: String::new(), sha: "abcdef0".to_string(), dirty: false, code: String::new(), at: 1, background: String::new(), transcript: String::new(), says: None, worktree: String::new(), read_to: 0, sandboxed: true };
+        let red = [run(crate::evidence::Outcome::Passed), run(crate::evidence::Outcome::Failed)];
+        let refused = red_gate(&red, None).unwrap_err();
+        assert!(refused.contains("`cargo test` failed at abcdef0") && refused.contains("kebbie obstacle") && refused.contains("--red-cause"), "{refused}");
+        assert_eq!(red_gate(&red, Some("  tests/vat.rs:12 fails on main\n too ")), Ok(Some("tests/vat.rs:12 fails on main too".to_string())));
+        assert!(red_gate(&red, Some(" ")).unwrap_err().contains("needs the cause found"));
+        let green = [run(crate::evidence::Outcome::Failed), run(crate::evidence::Outcome::Passed)];
+        assert_eq!(red_gate(&green, None), Ok(None), "only the latest run counts");
+        assert!(red_gate(&green, Some("x")).unwrap_err().contains("it is not red"));
+        assert_eq!(red_gate(&[], None), Ok(None));
+        assert_eq!(red_gate(&[run(crate::evidence::Outcome::Unknown)], None), Ok(None), "a result kebbie could not read is not red");
     }
 }

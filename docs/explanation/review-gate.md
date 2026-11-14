@@ -107,7 +107,7 @@ Its answer is one line on the task's row, in your terms: `review suggested: chan
 
 ## A finding only you can settle
 
-Sometimes the code is right if you meant it, and the reviewer cannot tell from the conversation whether you did. The reviewer marks such a finding `confirm:`. When every finding of a verdict is one, kebbie asks you under Needs you, with the finding:
+Sometimes the code is right if you meant it, and the reviewer cannot tell from the conversation whether you did. The reviewer marks such a finding `confirm:`, a hunk outside the task `scope:`, and a test or docs gap the task cannot close `gap:`. kebbie's investigator reads each first; with it off (`investigate.profile = "none"`), or when it cannot decide, a verdict whose every finding is marked comes to you under Needs you:
 
 - Confirm passes the review on the code it read, with your words kept in the verdict. The task hears them and changes nothing.
 - Change it sends your comment to the task, which reworks it and goes back to the reviewer.

@@ -1976,3 +1976,46 @@ fn kebbie_order_shows_the_push_order_moves_and_groups_and_refuses_what_it_cannot
     let old = run_as_user(&lab, &["-C", app, "unstage", "billing"]);
     assert!(stderr(&old).contains("kebbie unstage is now kebbie try --off"), "{}", stderr(&old));
 }
+
+#[test]
+fn a_ready_report_keeps_the_card_as_data_refuses_a_part_to_confirm_and_a_red_run_without_its_cause() {
+    let lab = Lab::new("card-data");
+    let (_, slot) = lab.task_fixture();
+    let slot_str = slot.to_str().unwrap();
+    git(&slot, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend", "-m", "Add refunds\n\nThe billing page lists refunds now."]);
+    let task_bin = lab.root.join("task-bin");
+    fs::create_dir_all(&task_bin).unwrap();
+    crate::executable::write(task_bin.join("claude"), "#!/bin/sh\ncat > /dev/null\n").unwrap();
+    let report = |card: &str, extra: &[&str]| {
+        fs::write(slot.join("card.md"), card).unwrap();
+        let mut args = vec!["-C", slot_str, "report", "--state", "ready", "--next", "push", "--card", "card.md"];
+        args.extend(extra);
+        args.push("refunds done");
+        lab.command().env("PATH", format!("{}:{}", task_bin.display(), lab.path())).args(&args).output().unwrap()
+    };
+    fs::create_dir_all(lab.state.join("evidence")).unwrap();
+    fs::write(lab.state.join("evidence/billing@app.jsonl"), "{\"command\":\"cargo test\",\"runner\":\"cargo test\",\"result\":\"failed\",\"sha\":\"abc\",\"code\":\"abc\",\"at\":1}\n").unwrap();
+    let card = "**Refunds show under each invoice.**\n\nBuilt:\n- Each invoice lists its refunds at /billing.\n\nDecisions:\n- Refunds round per invoice, because the accountant books it so (you)\n\nAlso noticed:\n- The README's install step names an old flag.\n";
+    let red = report(card, &[]);
+    assert!(!red.status.success() && stderr(&red).contains("Your latest test run is red: `cargo test` failed") && stderr(&red).contains("--red-cause"), "{}", stderr(&red));
+    let confirm = report("**Refunds show.**\n\nBuilt:\n- Each invoice lists its refunds.\n\nConfirm:\n- Old refunds are not backfilled.\n", &["--red-cause", "the VAT test fails on main too, at tests/vat.rs:12"]);
+    assert!(!confirm.status.success() && stderr(&confirm).contains("\"Confirm:\" asks the user to confirm"), "{}", stderr(&confirm));
+    let taken = report(card, &["--red-cause", "the VAT test fails on main too, at tests/vat.rs:12"]);
+    assert!(taken.status.success(), "{}", stderr(&taken));
+    assert!(stdout(&taken).contains("the card shows them as (task): Refunds round per invoice, because the accountant books it so"), "a decider kebbie has no record of is the task's: {}", stdout(&taken));
+    let data: serde_json::Value = serde_json::from_str(&fs::read_to_string(lab.state.join("cards/billing@app.json")).unwrap()).unwrap();
+    assert_eq!((data["version"].as_u64(), data["decisions"][0]["by"].as_str(), data["noticed"][0]["found"].as_str()), (Some(1), Some("task"), Some("f1")), "{data}");
+    assert_eq!(data["decisions"][1]["text"], "The latest test run stays red: the VAT test fails on main too, at tests/vat.rs:12");
+    let searched = lab.run(&["backlog", "--search", "install flag"]);
+    assert!(stdout(&searched).contains("[found] The README's install step names an old flag  (found:f1 · by billing)"), "{}", stdout(&searched));
+    assert!(lab.run(&["found", "keep", "f1"]).status.success());
+    assert!(stdout(&lab.run(&["found"])).contains("· kept"), "a kept item stays under Found by tasks");
+    let rewritten = report(&card.replace("at /billing", "and each credit at /billing"), &["--red-cause", "the VAT test fails on main too, at tests/vat.rs:12"]);
+    assert!(rewritten.status.success() && stdout(&rewritten).contains("It replaces your card's version 1"), "{}", stdout(&rewritten));
+    let data: serde_json::Value = serde_json::from_str(&fs::read_to_string(lab.state.join("cards/billing@app.json")).unwrap()).unwrap();
+    assert_eq!((data["version"].as_u64(), data["previous"]["version"].as_u64()), (Some(2), Some(1)), "{data}");
+    let passed = report(card, &["--red-cause", "x"]);
+    assert!(passed.status.success(), "the run is still red, so a cause goes with it: {}", stderr(&passed));
+    fs::write(lab.state.join("evidence/billing@app.jsonl"), "{\"command\":\"cargo test\",\"runner\":\"cargo test\",\"result\":\"passed\",\"sha\":\"abc\",\"code\":\"abc\",\"at\":2}\n").unwrap();
+    assert!(stderr(&report(card, &["--red-cause", "x"])).contains("it is not red"), "a cause for a green run is refused");
+}

@@ -413,7 +413,7 @@ mod tests {
     fn the_push_dialog_parts_the_card_tests_commits_and_message_under_their_own_headers() {
         let text = |lines: &[Line]| lines.iter().map(|line| line.spans.iter().map(|span| span.content.to_string()).collect::<String>()).collect::<Vec<_>>().join("\n");
         let commits = vec![tasks::Commit { sha: "1111111aaaa".to_string(), message: "Add refunds\n\nso a customer gets money back".to_string() }, tasks::Commit { sha: "2222222bbbb".to_string(), message: "Show refunds".to_string() }];
-        let card = report::Card { sha: "abcdef0123".to_string(), text: "Refunds show on the **billing** page.\n\n![the refund row](/tmp/kebbie-shots/refund.png)\nTo check: 30 days.".to_string(), file: PathBuf::from("/state/cards/billing@web.md") };
+        let card = report::Card { sha: "abcdef0123".to_string(), text: "Refunds show on the **billing** page.\n\n![the refund row](/tmp/kebbie-shots/refund.png)\nTo check: 30 days.".to_string(), file: PathBuf::from("/state/cards/billing@web.md"), data: None };
         let tests = evidence::Shown { mark: evidence::Mark::Covered, text: "cargo test · 412 passed · at abcdef0".to_string() };
         let (lines, first) = push_lines(Some(&(card, true)), Some(&tests), &commits, &Marks::default(), 0, 60);
         let screen = text(&lines);
@@ -430,7 +430,7 @@ mod tests {
         let screen = text(&lines);
         assert!(screen.contains("MESSAGE 2222222") && screen.contains("  ▎ Show refunds") && !screen.contains("money back"), "the message follows the selection: {screen}");
         assert!(push_keys(2, 1, None, false, false, false).to_string().contains("p push the first 2 and keep it open"));
-        let stale = report::Card { sha: "abcdef0123".to_string(), text: (0..40).map(|index| format!("line {index}")).collect::<Vec<_>>().join("\n"), file: PathBuf::from("/state/cards/billing@web.md") };
+        let stale = report::Card { sha: "abcdef0123".to_string(), text: (0..40).map(|index| format!("line {index}")).collect::<Vec<_>>().join("\n"), file: PathBuf::from("/state/cards/billing@web.md"), data: None };
         let (lines, _) = push_lines(Some(&(stale, false)), None, &commits, &Marks::default(), 0, 60);
         let screen = text(&lines);
         assert!(screen.contains("CARD ○ written at abcdef0, code changed since") && screen.contains("  … the rest in /state/cards/billing@web.md") && !screen.contains("line 20"), "{screen}");
@@ -460,7 +460,7 @@ mod tests {
     fn pushing(app: &mut crate::board::App, commits: usize, card_lines: usize) {
         let commits = (0..commits).map(|index| tasks::Commit { sha: format!("{index:07}abc"), message: format!("Commit number {index}\n\nthe body of {index}") }).collect();
         let text = (0..card_lines).map(|index| format!("card line {index}")).collect::<Vec<_>>().join("\n");
-        let card = report::Card { sha: "abcdef0123".to_string(), text, file: PathBuf::from("/state/cards/x.md") };
+        let card = report::Card { sha: "abcdef0123".to_string(), text, file: PathBuf::from("/state/cards/x.md"), data: None };
         app.mode = crate::board::Mode::ConfirmPush { path: PathBuf::from("/work/wt2.web"), commits, selected: 0, card: Some((card, true)), tests: None, marks: Marks::default(), scroll: Scroll::default() };
     }
 

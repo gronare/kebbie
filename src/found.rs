@@ -22,6 +22,7 @@ pub enum State {
     Started,
     Added,
     Dismissed,
+    Kept,
 }
 
 // What tasks noticed outside their own work, filed once however many tasks found it: each task that found it is a source, and the count is how often it was found.
@@ -37,11 +38,19 @@ pub struct Item {
     pub state: State,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub raised: bool,
 }
 
 impl Item {
+    // Kept in the backlog is still open: the user can start or add it later.
     pub fn open(&self) -> bool {
-        self.state == State::Open
+        matches!(self.state, State::Open | State::Kept)
+    }
+
+    // A second task found it, so it is a problem of its own rather than something each task works around.
+    pub fn recurring(&self) -> bool {
+        self.sources.len() >= 2
     }
 
     // What the board's row says after the line: how often and by which tasks.
@@ -63,7 +72,7 @@ impl Item {
     }
 
     fn to_json(&self) -> serde_json::Value {
-        json!({ "id": self.id, "line": self.line, "repo": self.repo, "sources": self.sources, "count": self.count, "first_at": self.first_at, "last_at": self.last_at, "state": self.state, "outcome": self.outcome })
+        json!({ "id": self.id, "line": self.line, "repo": self.repo, "sources": self.sources, "count": self.count, "first_at": self.first_at, "last_at": self.last_at, "state": self.state, "outcome": self.outcome, "recurring": self.recurring() })
     }
 }
 
@@ -119,7 +128,7 @@ pub fn file_line(items: &mut Vec<Item>, address: &str, line: &str, now: u64) -> 
         }
         None => {
             let id = format!("f{}", items.iter().filter_map(|item| item.id.strip_prefix('f')?.parse::<u32>().ok()).max().unwrap_or(0) + 1);
-            items.push(Item { id: id.clone(), line: what, repo, sources: vec![address.to_string()], count: 1, first_at: now, last_at: now, state: State::Open, outcome: None });
+            items.push(Item { id: id.clone(), line: what, repo, sources: vec![address.to_string()], count: 1, first_at: now, last_at: now, state: State::Open, outcome: None, raised: false });
             id
         }
     }
@@ -131,8 +140,14 @@ fn label(line: &str) -> Option<&str> {
     (rest.trim().is_empty() && !head.is_empty() && head.chars().all(|character| character.is_alphabetic() || character == ' ')).then_some(head)
 }
 
-// The card's Also noticed lines are filed under Found by tasks as the card is taken, and each line ends with the item it went to.
-pub fn file_card(state: &Path, address: &str, card: &str, now: u64) -> Result<String> {
+// The card as filed, and each item it made recurring: found by a second task, and not yet raised as a problem of its own.
+pub struct Filed {
+    pub text: String,
+    pub recurring: Vec<Item>,
+}
+
+// The card's Also noticed lines are filed under Found by tasks as the card is taken, and each line ends with the item it went to; an item a second task finds is marked raised once, for its caller to raise.
+pub fn file_card(state: &Path, address: &str, card: &str, now: u64) -> Result<Filed> {
     let mut items = load(state);
     let before = items.clone();
     let mut inside = false;
@@ -148,10 +163,15 @@ pub fn file_card(state: &Path, address: &str, card: &str, now: u64) -> Result<St
         let id = file_line(&mut items, address, item, now);
         if named_id(item).is_some() { line.to_string() } else { format!("{} ({MARK}{id})", line.trim_end()) }
     }).collect();
+    let mut recurring = Vec::new();
+    for item in items.iter_mut().filter(|item| item.open() && item.recurring() && !item.raised && item.sources.iter().any(|source| source == address)) {
+        item.raised = true;
+        recurring.push(item.clone());
+    }
     if items != before {
         save(state, &items)?;
     }
-    Ok(lines.join("\n"))
+    Ok(Filed { text: lines.join("\n"), recurring })
 }
 
 fn change(state: &Path, id: &str, to: State, outcome: &str) -> Result<Item> {
@@ -187,6 +207,13 @@ pub fn add_in(state: &Path, caller: &Caller, id: &str, task: &str, tell: impl Fn
     let told = tell(task, &format!("The user adds this to your task, found outside their own work by {}: {}. Plan it in as a part of its own, and tell the lead how it changes your plan.", item.sources.join(", "), item.line))?;
     change(state, id, State::Added, &format!("added to {task}"))?;
     Ok(crate::notice::Notice::new(crate::notice::Tone::Done, "Added to the task").next(told).detail("task", task).to_string())
+}
+
+// Keep in backlog: the item stays filed and open, and the card it came from shows the choice.
+pub fn keep_in(state: &Path, caller: &Caller, id: &str) -> Result<String> {
+    users_or_leads(caller, "keeping what tasks found in the backlog")?;
+    let item = change(state, id, State::Kept, "kept in the backlog")?;
+    Ok(crate::notice::Notice::new(crate::notice::Tone::Done, "Kept in the backlog").detail("item", &item.line).to_string())
 }
 
 pub fn started_in(state: &Path, id: &str, task: &str) -> Result<()> {
@@ -226,7 +253,8 @@ pub fn command(words: &[String], as_json: bool) -> Result<String> {
         Some("dismiss") => dismiss_in(&state, &caller, word(1).ok_or("kebbie found dismiss needs the item's id")?),
         Some("add") => add(&state, &caller, word(1).ok_or("kebbie found add needs the item's id and the running task")?, word(2).ok_or("kebbie found add needs the running task it goes to")?),
         Some("start") => start(&state, &caller, word(1).ok_or("kebbie found start needs the item's id")?, word(2)),
-        Some(other) => Err(format!("kebbie found knows start, add and dismiss, not {other}: kebbie found [--json], kebbie found start <id> [name], kebbie found add <id> <task>, kebbie found dismiss <id>")),
+        Some("keep") => keep_in(&state, &caller, word(1).ok_or("kebbie found keep needs the item's id")?),
+        Some(other) => Err(format!("kebbie found knows start, add, keep and dismiss, not {other}: kebbie found [--json], kebbie found start <id> [name], kebbie found add <id> <task>, kebbie found keep <id>, kebbie found dismiss <id>")),
     }
 }
 
@@ -239,7 +267,7 @@ pub fn list(state: &Path, as_json: bool) -> String {
         return format!("Nothing under {SECTION}: what tasks list under Also noticed on their card is filed here.");
     }
     let mut lines = vec![format!("{SECTION}:")];
-    lines.extend(items.iter().map(|item| format!("  {} {} · {}", item.id, item.line, item.found_by())));
+    lines.extend(items.iter().map(|item| format!("  {} {} · {}{}", item.id, item.line, item.found_by(), if item.state == State::Kept { " · kept" } else { "" })));
     lines.join("\n")
 }
 
@@ -252,12 +280,12 @@ mod tests {
     #[test]
     fn a_cards_also_noticed_lines_are_filed_once_each_and_end_with_their_item() {
         let state = crate::sh::test_dir("found-card");
-        let card = file_card(&state, "billing@app", CARD, 100).unwrap();
+        let card = file_card(&state, "billing@app", CARD, 100).unwrap().text;
         assert!(card.contains("- The VAT rounding test is flaky on main: filed in the backlog (low). (found:f1)") && card.contains("- The README's install step names an old flag. (found:f2)"), "{card}");
         assert!(card.contains("- Refunds list under each invoice.\n"), "Built lines are not filed: {card}");
         let items = load(&state);
         assert_eq!(items.iter().map(|item| (item.id.as_str(), item.line.as_str(), item.repo.as_str(), item.count)).collect::<Vec<_>>(), [("f1", "The VAT rounding test is flaky on main", "app", 1), ("f2", "The README's install step names an old flag", "app", 1)]);
-        assert_eq!(file_card(&state, "billing@app", &card, 200).unwrap(), card, "the same card again files nothing new and counts nothing twice");
+        assert_eq!(file_card(&state, "billing@app", &card, 200).unwrap().text, card, "the same card again files nothing new and counts nothing twice");
         assert_eq!(load(&state).iter().map(|item| item.count).collect::<Vec<_>>(), [1, 1]);
         fs::remove_dir_all(state).unwrap();
     }
@@ -267,14 +295,14 @@ mod tests {
         let state = crate::sh::test_dir("found-repeat");
         file_card(&state, "billing@app", CARD, 100).unwrap();
         let other = "Built:\n- Search.\n\nAlso noticed:\n- the VAT rounding test is flaky on main.\n- Something else (found:f2)\n";
-        let card = file_card(&state, "search@app", other, 300).unwrap();
+        let card = file_card(&state, "search@app", other, 300).unwrap().text;
         assert!(card.contains("- the VAT rounding test is flaky on main. (found:f1)") && card.contains("- Something else (found:f2)"), "the task's own mark names its item: {card}");
         let items = load(&state);
         assert_eq!((items.len(), items[0].count, items[0].sources.clone(), items[0].last_at), (2, 2, vec!["billing@app".to_string(), "search@app".to_string()], 300));
         assert_eq!(items[1].count, 2, "a found: mark merges whatever the words");
         assert_eq!(items[0].found_by(), "found 2× · by billing, search");
         assert!(items[0].prompt().contains("billing@app, search@app (2 times)"));
-        assert!(file_card(&state, "web-billing@web", "Also noticed:\n- The VAT rounding test is flaky on main\n", 400).unwrap().ends_with("(found:f3)"), "the same words in another repo are another item");
+        assert!(file_card(&state, "web-billing@web", "Also noticed:\n- The VAT rounding test is flaky on main\n", 400).unwrap().text.ends_with("(found:f3)"), "the same words in another repo are another item");
         fs::remove_dir_all(state).unwrap();
     }
 
@@ -296,8 +324,27 @@ mod tests {
 
     #[test]
     fn an_item_named_after_its_line_and_a_line_without_words_gets_its_id() {
-        let item = Item { id: "f4".to_string(), line: "The README's install step names an old flag".to_string(), repo: "app".to_string(), sources: vec!["billing@app".to_string()], count: 1, first_at: 0, last_at: 0, state: State::Open, outcome: None };
+        let item = Item { id: "f4".to_string(), line: "The README's install step names an old flag".to_string(), repo: "app".to_string(), sources: vec!["billing@app".to_string()], count: 1, first_at: 0, last_at: 0, state: State::Open, outcome: None, raised: false };
         assert_eq!(item.name(), "the-readme-install");
         assert_eq!(Item { line: "a b".to_string(), ..item }.name(), "found-f4");
+    }
+
+    #[test]
+    fn an_item_a_second_task_finds_is_raised_once_and_one_kept_in_the_backlog_stays_open() {
+        let state = crate::sh::test_dir("found-recurring");
+        assert!(file_card(&state, "billing@app", CARD, 100).unwrap().recurring.is_empty());
+        let again = file_card(&state, "search@app", "Also noticed:\n- the VAT rounding test is flaky on main.\n", 200).unwrap();
+        assert_eq!(again.recurring.iter().map(|item| item.id.as_str()).collect::<Vec<_>>(), ["f1"], "found by a second task");
+        assert!(load(&state)[0].raised && load(&state)[0].recurring());
+        assert!(file_card(&state, "search@app", &again.text, 300).unwrap().recurring.is_empty(), "the same card again raises nothing");
+        assert!(file_card(&state, "web@app", "Also noticed:\n- The VAT rounding test is flaky on main\n", 400).unwrap().recurring.is_empty(), "a third task counts up; it was raised once");
+        assert_eq!(load(&state)[0].count, 3);
+        assert!(keep_in(&state, &Caller::Task("billing@app".to_string()), "f2").unwrap_err().contains("the user's or the lead's"));
+        keep_in(&state, &Caller::User, "f2").unwrap();
+        assert!(open_in(&state).iter().any(|item| item.id == "f2" && item.state == State::Kept), "kept is still open, to start or add later");
+        assert!(list(&state, false).contains("· kept"));
+        started_in(&state, "f2", "readme-flag").unwrap();
+        assert!(open_in(&state).iter().all(|item| item.id != "f2"));
+        fs::remove_dir_all(state).unwrap();
     }
 }

@@ -120,7 +120,9 @@ What reaches a machine is its own choice, set by [`hub.commands`](../reference/c
 - **Answers an open question.** Pick the question on the item and write your answer. It waits with the lead until the lead folds it into the item, on the phone and on the board's card alike.
 - **Starts the item.** The machine starts it as `g` on the board does: the item is the task's prompt, and the lead picks how the task goes.
 - **Edits the item.** Tap **Edit** on its title or on a section, change it and save. The machine writes it into the item's file or vault note.
-- **Settles what tasks found.** What tasks noticed outside their work shows in the backlog as rows marked found by tasks, with the tasks that found it. Start one as a task, add it to a running task, or dismiss it, as [`kebbie found`](../reference/commands.md#kebbie-found---json) does.
+- **Settles what tasks found.** What tasks noticed outside their work shows in the backlog as rows marked found by tasks, with the tasks that found it. Start one as a task, add it to a running task, keep it in the backlog, or dismiss it, as [`kebbie found`](../reference/commands.md#kebbie-found---json) does.
+- **Reads the sign-off card.** A ready task's card shows what was built, each decision with who took it, and what changed since its last version. Each Also noticed line offers Add as a subtask, New task and Keep in backlog, and shows the choice once made.
+- **Sends a task to review.** When the assessor recommends a full review, the task shows why with Send to review, which starts the review as `v` on the board does, for the subtask you are reading or the whole task.
 
 - If questions still wait on you, the start is refused and says how many; start it again to start it anyway.
 - The phone hears `Starting <task>` while the machine starts it. If the start fails, the device that asked gets a `Not started` notification that says why, and the item stays in the backlog.

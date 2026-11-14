@@ -759,7 +759,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let png = dir.join("after.png");
         image::RgbImage::from_pixel(40, 20, image::Rgb([200, 30, 30])).save(&png).unwrap();
-        let card = |text: String| report::Card { sha: "abcdef0123".to_string(), text, file: PathBuf::from("/state/cards/x.md") };
+        let card = |text: String| report::Card { sha: "abcdef0123".to_string(), text, file: PathBuf::from("/state/cards/x.md"), data: None };
         let mut app = test_app(vec![served("search-filters")]);
         with_detail(&mut app);
         let text = format!("Refunds show.\n![after]({})\n![before](/nowhere/before.png)", png.display());

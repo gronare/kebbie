@@ -1077,7 +1077,7 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 20)).unwrap();
         terminal.draw(|frame| frame.render_widget(Paragraph::new(text.clone()), frame.area())).unwrap();
         no_escape_reaches_the_terminal(terminal.backend().buffer(), "a markdown plan");
-        let card = report::Card { sha: "abc".to_string(), text: format!("![alt {ESCAPES}](../../etc/passwd)\n{ESCAPES}"), file: PathBuf::from("/state/cards/x.md") };
+        let card = report::Card { sha: "abc".to_string(), text: format!("![alt {ESCAPES}](../../etc/passwd)\n{ESCAPES}"), file: PathBuf::from("/state/cards/x.md"), data: None };
         let lines = card_lines(&card, true, 60);
         let shown: String = lines.iter().map(|line| line.to_string()).collect::<Vec<_>>().join("\n");
         assert!(shown.contains("▣ ../../etc/passwd"), "an image is shown by its path, read by the user before anything opens it: {shown}");
