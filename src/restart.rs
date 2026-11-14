@@ -747,6 +747,14 @@ pub struct Line {
 // The lead is the session the user talks to, so once they are out of its pane it waits a minute, not the idle minutes.
 pub const LEAD_IDLE: u64 = 60;
 
+// A lead started fresh has no conversation file until its first reply, and kebbie lead --restart starts that same conversation again, so only a task's restart needs the file.
+pub fn with_conversation(verdict: Verdict, lead: bool, transcript: bool) -> Verdict {
+    match verdict {
+        Verdict::Restart if !transcript && !lead => Verdict::Skip("its conversation file is not found".to_string()),
+        other => other,
+    }
+}
+
 pub fn mode_for(mode: Mode, lead: bool) -> Mode {
     match mode {
         Mode::Routine { min_idle } if lead => Mode::Routine { min_idle: min_idle.min(LEAD_IDLE) },
@@ -925,8 +933,8 @@ pub fn run_counted(mode: Mode, memory: &mut Memory, only: Option<&str>, counted:
         };
         let verdict = match &args {
             Err(reason) if facts.stale || mode == (Mode::Manual { all: true }) => Verdict::Skip(reason.clone()),
-            _ => match decide(mode, auto, &facts, || pane.agent == Agent::Claude && transcript.as_deref().is_some_and(|path| !memory.background(path, start, at).is_empty())) {
-                Verdict::Restart if transcript.is_none() => Verdict::Skip("its conversation file is not found".to_string()),
+            _ => match with_conversation(decide(mode, auto, &facts, || pane.agent == Agent::Claude && transcript.as_deref().is_some_and(|path| !memory.background(path, start, at).is_empty())), lead, transcript.is_some()) {
+                skip @ Verdict::Skip(_) => skip,
                 other => with_screen(mode, other, pane.agent, &pane.title, || task_address(cwd.as_deref()).is_some_and(|address| tasks::awaits_first_prompt(&address)), || crate::typing::screen(&pane.pane).ok()),
             },
         };
@@ -1173,6 +1181,14 @@ mod tests {
         assert_eq!(decide(Mode::Update, true, &facts(true, true, false, 0), none), Verdict::Restart, "kebbie update does not wait the idle minutes");
         assert_eq!(decide(Mode::Manual { all: false }, true, &facts(false, true, false, 0), none), Verdict::Fresh);
         assert_eq!(decide(Mode::Manual { all: true }, true, &facts(false, true, false, 0), none), Verdict::Restart, "--all restarts a free session that is current");
+    }
+
+    #[test]
+    fn a_stale_lead_started_fresh_restarts_before_its_first_reply_while_a_task_without_a_conversation_is_skipped() {
+        assert_eq!(with_conversation(Verdict::Restart, true, false), Verdict::Restart, "kebbie lead --restart starts the recorded conversation that has no file yet");
+        assert_eq!(with_conversation(Verdict::Restart, false, false), Verdict::Skip("its conversation file is not found".to_string()));
+        assert_eq!(with_conversation(Verdict::Restart, false, true), Verdict::Restart);
+        assert_eq!(with_conversation(Verdict::Focused, true, false), Verdict::Focused);
     }
 
     #[test]

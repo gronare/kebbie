@@ -68,11 +68,13 @@ pub fn routines() -> Vec<Routine> {
     ]
 }
 
+// The round is dated by its start, as a session restarted while it ran may still show stale in it.
 fn restart(ctx: &mut Ctx) -> Result<()> {
+    let began = crate::messages::now();
     let lines = crate::restart::run(crate::restart::Mode::Routine { min_idle: 0 }, &mut ctx.memory, None)?;
     ctx.notes.extend(lines.iter().filter(|line| line.said == "restarted" || line.said.starts_with("restart failed")).map(|line| format!("restart: {}: {}", line.label, line.said)));
     ctx.stale = stale_lines(&lines);
-    ctx.stale_at = crate::messages::now();
+    ctx.stale_at = began;
     ctx.notes.extend(crate::known::announce()?.into_iter().map(|said| format!("update: {said}")));
     Ok(())
 }

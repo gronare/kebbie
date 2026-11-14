@@ -380,6 +380,7 @@ fn draft_of(agent: Option<&Value>) -> Draft {
 }
 
 pub const REFUSED: &str = "Not restarted: ";
+pub const RESTARTED: &str = "Restarted the lead";
 
 fn refused(why: &str) -> String {
     format!("{REFUSED}{why}.")
@@ -451,7 +452,7 @@ fn restart_locked(anyway: bool, fresh: bool) -> Result<String> {
     }
     close_messages(places(&lead)?.messages.as_deref())?;
     start_chat(&pane, session)?;
-    Ok(format!("Restarted the lead with its current role and settings, {how}."))
+    Ok(format!("{RESTARTED} with its current role and settings, {how}."))
 }
 
 fn previous_session() -> Result<(Session, &'static str)> {

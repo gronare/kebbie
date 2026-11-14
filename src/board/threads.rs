@@ -130,7 +130,8 @@ pub(super) fn spawn_restarter(overlay: bool) -> Receiver<(u64, Vec<String>)> {
                 }
                 crate::keeper::Owner::Board if !overlay && ran.is_none_or(|at| at.elapsed() >= Duration::from_secs(60)) => {
                     ran = Some(Instant::now());
-                    crate::restart::run(crate::restart::Mode::Routine { min_idle: 0 }, &mut memory, None).ok().map(|lines| (crate::messages::now(), crate::keeper::stale_lines(&lines)))
+                    let began = crate::messages::now();
+                    crate::restart::run(crate::restart::Mode::Routine { min_idle: 0 }, &mut memory, None).ok().map(|lines| (began, crate::keeper::stale_lines(&lines)))
                 }
                 crate::keeper::Owner::Board => None,
             };

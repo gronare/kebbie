@@ -234,6 +234,7 @@ struct App {
     lead_restarter: Updater,
     lead_fresh_starter: Updater,
     lead_checker: std::sync::Arc<dyn Fn() -> Result<()> + Send + Sync>,
+    lead_restarted: std::sync::Arc<std::sync::atomic::AtomicU64>,
     lead_context: Option<f64>,
     devices: Vec<crate::hub::devices::Request>,
     subject: Option<notices::Subject>,
@@ -490,15 +491,30 @@ impl App {
 
     fn resume_lead(&mut self) {
         let restarter = self.lead_restarter.clone();
+        let restarted = self.lead_restarted.clone();
         self.subject = Some(notices::Subject::plain("lead"));
         let label = if self.lead_line().is_some() { "Restarting the lead on the new kebbie…" } else { "Restarting the lead…" };
-        self.in_background(label.to_string(), move || restarter());
+        self.in_background(label.to_string(), move || noted_restart(&restarted, restarter()));
     }
 
     fn start_lead_fresh(&mut self) {
         let starter = self.lead_fresh_starter.clone();
+        let restarted = self.lead_restarted.clone();
         self.subject = Some(notices::Subject::plain("lead"));
-        self.in_background("Starting the lead fresh…".to_string(), move || starter());
+        self.in_background("Starting the lead fresh…".to_string(), move || noted_restart(&restarted, starter()));
+    }
+
+    pub(super) fn take_stale(&mut self, at: u64, stale: Vec<String>) {
+        (self.stale_at, self.stale) = (at, stale);
+        self.drop_restarted_lead();
+    }
+
+    // A lead restarted from here runs the installed kebbie, so a stale reading from a round that began before that restart no longer holds for it.
+    fn drop_restarted_lead(&mut self) {
+        let restarted = self.lead_restarted.load(std::sync::atomic::Ordering::SeqCst);
+        if restarted > 0 && self.stale_at <= restarted {
+            self.stale.retain(|line| !line.strip_prefix(crate::status::LEAD_LABEL).is_some_and(|rest| rest.starts_with(": ")));
+        }
     }
 
     fn context_line_for(&self, width: usize) -> Option<String> {
@@ -516,6 +532,7 @@ impl App {
     fn take_working_result(&mut self) {
         let Mode::Working { result, .. } = &self.mode else { return };
         let Ok(result) = result.try_recv() else { return };
+        self.drop_restarted_lead();
         self.show(result);
     }
 
@@ -1055,6 +1072,13 @@ const RENEW_HOLD: Duration = Duration::from_secs(5);
 
 const IDLE_REDRAW: Duration = Duration::from_secs(1);
 
+fn noted_restart(at: &std::sync::atomic::AtomicU64, said: Result<String>) -> Result<String> {
+    if said.as_ref().is_ok_and(|said| said.starts_with(crate::lead::RESTARTED)) {
+        at.store(crate::messages::now(), std::sync::atomic::Ordering::SeqCst);
+    }
+    said
+}
+
 // The plain board redraws at once on what changes it and once a second for its ages and countdowns; a window or another page redraws on every pass.
 fn redraw_due(changed: bool, plain: bool, drawn_at: Option<Instant>, now: Instant) -> bool {
     changed || !plain || drawn_at.is_none_or(|at| now.duration_since(at) >= IDLE_REDRAW)
@@ -1130,7 +1154,7 @@ impl App {
             graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel).map(|outcome| outcome.details.join("\n"))), update: None, progress_file: None, recheck: None, stale: Vec::new(), stale_at: 0, restart_after_update: false,
             agent_offer: None, agent_mode: std::sync::Arc::new(|| config::agent_updates_in(&config::path())), installer: agent_updates::default_install(),
-            filter: None, ctrl_c: None, go_again: None, notice: None, lead_chat: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), lead_fresh_starter: std::sync::Arc::new(crate::lead_restart::fresh_now), lead_checker: std::sync::Arc::new(crate::lead::restart_refusal), lead_context: None, devices: Vec::new(), subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
+            filter: None, ctrl_c: None, go_again: None, notice: None, lead_chat: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), lead_fresh_starter: std::sync::Arc::new(crate::lead_restart::fresh_now), lead_checker: std::sync::Arc::new(crate::lead::restart_refusal), lead_restarted: std::sync::Arc::default(), lead_context: None, devices: Vec::new(), subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
             comments: Vec::new(), comment_panel: Default::default(), comment_dir: None, copier: comments::default_copier(), reopener: comments::default_reopener(), pusher: None,
         }
     }
@@ -1203,7 +1227,7 @@ pub fn run(overlay: bool) -> Result<String> {
                 changed = true;
             }
             while let Ok((at, stale)) = restarter.try_recv() {
-                (app.stale_at, app.stale) = (at, stale);
+                app.take_stale(at, stale);
                 changed = true;
             }
             while let Ok(update) = snapshots.try_recv() {
@@ -1567,6 +1591,35 @@ mod tests {
         assert!(!rows.join("\n").contains("↻ The lead"), "the Work page only");
         assert!(shown(keys::map(), Ctx::Work, false).iter().any(|(key, _)| key == "L"), "L is in the keys help");
         assert!(!shown(keys::map(), Ctx::Work, false).iter().any(|(key, _)| key == "F"), "and no F");
+    }
+
+    #[test]
+    fn the_lead_line_goes_once_l_restarted_the_lead_and_only_a_round_begun_after_that_restart_brings_it_back() {
+        let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
+        app.lead_checker = std::sync::Arc::new(|| Ok(()));
+        app.lead_restarter = std::sync::Arc::new(|| Ok("Restarted the lead with its current role and settings, resuming its conversation.".to_string()));
+        let stale = || vec!["billing@app: restarts when idle".to_string(), format!("lead: {}", crate::restart::Verdict::Focused.words(true))];
+        app.take_stale(100, stale());
+        assert!(app.lead_line().is_some_and(|line| line.contains("when you leave")), "the keeper's round says the lead waits for you to leave it");
+        app.handle_normal(key(KeyCode::Char('L')));
+        press(&mut app, key(KeyCode::Char('2')));
+        settle(&mut app);
+        let restarted = app.lead_restarted.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(restarted > 0, "the restart is noted");
+        assert_eq!(app.lead_line(), None, "the line goes as soon as L restarted the lead");
+        assert_eq!(app.stale, vec!["billing@app: restarts when idle".to_string()], "another stale session stays");
+        app.take_stale(restarted, stale());
+        assert_eq!(app.lead_line(), None, "a round that began before the restart finished says nothing about the restarted lead");
+        app.take_stale(restarted + 1, stale());
+        assert!(app.lead_line().is_some(), "a later round that still finds it stale shows the line again");
+        let mut refused = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
+        refused.lead_checker = std::sync::Arc::new(|| Ok(()));
+        refused.lead_restarter = std::sync::Arc::new(|| crate::lead_restart::outcome(Err("Not restarted: the lead is working.".to_string())));
+        refused.take_stale(100, stale());
+        refused.handle_normal(key(KeyCode::Char('L')));
+        press(&mut refused, key(KeyCode::Char('2')));
+        settle(&mut refused);
+        assert!(refused.lead_line().is_some(), "a refused restart leaves the line");
     }
 
     fn settle(app: &mut App) {

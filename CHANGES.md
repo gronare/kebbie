@@ -17,6 +17,8 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A review leaves out points the task already decided, so the investigator decides each point once.
 - A review kebbie sent back twice by itself waits under Needs you instead of starting again.
 - Your phone hears a task is ready to push once per commit, and only when nothing holds the push.
+- A lead you started fresh moves to the new kebbie on the next update or once idle, before you have written to it.
+- The board's "Lead restarts" line goes as soon as L has restarted the lead.
 
 ## 0.38.0
 
