@@ -266,6 +266,7 @@ impl App {
         self.restart_after_update = succeeded;
         let state = run.file.parent().map(Path::to_path_buf);
         self.update = None;
+        self.fixed_changed();
         if let (true, Some(state)) = (succeeded, state) {
             self.offer_agent_updates(&state);
         }

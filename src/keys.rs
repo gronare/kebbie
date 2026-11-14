@@ -46,7 +46,6 @@ pub enum Act {
     Stage,
     Done,
     DismissCi,
-    DismissFixed,
     RerunCi,
     Park,
     Reset,
@@ -98,9 +97,9 @@ const ALL: &[Ctx] = &[Work, Backlog, Areas, Routines];
 const PAGES: &[Ctx] = &[Work, Backlog, Areas, Routines, Settings];
 
 impl Act {
-    pub const EVERY: [Act; 52] = [
+    pub const EVERY: [Act; 51] = [
         Act::Options, Act::ItemOptions, Act::Move, Act::Switch, Act::WorkPage, Act::AreasPage, Act::RoutinesPage, Act::SettingsPage, Act::Lead, Act::HideChat, Act::Messages, Act::Hub, Act::Help, Act::Inbox, Act::Next, Act::New, Act::Go, Act::Chat,
-        Act::Review, Act::Card, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Rebase, Act::Follow, Act::Tidy, Act::Push, Act::Stage, Act::Done, Act::DismissCi, Act::DismissFixed, Act::RerunCi, Act::Park, Act::Reset, Act::Drop, Act::StartAt, Act::Refresh, Act::Away,
+        Act::Review, Act::Card, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Rebase, Act::Follow, Act::Tidy, Act::Push, Act::Stage, Act::Done, Act::DismissCi, Act::RerunCi, Act::Park, Act::Reset, Act::Drop, Act::StartAt, Act::Refresh, Act::Away,
         Act::Update, Act::RestartLead, Act::Filter, Act::AreaRefresh, Act::Log, Act::Edit, Act::Pause, Act::Delete, Act::Fullscreen, Act::OpenImage, Act::Back, Act::Close, Act::Quit,
     ];
 
@@ -137,7 +136,6 @@ impl Act {
             Act::Stage => "try",
             Act::Done => "done",
             Act::DismissCi => "dismiss_ci",
-            Act::DismissFixed => "dismiss_fixed",
             Act::RerunCi => "rerun_ci",
             Act::Park => "park",
             Act::Reset => "reset",
@@ -197,7 +195,6 @@ impl Act {
             Act::Stage => Default::Char('M'),
             Act::Done => Default::Char('d'),
             Act::DismissCi => Default::Char('C'),
-            Act::DismissFixed => Default::Char('X'),
             Act::RerunCi => Default::Char('G'),
             Act::Park => Default::Char('Z'),
             Act::Reset => Default::Char('z'),
@@ -268,7 +265,6 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::Drop, on: &[Work], help: "drop the task (asks first)", hint: Hint::No },
     Binding { act: Act::StartAt, on: BOARD, help: "start later: a queued task or a backlog item starts at the time you type (15:00, tomorrow 09:00, fri 09:00, 24 oct 09:00, in 2h)", hint: Hint::No },
     Binding { act: Act::Refresh, on: BOARD, help: "ask the lead to refresh the backlog", hint: Hint::No },
-    Binding { act: Act::DismissFixed, on: BOARD, help: "dismiss the Done in kebbie line under the tasks without opening its list; it does not come back", hint: Hint::No },
     Binding { act: Act::Away, on: BOARD, help: "away mode on or off: the lead settles how-questions and keeps what-questions for you", hint: Hint::No },
     Binding { act: Act::Update, on: BOARD, help: "update everything to the latest (kebbie update); ↑ at the bottom shows when there is a newer version", hint: Hint::No },
     Binding { act: Act::RestartLead, on: BOARD, help: "restart the lead on the installed kebbie: offers a new conversation or resuming this one; refused while it works, asks, holds text you have not sent or has background work running", hint: Hint::No },
@@ -538,11 +534,11 @@ mod tests {
 
     #[test]
     fn b_is_no_key_any_more_and_a_config_that_still_moves_reports_is_read_without_a_word() {
-        let (keys, errors) = Keys::with(&entries(&[("reports", "W"), ("inbox", "I")]));
+        let (keys, errors) = Keys::with(&entries(&[("reports", "X"), ("inbox", "I")]));
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(keys.char(Act::Inbox), 'I', "the entries around it still count");
         for ctx in [Work, Backlog] {
-            assert_eq!((keys.act(ctx, &KeyEvent::from(KeyCode::Char('B'))), keys.act(ctx, &KeyEvent::from(KeyCode::Char('W')))), (None, None), "{ctx:?}");
+            assert_eq!((keys.act(ctx, &KeyEvent::from(KeyCode::Char('B'))), keys.act(ctx, &KeyEvent::from(KeyCode::Char('X')))), (None, None), "{ctx:?}");
         }
         assert!(!keys.describe(&errors).iter().any(|line| line.contains("reports")), "kebbie config lists no reports key");
     }

@@ -57,7 +57,8 @@ impl App {
                 match hit {
                     Some(Hit::Task(_)) if normal => (self.column, self.in_messages, self.offer_panel.focused, self.comment_panel.focused) = (Column::Work, false, false, false),
                     Some(Hit::Entry(_)) if normal => (self.column, self.in_messages, self.offer_panel.focused, self.comment_panel.focused) = (Column::Backlog, false, false, false),
-                    Some(Hit::Offer(_)) if normal && !self.offer_panel.focused => self.focus_offers(self.offer_panel.selected),
+                    Some(Hit::Offer(_)) if normal && (!self.offer_panel.focused || self.offer_panel.on_fixed) => self.focus_offers(self.offer_panel.selected),
+                    Some(Hit::Fixed) if normal && !self.fixed_focused() => self.focus_fixed(),
                     Some(Hit::Comment(_)) if normal && !self.comment_panel.focused => self.focus_comments(self.comment_panel.selected),
                     Some(Hit::Messages(_)) if normal && self.fold == Fold::Open => self.in_messages = true,
                     _ => {}
@@ -84,7 +85,7 @@ impl App {
                     }
                     (Some(Hit::Offer(index)), Mode::Normal) => {
                         let shown = self.offer_panel.shown;
-                        let again = self.offer_panel.focused && (self.offer_panel.selected == index || !shown);
+                        let again = self.offer_panel.focused && !self.offer_panel.on_fixed && (self.offer_panel.selected == index || !shown);
                         self.focus_offers(index);
                         match (again, shown) {
                             (true, true) => {
@@ -92,6 +93,13 @@ impl App {
                             }
                             (true, false) => self.show_offers(),
                             _ => {}
+                        }
+                    }
+                    (Some(Hit::Fixed), Mode::Normal) => {
+                        let again = self.fixed_focused();
+                        self.focus_fixed();
+                        if again {
+                            self.mode = Mode::FixedOptions(0);
                         }
                     }
                     (Some(Hit::Comment(index)), Mode::Normal) => {
@@ -150,11 +158,15 @@ impl App {
                         self.mode = Mode::Normal;
                         self.pick_restart(index);
                     }
+                    (Some(Hit::Choice(index)), Mode::FixedOptions(_)) => {
+                        self.mode = Mode::Normal;
+                        self.pick_fixed(index);
+                    }
                     (Some(Hit::Commit(index)), Mode::ConfirmPush { selected, commits, marks, .. }) => *selected = index.min(marks.last_pushable(commits.len())),
                     (Some(Hit::CardImage(index)), Mode::Card { image, .. }) => *image = index,
                     (Some(Hit::Question(index)), Mode::Questions(window)) => window.select(&self.questions, index),
                     (Some(Hit::Answer(index)), Mode::Questions(window)) => window.click(&self.questions, index),
-                    (None, Mode::Options(_) | Mode::ReviewMenu(_) | Mode::RestartLead(_) | Mode::Park { .. } | Mode::Message(_) | Mode::Help(_)) => self.mode = Mode::Normal,
+                    (None, Mode::Options(_) | Mode::ReviewMenu(_) | Mode::RestartLead(_) | Mode::FixedOptions(_) | Mode::Park { .. } | Mode::Message(_) | Mode::Help(_)) => self.mode = Mode::Normal,
                     (None, Mode::Update) => {
                         self.mode = Mode::Normal;
                         self.handle_update(KeyEvent::from(KeyCode::Esc));

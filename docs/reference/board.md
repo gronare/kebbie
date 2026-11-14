@@ -68,8 +68,8 @@ Work:
 - Under READY TO PUSH: [COMMENTS](#comments), the comments colleagues left on commits kebbie pushed, while any waits for you.
 - Under the groups: the [parked line](#parked) while you have parked tasks.
 - Under the tasks: the [bugs and wishes to send](#bugs-and-wishes-to-send), folded into one row until you open them, and the main checkouts with files changed outside any task.
-- A folded row, the parked line, the comments or the bugs and wishes to send, is selected like a task: `⏎` or a click on it once selected opens it, and `esc` on a row inside folds it back with the selection on the row.
-- After an update's recheck fixed some bugs, `✓ Fixed in kebbie <version>: N bugs you ran into` with their titles. `i` shows the list and clears the line; `X` clears it without opening the list.
+- A folded row, the parked line, the comments, the bugs and wishes to send or the fixed block, is selected like a task: `⏎` or a click on it once selected opens it, and `esc` on a row inside folds it back with the selection on the row.
+- After an update's recheck fixed some bugs, `✓ Fixed in kebbie <version>: N bugs you ran into` with their titles, below the bugs and wishes to send. `i` shows the list and clears the block. `↓` selects it like a row, and `⏎` on it offers **Show the list** or **Hide this**, which clears it without the list; it does not come back.
 
 Backlog: FOUND BY TASKS lists what tasks noticed outside their work. A `◆` and `2×` mark one found more than once; the selected item shows whole, with its repo and who found it (`found 2× · by billing, search`). See [`kebbie found`](commands.md#kebbie-found---json).
 
@@ -882,7 +882,7 @@ inbox = "I"
 new = "N"
 ```
 
-The actions are `work_page`, `areas_page`, `routines_page`, `settings_page`, `hide_chat`, `messages`, `hub`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `rebase`, `follow`, `tidy`, `push`, `try` (the older name `stage` still reads), `done`, `dismiss_ci`, `dismiss_fixed`, `rerun_ci`, `park`, `reset`, `drop`, `start_at`, `refresh`, `away`, `update`, `restart_lead`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, `item_options` (`o` in the Backlog column), and `close` (`q`).
+The actions are `work_page`, `areas_page`, `routines_page`, `settings_page`, `hide_chat`, `messages`, `hub`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `rebase`, `follow`, `tidy`, `push`, `try` (the older name `stage` still reads), `done`, `dismiss_ci`, `rerun_ci`, `park`, `reset`, `drop`, `start_at`, `refresh`, `away`, `update`, `restart_lead`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, `item_options` (`o` in the Backlog column), and `close` (`q`).
 
 - The key is one plain character.
 - `esc`, `ctrl+c`, `⏎`, the arrows, `j` `k` and `tab` stay where they are, and so do the keys inside a window or a text field.

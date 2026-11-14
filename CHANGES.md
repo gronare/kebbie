@@ -10,7 +10,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 
 ### Fixed
 - When one bug or wish waits to be sent, the board's row names it by its title instead of counting it.
-- X on the board dismisses the "Done in kebbie" line without opening its list.
+- The board's "Done in kebbie" line is selected like a task, and ⏎ on it shows its list or hides it for good.
 - Your phone answers kebbie's own question on a task's obstacle, and the task hears your decision.
 - The investigator applies your earlier answer in a task instead of asking you the same kind of question again.
 - Subtasks with commits show ready once later work moved past them, even without kebbie subtasks done.

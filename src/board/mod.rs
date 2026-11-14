@@ -120,6 +120,7 @@ enum Mode {
     ConfirmQueued { name: String, about: String, now: bool, nudged: bool },
     ConfirmClaimed { entry: Entry, about: String, machine: String, nudged: bool },
     RestartLead(usize),
+    FixedOptions(usize),
     Park { address: String, name: String, index: usize, date: Option<String> },
     Filter { buffer: String },
     Card { path: PathBuf, name: String, scroll: u16, image: usize },
@@ -154,6 +155,7 @@ enum Hit {
     Answer(usize),
     Messages(Option<usize>),
     Offer(usize),
+    Fixed,
     Comment(usize),
     Key(KeyCode),
 }
@@ -706,6 +708,7 @@ impl App {
             Mode::ConfirmClaimed { entry, about, machine, .. } => self.confirm_claimed(entry, about, machine, key, cancels),
             Mode::ConfirmDrop { path, name, force, .. } => self.confirm_drop(path, name, force, key, cancels),
             Mode::RestartLead(index) => self.choose_restart(index, act, key),
+            Mode::FixedOptions(index) => self.choose_fixed(index, act, key),
             Mode::Park { address, name, index, date } => self.choose_park(address, name, index, date, act, key),
             Mode::Card { path, name, scroll, image } => self.handle_card(path, name, scroll, image, key),
             Mode::Fullscreen { path, name, scroll, index } => self.handle_fullscreen(path, name, scroll, index, key),
@@ -775,15 +778,14 @@ impl App {
                     return;
                 }
                 self.move_selection(if down { 1 } else { -1 });
-                if down && ctx == Ctx::Work && self.work_selected == before && !self.offers.is_empty() {
-                    self.focus_offers(0);
+                if down && ctx == Ctx::Work && self.work_selected == before {
+                    if self.offers.is_empty() { self.focus_fixed() } else { self.focus_offers(0) }
                 }
             }
             Act::Switch => self.column = if self.column == Column::Work { Column::Backlog } else { Column::Work },
             Act::Back | Act::Close => self.at_top(Some(act)),
             Act::Help => self.mode = Mode::Help(Default::default()),
             Act::Inbox => self.open_questions(None),
-            Act::DismissFixed => self.dismiss_fixed(),
             Act::Options if self.on_parked_line() => self.show_parked(true),
             Act::Options => {
                 let has_selection = match self.column {
@@ -1276,6 +1278,7 @@ pub fn run(overlay: bool) -> Result<String> {
                         app.comments = snapshot.comments;
                         app.comments_changed();
                         app.fixed = snapshot.fixed.filter(|fixed| fixed.last > app.fixed_seen);
+                        app.fixed_changed();
                         app.usage = snapshot.usage;
                         app.ongoing = snapshot.ongoing;
                         app.lead_chat = snapshot.lead_chat;

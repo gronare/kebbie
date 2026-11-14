@@ -89,7 +89,8 @@ A read-only Claude reads the issue, every commit since the build it was filed on
 
 Nobody asks you anything. The board shows one line under Work as soon as the first recheck closes an issue, such as `✓ Fixed in kebbie 0.26.3: 2 bugs you ran into`, with the titles below it. It adds to the line as the other rechecks finish, and a fixed wish counts as `1 wish you made`.
 
-- `i` shows the list and clears the line, once any questions are answered; `X` clears the line without opening the list. A fix that lands later shows again.
+- `i` shows the list and clears the line, once any questions are answered. A fix that lands later shows again.
+- `↓` selects the line like a task, and `⏎` on it offers **Show the list** or **Hide this**, which clears it without opening the list.
 - The line also goes by itself three days after the last fix, and an issue you reopen leaves it.
 - `kebbie issues --all` shows every closed issue with its last recorded line.
 

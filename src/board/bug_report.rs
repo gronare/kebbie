@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::Frame;
@@ -14,7 +15,7 @@ use crate::notice::{Notice, Tone};
 use crate::sh::Result;
 use super::{App, Hit, Mode};
 use super::columns::Rows;
-use super::widgets::{FAINT, GREEN, MAUVE, MUTED, PEACH, SURFACE, TEXT, YELLOW, bold, group_line, modal, style, wrap};
+use super::widgets::{Choice, FAINT, GREEN, MAUVE, MUTED, PEACH, SURFACE, TEXT, YELLOW, bold, group_line, modal, options_lines, style, wrap};
 
 const PAGE: u16 = 10;
 const FRAME_ROWS: u16 = 14;
@@ -50,6 +51,7 @@ pub(super) struct OfferPanel {
     pub(super) focused: bool,
     pub(super) selected: usize,
     pub(super) file: Option<PathBuf>,
+    pub(super) on_fixed: bool,
 }
 
 type SendFn = Arc<dyn Fn(&str, &[u8; 32]) -> Result<String> + std::marker::Send + Sync>;
@@ -119,25 +121,26 @@ pub(super) fn offer_lines(app: &App, width: usize, first: usize) -> (Vec<Line<'s
         return (Vec::new(), Vec::new(), None);
     }
     let panel = &app.offer_panel;
+    let focused = panel.focused && !panel.on_fixed;
     let mut rows = Vec::new();
     let mut selected_line = None;
     if !panel.shown {
-        let marker = if panel.focused { Span::styled("▌", bold(MAUVE)) } else { Span::raw(" ") };
+        let marker = if focused { Span::styled("▌", bold(MAUVE)) } else { Span::raw(" ") };
         let text = folded_text(&app.offers, &keys::map().label(Act::Options), width);
         let line = Line::from(vec![marker, Span::styled("! ", style(YELLOW)), Span::styled(text, style(YELLOW))]);
-        if panel.focused {
+        if focused {
             selected_line = Some(first + 1);
         }
         rows.push((first + 1, first + 2, Hit::Offer(0)));
-        return (vec![Line::default(), if panel.focused { line.style(Style::new().bg(SURFACE)) } else { line }], rows, selected_line);
+        return (vec![Line::default(), if focused { line.style(Style::new().bg(SURFACE)) } else { line }], rows, selected_line);
     }
     let mut lines = vec![Line::default(), group_line("Send to kebbie's maintainers?", app.offers.len(), YELLOW)];
-    let hint = if panel.focused { "⏎ asks to send · a sends all · n keeps it here · esc hides them" } else { "bugs and wishes about kebbie, saved here" };
+    let hint = if focused { "⏎ asks to send · a sends all · n keeps it here · esc hides them" } else { "bugs and wishes about kebbie, saved here" };
     lines.push(Line::from(Span::styled(hint, style(MUTED))));
     for (index, offer) in app.offers.iter().enumerate() {
         let title = wrap(&offer.report.title, width.saturating_sub(12), 1).into_iter().next().unwrap_or_default();
         let line = Line::from(vec![Span::styled("! ", style(YELLOW)), Span::styled(format!("{}  ", offer.id), style(FAINT)), Span::styled(title, style(TEXT))]);
-        let selected = panel.focused && index == panel.selected;
+        let selected = focused && index == panel.selected;
         if selected {
             selected_line = Some(first + lines.len());
         }
@@ -151,20 +154,48 @@ pub(super) fn load_fixed() -> Option<Fixed> {
     crate::issue_recheck::shown(&crate::lead::state_dir().ok()?, crate::messages::now())
 }
 
-pub(super) fn fixed_lines(fixed: Option<&Fixed>, questions: bool, width: usize) -> Vec<Line<'static>> {
-    let Some(fixed) = fixed else { return Vec::new() };
-    let mut lines = vec![Line::default(), Line::from(Span::styled(format!("✓ {}", crate::issue_recheck::headline(fixed, crate::config::channel().unwrap_or_default())), style(GREEN)))];
+// The block, its row, and its first line when the cursor is on it, counted from `first`.
+pub(super) fn fixed_lines(app: &App, width: usize, first: usize) -> (Vec<Line<'static>>, Rows, Option<usize>) {
+    let Some(fixed) = app.fixed.as_ref() else { return (Vec::new(), Vec::new(), None) };
+    let focused = app.fixed_focused();
+    let block = fixed_block(fixed, !app.questions.is_empty(), width, focused);
+    let rows = vec![(first + 1, first + 1 + block.len(), Hit::Fixed)];
+    let mut lines = vec![Line::default()];
+    lines.extend(block);
+    (lines, rows, focused.then_some(first + 1))
+}
+
+fn fixed_block(fixed: &Fixed, questions: bool, width: usize, focused: bool) -> Vec<Line<'static>> {
+    let marker = if focused { Span::styled("▌", bold(MAUVE)) } else { Span::raw(" ") };
+    let mut lines = vec![Line::from(vec![marker, Span::styled(format!("✓ {}", crate::issue_recheck::headline(fixed, crate::config::channel().unwrap_or_default())), style(GREEN))])];
     for title in fixed.titles.iter().take(FIXED_TITLES) {
-        let title = wrap(title, width.saturating_sub(4), 1).into_iter().next().unwrap_or_default();
-        lines.push(Line::from(vec![Span::raw("  "), Span::styled(title, style(TEXT))]));
+        let title = wrap(title, width.saturating_sub(5), 1).into_iter().next().unwrap_or_default();
+        lines.push(Line::from(vec![Span::raw("   "), Span::styled(title, style(TEXT))]));
     }
     let more = fixed.titles.len().saturating_sub(FIXED_TITLES);
     if more > 0 {
-        lines.push(Line::from(Span::styled(format!("  … and {more} more"), style(MUTED))));
+        lines.push(Line::from(Span::styled(format!("   … and {more} more"), style(MUTED))));
     }
     let after = if questions { ", once the questions are answered" } else { "" };
-    lines.push(Line::from(Span::styled(format!("  {} shows the list{after} · {} dismisses", keys::key(Act::Inbox), keys::key(Act::DismissFixed)), style(MUTED))));
+    lines.push(Line::from(Span::styled(format!("   {} shows the list{after} · {} options", keys::key(Act::Inbox), keys::map().label(Act::Options)), style(MUTED))));
+    if focused {
+        return lines.into_iter().map(|line| line.style(Style::new().bg(SURFACE))).collect();
+    }
     lines
+}
+
+fn fixed_choices() -> Vec<Choice> {
+    let row = |key: char, label: &str, about: &str| Choice { key, act: None, label: label.to_string(), about: about.to_string(), link: None };
+    vec![
+        row('1', "Show the list", "every title in a window; the block goes once it is shown"),
+        row('2', "Hide this", "the block goes without the list and does not come back"),
+    ]
+}
+
+pub(super) fn draw_fixed_options(frame: &mut Frame, fixed: Option<&Fixed>, index: usize) -> Vec<(Rect, Hit)> {
+    let title = fixed.map_or("kebbie".to_string(), |fixed| crate::issue_recheck::headline(fixed, crate::config::channel().unwrap_or_default()).chars().take(56).collect());
+    let area = modal(frame, title, options_lines(fixed_choices(), index, 56), 62);
+    (0..2u16).map(|choice| (Rect::new(area.x, area.y + 1 + 2 * choice, area.width, 2), Hit::Choice(choice as usize))).filter(|(rect, _)| rect.y + 1 < area.bottom()).collect()
 }
 
 impl App {
@@ -174,11 +205,78 @@ impl App {
         if let Ok(state) = crate::lead::state_dir() {
             let _ = crate::issue_recheck::dismiss(&state, &fixed, crate::messages::now());
         }
+        self.fixed_changed();
         Some(fixed)
     }
 
-    pub(super) fn dismiss_fixed(&mut self) {
-        self.mark_fixed_seen();
+    pub(super) fn fixed_focused(&self) -> bool {
+        self.offer_panel.focused && self.offer_panel.on_fixed
+    }
+
+    pub(super) fn focus_fixed(&mut self) {
+        if self.fixed.is_none() {
+            return;
+        }
+        self.in_messages = false;
+        self.comment_panel.focused = false;
+        self.column = super::Column::Work;
+        (self.offer_panel.focused, self.offer_panel.on_fixed) = (true, true);
+    }
+
+    // Gone while the cursor was on it, the cursor goes up a row, as ↑ would take it.
+    pub(super) fn fixed_changed(&mut self) {
+        if self.fixed_focused() && self.fixed.is_none() {
+            self.leave_fixed();
+        }
+    }
+
+    fn leave_fixed(&mut self) {
+        if !self.offers.is_empty() {
+            let last = if self.offer_panel.shown { self.offers.len() - 1 } else { 0 };
+            return self.focus_offers(last);
+        }
+        if self.comments_shown() && !(self.comment_boundary()..self.tasks.len()).any(|index| self.shown(super::Column::Work, index)) {
+            self.offer_panel.on_fixed = false;
+            return self.focus_comments(self.comments.len().saturating_sub(1));
+        }
+        let stays = self.tasks.is_empty() && self.fixed.is_some();
+        (self.offer_panel.focused, self.offer_panel.on_fixed) = (stays, stays);
+    }
+
+    fn handle_fixed(&mut self, key: KeyEvent) {
+        match keys::map().act(self.ctx(), &key) {
+            Some(Act::Move) if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) => self.leave_fixed(),
+            Some(Act::Options) => self.mode = Mode::FixedOptions(0),
+            Some(Act::Back | Act::Close) => (self.offer_panel.focused, self.offer_panel.on_fixed) = (false, false),
+            Some(Act::Switch) => (self.offer_panel.focused, self.offer_panel.on_fixed, self.column) = (false, false, super::Column::Backlog),
+            Some(Act::Messages) => {
+                (self.offer_panel.focused, self.offer_panel.on_fixed) = (false, false);
+                self.press_m();
+            }
+            Some(Act::Help) => self.mode = Mode::Help(Default::default()),
+            Some(Act::Inbox) => self.open_questions(None),
+            _ => {}
+        }
+    }
+
+    pub(super) fn choose_fixed(&mut self, index: usize, act: Option<Act>, key: KeyEvent) {
+        match (key.code, act) {
+            (KeyCode::Char('1'), _) => self.pick_fixed(0),
+            (KeyCode::Char('2'), _) => self.pick_fixed(1),
+            (_, Some(Act::Move)) if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) => self.mode = Mode::FixedOptions(0),
+            (_, Some(Act::Move)) => self.mode = Mode::FixedOptions(1),
+            (_, Some(Act::Options)) => self.pick_fixed(index),
+            (_, Some(Act::Back | Act::Close)) => {}
+            _ => self.mode = Mode::FixedOptions(index),
+        }
+    }
+
+    pub(super) fn pick_fixed(&mut self, index: usize) {
+        if index == 0 {
+            self.open_fixed();
+        } else {
+            self.mark_fixed_seen();
+        }
     }
 
     pub(super) fn open_fixed(&mut self) -> bool {
@@ -194,7 +292,7 @@ impl App {
             self.offers.retain(|offer| !going.contains(&offer.id));
         }
         self.offer_panel.selected = self.offer_panel.selected.min(self.offers.len().saturating_sub(1));
-        self.offer_panel.focused &= !self.offers.is_empty();
+        self.offer_panel.focused &= if self.offer_panel.on_fixed { self.fixed.is_some() } else { !self.offers.is_empty() };
     }
 
     fn set_shown(&mut self, shown: bool) {
@@ -207,6 +305,7 @@ impl App {
         self.comment_panel.focused = false;
         self.column = super::Column::Work;
         self.offer_panel.focused = !self.offers.is_empty();
+        self.offer_panel.on_fixed = false;
         self.offer_panel.selected = index.min(self.offers.len().saturating_sub(1));
     }
 
@@ -217,6 +316,9 @@ impl App {
 
     // Folded, the list is one row that ⏎ opens; open, esc folds it back with the selection on that row.
     pub(super) fn handle_offers(&mut self, key: KeyEvent) {
+        if self.offer_panel.on_fixed {
+            return self.handle_fixed(key);
+        }
         let shown = self.offer_panel.shown;
         if shown && key.code == KeyCode::Char('n') {
             return self.decline_offer();
@@ -235,7 +337,8 @@ impl App {
                 None if self.comments_shown() && !(self.comment_boundary()..self.tasks.len()).any(|index| self.shown(super::Column::Work, index)) => self.focus_comments(self.comments.len().saturating_sub(1)),
                 None => self.offer_panel.focused = self.tasks.is_empty(),
             },
-            Some(Act::Move) if shown => self.offer_panel.selected = (self.offer_panel.selected + 1).min(self.offers.len().saturating_sub(1)),
+            Some(Act::Move) if !shown || self.offer_panel.selected + 1 >= self.offers.len() => self.focus_fixed(),
+            Some(Act::Move) => self.offer_panel.selected += 1,
             Some(Act::Options) if shown => {
                 self.open_report();
             }
@@ -764,7 +867,7 @@ mod tests {
         app.fixed = Some(Fixed { version: "0.26.3".to_string(), titles: titles.clone(), bugs: titles.clone(), wishes: 0, last: 500 });
         let (rows, _) = render(&mut app, 120, 40);
         let screen = rows.join("\n");
-        assert!(screen.contains("✓ Fixed in kebbie 0.26.3: 4 bugs you ran into") && screen.contains("  i shows the list · X dismisses"), "{screen}");
+        assert!(screen.contains("✓ Fixed in kebbie 0.26.3: 4 bugs you ran into") && screen.contains("   i shows the list · ⏎ options"), "{screen}");
         assert!(screen.contains("  push hid git's error") && screen.contains("  stage lost a commit") && !screen.contains("a fourth") && screen.contains("… and 1 more"), "{screen}");
         press(&mut app, key(KeyCode::Char('i')));
         assert!(app.fixed.is_none() && app.fixed_seen == 500, "the line goes once it was opened, and a snapshot read before it cannot bring it back");
@@ -772,24 +875,75 @@ mod tests {
         assert!(text.contains("Fixed in kebbie 0.26.3: 4 bugs you ran into") && text.contains("a fourth") && text.contains("kebbie issues --all"), "{text}");
         app.fixed = Some(Fixed { version: "0.26.3".to_string(), titles: vec!["x".to_string()], bugs: vec!["x".to_string()], wishes: 0, last: 600 });
         app.questions = crate::messages::fold(QUESTION);
-        let hint = |questions: bool| fixed_lines(app.fixed.as_ref(), questions, 120).iter().map(|line| line.to_string()).collect::<Vec<_>>().join("\n");
-        assert!(hint(true).contains("i shows the list, once the questions are answered · X dismisses"), "{}", hint(true));
-        assert!(hint(false).ends_with("i shows the list · X dismisses"), "{}", hint(false));
+        let hint = |questions: bool| fixed_block(app.fixed.as_ref().unwrap(), questions, 120, false).iter().map(|line| line.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(hint(true).contains("i shows the list, once the questions are answered · ⏎ options"), "{}", hint(true));
+        assert!(hint(false).ends_with("i shows the list · ⏎ options"), "{}", hint(false));
         press(&mut app, key(KeyCode::Esc));
         press(&mut app, key(KeyCode::Char('i')));
         assert!(matches!(app.mode, Mode::Questions(_)) && app.fixed.is_some(), "questions come first");
     }
 
+    fn wish_done() -> Fixed {
+        Fixed { version: "main".to_string(), titles: vec!["a dark theme for shop".to_string()], bugs: Vec::new(), wishes: 1, last: 700 }
+    }
+
     #[test]
-    fn the_dismiss_key_clears_the_fixed_block_without_opening_the_list_and_a_refresh_leaves_it_gone() {
+    fn the_cursor_steps_onto_the_fixed_block_and_its_options_hide_it_for_good() {
         let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
-        let fixed = Fixed { version: "main".to_string(), titles: vec!["a dark theme for shop".to_string()], bugs: Vec::new(), wishes: 1, last: 700 };
-        app.fixed = Some(fixed.clone());
-        assert!(screen(&mut app).contains("a dark theme for shop"));
-        press(&mut app, key(KeyCode::Char('X')));
-        assert!(app.fixed.is_none() && app.fixed_seen == 700 && matches!(app.mode, Mode::Normal), "no list opens");
+        app.fixed = Some(wish_done());
+        press(&mut app, key(KeyCode::Char('j')));
+        assert!(app.fixed_focused(), "↓ from the last task selects the block");
+        assert!(screen(&mut app).contains("▌✓ "), "the block is marked as selected");
+        press(&mut app, key(KeyCode::Char('k')));
+        assert!(!app.offer_panel.focused && app.work_selected == 0, "↑ goes back to the task");
+        press(&mut app, key(KeyCode::Down));
+        press(&mut app, key(KeyCode::Enter));
+        assert!(matches!(app.mode, Mode::FixedOptions(0)), "⏎ on the block opens its options");
+        let shown = screen(&mut app);
+        assert!(shown.contains("Show the list") && shown.contains("Hide this"), "{shown}");
+        press(&mut app, key(KeyCode::Char('j')));
+        assert!(matches!(app.mode, Mode::FixedOptions(1)));
+        press(&mut app, key(KeyCode::Enter));
+        assert!(app.fixed.is_none() && app.fixed_seen == 700 && matches!(app.mode, Mode::Normal), "Hide this clears it without the list");
+        assert!(!app.offer_panel.focused && app.work_selected == 0, "the cursor goes back to the task");
         assert!(!screen(&mut app).contains("a dark theme for shop"), "the block is gone");
-        app.fixed = Some(fixed).filter(|fixed| fixed.last > app.fixed_seen);
+        app.fixed = Some(wish_done()).filter(|fixed| fixed.last > app.fixed_seen);
+        app.fixed_changed();
         assert!(app.fixed.is_none(), "a snapshot read before it cannot bring it back");
+    }
+
+    #[test]
+    fn show_the_list_in_the_fixed_blocks_options_opens_the_list() {
+        let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
+        app.fixed = Some(wish_done());
+        press(&mut app, key(KeyCode::Char('j')));
+        press(&mut app, key(KeyCode::Enter));
+        press(&mut app, key(KeyCode::Enter));
+        let Mode::Message(text) = &app.mode else { panic!("Show the list opens the list") };
+        assert!(text.contains("a dark theme for shop") && text.contains("kebbie issues --all"), "{text}");
+        assert!(app.fixed.is_none(), "shown, the block goes");
+    }
+
+    #[test]
+    fn the_cursor_passes_the_issues_row_on_its_way_to_the_fixed_block() {
+        let state = crate::sh::test_dir("board-fixed-under-offers");
+        filed(&state, "a1b2c3", "bug", "push hid git's error");
+        let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
+        app.offers = offers_in(&state, true, &scrub);
+        app.fixed = Some(wish_done());
+        press(&mut app, key(KeyCode::Char('j')));
+        assert!(app.offer_panel.focused && !app.fixed_focused(), "the issues row comes first");
+        press(&mut app, key(KeyCode::Char('j')));
+        assert!(app.fixed_focused(), "then the block");
+        press(&mut app, key(KeyCode::Char('k')));
+        assert!(app.offer_panel.focused && !app.fixed_focused(), "↑ goes back to the issues row");
+    }
+
+    #[test]
+    fn x_is_no_board_key() {
+        assert!(Act::EVERY.iter().all(|act| act.id() != "dismiss_fixed"));
+        for ctx in [crate::keys::Ctx::Work, crate::keys::Ctx::Backlog] {
+            assert_eq!(keys::map().act(ctx, &key(KeyCode::Char('X'))), None, "{ctx:?}");
+        }
     }
 }

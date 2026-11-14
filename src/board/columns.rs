@@ -350,7 +350,10 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
     rows.extend(offer_rows);
     selected_line = offer_selected.unwrap_or(selected_line);
     lines.extend(offers);
-    lines.extend(super::bug_report::fixed_lines(app.fixed.as_ref(), !app.questions.is_empty(), width));
+    let (fixed, fixed_rows, fixed_selected) = super::bug_report::fixed_lines(app, width, lines.len());
+    rows.extend(fixed_rows);
+    selected_line = fixed_selected.unwrap_or(selected_line);
+    lines.extend(fixed);
     let leftovers: Vec<String> = app.checkouts.iter().filter(|checkout| checkout.changed > 0)
         .map(|checkout| format!("{}: {} changed outside tasks", checkout.name, plural(checkout.changed, "file"))).collect();
     if !leftovers.is_empty() {

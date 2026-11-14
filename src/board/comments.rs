@@ -204,6 +204,7 @@ impl App {
                 self.work_selected = index;
             }
             None if down && !self.offers.is_empty() => self.focus_offers(0),
+            None if down => self.focus_fixed(),
             None => {}
         }
     }
