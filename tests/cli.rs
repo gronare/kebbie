@@ -513,6 +513,9 @@ fn away_mode_is_the_users_switch_and_the_lead_alone_decides_while_it_is_on() {
         assert!(!decide.status.success() && stderr(&decide).contains("only the lead settles a question"), "{}", stderr(&decide));
         assert!(stdout(&lab.run(&["away", "off"])).starts_with("✓ Away mode is off"));
         assert!(!lab.state.join("away").exists());
+        let thread: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(lab.state.join("lead-thread.json")).unwrap()).unwrap();
+        let switches: Vec<(bool, bool)> = thread["switches"].as_array().unwrap().iter().map(|switch| (switch["on"] == true, switch["device"].is_null())).collect();
+        assert_eq!(switches, [(true, true), (false, true)], "both switches are turns of the lead's thread, made at the computer: {thread}");
     }
     assert!(!lab.run(&["away", "maybe"]).status.success());
 }

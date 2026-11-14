@@ -69,7 +69,7 @@ pub(super) fn note_typed(dir: &Path, address: &str) {
 }
 
 // The box seen as a draft right after kebbie typed into it, in this pass or a recent one, holds kebbie's own text.
-fn kebbies_own<'a>(dir: &Path, address: &str, why: &'a str) -> &'a str {
+pub(super) fn kebbies_own<'a>(dir: &Path, address: &str, why: &'a str) -> &'a str {
     let recent = fs::read_to_string(typed_file(dir, address)).ok().and_then(|at| at.trim().parse::<u64>().ok()).is_some_and(|at| now().saturating_sub(at) <= TYPED_FOR);
     if why == DRAFT_HOLD && recent { EARLIER_TYPING } else { why }
 }
@@ -101,7 +101,9 @@ pub(super) fn stale(message: &Message, open: &[&Message]) -> bool {
 }
 
 fn flush_held(sessions: &[Session]) -> Result<usize> {
-    flush_held_in(&state_dir()?, sessions, &mut crate::inbox::prompt, &heard, &rules_check_wanted)
+    let dir = state_dir()?;
+    let from_device = super::deliver_device_in(&dir, sessions, &mut |pane, text| crate::typing::prompt(pane, text, LEAD_LABEL))?;
+    Ok(from_device + flush_held_in(&dir, sessions, &mut crate::inbox::prompt, &heard, &rules_check_wanted)?)
 }
 
 fn note_kebbie_typed_lead(dir: &Path, address: &str) {
@@ -167,6 +169,9 @@ pub(super) fn flush_typing_in(dir: &Path, sessions: &[Session], type_into: TypeI
     let mut typed_into = HashSet::new();
     let mut for_lead: Vec<&Message> = Vec::new();
     for message in held {
+        if message.kind.as_deref() == Some(super::DEVICE_KIND) {
+            continue;
+        }
         if stale(message, &open) {
             append_in(dir, &json!({ "id": message.id, "at": now(), "state": "dropped" }), ROTATE_BYTES)?;
             continue;
@@ -232,7 +237,7 @@ pub(super) fn flush_typing_in(dir: &Path, sessions: &[Session], type_into: TypeI
 }
 
 // A held message keeps the latest reason it waits, written only when it changes, so the board can say why.
-fn note_why(dir: &Path, message: &Message, why: &str) -> Result<()> {
+pub(super) fn note_why(dir: &Path, message: &Message, why: &str) -> Result<()> {
     if message.why.as_deref() == Some(why) {
         return Ok(());
     }

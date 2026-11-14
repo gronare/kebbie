@@ -144,6 +144,22 @@ A task whose subtask waits for your acceptance offers a review on its row, and a
 - If the task's branch moved since you opened it, a read mark or an accept is refused; open the review again.
 - If its Claude has text in its input box, the comments are not sent; send them again once it is clear.
 
+### Talk to the lead from your phone
+
+**Lead** holds one thread per machine: the whole conversation with its lead, what you wrote at the computer, what you wrote on a device and the lead's replies to you, without its tool calls. A device that makes changes also:
+
+1. Pick the machine at the top of **Lead**.
+2. Write your message and tap **Send**.
+3. Read the line under it: `Waiting for the lead to finish its turn`, `Waiting: a draft is in the lead's input`, then `delivered` once the lead has it.
+
+The lead gets it as your own word, typed into its chat as `(from iPhone) <your message>` once its turn has ended and its input box is empty. The machine answers the device only when the lead's conversation shows the message, and the lead's reply comes as a `Lead · MacBook` notification with its first line.
+
+- If the lead is not running, the message waits on the machine and goes in once the lead runs again; after a week it expires.
+- If no lead has run on the machine yet, the message is refused.
+- The away switch in **Lead** turns [away mode](work-while-away.md) on or off as `kebbie away` does, and the lead answers it in the thread. Of two switches sent from two devices, the one sent last decides.
+- While you are away, every reply of the lead shows in the thread and comes as a notification.
+- Messages to the lead and the away switch reach a machine whose [`hub.commands`](../reference/configuration.md#keys) holds `"lead"`.
+
 ### Approve a new device on the machine
 
 Each machine decides which of your devices may change things on it, by [`hub.trust`](../reference/configuration.md#machine). A new device's first command waits on the machine until you let the device in.
@@ -187,8 +203,9 @@ Each machine sends your devices a notification through the hub when something ne
 | CI failed | `CI failed on web · app` | the failed job and step, and what kebbie did about it |
 | Started, off unless you turn it on | `Started: Retry flaky red runs` | `On MacBook as retry, recipe feature.` |
 | A start you asked for that failed, under Started | `Not started: Retry flaky red runs` | why, and that it stays in the backlog |
+| The lead answered a message from a device, or replied while you are away | `Lead · MacBook` | the first line of its reply |
 
-Tapping a notification opens the task, the item or the device it is about.
+Tapping a notification opens the task, the item, the device or the lead's thread it is about.
 
 - A device hears only what a machine approved it for: under `hub.trust = "device"`, once it is approved there.
 - A newer notification about the same task, item or device replaces the older one, and one about something settled elsewhere, a question answered, a task pushed, CI green again, a device decided, an item started, goes with the next notification that device gets.

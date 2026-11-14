@@ -137,6 +137,9 @@ pub fn set_away_in(state: &Path, on: bool, now: u64) -> Result<Option<u64>> {
     }
 }
 
+pub const AWAY_ON: &str = "The user is away from now on.";
+pub const AWAY_OFF: &str = "The user is back.";
+
 // `kebbie away on|off` and the board's key: the user's word only, and the lead is told either way.
 pub fn away(word: Option<&str>) -> Result<String> {
     let on = match word {
@@ -146,15 +149,22 @@ pub fn away(word: Option<&str>) -> Result<String> {
         Some(other) => return Err(format!("kebbie away takes on or off, not \"{other}\"")),
     };
     user_only("switching away mode")?;
-    let Some(since) = set_away_in(&state_dir()?, on, messages::now())? else {
+    let now = messages::now();
+    switch_away(&state_dir()?, on, now, now, None)
+}
+
+// Away mode switched at the computer or from a device (its command's id and device, `by` when it was asked for): set, written into the lead's thread, and the lead told so it answers.
+pub fn switch_away(state: &Path, on: bool, now: u64, by: u64, from: Option<(&str, &str)>) -> Result<String> {
+    let Some(since) = set_away_in(state, on, now)? else {
         return crate::notice::Notice::new(crate::notice::Tone::Done, format!("Away mode is already {}", if on { "on" } else { "off" })).ok();
     };
+    crate::lead_thread::switched(state, on, now, by, from.map(|(id, _)| id), from.map(|(_, device)| device))?;
     if on {
         let log = messages::load();
         let open: Vec<String> = crate::questions::open_now(&log).into_iter().filter(|question| question.question.as_ref().is_some_and(|question| !question.waits))
             .map(|question| format!("\n- {}", crate::questions::question_copy(question, true))).collect();
         let open = if open.is_empty() { String::new() } else { format!("\nQuestions waiting on the board now:{}", open.concat()) };
-        tell_lead(messages::ToLead::Away, &format!("The user is away from now on. Work by the away rules in your role: answer how-questions yourself with kebbie decide, keep what-questions for the user with kebbie defer, push only what their permissions allow, and keep what you decide for the summary they get back.{open}"));
+        tell_lead(messages::ToLead::Away, &format!("{AWAY_ON} Work by the away rules in your role: answer how-questions yourself with kebbie decide, keep what-questions for the user with kebbie defer, push only what their permissions allow, and keep what you decide for the summary they get back.{open}"));
         return crate::notice::Notice::new(crate::notice::Tone::Done, "Away mode is on").next("The lead decides how-questions itself, keeps what-questions for you, and pushes only what you permitted.").ok();
     }
     let log = messages::load();
@@ -172,7 +182,7 @@ pub fn return_brief(log: &[Message], since: u64, waiting: &[Message]) -> String 
     let section = |title: &str, lines: Vec<String>| if lines.is_empty() { format!("{title}: none.") } else { format!("{title}:\n{}", lines.join("\n")) };
     let kept: Vec<String> = waiting.iter().map(|question| format!("- {} asks: {}", question.from, question.text)).collect();
     format!(
-        "The user is back. Write them the summary now, a screen at most, in your three parts: what landed and what you decided for them and why under Done, the kept questions under Needs you.\n{}\n{}\n{}",
+        "{AWAY_OFF} Write them the summary now, a screen at most, in your three parts: what landed and what you decided for them and why under Done, the kept questions under Needs you.\n{}\n{}\n{}",
         section("Pushed while they were away", since_left("push")), section("Your calls", since_left("decision")), section("Questions kept for them", kept),
     )
 }

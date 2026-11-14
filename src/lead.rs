@@ -306,6 +306,20 @@ fn unspoken(transcripts: &[Transcript], recorded: Option<&str>, recorded_at: Opt
     (!transcripts.iter().any(|(_, stem)| stem == id) && transcripts.iter().all(|(modified, _)| *modified < at)).then(|| id.to_string())
 }
 
+// The lead's conversation as Claude Code keeps it: the recorded one, or a newer one in the lead's folder, as after /clear.
+pub(crate) fn transcript_file(state: &Path) -> Option<PathBuf> {
+    let home = Agent::Claude.home()?;
+    let dir = Agent::Claude.transcripts_dir(&home, &lead_dir_path().ok()?);
+    let recorded = fs::read_to_string(state.join("lead-session")).ok();
+    let id = lead_session(&transcripts_in(&dir), recorded.as_deref().map(str::trim))?;
+    Some(dir.join(format!("{id}.jsonl")))
+}
+
+// A machine where no lead ever started has no conversation to take a message into.
+pub(crate) fn ever_started(state: &Path) -> bool {
+    state.join("lead-session").exists()
+}
+
 fn lead_session(transcripts: &[Transcript], recorded: Option<&str>) -> Option<String> {
     let newest = transcripts.iter().map(|(modified, _)| *modified).max()?;
     recorded.filter(|id| transcripts.iter().any(|(modified, stem)| stem == id && *modified == newest)).map(str::to_string)

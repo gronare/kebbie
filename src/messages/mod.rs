@@ -1,4 +1,5 @@
 mod delivery;
+mod device;
 mod digest;
 mod force;
 mod lead;
@@ -8,6 +9,7 @@ mod log;
 mod pane;
 
 pub use delivery::*;
+pub use device::*;
 pub use digest::*;
 pub use force::*;
 pub use lead::*;

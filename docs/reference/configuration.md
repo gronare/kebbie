@@ -178,7 +178,7 @@ profile = "deep-codex"
 | `notify.command` | none | config.toml only | The shell command kebbie runs when something needs you. Unset sends nothing. See [Notify command](#notify-command). |
 | `vault.command` | none | config.toml only | The vault command kebbie runs for task notes, log lines and the board's snapshot, before its own arguments, such as `"uvx mindin"`. |
 | `hub.url` | the kebbie hub, `https://hub.kebbie.dev` | config.toml only | The [kebbie hub](../how-to/see-your-board-on-your-phone.md) `kebbie hub connect` and the board's `H` window connect this machine to. |
-| `hub.commands` | all seven kinds | config.toml only | What this machine takes from your devices through the hub: a list of `"answer"`, `"push"`, `"prompt"`, `"idea"`, `"start"`, `"edit"` and `"review"`. See [Answer and push from your phone](../how-to/see-your-board-on-your-phone.md#answer-and-push-from-your-phone). |
+| `hub.commands` | all eight kinds | config.toml only | What this machine takes from your devices through the hub: a list of `"answer"`, `"push"`, `"prompt"`, `"idea"`, `"start"`, `"edit"`, `"review"` and `"lead"`. See [Answer and push from your phone](../how-to/see-your-board-on-your-phone.md#answer-and-push-from-your-phone). |
 | `hub.trust` | `"device"` | config.toml only | Which of your devices this machine takes commands from: `"device"`, each device you approve here, or `"account"`, any device signed in to your account. |
 | `hub.auto_approve` | `"24h"` | config.toml only | When a device waiting under `hub.trust = "device"` is let in: `"24h"` after its first command unless you deny it, or `"never"`, only when you approve it. |
 | `hub.approve_from` | `"devices"` | config.toml only | Where a waiting device can be approved: `"devices"`, also from a device you approved on this machine, or `"machine"`, only here. |
@@ -215,13 +215,14 @@ profile = "deep-codex"
 | `"start"` | Starts of a backlog item as a task, as `g` on the board starts one, and what tasks found started, added to a task or kept in the backlog. |
 | `"edit"` | Edits of a backlog item's title or one of its sections. |
 | `"review"` | A task's waiting subtask opened for review, line comments typed into its Claude, files marked read, the subtask accepted, and a task or subtask sent to a full review. |
+| `"lead"` | Your messages to the lead, typed into its chat as your own word once it is free, and away mode switched on or off. |
 
 ```toml
 [hub]
 commands = ["answer", "prompt", "idea"]
 ```
 
-- Unset, the machine takes all seven. `[]` takes nothing, and the board still posts; your phone shows each machine's choice under Machines.
+- Unset, the machine takes all eight. `[]` takes nothing, and the board still posts; your phone shows each machine's choice under Machines.
 - The single words of earlier versions still read: `"answer-and-push"` is `["answer", "push", "prompt"]`, `"answer"` is `["answer", "prompt"]` and `"off"` is `[]`.
 - A refused command gets an answer that names it, such as `Not pushed: devbox takes no pushes from the hub. Push at the machine, or allow pushes in its kebbie settings.`
 - A change counts from the next command; `kebbie hub status` shows it on its `commands:` line.

@@ -24,6 +24,7 @@ Let the lead keep tasks moving while you are gone, and get a summary when you ar
 
    The lead writes you a summary: what landed and what it decided and why, then what waits for you, the kept questions under Needs you. Answer those with `i` on the board.
 
+- If you are already gone, turn it on or off with the away switch in your phone's Lead thread, see [Talk to the lead from your phone](see-your-board-on-your-phone.md#talk-to-the-lead-from-your-phone).
 - If a task should run unattended, start it with a permission mode that does not stop for prompts, for example `kebbie start <name> "<prompt>" --mode auto`.
 
 See also: [The lead and away mode](../explanation/lead-and-away-mode.md).

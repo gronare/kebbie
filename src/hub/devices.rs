@@ -267,6 +267,8 @@ impl Asked {
             Payload::FoundStart(start) => Asked { kind: Kind::FoundStart, task: item(&start.item), said: None },
             Payload::FoundAdd(add) => Asked { kind: Kind::FoundAdd, task: item(&add.item), said: Some(task(&add.task)) },
             Payload::FoundDismiss(dismiss) => Asked { kind: Kind::FoundDismiss, task: item(&dismiss.item), said: None },
+            Payload::LeadMessage(message) => Asked { kind: Kind::LeadMessage, task: String::new(), said: Some(short(&message.text)) },
+            Payload::Away(away) => Asked { kind: Kind::Away, task: if away.on { "on" } else { "off" }.to_string(), said: None },
             other => Asked { kind: other.kind(), task: String::new(), said: None },
         }
     }
@@ -287,6 +289,8 @@ impl Asked {
             Kind::FoundStart => format!("start of {}, found by tasks", self.task),
             Kind::FoundAdd => format!("addition of {}, found by tasks, to a task", self.task),
             Kind::FoundDismiss => format!("dismissal of {}, found by tasks", self.task),
+            Kind::LeadMessage => "message to the lead".to_string(),
+            Kind::Away => format!("switch of away mode {}", self.task),
             other => other.name().to_string(),
         }
     }

@@ -72,6 +72,22 @@ pub struct Bridge {
 pub type Done = (Outcome, String);
 pub type Opened = std::result::Result<Vec<u8>, Done>;
 
+// A message to the lead is answered only once it is in the lead, so its hand can leave the result for later.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Taken {
+    Now(Done),
+    Later(String),
+}
+
+// What a command to the lead carries beyond its payload: the newest away switch by its header's time wins, and a message waits at most until it expires.
+pub struct ToLead<'a> {
+    pub command: &'a Id,
+    pub device: &'a Id,
+    pub at: u64,
+    pub exp: u64,
+    pub dir: &'a Path,
+}
+
 // What applying a command does, given as functions so tests drive the bridge without touching the user's tasks.
 pub struct Hands<'a> {
     pub answer: &'a dyn Fn(&Caller, &Answer) -> Done,
@@ -87,6 +103,7 @@ pub struct Hands<'a> {
     pub accept_subtask: &'a dyn Fn(&Caller, &AcceptSubtask) -> Done,
     pub found: &'a dyn Fn(&Caller, &Payload) -> Done,
     pub review_send: &'a dyn Fn(&Caller, &ReviewSend) -> Done,
+    pub lead: &'a dyn Fn(&Caller, &ToLead, &Payload) -> Taken,
     pub relay: &'a dyn Fn(),
     pub notify: &'a dyn Fn(&str),
 }
@@ -97,6 +114,7 @@ pub enum Handled {
     Refused(CommandResult),
     Replayed(CommandResult),
     Held(Id),
+    Later(String),
     Dropped(Dropped),
 }
 
@@ -104,7 +122,7 @@ impl Handled {
     pub fn result(&self) -> Option<&CommandResult> {
         match self {
             Handled::Applied(result) | Handled::Refused(result) | Handled::Replayed(result) => Some(result),
-            Handled::Held(_) | Handled::Dropped(_) => None,
+            Handled::Held(_) | Handled::Later(_) | Handled::Dropped(_) => None,
         }
     }
 }
@@ -145,6 +163,7 @@ pub fn accepts(policy: HubCommands) -> Vec<Kind> {
         HubCommand::Start => vec![Kind::StartItem, Kind::FoundStart, Kind::FoundAdd, Kind::FoundKeep],
         HubCommand::Edit => vec![Kind::ItemEdit, Kind::FoundDismiss],
         HubCommand::Review => vec![Kind::ReviewOpen, Kind::ReviewComments, Kind::ReviewRead, Kind::AcceptStep, Kind::AcceptSubtask, Kind::ReviewSend],
+        HubCommand::Lead => vec![Kind::LeadMessage, Kind::Away],
     }).collect()
 }
 
@@ -195,6 +214,8 @@ fn not_taken(kind: Kind, machine: &str, accepts: &[Kind]) -> String {
         Kind::StartItem | Kind::FoundStart | Kind::FoundAdd | Kind::FoundKeep => ("Not started", "Start it", "starts"),
         Kind::ItemEdit | Kind::FoundDismiss => ("Not saved", "Edit it", "edits"),
         Kind::ReviewOpen | Kind::ReviewComments | Kind::ReviewRead | Kind::AcceptStep | Kind::AcceptSubtask | Kind::ReviewSend => ("Not done", "Review it", "reviews"),
+        Kind::LeadMessage => ("Not delivered", "Tell the lead", "messages to the lead"),
+        Kind::Away => ("Not switched", "Switch away mode", "messages to the lead"),
         Kind::DeviceDecision if accepts.is_empty() => return format!("Not decided: {machine} takes nothing from the hub. Approve or deny it at the machine: N on the board, or kebbie hub devices."),
         Kind::DeviceDecision => return format!("Not decided: {machine} takes device approvals only at the machine. Approve or deny it there: N on the board, or kebbie hub devices."),
         other => return format!("Not done: {machine} takes no {} from the hub", other.name()),
@@ -277,31 +298,43 @@ pub fn handle(dir: &Path, identity: &Identity, account: &AccountKey, accepts: &[
             save_ledger(dir, &ledger)?;
             let caller = Caller::Hub { account: account.account.as_str().to_string(), name: verified.device.cert().name.clone() };
             let mut blob = None;
-            let done = as_device(verified.device.id(), || match &verified.payload {
-                Payload::Answer(answer) => (hands.answer)(&caller, answer),
-                Payload::Push(push) => (hands.push)(&caller, push),
-                Payload::PromptAnswer(prompt) => (hands.prompt)(&caller, prompt),
-                Payload::Idea(idea) => (hands.idea)(&caller, idea),
-                Payload::ItemAnswer(answer) => (hands.item_answer)(&caller, answer),
-                Payload::StartItem(start) => (hands.start_item)(&caller, start),
-                Payload::ItemEdit(edit) => (hands.item_edit)(&caller, edit),
-                Payload::ReviewOpen(open) => match (hands.review_open)(&caller, open).and_then(|plaintext| review_blob(dir, identity, &open.address, &plaintext, now)) {
-                    Ok(sealed) => {
-                        blob = Some(sealed);
-                        (Outcome::Done, format!("The review of {} is ready", open.address))
-                    }
-                    Err(done) => done,
-                },
-                Payload::ReviewComments(comments) => (hands.review_comments)(&caller, comments),
-                Payload::ReviewRead(read) => (hands.review_read)(&caller, read),
-                Payload::AcceptStep(accept) => (hands.accept_subtask)(&caller, &AcceptSubtask { address: accept.address.clone(), subtask: accept.step.to_string(), head: accept.head.clone() }),
-                Payload::AcceptSubtask(accept) => (hands.accept_subtask)(&caller, accept),
-                Payload::FoundStart(_) | Payload::FoundAdd(_) | Payload::FoundDismiss(_) | Payload::FoundKeep(_) => (hands.found)(&caller, &verified.payload),
-                Payload::ReviewSend(send) => (hands.review_send)(&caller, send),
-                Payload::DeviceDecision(decision) => device_decision(dir, &identity.name, policy, decision, now),
-                _ => (Outcome::Refused { reason: Reason::NotAllowed }, not_taken(header.kind, &identity.name, accepts)),
+            let asked = ToLead { command: &header.id, device: verified.device.id(), at: header.at, exp: header.exp, dir };
+            let taken = as_device(verified.device.id(), || match &verified.payload {
+                Payload::LeadMessage(_) | Payload::Away(_) => (hands.lead)(&caller, &asked, &verified.payload),
+                payload => Taken::Now(match payload {
+                    Payload::Answer(answer) => (hands.answer)(&caller, answer),
+                    Payload::Push(push) => (hands.push)(&caller, push),
+                    Payload::PromptAnswer(prompt) => (hands.prompt)(&caller, prompt),
+                    Payload::Idea(idea) => (hands.idea)(&caller, idea),
+                    Payload::ItemAnswer(answer) => (hands.item_answer)(&caller, answer),
+                    Payload::StartItem(start) => (hands.start_item)(&caller, start),
+                    Payload::ItemEdit(edit) => (hands.item_edit)(&caller, edit),
+                    Payload::ReviewOpen(open) => match (hands.review_open)(&caller, open).and_then(|plaintext| review_blob(dir, identity, &open.address, &plaintext, now)) {
+                        Ok(sealed) => {
+                            blob = Some(sealed);
+                            (Outcome::Done, format!("The review of {} is ready", open.address))
+                        }
+                        Err(done) => done,
+                    },
+                    Payload::ReviewComments(comments) => (hands.review_comments)(&caller, comments),
+                    Payload::ReviewRead(read) => (hands.review_read)(&caller, read),
+                    Payload::AcceptStep(accept) => (hands.accept_subtask)(&caller, &AcceptSubtask { address: accept.address.clone(), subtask: accept.step.to_string(), head: accept.head.clone() }),
+                    Payload::AcceptSubtask(accept) => (hands.accept_subtask)(&caller, accept),
+                    Payload::FoundStart(_) | Payload::FoundAdd(_) | Payload::FoundDismiss(_) | Payload::FoundKeep(_) => (hands.found)(&caller, &verified.payload),
+                    Payload::ReviewSend(send) => (hands.review_send)(&caller, send),
+                    Payload::DeviceDecision(decision) => device_decision(dir, &identity.name, policy, decision, now),
+                    _ => (Outcome::Refused { reason: Reason::NotAllowed }, not_taken(header.kind, &identity.name, accepts)),
+                }),
             });
-            Handled::Applied(result(header, done, blob))
+            match taken {
+                Taken::Later(said) => {
+                    ledger.started.remove(&header.id);
+                    ledger.held.remove(&held_key(&header.from, &header.id));
+                    save_ledger(dir, &ledger)?;
+                    return Ok(Handled::Later(said));
+                }
+                Taken::Now(done) => Handled::Applied(result(header, done, blob)),
+            }
         }
     };
     if let Handled::Applied(result) | Handled::Refused(result) = &handled {
@@ -325,6 +358,7 @@ pub fn release(dir: &Path, identity: &Identity, account: &AccountKey, accepts: &
 fn note(header: &Header, handled: &Handled) -> String {
     match handled {
         Handled::Held(device) => format!("commands: {} {} from {device} waits for the device to be approved", header.kind.name(), header.id),
+        Handled::Later(said) => format!("commands: {} {} from {}: {said}", header.kind.name(), header.id, header.from),
         Handled::Dropped(_) => format!("commands: dropped {} {} from {}", header.kind.name(), header.id, header.from),
         Handled::Applied(result) | Handled::Refused(result) | Handled::Replayed(result) => format!("commands: {} {}: {}", header.kind.name(), header.id, result.text),
     }
@@ -372,6 +406,23 @@ pub fn send_unsent(dir: &Path, client: &Client, identity: &Identity, account: &A
     failed.map_or(Ok(()), Err)
 }
 
+// A command the lead took after its round: its result is recorded once and goes out at once, or with the next round when the hub cannot take it now.
+pub fn answer_later(dir: &Path, result: CommandResult, now: u64) -> Result<()> {
+    {
+        let _ledger_lock = Locked::wait(dir, LEDGER_LOCK)?;
+        let mut ledger = ledger(dir);
+        if ledger.applied.result(&result.device, &result.command).is_some() {
+            return Ok(());
+        }
+        ledger.unsent.insert(Unsent { device: result.device.clone(), command: result.command.clone() });
+        ledger.applied.record(now, result);
+        save_ledger(dir, &ledger)?;
+    }
+    let Some(identity) = identity::load_at(dir)? else { return Ok(()) };
+    let Some(account) = identity.account.as_ref().map(|account| account.key.clone()) else { return Ok(()) };
+    send_unsent(dir, &Client::new(&identity.url, Some(identity.token()), CALL), &identity, &account)
+}
+
 struct Alone(std::fs::File);
 
 impl Alone {
@@ -404,7 +455,7 @@ pub fn round(dir: &Path, wait: u64, accepts: &[Kind], policy: Policy, hands: &Ha
     let inbox: Inbox = polling.get(&format!("/v1/m/inbox?after={}&wait={wait}", bridge.inbox_seq)).map_err(|error| error.to_string())?;
     for message in inbox.messages.iter().filter(|message| message.envelope.header.kind.is_command()) {
         let handled = handle(dir, &identity, &account, accepts, policy, &message.envelope, hands, clock())?;
-        applied |= matches!(handled, Handled::Applied(_));
+        applied |= matches!(handled, Handled::Applied(_) | Handled::Later(_));
         notes.push(note(&message.envelope.header, &handled));
     }
     send_unsent(dir, &client, &identity, &account)?;
@@ -527,6 +578,7 @@ fn keeper_hands<T>(state: &Path, run: impl FnOnce(&Hands) -> T) -> T {
         accept_subtask: &super::review::accept,
         found: &super::backlog::found,
         review_send: &super::review::send,
+        lead: &super::lead::take,
         relay: &relay,
         notify: &notify,
     })
@@ -695,6 +747,14 @@ mod tests {
     }
 
     fn with_answering<T>(seen: &Seen, answer: &dyn Fn(&Caller, &Answer) -> Done, run: impl FnOnce(&Hands) -> T) -> T {
+        let lead = |caller: &Caller, _: &ToLead, payload: &Payload| {
+            seen.backlog.borrow_mut().push((caller.clone(), payload.clone()));
+            Taken::Now((Outcome::Done, "With the lead".to_string()))
+        };
+        with_lead(seen, answer, &lead, run)
+    }
+
+    fn with_lead<T>(seen: &Seen, answer: &dyn Fn(&Caller, &Answer) -> Done, lead: &dyn Fn(&Caller, &ToLead, &Payload) -> Taken, run: impl FnOnce(&Hands) -> T) -> T {
         let push = |caller: &Caller, push: &PushApproval| {
             seen.pushes.borrow_mut().push((caller.clone(), push.clone()));
             (Outcome::Done, "Pushed 9f3c2a1 to main".to_string())
@@ -745,7 +805,7 @@ mod tests {
         };
         let relay = || seen.relays.set(seen.relays.get() + 1);
         let notify = |text: &str| seen.told.borrow_mut().push(text.to_string());
-        run(&Hands { answer, push: &push, prompt: &prompt, idea: &idea, item_answer: &item_answer, start_item: &start_item, item_edit: &item_edit, review_open: &review_open, review_comments: &review_comments, review_read: &review_read, accept_subtask: &accept_subtask, found: &found, review_send: &review_send, relay: &relay, notify: &notify })
+        run(&Hands { answer, push: &push, prompt: &prompt, idea: &idea, item_answer: &item_answer, start_item: &start_item, item_edit: &item_edit, review_open: &review_open, review_comments: &review_comments, review_read: &review_read, accept_subtask: &accept_subtask, found: &found, review_send: &review_send, lead, relay: &relay, notify: &notify })
     }
 
     fn review_of(address: &str) -> kebbie_hub_protocol::Review {
@@ -854,6 +914,78 @@ mod tests {
         assert!(crate::kebbie_questions::load(&state).iter().all(|asked| asked.address != address), "nothing kebbie asked about it waits");
         let _ = std::fs::remove_file(state.join("steps").join(format!("{address}.json")));
         cleanup(dir, origin, &slot);
+    }
+
+    fn iso(at: u64) -> String {
+        let (days, rest) = ((at / 86_400) as i64, at % 86_400);
+        let z = days + 719_468;
+        let era = z.div_euclid(146_097);
+        let of_era = z - era * 146_097;
+        let year_of_era = (of_era - of_era / 1460 + of_era / 36_524 - of_era / 146_096) / 365;
+        let of_year = of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+        let month_shifted = (5 * of_year + 2) / 153;
+        let day = of_year - (153 * month_shifted + 2) / 5 + 1;
+        let month = if month_shifted < 10 { month_shifted + 3 } else { month_shifted - 9 };
+        let year = year_of_era + era * 400 + i64::from(month <= 2);
+        format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.000Z", rest / 3600, rest % 3600 / 60, rest % 60)
+    }
+
+    #[test]
+    fn a_message_from_the_phone_is_answered_only_once_it_is_in_the_lead_and_away_mode_switches_from_the_phone() {
+        use kebbie_hub_protocol::{Away, Delivery, LeadMessage, LeadThread, Turn};
+        let mut account = Account::connected();
+        let seen = Seen::new();
+        let state = crate::sh::test_dir("lead-round-trip");
+        std::fs::write(state.join("lead-session"), "abc").unwrap();
+        let lead = |caller: &Caller, asked: &ToLead, payload: &Payload| crate::hub::lead::take_in(&state, caller, asked, payload, now(), &|| {});
+        let lead_round = |account: &Account, policy: HubCommands| with_lead(&seen, &|_, _| unreachable!(), &lead, |hands| round(&account.dir, 0, &accepts(policy), ACCOUNT, hands, &now)).unwrap();
+
+        let sent = account.send(&Payload::LeadMessage(LeadMessage { text: "Hold the push until I've read step 5.".to_string() }));
+        let notes = lead_round(&account, HubCommands::default());
+        assert!(notes.iter().any(|note| note.contains("held for the lead")), "{notes:?}");
+        assert_eq!(account.hub.runtime.block_on(account.browser.await_result(&sent.header.id, Duration::from_secs(1))).unwrap(), None, "no result while the message only waits");
+        assert!(ledger(&account.dir).applied.result(&sent.header.from, &sent.header.id).is_none());
+        let typed = crate::lead_thread::typed(&account.browser.device_name, "Hold the push until I've read step 5.");
+        assert!(crate::messages::load_in(&state).iter().any(|message| message.held && message.text == typed), "held in kebbie's log as your word");
+
+        let file = state.join("lead.jsonl");
+        let at = now() + 1;
+        let lines = [
+            serde_json::json!({ "type": "user", "uuid": "u1", "timestamp": iso(at), "message": { "role": "user", "content": typed } }),
+            serde_json::json!({ "type": "assistant", "uuid": "a1", "timestamp": iso(at + 1), "message": { "stop_reason": "end_turn", "content": [{ "type": "text", "text": "Understood. I hold the push." }] } }),
+            serde_json::json!({ "type": "system", "subtype": "turn_duration", "timestamp": iso(at + 2) }),
+        ];
+        std::fs::write(&file, lines.iter().map(|line| format!("{line}\n")).collect::<String>()).unwrap();
+        let mut reader = crate::lead_thread::Reader::default();
+        let answer = |dir: &Path, result: CommandResult| answer_later(dir, result, now());
+        let thread = crate::lead_thread::tick_from(&state, Some(&file), &mut reader, at + 3, &answer, &|_| {}).unwrap();
+        let result = account.result(&sent);
+        assert_eq!((result.outcome, result.text.as_str()), (Outcome::Done, crate::lead_thread::DELIVERED), "done once the transcript has it");
+
+        let lead_ref = crate::hub::lead::seal(&account.dir, &thread, at + 3, crate::hub::blobs::put_with(&account.identity), crate::hub::blobs::delete_with(&account.identity)).unwrap();
+        let mut board = crate::hub::board::build(&[], &[], Vec::new(), None, &crate::hub::board::Seen::default());
+        board.lead = Some(lead_ref.clone());
+        crate::hub::relay::relay_at(&account.dir, &board, at + 3).unwrap();
+        let boards = account.hub.runtime.block_on(account.browser.boards()).unwrap();
+        let shown = boards[0].board.as_ref().unwrap().lead.clone().expect("the board names the lead's thread");
+        assert_eq!(shown, lead_ref);
+        let ciphertext = account.hub.runtime.block_on(account.browser.blob(&shown.thread.id)).unwrap();
+        let page = LeadThread::read(&kebbie_hub_protocol::open_blob(&shown.thread, &ciphertext).unwrap()).unwrap();
+        assert!(matches!(&page.turns[..], [Turn::You { device: Some(device), delivery: Some(Delivery::Delivered { .. }), .. }, Turn::Lead { text, .. }] if *device == sent.header.from && text == "Understood. I hold the push."), "{page:?}");
+
+        let refused = account.send(&Payload::LeadMessage(LeadMessage { text: "again".to_string() }));
+        lead_round(&account, HubCommands::of(&[HubCommand::Answer]));
+        assert_eq!(account.result(&refused).text, "Not delivered: mac takes no messages to the lead from the hub. Tell the lead at the machine, or allow messages to the lead in its kebbie settings.");
+
+        let on = account.send(&Payload::Away(Away { on: true }));
+        lead_round(&account, HubCommands::default());
+        assert!(account.result(&on).text.starts_with("Away mode is on"));
+        assert!(crate::permit::away_since_in(&state).is_some());
+        let off = account.send(&Payload::Away(Away { on: false }));
+        lead_round(&account, HubCommands::default());
+        assert!(account.result(&off).text.starts_with("Away mode is off"));
+        assert!(crate::permit::away_since_in(&state).is_none());
+        assert_eq!(crate::lead_thread::load(&state).switches.iter().map(|switch| switch.on).collect::<Vec<_>>(), [true, false]);
     }
 
     #[test]
@@ -971,7 +1103,8 @@ mod tests {
             let (item_edit, review_open) = (|_: &Caller, _: &ItemEdit| unreachable!(), |_: &Caller, _: &ReviewOpen| unreachable!());
             let (review_comments, review_read, accept_subtask, found) = (|_: &Caller, _: &ReviewComments| unreachable!(), |_: &Caller, _: &ReviewRead| unreachable!(), |_: &Caller, _: &AcceptSubtask| unreachable!(), |_: &Caller, _: &Payload| unreachable!());
             let review_send = |_: &Caller, _: &ReviewSend| unreachable!();
-            round(&account.dir, 0, &accepts(word("answer-and-push")), ACCOUNT, &Hands { answer: &answer, push: &push, prompt: &prompt, idea: &idea, item_answer: &item_answer, start_item: &start_item, item_edit: &item_edit, review_open: &review_open, review_comments: &review_comments, review_read: &review_read, accept_subtask: &accept_subtask, found: &found, review_send: &review_send, relay: &relay, notify: &notify }, &now)
+            let lead = |_: &Caller, _: &ToLead, _: &Payload| unreachable!();
+            round(&account.dir, 0, &accepts(word("answer-and-push")), ACCOUNT, &Hands { answer: &answer, push: &push, prompt: &prompt, idea: &idea, item_answer: &item_answer, start_item: &start_item, item_edit: &item_edit, review_open: &review_open, review_comments: &review_comments, review_read: &review_read, accept_subtask: &accept_subtask, found: &found, review_send: &review_send, lead: &lead, relay: &relay, notify: &notify }, &now)
         }));
         assert!(crashed.is_err());
         assert_eq!(seen.answers.borrow().len(), 1, "applied once, then cut off before it was recorded");
@@ -1308,8 +1441,9 @@ mod tests {
 
     #[test]
     fn hub_commands_drives_what_the_machine_takes_and_names_what_it_refuses() {
-        assert_eq!(accepts(HubCommands::default()), [Kind::Answer, Kind::ItemAnswer, Kind::Push, Kind::PromptAnswer, Kind::Idea, Kind::StartItem, Kind::FoundStart, Kind::FoundAdd, Kind::FoundKeep, Kind::ItemEdit, Kind::FoundDismiss, Kind::ReviewOpen, Kind::ReviewComments, Kind::ReviewRead, Kind::AcceptStep, Kind::AcceptSubtask, Kind::ReviewSend], "every kind unless set");
+        assert_eq!(accepts(HubCommands::default()), [Kind::Answer, Kind::ItemAnswer, Kind::Push, Kind::PromptAnswer, Kind::Idea, Kind::StartItem, Kind::FoundStart, Kind::FoundAdd, Kind::FoundKeep, Kind::ItemEdit, Kind::FoundDismiss, Kind::ReviewOpen, Kind::ReviewComments, Kind::ReviewRead, Kind::AcceptStep, Kind::AcceptSubtask, Kind::ReviewSend, Kind::LeadMessage, Kind::Away], "every kind unless set");
         assert_eq!(accepts(HubCommands::of(&[HubCommand::Edit])), [Kind::ItemEdit, Kind::FoundDismiss]);
+        assert_eq!(accepts(HubCommands::of(&[HubCommand::Lead])), [Kind::LeadMessage, Kind::Away], "the lead takes your messages and the away switch together");
         assert_eq!(not_taken(Kind::AcceptStep, "devbox", &accepts(word("answer"))), "Not done: devbox takes no reviews from the hub. Review it at the machine, or allow reviews in its kebbie settings.");
         assert_eq!(not_taken(Kind::ItemEdit, "devbox", &accepts(word("answer"))), "Not saved: devbox takes no edits from the hub. Edit it at the machine, or allow edits in its kebbie settings.");
         assert_eq!(accepts(word("answer-and-push")), [Kind::Answer, Kind::ItemAnswer, Kind::Push, Kind::PromptAnswer]);

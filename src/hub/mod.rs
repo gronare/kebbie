@@ -9,6 +9,7 @@ pub mod devices;
 pub mod http;
 pub mod identity;
 pub mod inbox;
+pub mod lead;
 pub mod notices;
 pub mod pair;
 pub mod qr;
@@ -383,20 +384,30 @@ pub fn leave(state: &Path) -> Result<String> {
 
 pub fn tick() -> Result<()> {
     let (state, now) = (crate::lead::state_dir()?, crate::messages::now());
-    tick_in(&state, configured_name(&crate::config::path()).as_deref(), now, || board::gather(&state, now))
+    tick_in(&state, configured_name(&crate::config::path()).as_deref(), now, || board::gather(&state, now), || lead_round(&state, now))
+}
+
+// The lead's thread read on from its transcript; what the lead took is answered to the device that sent it, and its reply to a device, or while you are away, is a notice.
+fn lead_round(state: &Path, now: u64) -> Option<crate::lead_thread::Thread> {
+    let answer = |dir: &Path, result| commands::answer_later(dir, result, now);
+    let notify = |first: &str| notices::send(&notices::About::LeadAnswered { first: first.to_string() }, None);
+    crate::lead_thread::tick(state, now, &answer, &notify)
 }
 
 // The keeper posts to the real hub and to the dev hub alike, whichever this machine is connected to, so a keeper started without KEBBIE_HUB_DEV still serves a dev connection.
-pub fn tick_in(state: &Path, configured: Option<&str>, now: u64, gather: impl Fn() -> Result<(kebbie_hub_protocol::Board, Vec<blobs::Attachment>)>) -> Result<()> {
+pub fn tick_in(state: &Path, configured: Option<&str>, now: u64, gather: impl Fn() -> Result<(kebbie_hub_protocol::Board, Vec<blobs::Attachment>)>, lead: impl Fn() -> Option<crate::lead_thread::Thread>) -> Result<()> {
     let mut gathered = None;
     let mut failed = Vec::new();
     for dir in [identity::dir_of(state, false), identity::dir_of(state, true)] {
         let posted = (|| {
             sync_name_at(&dir, configured)?;
             let Some(identity) = identity::load_at(&dir)?.filter(|identity| identity.account.is_some()) else { return Ok(()) };
-            let (board, attachments) = match &gathered {
+            let (board, attachments, thread) = match &gathered {
                 Some(gathered) => gathered,
-                None => gathered.insert(gather()?),
+                None => {
+                    let (board, attachments) = gather()?;
+                    gathered.insert((board, attachments, lead()))
+                }
             };
             let _ = devices::settle_due(&dir, devices::Policy::current(), now);
             notices::items_in(&dir, board, attachments).unwrap_or_default().iter().for_each(|about| notices::send_in(&dir, about));
@@ -407,6 +418,7 @@ pub fn tick_in(state: &Path, configured: Option<&str>, now: u64, gather: impl Fn
                 }
             }
             let mut board = blobs::attach(&dir, board, attachments, now, blobs::put_with(&identity));
+            board.lead = thread.as_ref().and_then(|thread| lead::seal(&dir, thread, now, blobs::put_with(&identity), blobs::delete_with(&identity)));
             board.devices = Some(devices::load(&dir).standings(devices::Policy::current(), now));
             relay::relay_at(&dir, &board, now).map(|_| ())
         })();

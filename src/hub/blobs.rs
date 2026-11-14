@@ -15,8 +15,8 @@ pub const REPUT: u64 = 24 * 60 * 60;
 pub const REFUSED_WAIT: u64 = 10 * 60;
 const FILE: &str = "blobs.json";
 const REVIEWS: &str = "reviews.json";
-const HUB_KEEPS: u64 = 14 * 24 * 60 * 60;
-const NONCE_LEN: usize = 12;
+pub(super) const HUB_KEEPS: u64 = 14 * 24 * 60 * 60;
+pub(super) const NONCE_LEN: usize = 12;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Attachment {
@@ -71,11 +71,11 @@ fn content_hash(media_type: &str, text: &str) -> String {
     hex(&Sha256::new().chain_update(media_type).chain_update([0]).chain_update(text).finalize())
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(super) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn nonce_of(hex: &str) -> Option<[u8; NONCE_LEN]> {
+pub(super) fn nonce_of(hex: &str) -> Option<[u8; NONCE_LEN]> {
     let bytes: Vec<u8> = (0..hex.len()).step_by(2).map(|at| hex.get(at..at + 2).and_then(|pair| u8::from_str_radix(pair, 16).ok())).collect::<Option<_>>()?;
     bytes.try_into().ok()
 }
@@ -170,7 +170,7 @@ pub fn attach(dir: &Path, board: &Board, attachments: &[Attachment], now: u64, p
     board
 }
 
-fn decode_key(key: &str) -> Option<[u8; 32]> {
+pub(super) fn decode_key(key: &str) -> Option<[u8; 32]> {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut bits = 0u32;
     let mut count = 0;

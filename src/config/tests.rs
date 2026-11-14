@@ -541,10 +541,10 @@ fn hub_commands_takes_every_kind_unless_the_machine_config_lists_some_and_still_
         assert_eq!(machine(&format!("[hub]\ncommands = {word:?}\n")).hub_commands.map(HubCommands::taken), Some(kinds), "{word}");
     }
     assert!(!HubCommands::from_word("answer-and-push").unwrap().takes(Start), "a machine set to the old word takes no new kind until its config lists it");
-    assert!(parse_machine("[hub]\ncommands = \"push\"\n", "config.toml").unwrap_err().contains("hub.commands: \"push\" is not a choice; list any of \"answer\", \"push\", \"prompt\", \"idea\", \"start\", \"edit\" and \"review\""));
+    assert!(parse_machine("[hub]\ncommands = \"push\"\n", "config.toml").unwrap_err().contains("hub.commands: \"push\" is not a choice; list any of \"answer\", \"push\", \"prompt\", \"idea\", \"start\", \"edit\", \"review\" and \"lead\""));
     assert!(parse_machine("[hub]\ncommands = [\"answer\", \"merge\"]\n", "config.toml").unwrap_err().contains("hub.commands: \"merge\" is not a kind of command"));
     let entry = entries(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) }).into_iter().find(|entry| entry.key == "hub.commands").expect("kebbie config edit lists hub.commands");
-    assert_eq!((entry.value.as_str(), entry.kind, entry.scope), ("[\"answer\", \"push\", \"prompt\", \"idea\", \"start\", \"edit\", \"review\"]", Kind::List, Scope::Machine));
+    assert_eq!((entry.value.as_str(), entry.kind, entry.scope), ("[\"answer\", \"push\", \"prompt\", \"idea\", \"start\", \"edit\", \"review\", \"lead\"]", Kind::List, Scope::Machine));
     assert!(entry.about.starts_with("What this machine takes from your devices through the hub, as a list of kinds:") && entry.about.contains("\"answer-and-push\" is [\"answer\", \"push\", \"prompt\"]"), "{}", entry.about);
 }
 

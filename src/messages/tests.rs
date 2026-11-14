@@ -1091,3 +1091,29 @@ fn a_sender_outside_kebbies_sessions_is_named_by_its_folder_and_delivered_as_saf
     assert_eq!(typed.borrow().as_slice(), [format!("[from a Claude session in /src/notes] the notes server moved to port 8040\n  {LEAD_CUE}")], "the lead reads where it came from, never you or lead");
     fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn a_message_from_a_device_goes_in_as_your_own_prompt_once_the_lead_is_idle_with_an_empty_box_and_kebbies_flush_leaves_it_alone() {
+    let dir = state("device");
+    let id = hold_for_lead_in(&dir, "(from iPhone) Hold the push").unwrap();
+    let lead = |status: &str| Session { address: LEAD_LABEL.to_string(), task: None, pane: Some("w1:p1".to_string()), status: Some(status.to_string()), agent: Some(crate::agent::Agent::Claude), asks: None };
+    let mut kebbie_typed = |_: &str, _: &str, _: &str| -> std::result::Result<Via, crate::typing::Refused> { panic!("kebbie's flush never types a device's message") };
+    flush_held_in(&dir, &[lead("idle")], &mut kebbie_typed, &|_, _| false, &|_, _| true).unwrap();
+    let typed = RefCell::new(Vec::new());
+    let boxes = RefCell::new(vec![Err(crate::typing::Refused::Draft), Ok(())].into_iter());
+    let mut type_as_user = |pane: &str, text: &str| {
+        typed.borrow_mut().push((pane.to_string(), text.to_string()));
+        boxes.borrow_mut().next().unwrap()
+    };
+    let why = |dir: &Path| load_in(dir).into_iter().find(|message| message.id == id).and_then(|message| message.why);
+    assert_eq!(deliver_device_in(&dir, &[lead("working")], &mut type_as_user).unwrap(), 0);
+    assert_eq!((why(&dir).as_deref(), typed.borrow().len()), (Some(LEAD_WORKING), 0), "held while the lead's turn runs");
+    assert_eq!(deliver_device_in(&dir, &[lead("idle")], &mut type_as_user).unwrap(), 0);
+    assert_eq!(why(&dir).as_deref(), Some(DRAFT_HOLD), "held behind the user's draft");
+    assert_eq!(deliver_device_in(&dir, &[lead("idle")], &mut type_as_user).unwrap(), 1);
+    assert_eq!(typed.borrow().last().unwrap(), &("w1:p1".to_string(), "(from iPhone) Hold the push".to_string()), "typed as it is, with no sender line");
+    assert!(!load_in(&dir).iter().any(|message| message.held));
+    assert!(fs::read_to_string(dir.join("lead-prompted")).unwrap().ends_with(" you"), "kebbie's own messages then wait while you talk with the lead");
+    assert_eq!(deliver_device_in(&dir, &[lead("idle")], &mut type_as_user).unwrap(), 0, "nothing more waits");
+    fs::remove_dir_all(&dir).unwrap();
+}

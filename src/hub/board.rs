@@ -390,6 +390,7 @@ pub fn build(items: &[status::Item], checkouts: &[status::Checkout], routines: V
         accepts: Some(super::commands::accepted(crate::config::hub_commands(), crate::config::hub_approve_from())),
         devices: None,
         backlog: None,
+        lead: None,
     }
 }
 

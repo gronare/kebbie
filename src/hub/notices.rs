@@ -27,6 +27,7 @@ pub enum Subject {
     Ready,
     Ci,
     Started,
+    Lead,
 }
 
 impl Subject {
@@ -39,6 +40,7 @@ impl Subject {
             Subject::Ready => "r",
             Subject::Ci => "c",
             Subject::Started => "s",
+            Subject::Lead => "l",
         }
     }
 }
@@ -68,6 +70,7 @@ pub enum About {
     CiFailed { address: String, what: String, done: Option<String> },
     Started { item: ItemKey, title: String, address: String, recipe: Option<String> },
     StartFailed { item: ItemKey, title: String, error: String },
+    LeadAnswered { first: String },
 }
 
 fn one_line(text: &str) -> String {
@@ -118,6 +121,7 @@ impl About {
             About::Ready { .. } => NoticeCategory::Ready,
             About::CiFailed { .. } => NoticeCategory::CiFailed,
             About::Started { .. } | About::StartFailed { .. } => NoticeCategory::Started,
+            About::LeadAnswered { .. } => NoticeCategory::LeadAnswered,
         }
     }
 
@@ -130,6 +134,7 @@ impl About {
             About::Ready { address, .. } => (Subject::Ready, address.clone()),
             About::CiFailed { address, .. } => (Subject::Ci, address.clone()),
             About::Started { item, .. } | About::StartFailed { item, .. } => (Subject::Started, item.as_str().to_string()),
+            About::LeadAnswered { .. } => (Subject::Lead, "lead".to_string()),
         }
     }
 
@@ -149,6 +154,7 @@ impl About {
             About::CiFailed { address, .. } => format!("CI failed on {}", task_title(address)),
             About::Started { title, .. } => format!("Started: {title}"),
             About::StartFailed { title, .. } => format!("Not started: {title}"),
+            About::LeadAnswered { .. } => format!("Lead · {machine}"),
         };
         cut(&one_line(&title), MAX_NOTICE_TITLE_CHARS)
     }
@@ -190,6 +196,7 @@ impl About {
                 }
             }
             About::StartFailed { error, .. } => format!("{} It stays in the backlog on {machine}.", sentence(error)),
+            About::LeadAnswered { first } => one_line(first),
         };
         cut(&body, MAX_NOTICE_BODY_CHARS)
     }
@@ -199,6 +206,7 @@ impl About {
             About::Question { address, .. } | About::Prompt { address, .. } | About::Ready { address, .. } | About::CiFailed { address, .. } | About::Started { address, .. } => Target::Task { address: address.clone() },
             About::ItemQuestions { item, .. } | About::StartFailed { item, .. } => Target::Item { item: item.clone() },
             About::NewDevice { device, .. } => Target::Device { device: device.clone() },
+            About::LeadAnswered { .. } => Target::Lead {},
         }
     }
 
@@ -632,6 +640,19 @@ mod tests {
     }
 
     #[test]
+    fn the_leads_answer_is_a_lead_answered_notice_with_its_first_line_that_opens_the_thread_and_replaces_the_one_before() {
+        let about = About::LeadAnswered { first: "Done. email-column is at  step 3 of 5.".to_string() };
+        let notice = about.notice("MacBook", Vec::new());
+        assert_eq!((notice.category, notice.title.as_str(), notice.body.as_str(), notice.open.clone()), (NoticeCategory::LeadAnswered, "Lead · MacBook", "Done. email-column is at step 3 of 5.", Target::Lead {}));
+        assert_eq!(Payload::Notice(notice).validate(), Ok(()));
+        let machine = Id::new(Prefix::Machine).unwrap();
+        let (subject, name) = about.subject();
+        let collapse = tag(&machine, subject, &name);
+        assert_eq!(NoticeCategory::of_collapse(&collapse), Some(NoticeCategory::LeadAnswered));
+        assert_eq!(collapse, tag(&machine, About::LeadAnswered { first: "another reply".to_string() }.subject().0, "lead"), "each answer takes the place of the one before on the phone");
+    }
+
+    #[test]
     fn each_notice_says_what_it_is_about_in_its_title_and_the_thing_itself_in_its_body() {
         let asked = crate::questions::parse(&["Once: after a minute, then give up", "Not at all: show the decline"], Some("1"), false, "Retry a declined card once or not at all?").unwrap();
         let question = crate::questions::question_notice("checkout@shop", &asked, false);
@@ -977,7 +998,7 @@ mod tests {
     fn the_leads_new_questions_on_an_item_are_told_once_and_settle_when_answered() {
         let machine = Machine::new();
         let key = item("Projects/retry.md");
-        let board = Board { rev: 0, kebbie: String::new(), away_since: None, checkouts: Vec::new(), routines: Vec::new(), items: Vec::new(), sessions_outside_tasks: 0, next: None, counts: None, later: None, accepts: None, devices: None, backlog: Some(vec![row(&key, "Retry flaky red runs")]) };
+        let board = Board { rev: 0, kebbie: String::new(), away_since: None, checkouts: Vec::new(), routines: Vec::new(), items: Vec::new(), sessions_outside_tasks: 0, next: None, counts: None, later: None, accepts: None, devices: None, backlog: Some(vec![row(&key, "Retry flaky red runs")]), lead: None };
         let one = [body(&key, &[("Which red runs count as flaky?", true, None)])];
         assert!(items_in(&machine.dir, &board, &one).unwrap().is_empty(), "the first look only records what waits");
         let two = [body(&key, &[("Which red runs count as flaky?", true, None), ("How long to wait?", false, None), ("Show a rerun on the row?", true, None)])];

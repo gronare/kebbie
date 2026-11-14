@@ -118,6 +118,7 @@ A `comments/` file holds the comment as GitHub gave it (author, text, file and l
 | `lead-talked` | When a message for the lead last came while the lead was mid-turn on your prompt; the 3 quiet minutes count from it too. |
 | `restart/` | The restarts, below. |
 | `away` | Present while away mode is on. |
+| `lead-thread.json`, `lead-thread.lock` | The messages your devices sent the lead, with when the lead took each, every away switch, and the lead's last reply a notification told. |
 
 `restart/` holds `updated`, when `kebbie update` last ran; `asked.json`, the sessions the board asked you about; `restarted.json`, the restarts done; and one lock per session while it restarts.
 
@@ -195,6 +196,7 @@ A `routines/` file holds when the scheduler first saw the routine, when its last
 | --- | --- |
 | `hub/identity.json` | The hub's address, the machine's id and name there, its token, and its signing and encryption keys. |
 | `hub/devices.json` | Each device on your account that sent this machine a command: its name, kind and full key, when it was first and last seen, and whether it waits, is approved or is denied. |
+| `hub/lead-blobs.json` | Each sealed page of the lead's thread on the hub, by its content, and when it was last put there. |
 | `hub/relay.json` | The board's last revision, when it went out, its fingerprint, the last error and whether the hub refused it because it has not enabled answering for your account. |
 | `hub-dev/` | The same for the dev hub, used instead of `hub/` while [`KEBBIE_HUB_DEV`](environment.md) is set. |
 

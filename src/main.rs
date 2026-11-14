@@ -40,6 +40,7 @@ mod keys;
 mod known;
 mod lead;
 mod lead_restart;
+mod lead_thread;
 mod login_env;
 mod menu;
 mod messages;

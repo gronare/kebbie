@@ -103,7 +103,7 @@ fn a_machine_connected_from_the_link_pins_the_account_and_seals_its_board_to_it(
     let shown = super::status_text(&state, Some("mac"), now()).unwrap();
     let (signing, encryption) = account.prints();
     assert!(shown.contains(&format!("account:  {} · signing key {signing} · encryption key {encryption}", key.account)), "{shown}");
-    assert!(shown.contains("\ncommands: answer, push, prompt, idea, start, edit, review (hub.commands = [\"answer\", \"push\", \"prompt\", \"idea\", \"start\", \"edit\", \"review\"])\n"), "the default policy shows under the account: {shown}");
+    assert!(shown.contains("\ncommands: answer, push, prompt, idea, start, edit, review, lead (hub.commands = [\"answer\", \"push\", \"prompt\", \"idea\", \"start\", \"edit\", \"review\", \"lead\"])\n"), "the default policy shows under the account: {shown}");
 
     let mut working = task(Some("working"), Some("working"), 1);
     working.name = "search".to_string();
@@ -1195,7 +1195,7 @@ fn the_keeper_posts_the_board_to_the_real_hub_and_the_dev_hub_each_with_its_own_
     let dev_state = connected_state(&dev_hub, &mut dev_browser);
     std::fs::rename(identity::dir_of(&dev_state, false), identity::dir_of(&state, true)).unwrap();
     let real = std::fs::read(state.join("hub/identity.json")).unwrap();
-    super::tick_in(&state, Some("mac"), now(), || Ok((board_of(&[asking("refunds", "shop")]), Vec::new()))).unwrap();
+    super::tick_in(&state, Some("mac"), now(), || Ok((board_of(&[asking("refunds", "shop")]), Vec::new())), || None).unwrap();
     assert_eq!(real_hub.boards(&mut real_browser).len(), 1, "the real hub has its board");
     assert_eq!(dev_hub.boards(&mut dev_browser).len(), 1, "the dev hub has its board");
     assert_eq!(std::fs::read(state.join("hub/identity.json")).unwrap(), real);
