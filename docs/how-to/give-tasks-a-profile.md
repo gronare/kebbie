@@ -81,6 +81,35 @@ profile = "designer"
 
 If a routine needs one, name it with `profile = "<name>"` in its `[[routines]]` table.
 
+## Run the lead on another model
+
+The lead runs on the model your Claude Code settings name, like your other Claude sessions. A profile gives it a model and an effort of its own.
+
+1. Write a Claude profile with the model and effort, `~/.config/kebbie/profiles/deep.toml`:
+
+   ```toml
+   about = "The lead on the strongest model"
+   model = "opus"
+   effort = "high"
+   ```
+
+2. Open the board's Settings page with `,`, go to This machine, select `lead.profile`, press `⏎` and pick `"deep"`. Or set it in `~/.config/kebbie/config.toml`:
+
+   ```toml
+   [lead]
+   profile = "deep"
+   ```
+
+3. Restart the lead with `L` on the board, or:
+
+   ```bash
+   kebbie lead --restart
+   ```
+
+4. Check it took: `kebbie doctor` shows `lead.profile names "deep", a Claude profile there is`.
+
+The lead takes the profile's `model` and `effort` alone, and keeps its own role. If the profile does not load, the lead starts on Claude Code's own model and `kebbie doctor` says why.
+
 ## Open the sandbox for a kind of work
 
 A task's shell commands run in Claude Code's sandbox (see [The trust boundary](../explanation/trust-boundary.md#the-sandbox)). A profile's `[sandbox]` table can give its tasks other hosts, other folders to write, or commands that run outside the sandbox:

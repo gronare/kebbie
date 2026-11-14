@@ -17,6 +17,7 @@ pub enum Kind {
     Bool,
     Choice(Vec<&'static str>),
     Profile,
+    LeadProfile,
     ReviewProfile,
     SecondOpinion,
     Text,
@@ -54,7 +55,7 @@ fn board_keys(loaded: &Loaded) -> (crate::keys::Keys, Vec<String>) {
 }
 
 fn entries_with(loaded: &Loaded, board_keys: &crate::keys::Keys) -> Vec<Entry> {
-    let Settings { sources, groups, ongoing, backlog_template, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, steps, require_accept, review_model, review_auto, review_profile, review_second, investigate_profile, notify_command, vault_command, server_name, worker_name, channel, agent_updates, idle_minutes, auto_restart, ci_watch, ci_deploy, tests_per_commit, tests_before_push, tests_full_command, comments_watch, comments_days, clean_on_release, docs_required, keeper, recover, machine_name, hub_url, hub_commands, hub_trust, hub_auto_approve, hub_approve_from, report_signals, report_text, report_inbox, propose_issues } = &loaded.settings;
+    let Settings { sources, groups, ongoing, backlog_template, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, steps, require_accept, review_model, review_auto, review_profile, review_second, investigate_profile, notify_command, vault_command, server_name, worker_name, channel, agent_updates, idle_minutes, auto_restart, ci_watch, ci_deploy, tests_per_commit, tests_before_push, tests_full_command, comments_watch, comments_days, clean_on_release, docs_required, keeper, recover, machine_name, hub_url, hub_commands, hub_trust, hub_auto_approve, hub_approve_from, report_signals, report_text, report_inbox, propose_issues, lead_profile } = &loaded.settings;
     let names: Vec<&str> = sources.value.iter().map(|source| source.key()).collect();
     let (server_key, worker_key) = (board_keys.char(crate::keys::Act::Server), board_keys.char(crate::keys::Act::Worker));
     let mut entries = Vec::new();
@@ -170,6 +171,8 @@ fn entries_with(loaded: &Loaded, board_keys: &crate::keys::Keys) -> Vec<Entry> {
         "For kebbie's maintainers: the kha_ token the issues endpoint issued. With it the keeper fetches the reports the endpoint lets through every 10 minutes, files each as a kebbie issue and acknowledges it, and kebbie doctor counts the ones waiting in quarantine; never in a repo config, and never shown.");
     key("issues.propose", propose_issues.value.to_string(), propose_issues.layer, Kind::Bool, Scope::Machine,
         "Whether the lead proposes saving a bug or wish about kebbie when kebbie itself cost something (an error, a workaround, a missing capability), one per turn at most, and saves it on your yes; false keeps the lead from proposing or filing them, and it files one only when you ask it to. Takes effect when the lead next restarts (L on the board); config.toml only.");
+    key("lead.profile", lead_profile.value.as_ref().map_or("none (Claude Code's own model)".to_string(), |profile| format!("{profile:?}")), lead_profile.layer, Kind::LeadProfile, Scope::Machine,
+        &format!("The profile the lead runs with: a Claude profile in {}/<name>.toml whose model and effort the lead's Claude starts with, so the lead can run another model than your other Claude sessions; its role, skills and rules are a task's and stay off the lead. none starts it on the model and effort your Claude Code settings name. Takes effect when the lead starts or restarts (L on the board, kebbie lead --restart, or the restart after an update); kebbie profiles lists them, and the Settings page picks from them. config.toml only.", crate::profiles::dir().display()));
     entries
 }
 

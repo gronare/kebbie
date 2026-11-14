@@ -499,7 +499,7 @@ pub(super) fn answered_with(caller: &Caller, answer: &Answer, close: crate::kebb
             },
         };
     }
-    match crate::questions::asked_by(&answer.question) {
+    match crate::questions::shown_under(&answer.question) {
         None => return refused(Reason::AlreadySettled, "That question no longer waits for an answer"),
         Some(from) if from != answer.address => return refused(Reason::BadRequest, &format!("That question is {from}'s, not {}'s", answer.address)),
         Some(_) => {}
@@ -914,6 +914,39 @@ mod tests {
         assert!(crate::kebbie_questions::load(&state).iter().all(|asked| asked.address != address), "nothing kebbie asked about it waits");
         let _ = std::fs::remove_file(state.join("steps").join(format!("{address}.json")));
         cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn kebbies_question_on_a_tasks_obstacle_answered_from_the_phone_is_your_decision_and_the_task_hears_it() {
+        use crate::obstacle::{By, Kind, Source, State};
+        let mut account = Account::connected();
+        let seen = Seen::new();
+        let state = crate::lead::state_dir().unwrap();
+        let address = format!("phone-obstacle-{}@app", std::process::id());
+        crate::obstacle::forget_in(&state, &address);
+        let worktree = crate::sh::test_dir("phone-obstacle");
+        crate::obstacle::raise_in(&state, &address, &worktree, Source::Task, "first", "Export", true, 1).unwrap();
+        let (second, _) = crate::obstacle::raise_in(&state, &address, &worktree, Source::Task, "second", "export", true, 2).unwrap();
+        let second = second.unwrap();
+        crate::obstacle::ask_replan(&state, &address, &second).unwrap();
+        let asked = crate::messages::load().into_iter().rev().find(|message| message.about.as_deref() == Some(crate::obstacle::question_about(&address, &second.id).as_str())).unwrap();
+        assert_eq!((asked.from.as_str(), crate::questions::shown_under(&asked.id)), ("kebbie", Some(address.clone())), "kebbie asks it, the task's card shows it");
+
+        let sent = account.send(&Payload::Answer(Answer { address: address.clone(), question: asked.id.clone(), choice: Some(1), comment: String::new() }));
+        with_answering(&seen, &answered, |hands| round(&account.dir, 0, &accepts(word("answer-and-push")), ACCOUNT, hands, &now)).unwrap();
+        let result = account.result(&sent);
+        assert_eq!(result.outcome, Outcome::Done, "{}", result.text);
+        let decided = crate::obstacle::load(&state, &address).into_iter().find(|obstacle| obstacle.id == second.id).unwrap();
+        assert_eq!((decided.state, decided.decision.as_ref().map(|decision| (decision.kind, decision.by))), (State::Decided, Some((Kind::Said, By::You))), "Plan again from the phone is your decision");
+        let log = crate::messages::load();
+        assert!(log.iter().any(|message| message.to == address && message.text.contains("Decision on your obstacle") && message.text.contains("Plan again")), "the task hears the decision");
+        assert!(log.iter().any(|message| message.to == crate::status::LEAD_LABEL && message.text.contains(&format!("{address}'s obstacle {} from the phone", second.id))), "the lead hears it came from the phone");
+
+        let again = account.send(&Payload::Answer(Answer { address: "someone-else@app".to_string(), question: asked.id.clone(), choice: Some(0), comment: String::new() }));
+        with_answering(&seen, &answered, |hands| round(&account.dir, 0, &accepts(word("answer-and-push")), ACCOUNT, hands, &now)).unwrap();
+        assert!(matches!(account.result(&again).outcome, Outcome::Refused { reason: Reason::BadRequest }), "another task's card cannot answer it");
+        crate::obstacle::forget_in(&state, &address);
+        let _ = std::fs::remove_dir_all(worktree);
     }
 
     fn iso(at: u64) -> String {

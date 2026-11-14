@@ -176,6 +176,7 @@ profile = "deep-codex"
 | --- | --- | --- | --- |
 | `machine.name` | the host's short name | config.toml only | The machine's one name, on your phone through the hub and on the vault notes it claims. |
 | `notify.command` | none | config.toml only | The shell command kebbie runs when something needs you. Unset sends nothing. See [Notify command](#notify-command). |
+| `lead.profile` | none | config.toml only | The Claude [profile](#profiles) whose model and effort the lead runs with. Unset, the lead runs on the model your Claude Code settings name. |
 | `vault.command` | none | config.toml only | The vault command kebbie runs for task notes, log lines and the board's snapshot, before its own arguments, such as `"uvx mindin"`. |
 | `hub.url` | the kebbie hub, `https://hub.kebbie.dev` | config.toml only | The [kebbie hub](../how-to/see-your-board-on-your-phone.md) `kebbie hub connect` and the board's `H` window connect this machine to. |
 | `hub.commands` | all eight kinds | config.toml only | What this machine takes from your devices through the hub: a list of `"answer"`, `"push"`, `"prompt"`, `"idea"`, `"start"`, `"edit"`, `"review"` and `"lead"`. See [Answer and push from your phone](../how-to/see-your-board-on-your-phone.md#answer-and-push-from-your-phone). |
@@ -190,6 +191,13 @@ profile = "deep-codex"
 - At most 64 characters, without control characters. `"localhost"` is refused, and `kebbie doctor` warns while the key is unset.
 - A task started from a vault note, or one kebbie opens a note for, writes this name and the task's into the note's `kebbie` frontmatter key. kebbie on another machine sharing the vault shows the note as `working on <name> · <task>` and asks before starting it.
 - Give each machine its own stable name, such as `"mac"` and `"devbox"`.
+
+`lead.profile`: the lead runs another model than your other Claude sessions. See [Run the lead on another model](../how-to/give-tasks-a-profile.md#run-the-lead-on-another-model).
+
+- It takes the profile's `model` and `effort` alone. Its role, skills and rules are a task's, and the lead keeps its own.
+- It names a Claude profile. A Codex profile or a review profile is refused, and so is one that does not load: the lead then starts on Claude Code's own model, and `kebbie doctor` warns.
+- It takes effect when the lead starts or restarts: `L` on the board, `kebbie lead --restart`, or the restart after an update.
+- The Settings page picks it under This machine from the Claude profiles that set a model or an effort. `none` removes the key.
 
 `vault.command` is kebbie's own way to the vault, whatever agent runs the task: Claude Code, Codex or another.
 
@@ -552,6 +560,9 @@ enabled = true
 
 [recover]
 enabled = true
+
+[lead]
+profile = "deep"
 ```
 
 ```toml

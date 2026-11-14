@@ -41,7 +41,7 @@ const SECTIONS: [(&str, &[&str]); 8] = [
     ("Review & docs", &["review", "ci", "tests", "comments", "docs"]),
     (PROFILES, &[]),
     ("Updates", &["update", "restart", "keeper", "recover"]),
-    ("This machine", &["machine", "hub", "notify", "vault"]),
+    ("This machine", &["machine", "lead", "hub", "notify", "vault"]),
     ("Reports", &["report", "issues"]),
 ];
 
@@ -504,7 +504,7 @@ impl Page {
         let Some(entry) = self.current() else { return };
         match entry.kind {
             Kind::Bool => self.request(entry.key, Change::Set(Set::Bool(entry.value != "true"))),
-            Kind::Choice(_) | Kind::Skill | Kind::Profile | Kind::ReviewProfile | Kind::SecondOpinion => self.mode = Mode::Choose(Box::new(self.chooser(&entry))),
+            Kind::Choice(_) | Kind::Skill | Kind::Profile | Kind::LeadProfile | Kind::ReviewProfile | Kind::SecondOpinion => self.mode = Mode::Choose(Box::new(self.chooser(&entry))),
             Kind::Secret => self.say(format!("{} is never shown here; set it in {} by hand", entry.key, home_relative(&self.paths.machine)), MUTED),
             Kind::Text | Kind::Number | Kind::List => self.mode = Mode::Edit { typed: Typed::Value, buffer: edit_text(&entry.value) },
         }

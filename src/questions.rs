@@ -343,8 +343,16 @@ pub fn answer_as(caller: &crate::permit::Caller, id: &str, choice: Option<usize>
     Ok(crate::notice::Notice::new(crate::notice::Tone::Done, "Answered").next(told).detail("task", &message.from).to_string())
 }
 
-pub fn asked_by(id: &str) -> Option<String> {
-    messages::load().into_iter().find(|message| message.id == id && message.question.is_some()).map(|message| message.from)
+// The task a question shows under on the board and the phone: its asker's, or for kebbie's own question on a task's review or obstacle that task's.
+pub fn shown_under(id: &str) -> Option<String> {
+    let message = messages::load().into_iter().find(|message| message.id == id && message.question.is_some())?;
+    let about = message.about.as_deref();
+    let task = match message.kind.as_deref() {
+        Some(crate::obstacle::QUESTION_KIND) => crate::obstacle::task_of(about),
+        Some(crate::review::QUESTION_KIND) => about.and_then(|about| about.strip_prefix(crate::review::QUESTION_KIND)?.strip_prefix(':')),
+        _ => None,
+    };
+    Some(task.map_or_else(|| message.from.clone(), str::to_string))
 }
 
 #[derive(Debug, PartialEq)]
@@ -638,7 +646,7 @@ mod tests {
         let id = messages::new_id("question");
         messages::append(&record(&id, messages::now(), &from, &asked(), None, None)).unwrap();
         let phone = Caller::hub("acc_01");
-        assert_eq!(asked_by(&id).as_deref(), Some(from.as_str()));
+        assert_eq!(shown_under(&id).as_deref(), Some(from.as_str()));
         assert!(matches!(answer_as(&Caller::Agent, &id, Some(0), ""), Err(Unanswered::NotAllowed(_))), "only the user answers");
         assert!(matches!(answer_as(&phone, &id, Some(9), ""), Err(Unanswered::Invalid(_))));
         let said = answer_as(&phone, &id, Some(1), "keep it short").unwrap();

@@ -449,6 +449,31 @@ fn the_repo_config_on_the_machine_layers_over_config_toml() {
 }
 
 #[test]
+fn lead_profile_is_shown_by_kebbie_config_checked_by_doctor_and_lives_only_in_config_toml() {
+    let lab = Lab::new("lead-profile");
+    let (app, _) = lab.task_fixture();
+    let profiles = lab.home.join(".config/kebbie/profiles");
+    fs::create_dir_all(&profiles).unwrap();
+    fs::write(profiles.join("deep.toml"), "agent = \"claude\"\nmodel = \"opus\"\neffort = \"high\"\n").unwrap();
+    let unset = stdout(&lab.run(&["config"]));
+    assert!(unset.contains("lead.profile = none (Claude Code's own model)  (default)"), "{unset}");
+    fs::write(&lab.config, "[lead]\nprofile = \"deep\"\n").unwrap();
+    let shown = lab.run(&["config"]);
+    assert!(shown.status.success() && stdout(&shown).contains("lead.profile = \"deep\"  (machine config)"), "{}", stderr(&shown));
+    assert!(!stderr(&shown).contains("unknown key"), "{}", stderr(&shown));
+    let doctor = stdout(&lab.run(&["doctor"]));
+    assert!(doctor.lines().any(|line| line.starts_with("ok") && line.contains("lead.profile names \"deep\"")), "{doctor}");
+    fs::write(&lab.config, "[lead]\nprofile = \"gone\"\n").unwrap();
+    let doctor = stdout(&lab.run(&["doctor"]));
+    assert!(doctor.contains("lead.profile: No profile \"gone\"") && doctor.contains("the lead starts on Claude Code's own model until it loads"), "{doctor}");
+    let repos = lab.home.join(".config/kebbie/repos");
+    fs::create_dir_all(&repos).unwrap();
+    fs::write(repos.join("app.toml"), "[lead]\nprofile = \"deep\"\n").unwrap();
+    let refused = lab.run(&["-C", app.to_str().unwrap(), "config"]);
+    assert!(!refused.status.success() && stderr(&refused).contains("app.toml: lead: applies to every repo, so it lives in config.toml; set [lead] profile in"), "{}", stderr(&refused));
+}
+
+#[test]
 fn a_symlinked_repo_config_loads_and_doctor_shows_its_target() {
     let lab = Lab::new("repo-link");
     let (app, _) = lab.task_fixture();

@@ -264,6 +264,10 @@ pub fn question_about(address: &str, id: &str) -> String {
     format!("{QUESTION_KIND}:{address}:{id}")
 }
 
+pub fn task_of(about: Option<&str>) -> Option<&str> {
+    about?.strip_prefix(&format!("{QUESTION_KIND}:"))?.rsplit_once(':').map(|(address, _)| address)
+}
+
 pub fn is_question_of(about: Option<&str>, address: &str) -> bool {
     about.is_some_and(|about| about.starts_with(&format!("{QUESTION_KIND}:{address}:")))
 }
@@ -466,7 +470,7 @@ fn replan_question(address: &str, obstacle: &Obstacle) -> crate::questions::Aske
     }
 }
 
-fn ask_replan(state: &Path, address: &str, obstacle: &Obstacle) -> Result<()> {
+pub(crate) fn ask_replan(state: &Path, address: &str, obstacle: &Obstacle) -> Result<()> {
     ask_user(state, address, obstacle, &replan_question(address, obstacle))
 }
 

@@ -180,6 +180,9 @@ impl Page {
         if let Some((file, _)) = crate::doctor::named_profiles(machine.as_ref(), &self.paths.machine, &self.paths.repos_dir).into_iter().find(|(_, named)| *named == profile.name) {
             return Some(format!("✗ task.profile names {} in {file}, so every new task there starts with it; pick another first", profile.name));
         }
+        if machine.as_ref().and_then(|machine| machine.lead_profile.as_deref()) == Some(profile.name.as_str()) {
+            return Some(format!("✗ lead.profile names {}, so the lead starts with it; pick another first", profile.name));
+        }
         let routines: Vec<String> = crate::routines::load_from(&self.paths.machine, &self.paths.repos_dir).0.into_iter().filter(|routine| routine.profile.as_deref() == Some(profile.name.as_str())).map(|routine| format!("\"{}\"", routine.title)).collect();
         if !routines.is_empty() {
             return Some(format!("✗ {} is the profile the routine {} starts its tasks with; give {} another first", profile.name, routines.join(", "), if routines.len() == 1 { "it" } else { "them" }));

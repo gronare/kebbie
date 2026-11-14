@@ -116,6 +116,15 @@ impl Page {
                 keep_current(&mut choices, 0, set.as_deref(), |name| choice(&format!("{name:?}"), &unset(name).unwrap_or_else(|| "no profile loads by this name".to_string()), Then::Write(Change::Set(Set::Text(name.to_string()))), true));
                 ("Which profile?", choices)
             }
+            Kind::LeadProfile => {
+                let set = (entry.layer != Layer::Default).then_some(now);
+                let mut choices = vec![choice("none", "Claude Code's own model and effort", Then::Write(Change::Remove), set.is_none())];
+                choices.extend(self.agents.profiles.iter().filter(|profile| !profile.review && profile.agent == crate::agent::Agent::Claude && (profile.model.is_some() || profile.effort.is_some())).map(|profile| {
+                    choice(&format!("{:?}", profile.name), &self.reviewer_runs(profile), Then::Write(Change::Set(Set::Text(profile.name.clone()))), set.as_deref() == Some(profile.name.as_str()))
+                }));
+                keep_current(&mut choices, 0, set.as_deref(), |name| choice(&format!("{name:?}"), "no Claude profile loads by this name", Then::Write(Change::Set(Set::Text(name.to_string()))), true));
+                return Chooser::new(entry.key.to_string(), "Which profile does the lead run with?", "Its model and effort, from the lead's next start or restart. Claude profiles only.".to_string(), choices, Vec::new());
+            }
             Kind::ReviewProfile => {
                 let runs = |profile: &Profile| self.reviewer_runs(profile);
                 let mut choices: Vec<Choice> = self.agents.reviewers().map(|profile| choice(&profile.name, &runs(profile), Then::Write(Change::Set(Set::Text(profile.name.clone()))), profile.name == now)).collect();

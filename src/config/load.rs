@@ -31,6 +31,10 @@ pub fn propose_issues_enabled() -> Result<bool> {
     Ok(load_machine(&path())?.propose_issues.unwrap_or(DEFAULT_PROPOSE_ISSUES))
 }
 
+pub fn lead_profile() -> Result<Option<String>> {
+    Ok(load_machine(&path())?.lead_profile.filter(|name| name != super::NONE))
+}
+
 pub fn keeper_enabled() -> Result<bool> {
     Ok(load_machine(&path())?.keeper.unwrap_or(DEFAULT_KEEPER))
 }

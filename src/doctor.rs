@@ -387,6 +387,15 @@ pub fn task_profiles(profiles_dir: &Path, named: &[(String, String)]) -> Option<
     Some(warn("task profile", format!("{}; the profiles are {}", missing.join("; "), names.join(", ")), one("pick it on the Settings page (,) under Tasks")))
 }
 
+// A lead.profile that does not load leaves the lead on Claude Code's own model at its next start.
+pub fn lead_profile(profiles_dir: &Path, named: Option<&str>) -> Option<Check> {
+    let name = named.filter(|name| *name != config::NONE)?;
+    match crate::lead::profile_in(profiles_dir, Some(name)) {
+        Ok(_) => Some(ok("lead profile", format!("lead.profile names \"{name}\", a Claude profile there is")).brief("lead profile")),
+        Err(error) => Some(warn("lead profile", format!("{error}; the lead starts on Claude Code's own model until it loads"), one("pick it on the Settings page (,) under This machine"))),
+    }
+}
+
 pub fn unchosen_profiles(profiles: &[crate::profiles::Profile], chosen: &[crate::agent::Agent]) -> Vec<Check> {
     profiles.iter().filter(|profile| !chosen.contains(&profile.agent)).map(|profile| {
         warn("profile", format!("profile {}: {}", profile.name, profile.agent.not_set_up()), one(format!("kebbie setup {}", profile.agent.key())))
@@ -997,6 +1006,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
     let (repo_checks, own) = repo_files(&env.repos_dir, env.repo_config.as_deref());
     checks.extend(repo_checks);
     checks.extend(task_profiles(&env.profiles_dir, &named_profiles(machine.as_ref(), &env.config, &env.repos_dir)));
+    checks.extend(lead_profile(&env.profiles_dir, machine.as_ref().and_then(|machine| machine.lead_profile.as_deref())));
     checks.extend(claude_models(&crate::profiles::list_in(&env.profiles_dir).0));
     checks.extend(kubeconfigs(&crate::profiles::list_in(&env.profiles_dir).0, &env.home));
     checks.extend(unchosen_profiles(&crate::profiles::list_in(&env.profiles_dir).0, &chosen));
@@ -1823,6 +1833,22 @@ mod tests {
         assert!(lacking.fact.contains("kebbie starts no task: socat, the seccomp filter missing"), "{}", lacking.fact);
         assert!(lacking.fix.iter().any(|fix| fix.contains("npm install -g @anthropic-ai/sandbox-runtime")) && lacking.fix.last().unwrap().contains("task.sandbox = false"), "{:?}", lacking.fix);
         assert!(include_str!("doctor.rs").contains("checks.push(sandbox(&settings.sandbox, &crate::sandbox::missing_here()));"), "doctor runs the check");
+    }
+
+    #[test]
+    fn a_lead_profile_that_does_not_load_or_is_not_claudes_is_a_warning_with_the_settings_page_as_fix() {
+        let profiles = crate::sh::test_dir("doctor-lead-profile");
+        std::fs::write(profiles.join("deep.toml"), "agent = \"claude\"\nmodel = \"opus\"\n").unwrap();
+        std::fs::write(profiles.join("coder.toml"), "agent = \"codex\"\n").unwrap();
+        assert_eq!(lead_profile(&profiles, None), None, "nothing to say when lead.profile is not set");
+        assert_eq!(lead_profile(&profiles, Some("none")), None);
+        assert_eq!(lead_profile(&profiles, Some("deep")).unwrap().level, Level::Ok);
+        let missing = lead_profile(&profiles, Some("designer")).unwrap();
+        assert_eq!(missing.level, Level::Warn);
+        assert!(missing.fact.starts_with("lead.profile: No profile \"designer\"") && missing.fact.ends_with("the lead starts on Claude Code's own model until it loads"), "{}", missing.fact);
+        assert_eq!(missing.fix, ["pick it on the Settings page (,) under This machine"]);
+        assert!(lead_profile(&profiles, Some("coder")).unwrap().fact.contains("the lead runs on Claude"));
+        std::fs::remove_dir_all(profiles).unwrap();
     }
 
     #[test]

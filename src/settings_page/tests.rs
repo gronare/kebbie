@@ -1153,6 +1153,26 @@ fn task_profile_is_picked_from_the_profiles_there_are_and_none_removes_it() {
 }
 
 #[test]
+fn lead_profile_is_picked_from_the_claude_profiles_with_a_model_or_effort_and_none_removes_it() {
+    let mut fixture = agents_fixture("settings-lead-profile");
+    go_to(&mut fixture.page, "lead.profile");
+    assert!(fixture.page.hint_lines().0.to_string().contains("⏎ pick"));
+    press(&mut fixture.page, &[KeyCode::Enter]);
+    let Mode::Choose(chooser) = &fixture.page.mode else { panic!("a pick") };
+    let labels: Vec<&str> = chooser.choices.iter().map(|choice| choice.label.as_str()).collect();
+    assert_eq!(labels, ["none", "\"designer\""], "Claude profiles that set a model or an effort; never a Codex one, the reviewer or a built-in that changes nothing");
+    assert!(screen(&mut fixture.page).contains("claude · opus · high"), "{}", screen(&mut fixture.page));
+    press(&mut fixture.page, &[KeyCode::Down, KeyCode::Enter]);
+    assert_eq!(file(&fixture, "config.toml"), "[lead]\nprofile = \"designer\"\n");
+    go_to_profile(&mut fixture.page, "designer");
+    press(&mut fixture.page, &[KeyCode::Char('x')]);
+    assert!(said(&fixture.page).starts_with("✗ lead.profile names designer, so the lead starts with it") && fixture.dir.join("profiles/designer.toml").exists(), "{}", said(&fixture.page));
+    go_to(&mut fixture.page, "lead.profile");
+    press(&mut fixture.page, &[KeyCode::Enter, KeyCode::Up, KeyCode::Enter]);
+    assert!(!file(&fixture, "config.toml").contains("profile"), "none starts the lead on Claude Code's own model: the key goes");
+}
+
+#[test]
 fn the_title_line_ends_at_the_right_edge() {
     let mut fixture = fixture("settings-title-edge", "", None);
     let (shown, buffer) = screen_at(&mut fixture.page, 100, 30);

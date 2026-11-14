@@ -295,7 +295,7 @@ fn a_symlinked_repo_config_loads_and_shows_its_target() {
 #[test]
 fn unknown_keys_are_named_with_the_file_and_ignored_while_bad_values_still_fail() {
     let warned = |text: &str| unknown_in_file(text, "/home/u/.config/kebbie/config.toml", &MACHINE_KEYS);
-    let all = "board, worktree, task, review, investigate, notify, vault, update, restart, keeper, recover, machine, hub, keys, ci, tests, comments, routines, report, issues";
+    let all = "board, worktree, task, review, investigate, notify, vault, update, restart, keeper, recover, machine, hub, keys, ci, tests, comments, routines, report, issues, lead";
     assert_eq!(warned("colour = 1
 "), [format!("/home/u/.config/kebbie/config.toml: colour: unknown key; known keys here: {all}")]);
     assert_eq!(warned("[backlog]\nsources = []\n"), [format!("/home/u/.config/kebbie/config.toml: backlog: unknown key; known keys here: {all}")]);
@@ -689,7 +689,7 @@ fn sample(entry: &Entry) -> String {
 fn each_keys_scope_is_the_files_that_take_it_and_what_its_text_says() {
     let loaded = Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
     let all = entries(&loaded);
-    assert_eq!(all.len(), 53);
+    assert_eq!(all.len(), 54);
     for entry in all {
         let (section, field) = entry.key.rsplit_once('.').unwrap();
         let text = format!("[{section}]\n{field} = {}\n", sample(&entry));

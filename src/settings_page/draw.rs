@@ -47,7 +47,7 @@ impl Page {
         }
         let change = match self.current().map(|entry| entry.kind) {
             Some(Kind::Bool) => "space toggle",
-            Some(Kind::Choice(_) | Kind::Skill | Kind::Profile | Kind::ReviewProfile | Kind::SecondOpinion) => "⏎ pick",
+            Some(Kind::Choice(_) | Kind::Skill | Kind::Profile | Kind::LeadProfile | Kind::ReviewProfile | Kind::SecondOpinion) => "⏎ pick",
             _ => "⏎ edit",
         };
         (
