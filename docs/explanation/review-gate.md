@@ -68,6 +68,8 @@ So you can tidy history in the push window without paying for a second review.
 
 Findings belong to the commits instead, since a reworded message can be what they asked for. Any change to the commits, a reword included, makes them stale, and the reviewer reads the branch again when the task next reports ready, also while its CI runs.
 
+kebbie sends a review back by itself twice in a row. When the third verdict is stale too, it stops: the task waits under Needs you with "the review keeps finding new points; read it yourself or push", and the push no longer waits on that review. Sending it to review again, with `v` or `kebbie review`, or a pass starts the count over.
+
 ## Test runs are recorded, not repeated
 
 A task's Claude runs the tests related to its change before it reports ready; the full suite is CI's job after the push. A repo whose suite runs in minutes can ask for the full suite on HEAD before every push instead, with [`tests.before_push`](../reference/configuration.md#ci-updates-and-the-keeper). kebbie records each of those runs from the task's hooks, with its command, its result and the commit it ran on, so nobody has to run them again to know they passed.

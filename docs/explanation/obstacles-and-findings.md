@@ -35,6 +35,8 @@ It does not run for a question of method, which is the task's own call, nor for 
 
 Bugs, broken rules, missing tests and missing docs go to the task as work. A finding the task cannot settle by changing code goes to the investigator first: the reviewer marks it `confirm:` for your intent, `scope:` for work outside the task or an Also noticed line on its own path, and `gap:` for a test or docs gap only someone else can close. The answer is often your own words in the task's note, which the reviewer never sees. When it settles a verdict that only held such findings, the review passes on its word. Only its `ask` reaches you.
 
+A point decided once stays decided. The reviewer's brief lists the task's decided obstacles with their decisions and the items it filed from its Also noticed lines, and kebbie leaves out a finding that names a decided point's `file:line` or its found item, so the same point never reaches the investigator twice. A verdict left with no finding passes.
+
 A thing a second task notices is raised once, as its own obstacle, and the investigator decides its root cause, usually one task for it. Every task that found it hears to stop working around it.
 
 ## The plan is living

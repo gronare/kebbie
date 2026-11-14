@@ -385,6 +385,44 @@ pub fn raise_from_review(state: &Path, address: &str, worktree: &Path, findings:
     Ok(obstacle.is_some())
 }
 
+const POINT_LIMIT: usize = 400;
+
+// The points this task has decided, each with its decision, for the reviewer's brief.
+pub fn decided_points(state: &Path, address: &str) -> Vec<String> {
+    load(state, address).into_iter().filter(|obstacle| !obstacle.state.open()).filter_map(|obstacle| {
+        let decision = obstacle.decision.as_ref()?;
+        let text: String = obstacle.text.chars().take(POINT_LIMIT).collect();
+        let cut = if text.len() < obstacle.text.len() { "…" } else { "" };
+        Some(format!("- {}: {text}{cut} → {}", obstacle.id, decision.line()))
+    }).collect()
+}
+
+// A marked finding on a point a decided obstacle of this task names already, by the same file:line or the same filed item: that obstacle's id.
+pub fn decided_on(state: &Path, address: &str, finding: &str, filed: &[String]) -> Option<String> {
+    let places = located(finding);
+    let items = item_ids(finding, filed);
+    load(state, address).into_iter().filter(|obstacle| !obstacle.state.open()).find(|obstacle| {
+        let named = format!("{} {} {}", obstacle.text, obstacle.found.as_deref().unwrap_or_default(), obstacle.decision.as_ref().and_then(|decision| decision.replaced_by.as_deref()).unwrap_or_default());
+        located(&obstacle.text).iter().any(|place| places.contains(place)) || item_ids(&named, filed).iter().any(|item| items.contains(item))
+    }).map(|obstacle| obstacle.id)
+}
+
+// The file:line right after each confirm:, scope: or gap: mark.
+fn located(text: &str) -> Vec<String> {
+    let lower = text.to_ascii_lowercase();
+    crate::review::UNSETTLED.iter().flat_map(|mark| lower.match_indices(mark).map(|(at, _)| at + mark.len()).collect::<Vec<_>>()).filter_map(|at| {
+        let token = text.get(at..)?.trim_start_matches(['*', '`', ' ']).split_whitespace().next()?.trim_end_matches([',', ';', ')', '`', '*', '.']);
+        let (file, line) = token.rsplit_once(':')?;
+        let line: String = line.chars().take_while(char::is_ascii_digit).collect();
+        (!file.is_empty() && !line.is_empty()).then(|| format!("{file}:{line}"))
+    }).collect()
+}
+
+// The filed found items a text names, as f1 or found:f1.
+fn item_ids(text: &str, filed: &[String]) -> Vec<String> {
+    text.split(|character: char| !character.is_ascii_alphanumeric()).filter(|word| filed.iter().any(|id| id == word)).map(str::to_string).collect()
+}
+
 // An item a second task found is raised once as its own problem, on the task that found it again: the investigator decides its root cause, usually a task of its own, and every task that found it is told to stop working around it.
 pub fn raise_recurring(state: &Path, address: &str, worktree: &Path, item: &crate::found::Item) -> Result<String> {
     let text = format!("found:{} was found outside their own work by {}: {}. Seen by more than one task, its root cause is decided once instead of worked around by each", item.id, item.sources.join(" and "), item.line);
@@ -1164,6 +1202,46 @@ mod tests {
         let brief = brief(&state, "search@app", Path::new("/nowhere/wt2.app"), &kept[0], "/bin/kebbie");
         assert!(brief.contains("decide its root cause once, which is usually task (one task for the cause)") && brief.contains("billing@app and search@app"), "{brief}");
         assert_eq!(raise_recurring(&state, "search@app", Path::new("/nowhere/wt2.app"), &item).unwrap(), "", "raised once");
+        let _ = fs::remove_dir_all(state);
+    }
+
+    fn decide(state: &Path, address: &str, id: &str, replaced_by: Option<&str>) {
+        update(state, address, id, |found| {
+            found.state = State::Decided;
+            found.decision = Some(Decision { kind: Kind::Workaround, by: By::Investigator, at: 2, reason: "The task's own call.".to_string(), plan: String::new(), replaced_by: replaced_by.map(str::to_string), subtask: None, task: None, standing: None });
+        }).unwrap();
+    }
+
+    #[test]
+    fn a_review_raises_every_marked_finding_in_one_obstacle() {
+        let state = crate::sh::test_dir("obstacle-review-all");
+        let findings = ["confirm: mindin/schema.py:466 — refuses a float limit".to_string(), "scope: mindin/client.py:354 — Also noticed f2 lies on the task's own path".to_string(), "scope: mindin/hooks.py:282 — env() is not in the plan".to_string()];
+        assert!(raise_from_review(&state, "refactor@mindin", Path::new("/nowhere/wt1.mindin"), &findings).unwrap());
+        let raised = load(&state, "refactor@mindin");
+        assert_eq!(raised.len(), 1, "one obstacle for the review: {raised:?}");
+        assert!(findings.iter().all(|finding| raised[0].text.contains(finding.as_str())), "{}", raised[0].text);
+        let _ = fs::remove_dir_all(state);
+    }
+
+    #[test]
+    fn a_finding_on_a_point_the_task_decided_is_known_by_its_file_line_or_its_found_item() {
+        let state = crate::sh::test_dir("obstacle-decided-on");
+        let address = "refactor@mindin";
+        let worktree = Path::new("/nowhere/wt1.mindin");
+        let filed = ["f1".to_string(), "f2".to_string(), "f3".to_string()];
+        raise_in(&state, address, worktree, Source::Review, "the review asks about scope or intent: scope: mindin/client.py:358 — Also noticed f2 (the remote client cannot tell a missing log from an outage) lies on cd07449's own path.", "", true, 1).unwrap();
+        raise_in(&state, address, worktree, Source::Review, "the review asks about scope or intent: confirm: mindin/context.py:209 — one unreadable note stops the bundle", "", true, 1).unwrap();
+        raise_in(&state, address, worktree, Source::Review, "the review asks about scope or intent: scope: mindin/signin.py:112 — Also noticed f3 lies on the task's path", "", true, 1).unwrap();
+        decide(&state, address, "o1", Some("Projects/remote-log.md (found f2, already in the backlog)"));
+        decide(&state, address, "o2", None);
+        assert_eq!(decided_on(&state, address, "scope: mindin/client.py:362 — commit aae7fb7 works around the missing error code that the card files as Also noticed f2", &filed).as_deref(), Some("o1"), "the same filed item, another line");
+        assert_eq!(decided_on(&state, address, "confirm: `mindin/context.py:209` — still stops the bundle", &filed).as_deref(), Some("o2"), "the same file:line");
+        assert_eq!(decided_on(&state, address, "scope: mindin/signin.py:112 — Also noticed f3, again", &filed), None, "o3 is still open, so its point is not decided yet");
+        assert_eq!(decided_on(&state, address, "scope: mindin/schema.py:64 — Also noticed f1 lies on the task's own path", &filed), None, "a new point goes to the investigator");
+        assert_eq!(decided_on(&state, address, "scope: mindin/other.py:1 — Also noticed f2", &[]), None, "an id is a found item only when the task filed it");
+        let points = decided_points(&state, address);
+        assert_eq!(points.len(), 2, "{points:?}");
+        assert!(points[0].starts_with("- o1: the review asks about scope or intent: scope: mindin/client.py:358") && points[0].ends_with("→ workaround, replaced by Projects/remote-log.md (found f2, already in the backlog), because the task's own call (investigator)"), "{}", points[0]);
         let _ = fs::remove_dir_all(state);
     }
 }

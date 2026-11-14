@@ -92,15 +92,15 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
     } else if let Some(event) = crate::notify::Event::of_state(&report.state) {
         let text = if event == crate::notify::Event::Ready { format!("{me} is ready: {summary}") } else { format!("{me} needs you: {}", report.next) };
         crate::notify::send(cwd, &crate::notify::Notice::from(event, &me, text));
-        if event == crate::notify::Event::Ready {
-            crate::hub::notices::send(&ready_notice(cwd, &state, &me, &summary), None);
-        }
     }
     if report.state == "ready" {
         crate::commit_tests::on_ready(cwd);
     }
     ask_to_close(cwd, &state, &me, &report, &summary);
     let check = if report.state == "ready" { review_again(cwd) + &crate::assessment::on_ready(cwd) + &rules_check(cwd) } else { String::new() };
+    if report.state == "ready" && !crate::routines::found(&me, &summary) {
+        notice_ready(cwd, &state, &me, &summary);
+    }
     Ok(format!("Reported to the lead and the board as {me}.{kept}{check}"))
 }
 
@@ -213,6 +213,44 @@ pub fn check_in(state: &Path, address: &str) -> Option<String> {
 
 pub fn forget_check_in(state: &Path, address: &str) {
     let _ = fs::remove_file(check_file(state, address));
+}
+
+// The phone hears a task is ready once per head, and only once nothing holds its push: no review waiting or running, no open obstacle.
+pub fn notice_ready(cwd: &Path, state: &Path, me: &str, summary: &str) {
+    let Ok(head) = git(cwd, &["rev-parse", "HEAD"]) else { return };
+    let review = main_checkout(cwd).and_then(|repo| default_branch(&repo)).ok().and_then(|upstream| crate::review::shown(me, cwd, &upstream));
+    if !pushable(review.as_ref(), crate::obstacle::shown_in(state, me).is_some()) || !first_for_head(state, me, &head) {
+        return;
+    }
+    crate::hub::notices::send(&ready_notice(cwd, state, me, summary), None);
+}
+
+// A review that passed lets the task's last ready report reach the phone, when that report is of the code it passed.
+pub fn notice_ready_after_pass(cwd: &Path, state: &Path, me: &str) {
+    let Some(report) = messages::latest_reports(&messages::load()).remove(me) else { return };
+    let Some(said) = report.report.as_ref().filter(|said| said.state == "ready") else { return };
+    if said.head.is_some() && said.head.as_deref() != git(cwd, &["rev-parse", "HEAD"]).ok().as_deref() {
+        return;
+    }
+    notice_ready(cwd, state, me, &report.text);
+}
+
+pub fn pushable(review: Option<&crate::review::Shown>, obstacle_open: bool) -> bool {
+    let review_holds = review.is_some_and(|shown| shown.held && !shown.stopped() && shown.pending());
+    !review_holds && !obstacle_open
+}
+
+fn ready_notice_file(state: &Path, me: &str) -> PathBuf {
+    state.join("ready-notices").join(me)
+}
+
+// The head a ready notice went out for is kept, so the same code is announced once.
+pub fn first_for_head(state: &Path, me: &str, head: &str) -> bool {
+    let file = ready_notice_file(state, me);
+    if fs::read_to_string(&file).is_ok_and(|sent| sent.trim() == head) {
+        return false;
+    }
+    crate::state::write(&file, head).is_ok()
 }
 
 fn ready_notice(cwd: &Path, state: &Path, me: &str, summary: &str) -> crate::hub::notices::About {
@@ -358,6 +396,7 @@ pub fn forget_card(task: &str, repo: &Path) {
 
 pub fn forget_card_in(state: &Path, address: &str) {
     let _ = fs::remove_file(card_file(state, address));
+    let _ = fs::remove_file(ready_notice_file(state, address));
     crate::card::forget(state, address);
 }
 
@@ -470,6 +509,25 @@ pub fn answer(input: &Payload) -> Answer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_phone_hears_a_task_is_ready_only_once_nothing_holds_its_push_and_once_per_head() {
+        let shown = |ok: bool, stale: bool, running: bool, held: bool, looped: bool| crate::review::Shown { verdict: Some(crate::review::Verdict { ok, sha: "abc".to_string(), findings: usize::from(!ok), ..Default::default() }), stale, running, held, file: PathBuf::new(), looped };
+        assert!(pushable(None, false), "never sent to review");
+        assert!(pushable(Some(&shown(true, false, false, true, false)), false), "passed");
+        assert!(!pushable(Some(&shown(true, false, true, true, false)), false), "the reviewer reads it again");
+        assert!(!pushable(Some(&shown(false, true, false, true, false)), false), "its verdict read older code, so a review waits");
+        assert!(!pushable(Some(&shown(false, false, false, true, false)), false), "the review asks for changes");
+        assert!(pushable(Some(&shown(false, false, false, false, false)), false), "an advised review holds no push");
+        assert!(pushable(Some(&shown(false, true, false, true, true)), false), "kebbie stopped sending it back; the user may push");
+        assert!(!pushable(None, true), "an open obstacle holds it");
+        let state = crate::sh::test_dir("report-ready-notice");
+        assert!(first_for_head(&state, "billing@app", "abc") && !first_for_head(&state, "billing@app", "abc"), "the same head is announced once");
+        assert!(first_for_head(&state, "billing@app", "def") && first_for_head(&state, "search@app", "def"), "a new head or another task is new");
+        forget_card_in(&state, "billing@app");
+        assert!(first_for_head(&state, "billing@app", "def"), "a task that ends forgets what it announced");
+        std::fs::remove_dir_all(state).unwrap();
+    }
 
     #[test]
     fn commits_left_to_push_that_git_cannot_count_are_an_error_never_none_left() {

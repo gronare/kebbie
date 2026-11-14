@@ -200,7 +200,7 @@ Each machine sends your devices a notification through the hub when something ne
 | An agent's prompt | `wt3 · kebbie` | `Claude asks to run cargo test --workspace. Yes or No.` |
 | The lead's questions on an idea | the item's title | its first question that waits on you, with `(1 of 3)` when there are more |
 | A new device | `iPhone 16 wants to make changes on MacBook` | `Added 14:02. Approve or deny it in kebbie: N on the board.` |
-| Ready to push | `cache · api is ready to push` | what the change does, its commits and the review's word |
+| Ready to push, once per commit and only when no review or obstacle holds it | `cache · api is ready to push` | what the change does, its commits and the review's word |
 | CI failed | `CI failed on web · app` | the failed job and step, and what kebbie did about it |
 | Started, off unless you turn it on | `Started: Retry flaky red runs` | `On MacBook as retry, recipe feature.` |
 | A start you asked for that failed, under Started | `Not started: Retry flaky red runs` | why, and that it stays in the backlog |

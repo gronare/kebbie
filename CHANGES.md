@@ -14,6 +14,9 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - s on a task waiting on kebbie's own obstacle question opens that question, not the sign-off card.
 - "project rules not checked" shows once, on the task's line, not on each of its ready subtasks.
 - kebbie hub connect and H on the board say a second machine is part of Hub Pro, with the page to get it.
+- A review leaves out points the task already decided, so the investigator decides each point once.
+- A review kebbie sent back twice by itself waits under Needs you instead of starting again.
+- Your phone hears a task is ready to push once per commit, and only when nothing holds the push.
 
 ## 0.38.0
 

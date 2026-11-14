@@ -317,6 +317,10 @@ impl Item {
         })
     }
 
+    pub fn review_stopped(&self) -> bool {
+        self.git.as_ref().is_some_and(|git| git.ahead > 0) && self.verdict.as_ref().is_some_and(crate::review::Shown::stopped)
+    }
+
     // Sent to review and not passed yet: it waits under In review, and push waits with it.
     pub fn awaiting_review(&self) -> bool {
         self.git.as_ref().is_some_and(|git| git.ahead > 0) && self.verdict.as_ref().is_some_and(|shown| shown.held && shown.pending())
@@ -464,6 +468,7 @@ impl Item {
             Phase::Idle if self.obstacle.as_ref().is_some_and(|obstacle| obstacle.state != crate::obstacle::State::Asked) => Group::Working,
             Phase::Idle => Group::Idle,
             Phase::NeedsYou(_) | Phase::CiRed { .. } => Group::NeedsYou,
+            Phase::Ready { .. } if self.review_stopped() => Group::NeedsYou,
             Phase::Ready { .. } if self.awaiting_review() => Group::InReview,
             Phase::Ready { .. } | Phase::Staged { .. } if self.to_accept.is_some() => Group::NeedsYou,
             Phase::Ready { .. } | Phase::Staged { .. } | Phase::Pushing { .. } => Group::ReadyToPush,
@@ -538,6 +543,9 @@ impl Item {
         if let Some(waits) = self.accept_waits() {
             return Some(&waits.next);
         }
+        if self.review_stopped() {
+            return Some(crate::review::LOOPED);
+        }
         self.report.as_ref()?.next_for_you()
     }
 
@@ -572,6 +580,9 @@ impl Item {
         }
         if let Some(question) = self.question.as_ref().and_then(|message| message.question.as_ref()) {
             return Some(if question.plan.is_some() { "approve the plan".to_string() } else { format!("answer a question · {}", plural(question.options.len(), "option")) });
+        }
+        if self.review_stopped() {
+            return Some(crate::review::LOOPED.to_string());
         }
         if let Some(verdict) = self.verdict_wanted() {
             return Some(verdict);
@@ -1454,13 +1465,22 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn in_review(ok: bool, findings: usize, stale: bool, running: bool) -> crate::review::Shown {
-        crate::review::Shown { verdict: Some(crate::review::Verdict { ok, sha: "abc".to_string(), findings, ..Default::default() }), stale, running, held: true, file: PathBuf::from("/state/verdicts/billing@web.md") }
+        crate::review::Shown { verdict: Some(crate::review::Verdict { ok, sha: "abc".to_string(), findings, ..Default::default() }), stale, running, held: true, file: PathBuf::from("/state/verdicts/billing@web.md"), looped: false }
+    }
+
+    #[test]
+    fn a_review_kebbie_stopped_sending_back_waits_under_needs_you_with_one_line() {
+        let mut item = task(Some("idle"), Some("ready"), 2);
+        item.verdict = Some(crate::review::Shown { looped: true, ..in_review(false, 3, true, false) });
+        assert_eq!((item.group(), item.wanted("enter").as_deref(), item.next_for_you()), (Group::NeedsYou, Some(crate::review::LOOPED), Some(crate::review::LOOPED)));
+        item.verdict = Some(crate::review::Shown { looped: true, ..in_review(false, 3, false, true) });
+        assert!(item.group() == Group::InReview, "a review the user sent again waits on the reviewer");
     }
 
     #[test]
     fn a_task_sent_to_review_waits_under_in_review_until_its_reviewer_passes_its_code() {
         let reviewed = |shown: crate::review::Shown| { let mut item = task(Some("idle"), Some("ready"), 2); item.verdict = Some(shown); item };
-        let running = reviewed(crate::review::Shown { verdict: None, stale: false, running: true, held: true, file: PathBuf::new() });
+        let running = reviewed(crate::review::Shown { verdict: None, stale: false, running: true, held: true, file: PathBuf::new(), looped: false });
         assert!(running.group() == Group::InReview);
         assert_eq!(running.summary(), "2 commits · review running · waits on the reviewer");
         assert_eq!(Group::InReview.title(), "IN REVIEW");
@@ -1479,7 +1499,7 @@ pub(crate) mod tests {
     #[test]
     fn a_review_under_way_or_of_this_code_covers_the_rules_and_a_stale_one_does_not() {
         let reviewed = |shown: crate::review::Shown| { let mut item = task(Some("idle"), Some("ready"), 2); item.git.as_mut().unwrap().approved = false; item.verdict = Some(shown); item };
-        let running = reviewed(crate::review::Shown { verdict: None, stale: false, running: true, held: true, file: PathBuf::new() });
+        let running = reviewed(crate::review::Shown { verdict: None, stale: false, running: true, held: true, file: PathBuf::new(), looped: false });
         assert_eq!(running.summary(), "2 commits · review running · waits on the reviewer", "the reviewer is the rules check");
         assert!(!reviewed(in_review(false, 2, false, false)).summary().contains(UNCHECKED));
         assert!(reviewed(in_review(true, 0, true, false)).summary().contains(UNCHECKED), "a review of older code checked none of this");

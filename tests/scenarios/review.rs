@@ -159,3 +159,36 @@ fn kebbie_review_refuses_at_once_a_review_profile_or_second_opinion_that_is_no_r
     assert!(plain.status.success() && stdout(&plain).contains("Review started"), "a second opinion only offered stops no plain review: {}", stderr(&plain));
     assert!(lab.claude_calls().iter().all(|call| !call.contains("designer")), "no reviewer ran on a task's profile");
 }
+
+#[test]
+fn a_review_that_finds_a_new_point_each_round_goes_back_twice_by_itself_and_then_waits_for_you() {
+    let lab = Lab::new("review-loop");
+    lab.config("[review]\nauto = \"suggest\"\n\n[investigate]\nprofile = \"none\"\n");
+    let worktree = lab.start("billing", "Round refunds", &[]);
+    let mut head = lab.work(&worktree, "refunds.rb", "Round refunds to the cent");
+    let round = |n: u32| format!("verdict: changes\n\n- refunds.rb:{n} — case {n} rounds half down\n- scope: refunds.rb:{} — point {n} lies outside the intent", 100 + n);
+    let reviewed_at = |head: &str| lab.item("billing")["verdict"]["sha"] == head[..7];
+    lab.answer("review", &round(1));
+    lab.ok(&["-C", lab.app(), "review", "billing"]);
+    assert!(eventually(Duration::from_secs(20), || reviewed_at(&head)), "{}", lab.item("billing"));
+    for n in 2..=4 {
+        head = lab.work(&worktree, &format!("case{n}.rb"), &format!("Round case {n} half up"));
+        lab.answer("review", &round(n));
+        lab.ok(&["-C", worktree.to_str().unwrap(), "report", "--state", "ready", "--next", "push", &format!("case {} fixed", n - 1)]);
+        lab.keeper_round();
+        if n < 4 {
+            assert!(eventually(Duration::from_secs(20), || reviewed_at(&head)), "round {n}: {}\n{}", lab.item("billing"), lab.keeper_log());
+        }
+    }
+    let reviews = lab.claude_roles().iter().filter(|role| *role == "review").count();
+    assert_eq!(reviews, 3, "the one you sent and two it went back for: {:?}", lab.claude_roles());
+    let item = lab.item("billing");
+    assert_eq!((item["group"].as_str(), item["next_for_you"].as_str(), item["verdict"]["stopped"].as_bool()), (Some("NEEDS YOU"), Some("the review keeps finding new points; read it yourself or push"), Some(true)), "{item}");
+    assert!(lab.to_lead().iter().any(|text| text.contains("billing@app's review was sent back 2 times by itself")), "{:?}", lab.to_lead());
+    lab.ok(&["-C", worktree.to_str().unwrap(), "report", "--state", "ready", "--next", "push", "still ready"]);
+    lab.keeper_round();
+    assert_eq!(lab.claude_roles().iter().filter(|role| *role == "review").count(), 3, "a stopped review stays stopped");
+    let push = pushed(&lab);
+    assert!(push.status.success(), "{}\n{}", stdout(&push), stderr(&push));
+    assert_eq!(on_origin(&lab), "Round case 4 half up");
+}

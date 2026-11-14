@@ -89,6 +89,10 @@ pub fn open_in(state: &Path) -> Vec<Item> {
     load(state).into_iter().filter(Item::open).collect()
 }
 
+pub fn filed_by(state: &Path, address: &str) -> Vec<Item> {
+    load(state).into_iter().filter(|item| item.sources.iter().any(|source| source == address)).collect()
+}
+
 fn save(state: &Path, items: &[Item]) -> Result<()> {
     crate::state::write(&file(state), serde_json::to_string_pretty(items).map_err(|error| error.to_string())?)
 }
