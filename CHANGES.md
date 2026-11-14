@@ -5,6 +5,12 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+
+### Fixed
+
+## 0.38.0
+
+### What's new
 - The phone's new screens and notifications need a newer hub, so update the hub first, then kebbie.
 - A new device's first command waits until you approve it under N or with kebbie hub devices, your phone included.
 - Your phone reviews and accepts a task's subtasks, pushes the accepted run and shows its stages and obstacle.
