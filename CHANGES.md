@@ -28,6 +28,9 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A plan from an older kebbie keeps its steps as subtasks with their numbers as ids, and kebbie steps still works.
 - The board shows the rules check on its own line under a task: checking, the project rules it breaks by name, or that you or the lead pushed past it; a passed check shows nothing.
 - Your phone shows a task's subtasks, its push order and pushable run, and its latest obstacle with the decision; update the hub first.
+- kebbie tell works from any session on the machine, and the lead sees it as from a Claude session or a shell in that folder.
+- tests.before_push = "full" holds a ready report and every push until the repo's full suite passed on the task's HEAD.
+- kebbie doctor suggests the full suite before push for a repo whose whole suite runs in minutes.
 - kebbie keeps a task's sign-off card as data, with who took each decision from its own records and what changed since the version before.
 - kebbie refuses a card with a part asking you to confirm, or any part beyond Built, Decisions and Also noticed.
 - A task reports ready over a red test run only with the cause it found, which its card shows.

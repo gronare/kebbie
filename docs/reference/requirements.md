@@ -82,7 +82,7 @@ kebbie doctor                                                       45 ok · 2 t
 | herdr | `herdr`, `herdr plugin` |
 | Tools | `git`, `jq`, `curl`, `nvim`, `tig`, `cargo` |
 | Files | `config`, `repo config`, `state dir`, `task hooks`, `setup skill` |
-| Tasks | `sandbox`, `push block`, `setup command`, `task profile`, `profile`, `reviewer`, `docs`, `comments`, `backlog`, `backlog local`, `backlog linear` |
+| Tasks | `sandbox`, `push block`, `setup command`, `task profile`, `profile`, `reviewer`, `docs`, `tests`, `comments`, `backlog`, `backlog local`, `backlog linear` |
 | Signals | `maintainers`, `reports`, `hub`, `notify` |
 
 With `--plain`, without a terminal or with `NO_COLOR` set, each line is `ok`, `skip`, `warn` or `fail`, the check's name and its text; `skip` is a check that got no answer, counted apart as not checked. Every `warn` and `fail` carries a `fix:` line for macOS and Linux. `kebbie doctor` exits non-zero when any check fails.
@@ -107,6 +107,7 @@ With `--plain`, without a terminal or with `NO_COLOR` set, each line is `ok`, `s
 | `push block` | Inside a repo: whether its task worktrees get the push block. |
 | `task hooks` | Open tasks and the lead whose hooks run a kebbie binary that is gone, so their test runs and edits go unrecorded (`kebbie restart` gives each its settings again, a busy one once it is idle). |
 | `docs` | Inside a repo: whether `docs.required` is on. |
+| `tests` | Inside a repo: which tests a push waits on, `tests.before_push` and its `tests.full_command`. |
 | `comments` | Inside a repo: whether kebbie reads comments on the commits it pushes there, and for how many days, or why not. |
 | `setup skill` | The setup skill's plugin is installed and enabled. |
 | `hub` | Whether the machine joined a kebbie hub, and how its board posts go. |
@@ -122,6 +123,7 @@ With `--plain`, without a terminal or with `NO_COLOR` set, each line is `ok`, `s
 | `backlog …` | Each backlog source can be read, and an installed source not in use. |
 
 - `docs` suggests turning `docs.required` on when `gh` says the repo is public on GitHub. Without `gh` or a GitHub remote the line is left out.
+- `tests` suggests `tests.before_push = "full"`, with the command, when the repo's tasks ran a whole suite green in five minutes or less (the median of kebbie's recorded runs). It warns when `"full"` is set without `tests.full_command`. A repo on related tests with no short run recorded has no line.
 - `hub`: when the machine has joined, it shows the hub's address and the machine's name, whether it pinned an account key and when the board last went out. It warns when the hub does not answer, the machine holds no account key (so no browser can read its board) or the last post failed. It fails, naming the file, when the machine's hub identity cannot be read.
 - `maintainers`: whether error signals go to kebbie's maintainers (`report.signals`, `not asked` until it is set), when they last went and whether that failed, and what happens to the bugs and wishes about kebbie saved here (`report.text`). It warns while `"always"` is set but not armed.
 - `reports`: how many reports were filed here, the last fetch and its error, and how many reports wait in quarantine on the issues endpoint.

@@ -718,7 +718,7 @@ It is yours, or the lead's on your explicit choice. The lead's settings do not a
 | `kebbie obstacle [--on <work>] <text>` | Raise an obstacle on the task's own path. See [below](#kebbie-obstacle---on-work-text). |
 | `kebbie found` | What tasks noticed outside their work, under Found by tasks. See [below](#kebbie-found---json). |
 | `kebbie answered <task>` | The task's question was settled elsewhere, dropped, or sent back to be asked again. |
-| `kebbie tell <to> <text>` | Message another session: a task (every half of it), `task@repo`, or `lead`. Held while the receiver waits for an answer, and logged. |
+| `kebbie tell <to> <text>` | Message another session: a task (every half of it), `task@repo`, or `lead`. Held while the receiver waits for an answer, and logged. Any session on the machine can send one: from outside a task or the lead it arrives as from `a Claude session in <dir>`, `a Codex session in <dir>` or `a shell in <dir>`. |
 
 `kebbie routine ok` is refused outside a routine's task, from anyone but that task's Claude, and while the task has changes or commits.
 

@@ -102,7 +102,7 @@ fn tests_per_commit_is_on_by_default_and_a_repo_can_turn_it_off() {
     let off = settings(&repo("[tests]\nper_commit = false\n"), &machine("[tests]\nper_commit = true\n"));
     assert_eq!(off.tests_per_commit, Setting { value: false, layer: Layer::Repo });
     assert!(parse_machine("[tests]\nper_commit = 1\n", "config.toml").unwrap_err().contains("tests.per_commit: must be true or false"));
-    assert!(unknown_repo("[tests]\neach = true\n").contains("tests.each: unknown key; known keys here: per_commit"));
+    assert!(unknown_repo("[tests]\neach = true\n").contains("tests.each: unknown key; known keys here: per_commit, before_push, full_command"));
     let shown = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: off });
     assert!(shown.contains("tests.per_commit = false  (repo config)"), "{shown}");
 }
@@ -689,7 +689,7 @@ fn sample(entry: &Entry) -> String {
 fn each_keys_scope_is_the_files_that_take_it_and_what_its_text_says() {
     let loaded = Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
     let all = entries(&loaded);
-    assert_eq!(all.len(), 51);
+    assert_eq!(all.len(), 53);
     for entry in all {
         let (section, field) = entry.key.rsplit_once('.').unwrap();
         let text = format!("[{section}]\n{field} = {}\n", sample(&entry));
@@ -765,6 +765,23 @@ fn stage_on_main_is_off_until_a_repo_config_turns_it_on_and_config_toml_cannot()
     assert!(parse_repo("[worktree]\nstage_on_main = 1\n", "app.toml").unwrap_err().contains("worktree.stage_on_main: must be true or false"));
     let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
     assert!(shown.contains("worktree.stage_on_main = false  (default)"), "{shown}");
+}
+
+#[test]
+fn the_full_suite_before_push_is_set_anywhere_and_its_command_only_per_repo() {
+    let default = settings(&Worktree::default(), &Machine::default());
+    assert_eq!((default.tests_before_push.value, default.tests_full_command.value), (BeforePush::Related, None), "related is today's behaviour");
+    let full = settings(&repo("[tests]\nfull_command = \" uv run pytest -q \"\n"), &machine("[tests]\nbefore_push = \"full\"\n"));
+    assert_eq!(full.tests_before_push, Setting { value: BeforePush::Full, layer: Layer::Machine });
+    assert_eq!(full.tests_full_command, Setting { value: Some("uv run pytest -q".to_string()), layer: Layer::Repo });
+    let back = settings(&repo("[tests]\nbefore_push = \"related\"\n"), &machine("[tests]\nbefore_push = \"full\"\n"));
+    assert_eq!(back.tests_before_push, Setting { value: BeforePush::Related, layer: Layer::Repo }, "a repo goes back to related");
+    let refused = parse_machine("[tests]\nfull_command = \"cargo test\"\n", "config.toml").unwrap_err();
+    assert!(refused.starts_with("config.toml: tests.full_command: each repo has its own full suite, so it lives in its repo config"), "{refused}");
+    assert!(parse_repo("[tests]\nbefore_push = \"all\"\n", "app.toml").unwrap_err().contains("tests.before_push: \"all\" is not a choice; use \"related\" or \"full\""));
+    assert!(parse_repo("[tests]\nfull_command = \" \"\n", "app.toml").unwrap_err().contains("tests.full_command: must not be empty"));
+    let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: full });
+    assert!(shown.contains("tests.before_push = \"full\"  (machine config)") && shown.contains("tests.full_command = \"uv run pytest -q\"  (repo config)"), "{shown}");
 }
 
 #[test]

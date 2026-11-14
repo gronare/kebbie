@@ -111,6 +111,41 @@ pub fn commands(configured: &[String]) -> Vec<String> {
     DEFAULT_COMMANDS.iter().map(|command| command.to_string()).chain(configured.iter().cloned()).collect()
 }
 
+// What kebbie records in a repo: the built-in list, task.test_commands and tests.full_command.
+pub fn listed_for(settings: &crate::config::Settings) -> Vec<String> {
+    commands(&settings.test_commands.value.iter().cloned().chain(settings.tests_full_command.value.clone()).collect::<Vec<_>>())
+}
+
+fn listed_in(repo: &Path) -> Vec<String> {
+    crate::config::resolve(Some(repo)).map(|loaded| listed_for(&loaded.settings)).unwrap_or_else(|_| commands(&[]))
+}
+
+// The first command in the line that starts with `full` is it, with flags of its own at most, so a run narrowed to some tests never counts as the whole suite.
+pub fn whole_run(command: &str, full: &str) -> bool {
+    let listed = [full.to_string()];
+    for (text, _) in shell::pieces(command) {
+        match shell::piece(text) {
+            shell::Piece::Simple(simple) if listed_start(simple, &listed).is_some() => return whole_in(simple, full),
+            shell::Piece::Nested(inner) if find(&inner, &listed).is_some() => return whole_run(&inner, full),
+            _ => {}
+        }
+    }
+    false
+}
+
+fn whole_in(simple: &str, full: &str) -> bool {
+    let wanted: Vec<&str> = full.split_whitespace().collect();
+    let words: Vec<&str> = words(simple);
+    let bare = |word: &str| word.trim_start_matches("./").to_string();
+    words.len() >= wanted.len() && words.iter().zip(&wanted).all(|(word, want)| bare(word) == bare(want)) && words[wanted.len()..].iter().all(|word| word.starts_with('-'))
+}
+
+// The command a recorded run ran as a whole suite, a listed command with flags of its own at most, as doctor proposes it for tests.full_command.
+pub fn whole_command(command: &str, listed: &[String]) -> Option<String> {
+    let runner = recognise(command, listed)?;
+    whole_run(command, runner).then(|| runner.trim_start_matches("./").to_string())
+}
+
 // The longest listed command a simple command starts with, whole words only.
 fn listed_start<'a>(simple: &str, listed: &'a [String]) -> Option<&'a str> {
     let core = simple.trim_start_matches("./");
@@ -423,8 +458,7 @@ fn unrecorded_context(command: &str) -> String {
 }
 
 pub fn unrecorded_for(state: &Path, address: &str, repo: &Path) -> Option<String> {
-    let configured = crate::config::resolve(Some(repo)).map(|loaded| loaded.settings.test_commands.value).unwrap_or_default();
-    unrecorded_note(&seen_in(state, address), &commands(&configured))
+    unrecorded_note(&seen_in(state, address), &listed_in(repo))
 }
 
 pub fn runs_in(state: &Path, address: &str) -> Vec<Run> {
@@ -677,7 +711,7 @@ pub fn hook(address: &str, input: &str) -> String {
     if settings.as_ref().is_ok_and(|settings| settings.steps.value) && let Ok(state) = state_dir() {
         tasks::subtasks_noted_after(&state, address, input);
     }
-    let listed = commands(&settings.map(|settings| settings.test_commands.value).unwrap_or_default());
+    let listed = settings.map(|settings| listed_for(&settings)).unwrap_or_else(|_| commands(&[]));
     let mut said = Vec::new();
     if payload.tool_name() == Some("Bash") && let Ok(state) = state_dir() {
         let missed = unrecorded(payload.command().unwrap_or_default(), &listed);
@@ -869,8 +903,7 @@ fn hook_in(state: &Path, address: &str, seen: &Seen) -> Hook {
 // The reviewer reads the commits, not the tree, so uncommitted work does not make a run stale here.
 pub fn brief_for(state: &Path, address: &str, worktree: &Path, upstream: &str, sha: &str) -> String {
     let seen = seen_in(state, address);
-    let configured = crate::config::resolve(Some(worktree)).map(|loaded| loaded.settings.test_commands.value).unwrap_or_default();
-    let listed = commands(&configured);
+    let listed = listed_in(worktree);
     settle(state, address, &listed, crate::messages::now());
     let unrecorded: Vec<String> = seen.unrecorded.iter().filter(|command| recognise(command, &listed).is_none()).cloned().collect();
     let current = |code: &str| tasks::same_code(worktree, upstream, code, sha);
@@ -883,8 +916,7 @@ fn duration(ms: u64) -> String {
 
 pub fn print(cwd: &Path, name: Option<&str>, as_json: bool) -> Result<String> {
     let task = task_at(cwd, name)?;
-    let configured = crate::config::resolve(Some(&task.path)).map(|loaded| loaded.settings.test_commands.value).unwrap_or_default();
-    settle(&state_dir()?, &task.address, &commands(&configured), crate::messages::now());
+    settle(&state_dir()?, &task.address, &listed_in(&task.path), crate::messages::now());
     let runs = runs_in(&state_dir()?, &task.address);
     if as_json {
         let items: Vec<Value> = runs.iter().rev().map(|run| {
@@ -939,6 +971,23 @@ mod tests {
         assert_eq!(recognise("./script/test --fast", &listed(&["script/test"])), Some("script/test"), "a leading ./ runs the same script");
         assert_eq!(recognise("cd app && ./script/test", &listed(&["script/test"])), Some("script/test"));
         assert_eq!(recognise("script/test", &listed(&["./script/test"])), Some("./script/test"));
+    }
+
+    #[test]
+    fn a_whole_run_is_the_command_with_flags_of_its_own_at_most() {
+        assert!(whole_run("cargo test --locked", "cargo test --locked"));
+        assert!(whole_run("cd w && HERDR_BIN_PATH=false cargo test --locked -q 2>&1 | tail -3", "cargo test --locked"), "flags, assignments and what reads its output keep it whole");
+        assert!(whole_run("./scripts/check.sh", "scripts/check.sh"));
+        assert!(!whole_run("cargo test --locked evidence", "cargo test --locked"), "a filter narrows it");
+        assert!(!whole_run("cargo test", "cargo test --locked"), "a shorter command is another one");
+        assert!(!whole_run("cargo test --locked evidence; cargo test --locked", "cargo test --locked"), "the first run of it in the line is the one recorded");
+        let list = listed(&["scripts/check.sh"]);
+        assert_eq!(whole_command("uv run pytest -q", &list).as_deref(), Some("uv run pytest"));
+        assert_eq!(whole_command("./scripts/check.sh", &list).as_deref(), Some("scripts/check.sh"));
+        assert_eq!(whole_command("uv run pytest tests/test_a.py", &list), None);
+        let mut settings = crate::config::settings(&crate::config::Worktree::default(), &crate::config::Machine::default());
+        settings.tests_full_command.value = Some("make check".to_string());
+        assert_eq!(recognise("make check", &listed_for(&settings)), Some("make check"), "the full command is recorded without being in task.test_commands");
     }
 
     #[test]

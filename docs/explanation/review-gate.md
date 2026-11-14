@@ -70,7 +70,7 @@ Findings belong to the commits instead, since a reworded message can be what the
 
 ## Test runs are recorded, not repeated
 
-A task's Claude runs the tests related to its change before it reports ready; the full suite is CI's job after the push. kebbie records each of those runs from the task's hooks, with its command, its result and the commit it ran on, so nobody has to run them again to know they passed.
+A task's Claude runs the tests related to its change before it reports ready; the full suite is CI's job after the push. A repo whose suite runs in minutes can ask for the full suite on HEAD before every push instead, with [`tests.before_push`](../reference/configuration.md#ci-updates-and-the-keeper). kebbie records each of those runs from the task's hooks, with its command, its result and the commit it ran on, so nobody has to run them again to know they passed.
 
 The reviewer gets every run on the code under review in its brief, one line per command with how many runs passed and failed and the newest result. Only when none ran on that code does it get the newest older ones instead. It treats a failed run, or no passing run on the reviewed code, as a finding. A run whose result kebbie could not see counts as no run.
 

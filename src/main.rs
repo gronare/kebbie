@@ -24,6 +24,7 @@ mod evidence;
 mod executable;
 mod fetch;
 mod found;
+mod full_tests;
 mod herdr;
 mod herdr_link;
 mod hooks;
@@ -151,7 +152,8 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   anywhere else, go to the lead's chat
   kebbie peers                    who you are and the other task sessions, with what each is doing
   kebbie tell <to> <text>         message another session: a task (every half of it), task@repo, or lead; held
-                                  while it waits for an answer, and logged
+                                  while it waits for an answer, and logged; from outside a task or the lead it
+                                  arrives as from a Claude session in <dir> (or a Codex session, or a shell)
   kebbie tell --force <to> <text> yours or the lead's: deliver now, clearing a draft from its input box (logged word
                                   for word; Ctrl+Y in its pane brings it back), with what is held for it first
   kebbie release <to>             yours or the lead's: deliver what is held for a session now, as tell --force does

@@ -43,7 +43,7 @@ const SECTION_KEYS: [(&str, &[&str]); 20] = [
     ("notify", &["command"]),
     ("vault", &["command"]),
     ("ci", &["watch", "deploy"]),
-    ("tests", &["per_commit"]),
+    ("tests", &["per_commit", "before_push", "full_command"]),
     ("comments", &["watch", "watch_days"]),
     ("docs", &["required"]),
 ];

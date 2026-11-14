@@ -2,7 +2,7 @@ use std::path::{Component, Path};
 
 use toml::{Table, Value};
 
-use super::{flag, path, permission_mode, skill, strings, subtable, table, template, text, AlsoNoticed, ReviewAuto, Second, NONE};
+use super::{flag, path, permission_mode, skill, strings, subtable, table, template, text, AlsoNoticed, BeforePush, ReviewAuto, Second, NONE};
 use crate::sh::Result;
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -34,6 +34,8 @@ pub struct Worktree {
     pub ci_watch: Option<bool>,
     pub ci_deploy: Option<String>,
     pub tests_per_commit: Option<bool>,
+    pub tests_before_push: Option<BeforePush>,
+    pub tests_full_command: Option<String>,
     pub comments_watch: Option<bool>,
     pub comments_days: Option<u64>,
     pub clean_on_release: Option<Vec<String>>,
@@ -70,6 +72,8 @@ fn worktree(table: &Table) -> Result<Worktree> {
         ci_watch: None,
         ci_deploy: None,
         tests_per_commit: None,
+        tests_before_push: None,
+        tests_full_command: None,
         comments_watch: None,
         comments_days: None,
         clean_on_release: worktree.get("clean_on_release").map(clean_on_release).transpose()?,
@@ -166,8 +170,16 @@ fn with_ci(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     }
     if let Some(tests) = subtable(table, "tests", "tests")? {
         worktree.tests_per_commit = flag(tests, "per_commit", "tests.per_commit")?;
+        worktree.tests_before_push = before_push(tests)?;
+        worktree.tests_full_command = text(tests, "full_command", "tests.full_command")?;
     }
     Ok(worktree)
+}
+
+fn before_push(tests: &Table) -> Result<Option<BeforePush>> {
+    let Some(name) = text(tests, "before_push", "tests.before_push")? else { return Ok(None) };
+    BeforePush::ALL.into_iter().find(|choice| choice.key() == name).map(Some)
+        .ok_or(format!("tests.before_push: \"{name}\" is not a choice; use \"related\" or \"full\""))
 }
 
 fn with_comments(table: &Table, mut worktree: Worktree) -> Result<Worktree> {

@@ -13,7 +13,7 @@ pub const GROUPS: [(&str, &[&str]); 9] = [
     ("herdr", &["herdr", "herdr plugin"]),
     ("Tools", &["git", "jq", "curl", "nvim", "tig", "cargo"]),
     ("Files", &["config", "repo config", "state dir", "task hooks", "setup skill"]),
-    (TASKS, &["sandbox", "push block", "setup command", "task profile", "profile", "kubeconfig", "reviewer", "docs", "comments", "backlog", "backlog local", "backlog linear"]),
+    (TASKS, &["sandbox", "push block", "setup command", "task profile", "profile", "kubeconfig", "reviewer", "docs", "tests", "comments", "backlog", "backlog local", "backlog linear"]),
     ("Signals", &["maintainers", "reports", "hub", "notify"]),
 ];
 
@@ -319,7 +319,7 @@ mod tests {
             ("herdr", "herdr"), ("herdr plugin", "herdr"),
             ("git", "Tools"), ("jq", "Tools"), ("curl", "Tools"), ("nvim", "Tools"), ("tig", "Tools"), ("cargo", "Tools"),
             ("state dir", "Files"), ("config", "Files"), ("repo config", "Files"), ("task hooks", "Files"), ("setup skill", "Files"),
-            ("sandbox", "Tasks"), ("push block", "Tasks"), ("setup command", "Tasks"), ("docs", "Tasks"), ("comments", "Tasks"), ("task profile", "Tasks"), ("profile", "Tasks"), ("kubeconfig", "Tasks"), ("reviewer", "Tasks"), ("backlog", "Tasks"), ("backlog local", "Tasks"), ("backlog linear", "Tasks"),
+            ("sandbox", "Tasks"), ("push block", "Tasks"), ("setup command", "Tasks"), ("docs", "Tasks"), ("tests", "Tasks"), ("comments", "Tasks"), ("task profile", "Tasks"), ("profile", "Tasks"), ("kubeconfig", "Tasks"), ("reviewer", "Tasks"), ("backlog", "Tasks"), ("backlog local", "Tasks"), ("backlog linear", "Tasks"),
             ("maintainers", "Signals"), ("reports", "Signals"), ("hub", "Signals"), ("notify", "Signals"),
         ];
         for (name, wanted) in names {

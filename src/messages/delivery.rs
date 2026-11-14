@@ -376,8 +376,17 @@ pub fn tell(cwd: &Path, to: &str, text: &str) -> Result<String> {
     if text.trim().is_empty() {
         return Err("kebbie tell needs a message: kebbie tell <task|task@repo|lead> \"<text>\"".to_string());
     }
-    let from = peers::me(cwd).ok_or("kebbie tell runs in a task's worktree or in the lead Space")?;
+    let from = peers::me(cwd).unwrap_or_else(|| outside_sender(cwd, crate::permit::agent_above()));
     let sessions = peers::sessions()?;
     let recipients = peers::resolve(to, &from, &sessions)?;
     Ok(send(&from, &recipients, text.trim(), &sessions)?.join("\n"))
+}
+
+// A sender kebbie did not start is named by where it runs, never as the user or the lead, with no line break or bracket a header could hide in.
+pub fn outside_sender(cwd: &Path, agent: Option<crate::agent::Agent>) -> String {
+    let dir: String = cwd.display().to_string().chars().map(|character| if character.is_control() || matches!(character, '[' | ']') || character.is_whitespace() && character != ' ' { '?' } else { character }).collect();
+    match agent {
+        Some(agent) => format!("a {} session in {dir}", agent.name()),
+        None => format!("a shell in {dir}"),
+    }
 }

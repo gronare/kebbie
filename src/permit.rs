@@ -281,6 +281,28 @@ pub fn caller_in(processes: &[(u32, u32, String)], pid: u32) -> Caller {
     Caller::User
 }
 
+// The nearest agent above the caller, Claude or Codex, kebbie's or not; none when a shell runs it.
+pub fn agent_above_in(processes: &[(u32, u32, String)], pid: u32) -> Option<crate::agent::Agent> {
+    let mut current = pid;
+    for _ in 0..64 {
+        let (_, parent, args) = processes.iter().find(|(id, _, _)| *id == current)?;
+        if current != pid && role_of(args).is_some() {
+            let program = args.split_whitespace().next().and_then(|word| Path::new(word).file_name()).map(|name| name.to_string_lossy().to_string()).unwrap_or_default();
+            let codex = program == "codex" || program.starts_with("codex-") || args.contains("@openai/codex");
+            return Some(if codex { crate::agent::Agent::Codex } else { crate::agent::Agent::Claude });
+        }
+        if *parent <= 1 || *parent == current {
+            return None;
+        }
+        current = *parent;
+    }
+    None
+}
+
+pub fn agent_above() -> Option<crate::agent::Agent> {
+    crate::sh::run(PS, &["-A", "-o", "pid=,ppid=,args="], None).ok().and_then(|table| agent_above_in(&processes(&table), std::process::id()))
+}
+
 // A terminal session: an interactive shell (no -c), a login, or a terminal multiplexer, herdr among them since the board runs straight under it; a shell running a script line is not one.
 fn is_session_host(args: &str) -> bool {
     let words: Vec<&str> = args.split_whitespace().collect();
@@ -470,6 +492,15 @@ mod tests {
         assert_eq!(caller_in(&processes(" 70 70 /bin/kebbie board\n"), 70), Caller::Agent, "a loop in the table ends the walk unread");
         assert_eq!(caller_in(&processes("garbage\n"), 70), Caller::Agent, "a table without kebbie in it proves no user");
         assert_eq!(caller_in(&[], 70), Caller::Agent, "an empty ps answer proves no user");
+    }
+
+    #[test]
+    fn the_agent_above_a_command_names_its_sender_and_a_plain_shell_has_none() {
+        let table = |above: &str| processes(&format!("  1     0 /sbin/launchd\n 40     1 /bin/zsh -l\n 50    40 {above}\n 60    50 /bin/zsh -c kebbie tell lead hi\n 70    60 /bin/kebbie tell lead hi\n"));
+        assert_eq!(agent_above_in(&table("node /opt/node_modules/@anthropic-ai/claude-code/cli.js"), 70), Some(crate::agent::Agent::Claude));
+        assert_eq!(agent_above_in(&table("/opt/homebrew/bin/codex"), 70), Some(crate::agent::Agent::Codex));
+        assert_eq!(agent_above_in(&table("/usr/bin/tmux"), 70), None, "a shell in a terminal is no agent");
+        assert_eq!(agent_above_in(&processes(" 70 70 /bin/kebbie tell lead hi\n"), 70), None, "a loop in the table ends the walk");
     }
 
     #[test]

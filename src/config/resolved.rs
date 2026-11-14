@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::{group_order, load_machine, load_repo, path, repo_file, short_hostname, AgentUpdates, AlsoNoticed, ApproveFrom, AutoApprove, Channel, HubCommands, HubTrust, Machine, OngoingAt, ReportText, ReviewAuto, Second, Source, read_sources, Worktree, DEFAULT_HUB_URL, DEFAULT_IDLE_MINUTES, DEFAULT_KEEPER, DEFAULT_PROPOSE_ISSUES, DEFAULT_RECOVER, NONE};
+use super::{group_order, load_machine, load_repo, path, repo_file, short_hostname, AgentUpdates, AlsoNoticed, ApproveFrom, AutoApprove, BeforePush, Channel, HubCommands, HubTrust, Machine, OngoingAt, ReportText, ReviewAuto, Second, Source, read_sources, Worktree, DEFAULT_HUB_URL, DEFAULT_IDLE_MINUTES, DEFAULT_KEEPER, DEFAULT_PROPOSE_ISSUES, DEFAULT_RECOVER, NONE};
 use crate::sh::Result;
 use crate::status::Group;
 
@@ -76,6 +76,8 @@ pub struct Settings {
     pub ci_watch: Setting<bool>,
     pub ci_deploy: Setting<Option<String>>,
     pub tests_per_commit: Setting<bool>,
+    pub tests_before_push: Setting<BeforePush>,
+    pub tests_full_command: Setting<Option<String>>,
     pub comments_watch: Setting<bool>,
     pub comments_days: Setting<u64>,
     pub clean_on_release: Setting<Vec<String>>,
@@ -152,6 +154,8 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         ci_watch: or_default(pick(repo.ci_watch.as_ref(), machine.worktree.ci_watch.as_ref()), true),
         ci_deploy: optional(pick(repo.ci_deploy.as_ref(), machine.worktree.ci_deploy.as_ref())),
         tests_per_commit: or_default(pick(repo.tests_per_commit.as_ref(), machine.worktree.tests_per_commit.as_ref()), true),
+        tests_before_push: or_default(pick(repo.tests_before_push.as_ref(), machine.worktree.tests_before_push.as_ref()), BeforePush::default()),
+        tests_full_command: optional(pick(repo.tests_full_command.as_ref(), None)),
         comments_watch: or_default(pick(repo.comments_watch.as_ref(), machine.worktree.comments_watch.as_ref()), true),
         comments_days: or_default(pick(repo.comments_days.as_ref(), machine.worktree.comments_days.as_ref()), crate::comments::DEFAULT_DAYS),
         clean_on_release: or_default(pick(repo.clean_on_release.as_ref(), machine.worktree.clean_on_release.as_ref()), vec!["target".to_string()]),

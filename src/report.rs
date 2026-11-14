@@ -51,7 +51,11 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
     }
     let red = if report.state == "ready" {
         crate::rules_check::refuse_unformed(cwd)?;
-        red_gate(&crate::evidence::runs_in(&state_dir()?, &me), red_cause)?
+        let red = red_gate(&crate::evidence::runs_in(&state_dir()?, &me), red_cause)?;
+        if to_push(cwd) && let Some(gap) = crate::full_tests::owed(cwd, &me) {
+            return Err(crate::full_tests::report_refusal(&gap));
+        }
+        red
     } else {
         None
     };
@@ -98,6 +102,10 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
     ask_to_close(cwd, &state, &me, &report, &summary);
     let check = if report.state == "ready" { review_again(cwd) + &crate::assessment::on_ready(cwd) + &rules_check(cwd) } else { String::new() };
     Ok(format!("Reported to the lead and the board as {me}.{kept}{check}"))
+}
+
+fn to_push(cwd: &Path) -> bool {
+    main_checkout(cwd).and_then(|repo| default_branch(&repo)).and_then(|upstream| crate::repo::ahead_behind(cwd, &upstream)).is_ok_and(|(ahead, _)| ahead > 0)
 }
 
 // While its check after the push runs, a task's report is the check's outcome: ready with nothing left to push is that it held, needs-you that it did not.

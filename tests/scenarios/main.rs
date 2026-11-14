@@ -4,6 +4,7 @@ mod executable;
 mod test_seal;
 
 mod lab;
+mod full_suite;
 mod needs_you;
 mod profiles;
 mod queue;

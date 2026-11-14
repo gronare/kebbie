@@ -227,6 +227,11 @@ pub fn docs_line(agent: crate::agent::Agent, required: bool) -> String {
     }
 }
 
+// A repo on tests.before_push = "full" has its tasks run the whole suite after their last commit, since ready and every push wait on it.
+pub fn tests_line(full: Option<&str>) -> String {
+    full.map_or(String::new(), |full| format!(" This repo pushes only on a green run of its full suite on HEAD (`tests.before_push = \"full\"`): once your last commit is made, run `{full}` as a command of its own, with nothing after it in the line, before you report ready. kebbie refuses the ready report, and every push, until that run passed on HEAD."))
+}
+
 // The plan step of roles/task.md: the task's note when kebbie keeps one, else with the vault as a backlog source a note there, else a plan file outside the worktree (plan_file); never a file in the worktree, where it would land in the repo.
 pub fn plan_step(sources: &[crate::config::Source], note: Option<&str>, kebbie: &str, task: &str, plans: &Path) -> String {
     if let Some(note) = note {
@@ -370,8 +375,9 @@ fn role_values(task: &str, place: &Place, peers: &str) -> Result<Vec<(&'static s
     let in_vault = crate::config::filing(&settings.sources.value) == Some(crate::config::Source::Vault);
     let noticed = noticed_section(settings.also_noticed.value, in_vault && tools && crate::vault_cli::detect().is_some(), &kebbie);
     let docs = docs_line(place.agent, settings.docs_required.value);
+    let tests = tests_line(crate::full_tests::required(&settings).as_deref());
     let steps = steps_section(settings.steps.value, &kebbie);
-    let mut values = vec![("address", me.clone()), ("task", task.to_string()), ("repo", repo), ("noticed", noticed), ("steps", steps), ("kebbie", kebbie), ("peers", peers), ("plan", plan), ("vault", vault), ("docs", docs)];
+    let mut values = vec![("address", me.clone()), ("task", task.to_string()), ("repo", repo), ("noticed", noticed), ("steps", steps), ("kebbie", kebbie), ("peers", peers), ("plan", plan), ("vault", vault), ("docs", docs), ("tests", tests)];
     values.extend(worktree_values(place)?);
     Ok(values)
 }
@@ -545,6 +551,17 @@ mod tests {
         let gone = rules_line(&dir.join("gone.md").display().to_string());
         assert!(gone.contains("which kebbie could not read") && gone.contains("gone.md"), "{gone}");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_repo_on_the_full_suite_tells_its_tasks_to_run_it_before_ready() {
+        use crate::config::{parse_machine, parse_repo, settings};
+        let template = include_str!("../roles/task.md");
+        let role = |repo: &str, machine: &str| fill(template, &[("tests", &tests_line(crate::full_tests::required(&settings(&parse_repo(repo, "app.toml").unwrap(), &parse_machine(machine, "config.toml").unwrap())).as_deref()))]);
+        let full = role("[tests]\nfull_command = \"uv run pytest -q\"\n", "[tests]\nbefore_push = \"full\"\n");
+        assert!(full.contains("a commit after the run makes it stale. This repo pushes only on a green run of its full suite on HEAD") && full.contains("run `uv run pytest -q` as a command of its own"), "{full}");
+        let related = role("[tests]\nfull_command = \"uv run pytest -q\"\n", "");
+        assert!(!related.contains("full suite on HEAD") && !related.contains("{tests}"), "{related}");
     }
 
     #[test]

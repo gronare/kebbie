@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::{load_machine, repos_dir, resolve, shown, AgentUpdates, AlsoNoticed, ApproveFrom, AutoApprove, Channel, HubTrust, Layer, Loaded, OngoingAt, ReportText, ReviewAuto, Second, Settings, PERMISSION_MODES};
+use super::{load_machine, repos_dir, resolve, shown, AgentUpdates, AlsoNoticed, ApproveFrom, AutoApprove, BeforePush, Channel, HubTrust, Layer, Loaded, OngoingAt, ReportText, ReviewAuto, Second, Settings, PERMISSION_MODES};
 use crate::repo::main_checkout;
 use crate::sh::Result;
 use crate::status::Group;
@@ -54,7 +54,7 @@ fn board_keys(loaded: &Loaded) -> (crate::keys::Keys, Vec<String>) {
 }
 
 fn entries_with(loaded: &Loaded, board_keys: &crate::keys::Keys) -> Vec<Entry> {
-    let Settings { sources, groups, ongoing, backlog_template, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, steps, require_accept, review_model, review_auto, review_profile, review_second, investigate_profile, notify_command, vault_command, server_name, worker_name, channel, agent_updates, idle_minutes, auto_restart, ci_watch, ci_deploy, tests_per_commit, comments_watch, comments_days, clean_on_release, docs_required, keeper, recover, machine_name, hub_url, hub_commands, hub_trust, hub_auto_approve, hub_approve_from, report_signals, report_text, report_inbox, propose_issues } = &loaded.settings;
+    let Settings { sources, groups, ongoing, backlog_template, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, steps, require_accept, review_model, review_auto, review_profile, review_second, investigate_profile, notify_command, vault_command, server_name, worker_name, channel, agent_updates, idle_minutes, auto_restart, ci_watch, ci_deploy, tests_per_commit, tests_before_push, tests_full_command, comments_watch, comments_days, clean_on_release, docs_required, keeper, recover, machine_name, hub_url, hub_commands, hub_trust, hub_auto_approve, hub_approve_from, report_signals, report_text, report_inbox, propose_issues } = &loaded.settings;
     let names: Vec<&str> = sources.value.iter().map(|source| source.key()).collect();
     let (server_key, worker_key) = (board_keys.char(crate::keys::Act::Server), board_keys.char(crate::keys::Act::Worker));
     let mut entries = Vec::new();
@@ -128,6 +128,10 @@ fn entries_with(loaded: &Loaded, board_keys: &crate::keys::Keys) -> Vec<Entry> {
         "The name of the GitHub Actions workflow that deploys this repo, for a task in stages (kebbie stages): a stage whose requirement is deploy is met once a run of this workflow on its pushed commit is green. None takes CI green on the pushed commit as the deploy. Needs ci.watch on.");
     key("tests.per_commit", tests_per_commit.value.to_string(), tests_per_commit.layer, Kind::Bool, Scope::Either,
         "Whether kebbie tests each of a task's unpushed commits on its own once the task reports ready: the keeper runs the test commands the task's own recorded test runs used (else task.test_commands) on one commit at a time, in a throwaway worktree of kebbie's, and remembers each commit's result by its sha, so a commit is tested once. A commit the task's own recorded runs already tested is not run again, and a task in the sandbox gets only those. The push order on the board and the phone marks each commit passed or failed; nothing waits on it. With a slow suite this costs a suite run per commit; false runs none. A repo config can turn it off for one repo.");
+    key("tests.before_push", format!("{:?}", tests_before_push.value.key()), tests_before_push.layer, Kind::Choice(BeforePush::ALL.map(BeforePush::key).to_vec()), Scope::Either,
+        "Which tests must have passed before a task reports ready and before any push of it, from the board, the lead or your phone: \"related\" leaves it to the task, which runs the tests its change touches; \"full\" also refuses both until kebbie recorded a green run of tests.full_command on the task's HEAD, and the refusal names the command to run. A repo without tests.full_command stays on related. kebbie doctor suggests full for a repo whose recorded full runs are short.");
+    key("tests.full_command", or_none(tests_full_command.value.as_ref()), tests_full_command.layer, Kind::Text, Scope::Repo,
+        "The command that runs this repo's whole test suite, such as \"cargo test --locked\" or \"uv run pytest -q\", as CI runs it; under tests.before_push = \"full\" a run of it, with flags of its own at most, counts as the full run, and kebbie records it as a test run whether or not task.test_commands lists it; repo config only.");
     key("comments.watch", comments_watch.value.to_string(), comments_watch.layer, Kind::Bool, Scope::Either,
         "Whether kebbie watches the GitHub comments colleagues leave on the commits it pushed, reads each one independently with a read-only Claude, and shows it under COMMENTS on the board with a recommendation and a reply to send; kebbie never posts a reply. Needs origin on GitHub and gh logged in, as ci.watch does; your own comments are skipped. A repo config can turn it off for one repo.");
     key("comments.watch_days", comments_days.value.to_string(), comments_days.layer, Kind::Number, Scope::Either,

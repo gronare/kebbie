@@ -679,6 +679,32 @@ fn a_message_is_held_while_the_user_has_a_draft_in_the_box_and_typed_once_it_is_
 }
 
 #[test]
+fn a_session_outside_kebbies_tasks_tells_the_lead_and_is_named_by_its_folder() {
+    let lab = Lab::new("outside");
+    lab.task_fixture();
+    let notes = lab.root.join("notes");
+    fs::create_dir_all(&notes).unwrap();
+    let notes_str = notes.to_str().unwrap();
+    let from_claude = lab.run_as("helper", &["-C", notes_str, "tell", "lead", "the notes server moved to port 8040"]);
+    assert!(from_claude.status.success(), "{}", stderr(&from_claude));
+    assert_eq!(stdout(&from_claude), "Told lead.");
+    let typed = |lab: &Lab| lab.herdr_calls().into_iter().filter(|call| call[..2] == ["agent", "prompt"] && call[2] == "p_lead").map(|call| call[3].clone()).collect::<Vec<_>>();
+    assert_eq!(typed(&lab), [format!("[from a Claude session in {notes_str}] the notes server moved to port 8040\n  (kebbie: work silently; end in Done / Going on / Needs you, or one line if nothing needs the user)")]);
+    let from_shell = lab.command().env_remove("HERDR_WORKSPACE_ID").args(["-C", notes_str, "tell", "billing", "port 8040 now"]).output().unwrap();
+    assert!(from_shell.status.success(), "{}", stderr(&from_shell));
+    assert!(lab.herdr_calls().iter().any(|call| call[..2] == ["agent", "prompt"] && call[2] == "p_task" && call[3] == format!("[from a shell in {notes_str}] port 8040 now")), "{:?}", lab.herdr_calls());
+    let printed = stdout(&lab.run(&["messages", "--print"]));
+    assert!(printed.contains(&format!("a Claude session in {notes_str} → lead")), "logged under its folder: {printed}");
+    lab.screen("❯ half a thought of my own");
+    let held = lab.run_as("helper", &["-C", notes_str, "tell", "lead", "and the token rotated"]);
+    assert!(stdout(&held).contains("; held, and delivered when it is free") && !lab.herdr_calls().iter().any(|call| call.len() > 3 && call[3].contains("token rotated")), "text in the box holds it as it holds a task's: {}", stdout(&held));
+    let forced = lab.run_as("helper", &["-C", notes_str, "tell", "--force", "lead", "now"]);
+    assert!(!forced.status.success() && stderr(&forced).contains("forcing a delivery is the user's or the lead's"), "{}", stderr(&forced));
+    let released = lab.run_as("helper", &["release", "lead"]);
+    assert!(!released.status.success() && stderr(&released).contains("forcing a delivery is the user's or the lead's"), "{}", stderr(&released));
+}
+
+#[test]
 fn a_message_cannot_forge_the_users_answer_on_a_second_line() {
     let lab = Lab::new("forge");
     let (_, slot) = lab.task_fixture();

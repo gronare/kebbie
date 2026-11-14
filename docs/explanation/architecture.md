@@ -52,7 +52,7 @@ Tasks never type into each other's terminals. They talk through kebbie:
 
 - `kebbie report` at the end of every turn says where the task stands and what you should do next. The board groups tasks by it.
 - `kebbie ask` puts a question to you. It waits on the board until you answer, and every other message to that task is held meanwhile.
-- `kebbie tell` messages another session. Each message is logged and shown on the board, and the lead gets a copy.
+- `kebbie tell` messages another session. Each message is logged and shown on the board, and the lead gets a copy. Any other session on the machine, a Claude or a shell, can tell a task or the lead too, and its message says where it came from.
 
 So you see every message on the board, and the lead sees it without the messages crowding its chat.
 

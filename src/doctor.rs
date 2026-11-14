@@ -569,6 +569,44 @@ pub fn docs(required: &Setting<bool>, visibility: impl FnOnce() -> Option<String
     })
 }
 
+// A whole-suite run this short is cheap enough to ask of every push.
+const SHORT_FULL_MS: u64 = 5 * 60 * 1000;
+
+// The whole-suite command the repo's tasks ran most, with its median time, when kebbie recorded its duration green at least once.
+pub fn short_full_run(runs: &[crate::evidence::Run], listed: &[String]) -> Option<(String, u64)> {
+    let mut timed: Vec<(String, Vec<u64>)> = Vec::new();
+    for run in runs.iter().filter(|run| run.result == crate::evidence::Outcome::Passed) {
+        let (Some(command), Some(ms)) = (crate::evidence::whole_command(&run.command, listed), run.duration_ms) else { continue };
+        match timed.iter_mut().find(|(known, _)| *known == command) {
+            Some((_, times)) => times.push(ms),
+            None => timed.push((command, vec![ms])),
+        }
+    }
+    let (command, mut times) = timed.into_iter().max_by_key(|(_, times)| times.len())?;
+    times.sort_unstable();
+    let median = times[times.len() / 2];
+    (median <= SHORT_FULL_MS).then_some((command, median))
+}
+
+pub fn tests(policy: &Setting<config::BeforePush>, full: Option<&str>, short: impl FnOnce() -> Option<(String, u64)>, repo_config: &Path) -> Option<Check> {
+    if policy.value == config::BeforePush::Full {
+        return Some(match full {
+            Some(full) => ok("tests", format!("tests.before_push is full ({}): a ready report and every push wait for a green `{full}` on the task's HEAD", policy.layer.label())).brief("full suite before push"),
+            None => warn("tests", "tests.before_push is full, but this repo names no tests.full_command, so its tasks run only related tests before a push", one(format!("add [tests] full_command = \"<the command CI runs>\" to {}", repo_config.display()))),
+        });
+    }
+    let (command, ms) = short()?;
+    Some(ok("tests", format!("this repo's whole suite `{command}` passed in {}s on its tasks' recorded runs, and a push asks only for the tests related to the change", ms.div_ceil(1000))).brief("related tests before push")
+        .with(one(format!("to require it before every push, add [tests] before_push = \"full\" and full_command = \"{command}\" to {}", repo_config.display()))))
+}
+
+// Every task's recorded runs in this repo, wherever its tasks stand now.
+fn repo_runs(state: &Path, repo: &Path) -> Vec<crate::evidence::Run> {
+    let tail = format!("@{}.jsonl", crate::repo::name_of(repo));
+    let names = std::fs::read_dir(state.join("evidence")).into_iter().flatten().flatten().filter_map(|entry| entry.file_name().to_str().map(str::to_string));
+    names.filter_map(|name| name.strip_suffix(".jsonl").filter(|_| name.ends_with(&tail)).map(str::to_string)).flat_map(|address| crate::evidence::runs_in(state, &address)).collect()
+}
+
 // The same requirement and the same reasons as CI watching.
 pub fn comments(watch: &Setting<bool>, days: u64, target: impl FnOnce() -> std::result::Result<String, String>) -> Check {
     if !watch.value {
@@ -974,6 +1012,8 @@ pub fn checks(env: &Env) -> Vec<Check> {
     checks.extend(env.repo.as_deref().and_then(|repo| setup_command(&settings.setup_command, repo)));
     if let (Some(repo), Some(file)) = (env.repo.as_deref(), env.repo_config.as_deref()) {
         checks.extend(docs(&settings.docs_required, || visibility(gh_on(&env.path).as_deref(), repo, GH_TIMEOUT), file));
+        let short = || short_full_run(&repo_runs(&env.kebbie_state, repo), &crate::evidence::listed_for(&settings));
+        checks.extend(tests(&settings.tests_before_push, settings.tests_full_command.value.as_deref(), short, file));
     }
     if let Some(repo) = env.repo.as_deref() {
         checks.push(comments(&settings.comments_watch, settings.comments_days.value, || crate::ci::target(repo, &crate::ci::gh())));
@@ -1592,6 +1632,27 @@ mod tests {
         assert!(check.fact.contains("docs.required is on (repo config)") && check.fix.is_empty(), "{check:?}");
         assert!(!asked.get(), "gh is not asked when there is nothing to suggest");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn doctor_suggests_the_full_suite_before_push_for_a_repo_whose_whole_run_is_short() {
+        let file = PathBuf::from("/c/repos/app.toml");
+        let run = |command: &str, seconds: u64| crate::evidence::Run { command: command.to_string(), result: crate::evidence::Outcome::Passed, duration_ms: Some(seconds * 1000), ..crate::evidence::Run::default() };
+        let listed = crate::evidence::commands(&[]);
+        let short = short_full_run(&[run("uv run pytest -q", 40), run("uv run pytest -q", 60), run("uv run pytest tests/test_a.py", 2), run("uv run pytest", 50)], &listed);
+        assert_eq!(short, Some(("uv run pytest".to_string(), 50_000)), "the whole suite, its median, never a filtered run");
+        assert_eq!(short_full_run(&[run("cargo test", 900)], &listed), None, "a slow suite is not suggested");
+        let related = Setting { value: config::BeforePush::Related, layer: config::Layer::Default };
+        let suggested = tests(&related, None, || short.clone(), &file).unwrap();
+        assert_eq!(suggested.level, Level::Ok, "a suggestion, not a warning");
+        assert_eq!(suggested.fix, [format!("to require it before every push, add [tests] before_push = \"full\" and full_command = \"uv run pytest\" to {}", file.display())]);
+        assert_eq!(tests(&related, None, || None, &file), None, "nothing measured, nothing said");
+        let full = Setting { value: config::BeforePush::Full, layer: config::Layer::Repo };
+        let on = tests(&full, Some("cargo test --locked"), || panic!("nothing to suggest"), &file).unwrap();
+        assert!(on.fact.contains("tests.before_push is full (repo config)") && on.fact.contains("`cargo test --locked`") && on.fix.is_empty(), "{on:?}");
+        let unnamed = tests(&full, None, || None, &file).unwrap();
+        assert_eq!(unnamed.level, Level::Warn, "{unnamed:?}");
+        assert!(unnamed.fact.contains("names no tests.full_command"), "{unnamed:?}");
     }
 
     #[test]

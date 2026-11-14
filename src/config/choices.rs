@@ -249,6 +249,25 @@ impl ReviewAuto {
     }
 }
 
+// tests.before_push: a ready report and a push wait on the task's own related tests, or on a green run of the repo's full suite on HEAD.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum BeforePush {
+    #[default]
+    Related,
+    Full,
+}
+
+impl BeforePush {
+    pub const ALL: [BeforePush; 2] = [BeforePush::Related, BeforePush::Full];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            BeforePush::Related => "related",
+            BeforePush::Full => "full",
+        }
+    }
+}
+
 // review.second: no second opinion, one offered when a task is sent to review, or one that runs with every review.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum Second {
