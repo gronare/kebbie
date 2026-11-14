@@ -88,7 +88,7 @@ fn away_at(store: &Store, away_since: Option<u64>, at: u64) -> bool {
 
 pub fn switched(state: &Path, on: bool, at: u64, by: u64, id: Option<&str>, device: Option<&str>) -> Result<()> {
     change(state, |store| {
-        let id = id.map_or_else(|| format!("away-{at}"), str::to_string);
+        let id = id.map_or_else(|| format!("away-{at}-{}", store.switches.len()), str::to_string);
         if !store.switches.iter().any(|switch| switch.id == id) {
             store.switches.push(Switch { id, at, by, on, device: device.map(str::to_string) });
         }
