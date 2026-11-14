@@ -23,7 +23,17 @@ pub struct Entry {
 
 pub struct Backlog {
     pub updated: Option<u64>,
+    pub vault: VaultRead,
     pub entries: Vec<Entry>,
+}
+
+// Where the column's vault rows were read: the saved list alone, the vault snapshot or local index as last synced, or a snapshot the keeper's watch keeps current.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum VaultRead {
+    #[default]
+    Saved,
+    Synced(Option<u64>),
+    Live,
 }
 
 pub const PRIORITIES: [&str; 5] = ["urgent", "high", "medium", "low", "none"];
@@ -59,16 +69,18 @@ fn entry(value: &Value) -> Option<Entry> {
 }
 
 pub fn load() -> Backlog {
-    let (updated, items) = read_all();
-    Backlog { updated, entries: items.into_iter().map(|(entry, _)| entry).collect() }
+    let (updated, vault, items) = read_all();
+    Backlog { updated, vault, entries: items.into_iter().map(|(entry, _)| entry).collect() }
 }
 
 // Each entry with its item's markdown where kebbie has it, from the same single read the Backlog column takes.
-pub fn with_bodies() -> Vec<(Entry, Option<String>)> {
-    read_all().1
+pub fn with_bodies() -> Bodied {
+    read_all().2
 }
 
-fn read_all() -> (Option<u64>, Vec<(Entry, Option<String>)>) {
+type Bodied = Vec<(Entry, Option<String>)>;
+
+fn read_all() -> (Option<u64>, VaultRead, Bodied) {
     let sources = config::sources().unwrap_or_default();
     let value: Value = file().ok().and_then(|path| fs::read_to_string(path).ok()).and_then(|raw| serde_json::from_str(&raw).ok()).unwrap_or_default();
     let mut entries: Vec<Entry> = value["entries"].as_array().into_iter().flatten().filter_map(entry).filter(|entry| entry.source != "local").collect();
@@ -82,8 +94,12 @@ fn read_all() -> (Option<u64>, Vec<(Entry, Option<String>)>) {
         }
     }
     let index = crate::vault::Index::open().ok();
+    let mut vault = VaultRead::Saved;
     if let Some(index) = index.as_ref().filter(|_| sources.contains(&Source::Vault)) {
         let notes = index.backlog().unwrap_or_default();
+        let watched = crate::lead::state_dir().is_ok_and(|state| crate::vault_watch::watching(&state));
+        vault = if watched { VaultRead::Live } else { VaultRead::Synced(index.last_sync()) };
+        entries = as_indexed(entries, &notes, today());
         entries.extend(missing_notes(&entries, &notes, today()));
     }
     let status = |key: &str| index.as_ref().map_or(Some("backlog".to_string()), |index| index.status_of(key));
@@ -97,7 +113,7 @@ fn read_all() -> (Option<u64>, Vec<(Entry, Option<String>)>) {
         shape_all(&mut items, &local, index.as_ref(), &state, &Templates::now());
     }
     sort(&mut items, |(entry, _)| entry, |entry| index.as_ref().filter(|_| entry.source == "vault").and_then(|index| index.changed_at(&entry.reference)));
-    (value["updated"].as_u64(), items)
+    (value["updated"].as_u64(), vault, items)
 }
 
 pub(crate) fn bodies_file(state: &Path) -> PathBuf {
@@ -217,8 +233,8 @@ fn shape_all(items: &mut [(Entry, Option<String>)], local: &std::collections::Ha
 }
 
 // Backlog notes the lead's last snapshot does not have yet: filed since, or put back by a reset.
-fn missing_notes(entries: &[Entry], notes: &[[String; 6]], today: i64) -> Vec<Entry> {
-    notes.iter().filter(|[key, ..]| !entries.iter().any(|entry| entry.source == "vault" && &entry.reference == key)).map(|[key, title, summary, priority, area, date]| Entry {
+fn indexed([key, title, summary, priority, area, date]: &[String; 6], today: i64) -> Entry {
+    Entry {
         source: "vault".to_string(),
         title: title.clone(),
         priority: if PRIORITIES.contains(&priority.as_str()) { priority.clone() } else { "none".to_string() },
@@ -227,7 +243,19 @@ fn missing_notes(entries: &[Entry], notes: &[[String; 6]], today: i64) -> Vec<En
         summary: summary.clone(),
         age: days_since(date, today).map_or(String::new(), |days| format!("{days} d")),
         shape: Default::default(),
+    }
+}
+
+// A saved vault entry the index also holds is drawn as the index has it now, its age counted to today rather than to the save.
+fn as_indexed(entries: Vec<Entry>, notes: &[[String; 6]], today: i64) -> Vec<Entry> {
+    entries.into_iter().map(|entry| match notes.iter().find(|[key, ..]| entry.source == "vault" && *key == entry.reference) {
+        Some(note) => indexed(note, today),
+        None => entry,
     }).collect()
+}
+
+fn missing_notes(entries: &[Entry], notes: &[[String; 6]], today: i64) -> Vec<Entry> {
+    notes.iter().filter(|[key, ..]| !entries.iter().any(|entry| entry.source == "vault" && &entry.reference == key)).map(|note| indexed(note, today)).collect()
 }
 
 pub(crate) fn today() -> i64 {
@@ -327,12 +355,19 @@ pub fn from(sources: &[Source]) -> String {
     joined(&fetched(sources), |source| if source == Source::Vault { "the vault" } else { "Linear" }, " and ")
 }
 
-pub fn label(sources: &[Source]) -> String {
-    if sources.is_empty() { "no source".to_string() } else { joined(sources, Source::title, " + ") }
-}
-
-pub fn freshness(sources: &[Source], updated: Option<u64>) -> String {
-    if fetched(sources).is_empty() { "live".to_string() } else { age(updated) }
+// Each source with how current its rows are: the local folder and a watched vault live, a synced vault by its last sync, the rest by the lead's last save.
+pub fn freshness(sources: &[Source], backlog: &Backlog) -> String {
+    if sources.is_empty() {
+        return "no source".to_string();
+    }
+    sources.iter().map(|source| {
+        let read = match (source, backlog.vault) {
+            (Source::Local, _) | (Source::Vault, VaultRead::Live) => "live".to_string(),
+            (Source::Vault, VaultRead::Synced(at)) => age(at),
+            _ => age(backlog.updated),
+        };
+        format!("{} {read}", source.title())
+    }).collect::<Vec<_>>().join(" + ")
 }
 
 pub fn not_configured() -> String {
@@ -594,7 +629,7 @@ mod tests {
 
     #[test]
     fn a_search_lists_the_items_holding_every_word_from_the_backlog_and_found_by_tasks() {
-        let backlog = Backlog { updated: None, entries: vec![Entry { title: "The suite is red inside a task".to_string(), summary: "cargo test fails in a worktree".to_string(), reference: "local:suite-red".to_string(), ..entry("local") }, entry("vault")] };
+        let backlog = Backlog { updated: None, vault: VaultRead::Saved, entries: vec![Entry { title: "The suite is red inside a task".to_string(), summary: "cargo test fails in a worktree".to_string(), reference: "local:suite-red".to_string(), ..entry("local") }, entry("vault")] };
         let found = [crate::found::Item { id: "f3".to_string(), line: "The suite is red in a task's sandbox".to_string(), repo: "kebbie".to_string(), sources: vec!["a@kebbie".to_string(), "b@kebbie".to_string()], count: 2, first_at: 0, last_at: 0, state: crate::found::State::Open, outcome: None, raised: true }];
         let said = search_in(&backlog, &found, "Suite RED");
         assert_eq!(said, "2 items for \"Suite RED\", from the backlog as kebbie last read it and from Found by tasks:\n  [high] The suite is red inside a task  (local:suite-red · app)\n  [found] The suite is red in a task's sandbox  (found:f3 · found 2× · by a, b)");
@@ -643,9 +678,27 @@ mod tests {
     }
 
     #[test]
+    fn the_header_dates_each_source_by_what_its_rows_were_read_from() {
+        let hours_ago = |hours: u64| Some(now() - hours * 3600);
+        let backlog = |vault: VaultRead| Backlog { updated: hours_ago(562), vault, entries: Vec::new() };
+        assert_eq!(freshness(&[Source::Vault], &backlog(VaultRead::Synced(Some(now() - 120)))), "vault 2 min ago", "vault rows come from the snapshot, not the lead's old save");
+        assert_eq!(freshness(&[Source::Vault], &backlog(VaultRead::Live)), "vault live");
+        assert_eq!(freshness(&[Source::Vault], &backlog(VaultRead::Saved)), "vault 562 h ago", "without an index the saved list is all there is");
+        assert_eq!(freshness(&[Source::Vault, Source::Linear], &backlog(VaultRead::Synced(hours_ago(1)))), "vault 1 h ago + Linear 562 h ago", "Linear's rows are only the lead's save");
+        assert_eq!(freshness(&[Source::Local], &backlog(VaultRead::Saved)), "local live");
+        assert_eq!(freshness(&[], &backlog(VaultRead::Saved)), "no source");
+    }
+
+    #[test]
+    fn a_saved_vault_entry_the_index_holds_is_drawn_as_the_index_has_it_today() {
+        let saved = vec![Entry { reference: "Projects/known.md".to_string(), title: "Old title".to_string(), age: "27 d".to_string(), ..entry("vault") }, Entry { reference: "Projects/gone.md".to_string(), age: "3 d".to_string(), ..entry("vault") }, entry("linear")];
+        let row = [ "Projects/known.md", "New title", "Sum", "high", "[[kebbie]]", "2026-09-01"].map(str::to_string);
+        let shown = as_indexed(saved, &[row], epoch_day("2026-11-14").unwrap());
+        assert_eq!(shown.iter().map(|entry| (entry.title.as_str(), entry.age.as_str())).collect::<Vec<_>>(), [("New title", "74 d"), ("Fix it", "3 d"), ("Fix it", "3 d")]);
+    }
+
+    #[test]
     fn the_board_texts_tell_a_local_backlog_from_a_fetched_one() {
-        assert_eq!(freshness(&[Source::Local], None), "live");
-        assert_eq!(freshness(&[Source::Local, Source::Vault], None), "never");
         assert_eq!(from(&[Source::Local, Source::Linear]), "Linear");
         assert!(refresh_label(&[Source::Local]).contains("nothing for the lead to refresh"));
         assert_eq!(refresh_label(&[Source::Local, Source::Vault]), "the lead fetches the vault again");
@@ -676,8 +729,6 @@ mod tests {
 
     #[test]
     fn labels_and_the_role_follow_the_sources() {
-        assert_eq!(label(&[Source::Vault, Source::Linear]), "vault + Linear");
-        assert_eq!(label(&[]), "no source");
         assert_eq!(from(&[Source::Vault]), "the vault");
         let Role { finding, backlog, intake, .. } = role_texts(&[Source::Vault], false);
         assert_eq!(finding, "the vault backlog by priority");

@@ -27,6 +27,9 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Your phone hears a task is ready to push once per commit, and only when nothing holds the push.
 - A lead you started fresh moves to the new kebbie on the next update or once idle, before you have written to it.
 - The board's "Lead restarts" line goes as soon as L has restarted the lead.
+- With the bugs-to-send row, the "Done in kebbie" line or a comment selected, no task on the board looks selected.
+- The board's header dates the vault backlog by its last vault sync, or says live while kebbie watches the vault.
+- Backlog rows from the vault show their current title, priority and age, not those of the lead's last save.
 
 ## 0.38.0
 

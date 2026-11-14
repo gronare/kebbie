@@ -262,8 +262,8 @@ fn without_spacers(lines: Vec<Line<'static>>, selected_line: usize, rows: Rows, 
 
 pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usize) -> (Vec<Line<'static>>, usize, Rows) {
     let open = app.column == Column::Work;
-    let focused = open && !app.in_messages && !app.offer_panel.focused && !app.comment_panel.focused;
-    let on_task = open && !app.comment_panel.focused;
+    let off_tasks = open && (app.offer_panel.focused || app.comment_panel.focused);
+    let focused = open && !app.in_messages && !off_tasks;
     let boundary = app.comment_boundary();
     let put_comments = |app: &App, lines: &mut Vec<Line<'static>>, rows: &mut Rows, selected_line: &mut usize, after: bool| {
         let (comments, comment_rows, comment_selected) = super::comments::comment_lines(app, width, lines.len() + usize::from(after), open && !app.in_messages);
@@ -306,7 +306,7 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
             current = Some(Group::Parked);
             let parked = app.parked_items();
             if !app.parked_open {
-                let selected = index == app.work_selected;
+                let selected = index == app.work_selected && !off_tasks;
                 if selected {
                     selected_line = lines.len();
                 }
@@ -326,7 +326,7 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
         }
         spacers.push(lines.len());
         lines.push(Line::default());
-        let selected = index == app.work_selected;
+        let selected = index == app.work_selected && !off_tasks;
         if selected {
             selected_line = lines.len();
         }
@@ -354,18 +354,18 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
             line.spans.extend([Span::raw(" "), Span::styled("●", style(GREEN))]);
         }
         lines.push(line);
-        lines.extend(how_lines(item, selected && on_task && unfold, width));
-        lines.extend(rules_lines(item, selected && on_task && unfold, width));
+        lines.extend(how_lines(item, selected && open && unfold, width));
+        lines.extend(rules_lines(item, selected && open && unfold, width));
         if let Some(at) = cursor {
             selected_line = lines.len() + cursor_line(item, at);
         }
-        lines.extend(step_lines(item, selected && on_task && unfold, width, cursor));
+        lines.extend(step_lines(item, selected && open && unfold, width, cursor));
         if let Some(wanted) = item.wanted(&keys::key(Act::Go).to_string()).or_else(|| item.verdict_wanted()).or_else(|| accept_wanted(item)) {
-            lines.extend(wanted_lines(&wanted, PEACH, selected && on_task && unfold, width));
+            lines.extend(wanted_lines(&wanted, PEACH, selected && open && unfold, width));
         } else if let Some(waiting) = item.waiting() {
-            lines.extend(wanted_lines(waiting, MUTED, selected && on_task && unfold, width));
+            lines.extend(wanted_lines(waiting, MUTED, selected && open && unfold, width));
         }
-        if selected && on_task && unfold {
+        if selected && open && unfold {
             let (detail, links) = unfolded_lines(app, item, width.saturating_sub(4));
             lines.extend(detail.into_iter().map(|line| {
                 let mut spans = vec![Span::raw("   ")];
@@ -950,6 +950,37 @@ mod tests {
         assert_eq!(buffer[(20, last as u16)].bg, SURFACE, "the selection's background covers the block's last line");
         let (second, second_end) = ends[1];
         assert!((second..=second_end).all(|row| rows[row].chars().nth(2) == Some(' ')), "{screen}");
+    }
+
+    #[test]
+    fn a_task_block_draws_unselected_while_the_cursor_is_on_the_issues_row_or_the_fixed_block() {
+        let mut app = test_app(four_tasks());
+        let offer = |id: &str| super::super::bug_report::Offer { id: id.to_string(), report: crate::report_wire::BugReport { kind: None, title: format!("bug {id}"), text: String::new(), version: "0.26.0".to_string(), os: "macos".to_string() } };
+        app.offers = vec![offer("a1"), offer("b2"), offer("c3")];
+        app.fixed = Some(crate::issue_recheck::Fixed { version: "0.27.0".to_string(), titles: vec!["push hid git's error".to_string()], bugs: vec!["a0".to_string()], wishes: 0, last: 0 });
+        app.work_selected = 3;
+        press(&mut app, key(KeyCode::Down));
+        assert!(app.offer_panel.focused && !app.offer_panel.on_fixed, "↓ from the last task selects the issues row");
+        let check = |app: &mut App, on: &str| {
+            let (rows, buffer) = render(app, 120, 40);
+            let screen = rows.join("\n");
+            let start = find(&rows, "◐ feed-hang")[0].1;
+            let glyph = rows[start].chars().position(|character| character == '◐').unwrap();
+            let mut end = start + 1;
+            while matches!(rows[end].chars().nth(glyph), Some('│')) {
+                end += 1;
+            }
+            for row in start..=end {
+                assert_ne!(rows[row].chars().nth(2), Some('▌'), "no bar on the task's line {row} while {on} is selected: {screen}");
+                for x in 0..60u16 {
+                    assert_ne!(buffer[(x, row as u16)].bg, SURFACE, "no selection background at ({x}, {row}) while {on} is selected: {screen}");
+                }
+            }
+            assert_eq!(rows.iter().filter(|row| work_side(row).contains('▌')).count(), 1, "only {on} carries the bar: {screen}");
+        };
+        check(&mut app, "the issues row");
+        app.focus_fixed();
+        check(&mut app, "the fixed block");
     }
 
     #[test]

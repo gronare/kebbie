@@ -65,9 +65,8 @@ fn pills(app: &App, compact: bool) -> Vec<Span<'static>> {
 
 pub(super) fn header(app: &App, width: u16) -> (Line<'static>, Vec<(u16, u16, Page)>) {
     let mut spans = pills(app, false);
-    let sources = backlog::label(&app.sources);
     let fresh = match app.page {
-        Page::Work => format!("backlog: {sources}, {}   ", backlog::freshness(&app.sources, app.backlog.updated)),
+        Page::Work => format!("backlog: {}   ", backlog::freshness(&app.sources, &app.backlog)),
         Page::Areas => format!("vault index: {}   ", backlog::age(app.areas.synced)),
         Page::Routines | Page::Settings => String::new(),
     };
@@ -103,4 +102,23 @@ pub(super) fn header(app: &App, width: u16) -> (Line<'static>, Vec<(u16, u16, Pa
         }
     }
     (Line::from(spans), places)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::backlog::VaultRead;
+    use crate::board::test_support::*;
+    use crate::config::Source;
+
+    #[test]
+    fn the_work_page_dates_the_vault_backlog_by_the_snapshot_its_rows_come_from() {
+        let mut app = test_app(Vec::new());
+        let now = crate::messages::now();
+        app.sources = vec![Source::Vault];
+        app.backlog.updated = Some(now - 562 * 3600);
+        app.backlog.vault = VaultRead::Synced(Some(now - 60));
+        let (header, _) = super::header(&app, 200);
+        let text: String = header.spans.iter().map(|span| span.content.as_ref()).collect();
+        assert!(text.contains("backlog: vault 1 min ago") && !text.contains("562 h"), "{text}");
+    }
 }

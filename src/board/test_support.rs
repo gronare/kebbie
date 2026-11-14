@@ -43,7 +43,7 @@ pub(super) const PLAN: &str = r#"{"id":"q2","at":20,"from":"payload@api","to":"l
 
 pub(super) fn test_app(tasks: Vec<Item>) -> App {
     let (refresh, _) = mpsc::channel();
-    let mut app = App::new(vec![Source::Local], Backlog { updated: None, entries: Vec::new() }, false, refresh);
+    let mut app = App::new(vec![Source::Local], Backlog { updated: None, vault: Default::default(), entries: Vec::new() }, false, refresh);
     for item in &tasks {
         if let Some(agent) = &item.agent {
             app.screens.insert(agent.pane.clone(), (Instant::now(), String::new()));
