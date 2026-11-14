@@ -15,6 +15,7 @@ pub const PREFIX: &str = "kept:";
 pub struct Kept {
     pub id: String,
     pub line: String,
+    pub words: String,
     pub priority: String,
     pub repo: String,
     pub at: u64,
@@ -67,21 +68,22 @@ fn text(value: &Value, key: &str) -> String {
 }
 
 pub fn kept_in(state: &Path) -> Vec<Kept> {
-    read(&kept_file(state)).iter().map(|value| Kept { id: text(value, "id"), line: text(value, "line"), priority: text(value, "priority"), repo: text(value, "repo"), at: value["at"].as_u64().unwrap_or(0) })
+    read(&kept_file(state)).iter().map(|value| Kept { id: text(value, "id"), line: text(value, "line"), words: text(value, "words"), priority: text(value, "priority"), repo: text(value, "repo"), at: value["at"].as_u64().unwrap_or(0) })
         .filter(|kept| !kept.id.is_empty()).collect()
 }
 
 fn write_kept(state: &Path, kept: &[Kept]) -> Result<()> {
-    let values: Vec<Value> = kept.iter().map(|kept| json!({ "id": kept.id, "line": kept.line, "priority": kept.priority, "repo": kept.repo, "at": kept.at })).collect();
+    let values: Vec<Value> = kept.iter().map(|kept| json!({ "id": kept.id, "line": kept.line, "words": kept.words, "priority": kept.priority, "repo": kept.repo, "at": kept.at })).collect();
     crate::state::write(&kept_file(state), Value::Array(values).to_string())
 }
 
-pub fn keep(state: &Path, line: &str, priority: &str, repo: &str, at: u64) -> Result<String> {
+// The user's own words stay with the row, so an idea the lead never filed is not lost with the message that told it.
+pub fn keep(state: &Path, line: &str, words: &str, priority: &str, repo: &str, at: u64) -> Result<String> {
     let _locked = Locked::take(&kept_file(state))?;
     let mut kept = kept_in(state);
     let id = (0u32..).map(|attempt| sha1_smol::Sha1::from(format!("{line}\n{at}\n{attempt}")).digest().to_string()[..6].to_string())
         .find(|id| !kept.iter().any(|other| &other.id == id)).unwrap_or_default();
-    kept.push(Kept { id: id.clone(), line: line.trim().to_string(), priority: priority.to_string(), repo: repo.to_string(), at });
+    kept.push(Kept { id: id.clone(), line: line.trim().to_string(), words: words.trim().to_string(), priority: priority.to_string(), repo: repo.to_string(), at });
     write_kept(state, &kept)?;
     Ok(id)
 }
@@ -108,7 +110,7 @@ impl Kept {
             priority: self.priority.clone(),
             area: if self.repo.is_empty() { area } else { self.repo.clone() },
             reference: format!("{PREFIX}{}", self.id),
-            summary: String::new(),
+            summary: self.words.clone(),
             age: format!("{} d", now.saturating_sub(self.at) / 86_400),
             shape: Shape { state: Some(State::ToWrite), kept: true, ..Shape::default() },
         }
@@ -165,12 +167,13 @@ mod tests {
     #[test]
     fn a_kept_row_lives_until_the_lead_says_it_filed_it() {
         let state = crate::sh::test_dir("backlog-kept");
-        let id = keep(&state, "ci push retry flaky (web)", "high", "", 1_000).unwrap();
+        let id = keep(&state, "ci push retry flaky (web)", " When a CI push goes red on a flaky test, retry it once\n before it reaches me ", "high", "", 1_000).unwrap();
         let rows = kept_in(&state);
         assert_eq!(rows.len(), 1);
         let entry = rows[0].entry(1_000 + 3 * 86_400);
         assert_eq!((entry.title.as_str(), entry.area.as_str(), entry.source.as_str(), entry.age.as_str()), ("ci push retry flaky", "web", "kept", "3 d"));
         assert_eq!(entry.reference, format!("kept:{id}"));
+        assert_eq!(entry.summary, "When a CI push goes red on a flaky test, retry it once\n before it reaches me", "the user's words stay in kebbie, whatever becomes of the message to the lead");
         assert!(entry.shape.kept && entry.shape.state == Some(State::ToWrite));
         assert!(release(&state, &format!("kept:{id}")).unwrap());
         assert!(kept_in(&state).is_empty() && !release(&state, &id).unwrap(), "released once");
@@ -222,7 +225,7 @@ mod tests {
                 scope.spawn(move || {
                     for round in 0..10 {
                         answer(state, Answer { item: format!("local:{writer}"), question: format!("Q{round}?"), answer: "a".to_string(), at: 1 }).unwrap();
-                        keep(state, &format!("idea {writer} {round}"), "low", "", 1_000).unwrap();
+                        keep(state, &format!("idea {writer} {round}"), "", "low", "", 1_000).unwrap();
                     }
                 });
             }

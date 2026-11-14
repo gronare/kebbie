@@ -220,11 +220,12 @@ pub fn answer_in(state: &Path, caller: &Caller, id: &str, choice: Option<usize>,
         return Err("Write your answer in the comment field first.".to_string());
     }
     let keeps = choice == Some(1) && asked.kind == Kind::Verify;
+    // Taken off before its action so a second answer finds nothing, and put back when the action is refused so it can be answered again.
     if !keeps {
         changed(state, |all| all.retain(|one| one.id != id))?;
         crate::hub::notices::settle(crate::hub::notices::Subject::Question, &asked.address);
     }
-    let said = match (asked.kind, choice) {
+    let acted = (|| -> std::result::Result<String, String> { Ok(match (asked.kind, choice) {
         (Kind::Verify, Some(1)) => format!("Nothing changes; the question waits for {}.", asked.address),
         (Kind::Verify, Some(0)) => match &asked.stage {
             Some(stage) => crate::tasks::rollout::verified(state, &asked.address, stage, messages::now())?,
@@ -251,6 +252,15 @@ pub fn answer_in(state: &Path, caller: &Caller, id: &str, choice: Option<usize>,
         (Kind::Close, None) => {
             tell(&asked.address, &format!("The user, asked whether to close this task: {comment}"));
             format!("{} stays open; told it what you said.", asked.address)
+        }
+    }) })();
+    let said = match acted {
+        Ok(said) => said,
+        Err(error) => {
+            if !keeps {
+                changed(state, |all| if !all.iter().any(|one| one.id == asked.id) { all.push(asked.clone()) })?;
+            }
+            return Err(error);
         }
     };
     if let Err(error) = messages::to_lead(messages::ToLead::QuestionCopy, &format!("The user answered kebbie's question on {} ({}): {}", asked.address, asked.text, said)) {
@@ -308,6 +318,18 @@ mod tests {
         assert_eq!(wire(&asked, &[stage(kebbie_hub_protocol::StageState::Pushed)]).stage, None);
         let closing = put(&state, "billing@app", Kind::Close, "billing says it is done. Close it?", None).unwrap();
         assert_eq!(wire(&closing, &[]).options.iter().map(|option| (option.label.as_str(), option.comment)).collect::<Vec<_>>(), [("Close", false), ("Not yet", false)]);
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_close_the_task_refuses_leaves_the_question_to_answer_again() {
+        let state = state();
+        let asked = put(&state, "billing@app", Kind::Close, "billing says it is done. Close it?", None).unwrap();
+        let refused = answer_in(&state, &Caller::User, &asked.id, Some(0), "", &|_| Err("Not closed: its note lacks its Solution".to_string()));
+        assert_eq!(refused.unwrap_err(), "Not closed: its note lacks its Solution");
+        assert_eq!(load(&state).iter().map(|one| one.id.as_str()).collect::<Vec<_>>(), [asked.id.as_str()], "nothing else asks again, so the question stays");
+        assert!(answer_in(&state, &Caller::User, &asked.id, Some(0), "", &|address| Ok(format!("Closed {address}"))).is_ok());
+        assert!(load(&state).is_empty(), "answered once it closed");
         fs::remove_dir_all(state).unwrap();
     }
 

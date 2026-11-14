@@ -108,7 +108,8 @@ The task shows the answer as sent, then the machine's own reply once it applied 
 What reaches a machine is its own choice, set by [`hub.commands`](../reference/configuration.md#keys) in its config.toml. **Machines** says it under each one: `takes answers and pushes`, `takes answers, not pushes` or `takes nothing from the hub`.
 
 - If a machine takes answers but not pushes, its task says `Not pushed: devbox takes no pushes from the hub. Push at the machine, or allow pushes in its kebbie settings.`
-- A task in [subtasks](work-in-steps.md) pushes its accepted run, the commits from the top whose subtasks you accepted, as `p` in the board's push window does, and the rest stays in the task. If the run changed since your phone showed it, the push is refused with `Not pushed: what can go out changed since you saw it`; a run on the default branch already says there is nothing to push.
+- Push on a whole task works as [`kebbie push`](../reference/commands.md#kebbie-push-name) does: kebbie rebases it on the default branch and pushes every commit it holds then, also one its Claude made after your phone last showed the task.
+- A task in [subtasks](work-in-steps.md) pushes its accepted run, the commits from the top whose subtasks you accepted, as `p` in the board's push window does, and the rest stays in the task. If the run changed since your phone showed it, a rebase included, the push is refused with `Not pushed: what can go out changed since you saw it`; a run on the default branch already says there is nothing to push.
 - If you turn the switch off, the device sends nothing; the setting stays in that browser alone.
 - If the hub has not enabled answering for your account, the task says so instead.
 
@@ -177,7 +178,7 @@ What it sent goes in at once, and the device makes changes on this machine from 
 
 - If you leave it, `hub.auto_approve = "24h"` approves the device 24 hours after its first command; a command waits at most its hour, so send it again then.
 - If you press `x` or run `kebbie hub devices deny`, the device stays view only on this machine.
-- If you set `hub.trust = "account"`, every device signed in to your account makes changes at once.
+- If you set `hub.trust = "account"`, every device signed in to your account makes changes at once. Switching back to `"device"` puts each one you never approved yourself under the approval rules again: it waits for you, or for `hub.auto_approve` counted from when it first sent a command.
 
 ### Approve a new device from another device
 

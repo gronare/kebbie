@@ -15,6 +15,11 @@ fn file(state: &Path) -> PathBuf {
     state.join("found.json")
 }
 
+// Held across each read, change and write of found.json, so two tasks filing at once never drop each other's items or reuse an id.
+fn locked(state: &Path) -> Result<crate::state::Locked> {
+    crate::state::Locked::wait(&state.join("found.lock"))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum State {
@@ -99,7 +104,7 @@ fn what(line: &str) -> String {
         None => line,
     };
     let line = line.trim().trim_end_matches('.');
-    let lower = line.to_lowercase();
+    let lower = line.to_ascii_lowercase();
     let cut = [": filed", " — filed", " - filed", "; filed", ", filed"].iter().filter_map(|tail| lower.rfind(tail)).min();
     cut.map_or(line, |at| &line[..at]).trim().to_string()
 }
@@ -148,6 +153,7 @@ pub struct Filed {
 
 // The card's Also noticed lines are filed under Found by tasks as the card is taken, and each line ends with the item it went to; an item a second task finds is marked raised once, for its caller to raise.
 pub fn file_card(state: &Path, address: &str, card: &str, now: u64) -> Result<Filed> {
+    let _held = locked(state)?;
     let mut items = load(state);
     let before = items.clone();
     let mut inside = false;
@@ -175,6 +181,7 @@ pub fn file_card(state: &Path, address: &str, card: &str, now: u64) -> Result<Fi
 }
 
 fn change(state: &Path, id: &str, to: State, outcome: &str) -> Result<Item> {
+    let _held = locked(state)?;
     let mut items = load(state);
     let item = items.iter_mut().find(|item| item.id == id).ok_or_else(|| format!("No item {id} under {SECTION}; kebbie found lists them"))?;
     if !item.open() {
@@ -276,6 +283,25 @@ mod tests {
     use super::*;
 
     const CARD: &str = "**Refunds show on the invoice.**\n\nBuilt:\n- Refunds list under each invoice.\n\nAlso noticed:\n- The VAT rounding test is flaky on main: filed in the backlog (low).\n- The README's install step names an old flag.\n";
+
+    #[test]
+    fn a_line_with_letters_whose_lowercase_is_longer_is_cut_where_it_says_filed() {
+        assert_eq!(what("İİİ in the İzmir export breaks: filed in the backlog"), "İİİ in the İzmir export breaks");
+    }
+
+    #[test]
+    fn a_card_filed_while_another_is_written_waits_for_it_and_takes_the_next_id() {
+        let state = crate::sh::test_dir("found-at-once");
+        file_card(&state, "billing@app", "**X.**\n\nAlso noticed:\n- Module one logs its secrets\n", 100).unwrap();
+        let writing = locked(&state).unwrap();
+        let filing = { let state = state.clone(); std::thread::spawn(move || file_card(&state, "web@app", "**Y.**\n\nAlso noticed:\n- Page two has no title\n", 100).unwrap().text) };
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(load(&state).len(), 1, "the second card waits while found.json is read, changed and written");
+        drop(writing);
+        assert!(filing.join().unwrap().contains("(found:f2)"));
+        assert_eq!(load(&state).iter().map(|item| item.id.as_str()).collect::<Vec<_>>(), ["f1", "f2"]);
+        std::fs::remove_dir_all(state).unwrap();
+    }
 
     #[test]
     fn a_cards_also_noticed_lines_are_filed_once_each_and_end_with_their_item() {

@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -15,6 +15,7 @@ const LOCK: &str = "lead-thread.lock";
 const KEPT_SENT: usize = 200;
 const KEPT_SWITCHES: usize = 100;
 const KEPT_EVENTS: usize = 4_000;
+const FIRST_READ: u64 = 16 * 1024 * 1024;
 // A turn the transcript shows as running long after its last write was cut off without its end, as by a killed Claude.
 const STALE_TURN: u64 = 30 * 60;
 pub const DELIVERED: &str = "Delivered to the lead.";
@@ -153,7 +154,7 @@ fn said(id: &str, at: u64, text: &str) -> Option<Event> {
 // One transcript line; most lines are request bodies and bookkeeping, so they are skipped before they are parsed.
 pub fn event(line: &str) -> Option<Event> {
     let wanted = ["\"type\":\"user\"", "\"type\":\"assistant\"", "\"turn_duration\"", "\"stop_hook_summary\"", "\"queued_command\""];
-    if !wanted.iter().any(|mark| line.contains(mark)) {
+    if !wanted.iter().any(|mark| line.contains(mark)) || line.contains("\"type\":\"tool_result\"") {
         return None;
     }
     let record: Value = serde_json::from_str(line).ok()?;
@@ -182,7 +183,7 @@ pub fn event(line: &str) -> Option<Event> {
     }
 }
 
-// The lead's transcript read so far: only what was appended since the last read is parsed, and a file replaced or cut short is read again from its start.
+// The lead's transcript read so far: only what was appended since the last read is parsed, a line at a time, a first read takes only the file's last FIRST_READ bytes, and a file replaced or cut short is read again.
 #[derive(Clone, Debug, Default)]
 pub struct Reader {
     pub path: PathBuf,
@@ -194,6 +195,10 @@ pub struct Reader {
 
 impl Reader {
     pub fn read(&mut self, path: &Path) -> std::io::Result<()> {
+        self.read_from(path, FIRST_READ)
+    }
+
+    fn read_from(&mut self, path: &Path, first: u64) -> std::io::Result<()> {
         let mut file = File::open(path)?;
         let metadata = file.metadata()?;
         if self.path != path || self.inode != metadata.ino() || metadata.len() < self.offset {
@@ -203,16 +208,33 @@ impl Reader {
         if metadata.len() == self.offset {
             return Ok(());
         }
-        file.seek(SeekFrom::Start(self.offset))?;
-        let mut bytes = Vec::new();
-        file.take(metadata.len() - self.offset).read_to_end(&mut bytes)?;
-        let Some(end) = bytes.iter().rposition(|byte| *byte == b'\n') else { return Ok(()) };
-        for line in bytes[..end].split(|byte| *byte == b'\n') {
-            if let Some(event) = std::str::from_utf8(line).ok().and_then(event) {
-                self.events.push(event);
+        let tail = self.offset == 0 && metadata.len() > first;
+        let start = if tail { metadata.len() - first } else { self.offset };
+        file.seek(SeekFrom::Start(start))?;
+        let mut lines = BufReader::new(file.take(metadata.len() - start));
+        let mut line = Vec::new();
+        let mut offset = start;
+        if tail {
+            offset += lines.read_until(b'\n', &mut line)? as u64;
+            if line.last() != Some(&b'\n') {
+                return Ok(());
             }
         }
-        self.offset += end as u64 + 1;
+        loop {
+            line.clear();
+            let read = lines.read_until(b'\n', &mut line)?;
+            if read == 0 || line.last() != Some(&b'\n') {
+                break;
+            }
+            offset += read as u64;
+            if let Some(event) = std::str::from_utf8(&line[..read - 1]).ok().and_then(event) {
+                self.events.push(event);
+                if self.events.len() >= 2 * KEPT_EVENTS {
+                    self.events.drain(..KEPT_EVENTS);
+                }
+            }
+        }
+        self.offset = offset;
         let keep_from = self.events.len().saturating_sub(KEPT_EVENTS);
         self.events.drain(..keep_from);
         Ok(())

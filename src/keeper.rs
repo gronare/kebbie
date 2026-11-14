@@ -389,6 +389,11 @@ pub fn status_cli() -> Result<String> {
 }
 
 // Its own session, so a closing pane's hangup never reaches it, and its output in the log, so herdr's hook and kebbie update never wait on a pipe it holds.
+// A panic in one round of a keeper thread or routine is that round's error, so the thread goes on with its next round.
+pub fn unpanicked<T>(run: impl FnOnce() -> crate::sh::Result<T>) -> crate::sh::Result<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)).unwrap_or_else(|_| Err("panicked".to_string()))
+}
+
 fn spawn(exe: &Path, dir: &Path) -> Result<std::process::Child> {
     let log = crate::state::append_to(&dir.join(LOG)).map_err(|error| format!("{}: {error}", dir.join(LOG).display()))?;
     let mut command = Command::new(exe);
@@ -523,7 +528,7 @@ pub fn run() -> Result<String> {
                 break;
             }
             let routine = &routines[index];
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (routine.run)(&mut ctx))).unwrap_or_else(|_| Err("panicked".to_string()));
+            let outcome = unpanicked(|| (routine.run)(&mut ctx));
             if let Some(change) = record(&mut tracks[index], now, outcome) {
                 let next = if tracks[index].failures > 0 { format!("; next try in {}", span(delay(routine.every, tracks[index].failures))) } else { String::new() };
                 log.line(&format!("{}: {change}{next}", routine.name));
@@ -556,6 +561,15 @@ mod tests {
 
     fn routine(name: &'static str, every: u64) -> Routine {
         Routine { name, every, run: |_| Ok(()) }
+    }
+
+    #[test]
+    fn a_panic_in_a_round_is_its_error_and_the_hub_and_vault_threads_run_every_round_through_the_guard() {
+        assert_eq!(unpanicked::<()>(|| panic!("a command broke")), Err("panicked".to_string()));
+        assert_eq!(unpanicked(|| Ok(3)), Ok(3));
+        let commands = include_str!("hub/commands.rs");
+        assert!(commands.contains("unpanicked(|| round(") && commands.contains("unpanicked(|| released("), "a panic while a phone command is applied would end hub-commands or hub-devices for good");
+        assert!(include_str!("vault_watch.rs").contains("unpanicked(|| Ok(follow("), "a panic while a vault change is applied would end the vault watch for good");
     }
 
     #[test]

@@ -145,7 +145,20 @@ pub fn default_branch(repo: &Path) -> Result<String> {
 }
 
 pub fn worktrees(repo: &Path) -> Result<Vec<Worktree>> {
-    Ok(listed_worktrees(&crate::sh::run_untrimmed("git", &["worktree", "list", "--porcelain", "-z"], Some(repo))?))
+    listed_from(repo, |args| crate::sh::run_untrimmed("git", args, Some(repo)))
+}
+
+// git before 2.36 has no -z: its line form is read the same way, and only an entry whose path is a worktree of this repo counts, so a path holding a newline can neither split into nor invent one.
+fn listed_from(repo: &Path, run: impl Fn(&[&str]) -> Result<String>) -> Result<Vec<Worktree>> {
+    match run(&["worktree", "list", "--porcelain", "-z"]) {
+        Ok(listed) => Ok(listed_worktrees(&listed)),
+        Err(refused) if refused.contains("-z") || refused.contains("usage:") => {
+            let own = common_dir(&repo.join(".git"));
+            let listed = run(&["worktree", "list", "--porcelain"])?.replace('\n', "\0");
+            Ok(listed_worktrees(&listed).into_iter().filter(|worktree| own.is_some() && common_dir(&worktree.path.join(".git")) == own).collect())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 // Fields end in NUL and an entry in an empty field, so a path holding a newline stays one path; a path listed twice keeps its first entry.
@@ -215,6 +228,11 @@ pub fn hidden_from_status(path: &Path) -> Result<Vec<String>> {
 
 pub fn rebase_in_progress(path: &Path) -> bool {
     ["rebase-merge", "rebase-apply"].iter().any(|name| git(path, &["rev-parse", "--path-format=absolute", "--git-path", name]).is_ok_and(|dir| Path::new(&dir).exists()))
+}
+
+// A rebase or cherry-pick stopped part-way: the branch holds only some of its commits until it ends.
+pub fn replay_in_progress(path: &Path) -> bool {
+    ["rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD"].iter().any(|name| git(path, &["rev-parse", "--path-format=absolute", "--git-path", name]).is_ok_and(|dir| Path::new(&dir).exists()))
 }
 
 pub fn ahead_behind(path: &Path, upstream: &str) -> Result<(usize, usize)> {
@@ -668,6 +686,30 @@ mod tests {
         assert!(list.iter().all(|worktree| worktree.path != listed_elsewhere));
         let found = list.iter().find(|worktree| worktree.path.file_name() == odd.file_name()).unwrap();
         assert_eq!(found.branch.as_deref(), Some("billing"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_git_without_z_lists_worktrees_from_its_line_form_and_drops_a_path_that_is_no_worktree_of_the_repo() {
+        let dir = crate::sh::test_dir("worktree-no-z");
+        let main = dir.join("app");
+        std::fs::create_dir_all(&main).unwrap();
+        git(&main, &["init", "--quiet", "--initial-branch=main"]).unwrap();
+        git(&main, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "--allow-empty", "-m", "one"]).unwrap();
+        let head = git(&main, &["rev-parse", "HEAD"]).unwrap();
+        let task = dir.join("wt1.app");
+        git(&main, &["worktree", "add", "--quiet", "-b", "billing", task.to_str().unwrap()]).unwrap();
+        let elsewhere = dir.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let old_git = |args: &[&str]| -> Result<String> {
+            if args.contains(&"-z") {
+                return Err("git worktree list --porcelain -z failed: error: unknown switch `z'\nusage: git worktree list [<options>]".to_string());
+            }
+            Ok(format!("worktree {}\nHEAD {head}\nbranch refs/heads/main\n\nworktree {}\nHEAD {head}\nbranch refs/heads/billing\n\nworktree {}\nHEAD {head}\nbranch refs/heads/main\n\n", main.display(), task.display(), elsewhere.display()))
+        };
+        let list = listed_from(&main, old_git).unwrap();
+        assert_eq!(list.iter().map(|worktree| (worktree.path.clone(), worktree.branch.clone())).collect::<Vec<_>>(), [(main.clone(), Some("main".to_string())), (task.clone(), Some("billing".to_string()))]);
+        assert!(listed_from(&main, |_| Err("git worktree list failed: fatal: not a git repository".to_string())).is_err(), "any other failure stays an error");
         let _ = std::fs::remove_dir_all(dir);
     }
 

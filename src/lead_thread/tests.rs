@@ -128,6 +128,27 @@ fn away_mode_is_a_turn_of_yours_and_every_reply_while_you_are_away_is_shown_and_
 }
 
 #[test]
+fn a_first_read_of_a_long_transcript_takes_only_its_end_and_skips_tool_results_unparsed() {
+    let dir = crate::sh::test_dir("lead-reader-tail");
+    let file = dir.join("lead.jsonl");
+    let at = base();
+    let lines: Vec<String> = (0..50).map(|n| you(&format!("u{n}"), at + n, &format!("message {n}"))).collect();
+    std::fs::write(&file, lines.iter().map(|line| format!("{line}\n")).collect::<String>()).unwrap();
+    let tail: u64 = lines[45..].iter().map(|line| line.len() as u64 + 1).sum::<u64>() + 10;
+    let mut reader = Reader::default();
+    reader.read_from(&file, tail).unwrap();
+    let texts: Vec<String> = reader.events.iter().filter_map(|event| match event { Event::Input { text, .. } => Some(text.clone()), _ => None }).collect();
+    assert_eq!(texts, ["message 45", "message 46", "message 47", "message 48", "message 49"], "the cut line at the start is skipped, not misread");
+    assert_eq!(reader.offset, std::fs::metadata(&file).unwrap().len());
+    std::fs::OpenOptions::new().append(true).open(&file).unwrap().write_all(format!("{}\n", you("u50", at + 50, "message 50")).as_bytes()).unwrap();
+    reader.read_from(&file, tail).unwrap();
+    assert_eq!(reader.events.len(), 6, "after the first read it goes on from where it was");
+    let result = json!({ "type": "user", "uuid": "t1", "timestamp": stamp(at), "message": { "role": "user", "content": [{ "type": "tool_result", "tool_use_id": "toolu_1", "content": "a long output" }] } }).to_string();
+    assert_eq!(event(&result), None);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn the_transcript_is_read_on_from_where_it_was_and_again_from_its_start_when_it_is_replaced() {
     let dir = crate::sh::test_dir("lead-reader");
     let file = dir.join("lead.jsonl");

@@ -30,11 +30,7 @@ fn target<'a>(repo: &Path, cwd: &Path, words: &'a [String]) -> Result<(Slot, &'a
 
 // A task reorders its own commits only; the lead and the user reorder any task's.
 fn reorders(caller: &Caller, address: &str) -> Result<()> {
-    match caller {
-        Caller::Task(own) if own != address => Err(format!("the task {own} orders its own commits, not {address}'s")),
-        Caller::Sandboxed | Caller::Hub { .. } => Err("kebbie order is the task's, the lead's or yours, from a terminal".to_string()),
-        _ => Ok(()),
-    }
+    super::plan::writes_to(caller, address, "orders its own commits")
 }
 
 pub fn command(cwd: &Path, words: &[String], asked: &Asked) -> Result<String> {

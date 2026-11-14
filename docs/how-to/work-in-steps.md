@@ -75,7 +75,7 @@ You or the lead can run the same for any task. A move is refused while a push of
 
 ## Test each commit on its own
 
-Once a task reports ready, the keeper tests each of its unpushed commits on its own, one at a time, in a throwaway worktree of kebbie's: with the test commands the task's own recorded runs used, else `task.test_commands`. The push window, `kebbie order` and the phone mark each commit `tests ✓`, `tests ✗`, `testing…` or `not tested`. Nothing waits on the result.
+Once a task reports ready, the keeper tests each of its unpushed commits on its own, one at a time, in a throwaway worktree of kebbie's that the repo's own setup prepares first (`worktree.setup_command`, else `bin/setup-worktree`): with the test commands the task's own recorded runs used, else `task.test_commands`. By default this runs only in a repo with such a setup; set `[tests] per_commit = true` to run it without one. The push window, `kebbie order` and the phone mark each commit `tests ✓`, `tests ✗`, `testing…` or `not tested`. Nothing waits on the result.
 
 - A commit is tested once: the result is kept by its sha, and a commit the task's own recorded run already tested is not run again.
 - A task in the sandbox gets only what its own recorded runs say, since kebbie runs none of its code outside the sandbox.

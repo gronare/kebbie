@@ -288,14 +288,17 @@ fn change<T>(dir: &Path, change: impl FnOnce(&mut Ledger) -> Result<T>) -> Resul
     Ok(done)
 }
 
-// A subject settled elsewhere: each device that got its notice has the tag retracted with the next notice it gets, never with a push of its own.
+// A subject settled elsewhere: a notice of it still waiting to be sent again is let go, and each device that got its notice has the tag retracted with the next notice it gets, never with a push of its own.
 pub fn settle_in(dir: &Path, subject: Subject, name: &str) -> Result<()> {
     let Some(identity) = identity::load_at(dir)? else { return Ok(()) };
     let tag = tag(&identity.machine, subject, name);
-    if !ledger(dir).sent.contains_key(&tag) {
+    let settled = |later: &Later| later.about.subject() == (subject, name.to_string());
+    let held = ledger(dir);
+    if !held.sent.contains_key(&tag) && !held.later.iter().any(settled) {
         return Ok(());
     }
     change(dir, |ledger| {
+        ledger.later.retain(|later| !settled(later));
         for device in ledger.sent.remove(&tag).unwrap_or_default() {
             let outstanding = ledger.outstanding.entry(device).or_default();
             if !outstanding.contains(&tag) {
@@ -979,6 +982,24 @@ mod tests {
         deliver_in(&machine.dir, &machine.identity, &machine.account, &question("billing@shop"), None, DEVICE, &down, 3_000).unwrap();
         assert!(retry_in(&machine.dir, &machine.identity, &machine.account, DEVICE, &up, 3_000 + RETRY_SECONDS).is_empty());
         assert_eq!((*posted.borrow(), ledger(&machine.dir).later.len()), (1, 0), "an hour on, it is let go unsent");
+    }
+
+    #[test]
+    fn a_notice_waiting_to_be_sent_again_is_let_go_once_its_subject_is_settled() {
+        let machine = Machine::new();
+        let phone = machine.phone("iPhone 16", Some(State::Approved));
+        let listing = [listed(&phone, Some(&NoticeCategory::ALL))];
+        let down = Wire { listed: &|| Ok(listing.to_vec()), post: &|_| Err(Unposted::Later("503".to_string())) };
+        deliver_in(&machine.dir, &machine.identity, &machine.account, &question("refunds@shop"), None, DEVICE, &down, 2_000).unwrap();
+        deliver_in(&machine.dir, &machine.identity, &machine.account, &question("billing@shop"), None, DEVICE, &down, 2_000).unwrap();
+        assert_eq!(ledger(&machine.dir).later.len(), 2);
+        settle_in(&machine.dir, Subject::Question, "refunds@shop").unwrap();
+        assert_eq!(ledger(&machine.dir).later.iter().map(|later| later.about.subject().1).collect::<Vec<_>>(), ["billing@shop"], "the answered question is never sent after its answer");
+        let posted = std::cell::RefCell::new(Vec::new());
+        let up = Wire { listed: &|| Ok(listing.to_vec()), post: &|envelope| { posted.borrow_mut().push(envelope.clone()); Ok(1) } };
+        retry_in(&machine.dir, &machine.identity, &machine.account, DEVICE, &up, 2_100);
+        assert_eq!(posted.borrow().len(), 1, "only the open question goes out");
+        assert!(!ledger(&machine.dir).sent.contains_key(&tag(&machine.identity.machine, Subject::Question, "refunds@shop")));
     }
 
     #[test]

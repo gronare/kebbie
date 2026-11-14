@@ -44,7 +44,7 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
     report.after = push_after(&report.state, &me, after)?;
     card_goes_with(&report.state, card.is_some(), crate::routines::routine_of(&me).is_some())?;
     if let Some(watch) = crate::ci::load(&state_dir()?, &me).filter(|watch| (watch.close || !watch.pushed.stages.is_empty()) && watch.checking().is_some()) {
-        let ahead = main_checkout(cwd).and_then(|repo| default_branch(&repo)).and_then(|upstream| crate::repo::ahead_behind(cwd, &upstream)).map_or(0, |(ahead, _)| ahead);
+        let ahead = ahead_of(cwd).map_err(|error| format!("kebbie cannot tell whether the check held, since git cannot count the commits left to push: {error}"))?;
         if let Some(said) = check_reported(&state_dir()?, &me, &watch, &report, &summary, ahead)? {
             return Ok(said);
         }
@@ -105,7 +105,11 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
 }
 
 fn to_push(cwd: &Path) -> bool {
-    main_checkout(cwd).and_then(|repo| default_branch(&repo)).and_then(|upstream| crate::repo::ahead_behind(cwd, &upstream)).is_ok_and(|(ahead, _)| ahead > 0)
+    ahead_of(cwd).is_ok_and(|ahead| ahead > 0)
+}
+
+fn ahead_of(cwd: &Path) -> Result<usize> {
+    main_checkout(cwd).and_then(|repo| default_branch(&repo)).and_then(|upstream| crate::repo::ahead_behind(cwd, &upstream)).map(|(ahead, _)| ahead)
 }
 
 // While its check after the push runs, a task's report is the check's outcome: ready with nothing left to push is that it held, needs-you that it did not.
@@ -466,6 +470,14 @@ pub fn answer(input: &Payload) -> Answer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn commits_left_to_push_that_git_cannot_count_are_an_error_never_none_left() {
+        let dir = crate::sh::test_dir("report-ahead");
+        assert!(ahead_of(&dir).is_err(), "a check after the push would read as held and the task close with commits unpushed");
+        assert!(include_str!("report.rs").contains(concat!("let ahead = ahead_of(cwd)", ".map_err(")), "the check's outcome reads the count, or refuses");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn a_report_needs_a_known_state_a_next_step_and_a_summary() {

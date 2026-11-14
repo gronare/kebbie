@@ -79,10 +79,23 @@ pub fn want(state: &Path, address: &str, worktree: &Path) -> Result<()> {
     crate::state::write(&file(state, address, "wanted"), worktree.to_string_lossy().as_ref())
 }
 
+pub fn setup_for(repo: &Path) -> Option<String> {
+    setup_in(crate::config::resolve(Some(repo)).ok().and_then(|loaded| loaded.settings.setup_command.value), repo)
+}
+
+fn setup_in(configured: Option<String>, repo: &Path) -> Option<String> {
+    crate::config::setup_command_in(configured, repo).or_else(|| repo.join("bin/setup-worktree").is_file().then(|| "bin/setup-worktree".to_string()))
+}
+
+// Left at its default, a repo tests each commit only when it names a setup, since a worktree nobody set up fails every commit for want of its dependencies; set either way, the setting decides.
+pub fn per_commit(setting: &crate::config::Setting<bool>, has_setup: bool) -> bool {
+    if setting.layer == crate::config::Layer::Default { setting.value && has_setup } else { setting.value }
+}
+
 pub fn on_ready(cwd: &Path) {
     let _ = (|| -> Result<()> {
         let repo = main_checkout(cwd)?;
-        if !crate::config::resolve(Some(&repo))?.settings.tests_per_commit.value {
+        if !per_commit(&crate::config::resolve(Some(&repo))?.settings.tests_per_commit, setup_for(&repo).is_some()) {
             return Ok(());
         }
         let slot = tasks::find_task(&repo, None, cwd)?;
@@ -155,7 +168,8 @@ pub fn run(cwd: &Path) -> Result<String> {
     crate::state::write(&file(&state, &address, "running"), std::process::id().to_string())?;
     let configured = crate::config::resolve(Some(&repo))?.settings.test_commands.value;
     let commands = commands_for(&state, &address, &slot.path, &configured);
-    let tested = test_all(&state, &repo, &slot.path, &address, &commands, &|command, tree| run_command(command, tree, CEILING));
+    let setup = setup_for(&repo);
+    let tested = test_all(&state, &repo, &slot.path, &address, &commands, setup.as_deref(), &|command, tree| run_command(command, tree, CEILING));
     let _ = fs::remove_file(file(&state, &address, "running"));
     tested
 }
@@ -197,16 +211,17 @@ fn tree(path: &Path, rev: &str) -> Option<String> {
 
 type Runner<'a> = &'a dyn Fn(&str, &Path) -> bool;
 
-// Each unpushed commit, oldest first, one at a time, in one throwaway worktree of kebbie's that is gone again at the end.
-pub fn test_all(state: &Path, repo: &Path, worktree: &Path, address: &str, commands: &[String], runner: Runner) -> Result<String> {
+// Each unpushed commit, oldest first, one at a time, in one throwaway worktree of kebbie's that the repo's setup prepares first and that is gone again at the end; a setup that fails leaves the commits not run, never failed.
+pub fn test_all(state: &Path, repo: &Path, worktree: &Path, address: &str, commands: &[String], setup: Option<&str>, runner: Runner) -> Result<String> {
     let upstream = default_branch(repo)?;
     let open: Vec<String> = tasks::open_commits_of(worktree, &upstream)?;
     let runs: Vec<(String, bool)> = crate::evidence::runs_in(state, address).into_iter()
-        .filter(|run| run.result != crate::evidence::Outcome::Unknown)
+        .filter(|run| run.result != crate::evidence::Outcome::Unknown && crate::evidence::whole_run(&run.command, &run.runner))
         .filter_map(|run| Some((tree(worktree, &run.code)?, run.result == crate::evidence::Outcome::Passed))).collect();
     let mut all = noted(state, address);
     let tree_dir = tree_of(state, address);
     let mut made = false;
+    let mut ready = true;
     let mut counts = (0, 0, 0);
     for sha in &open {
         if all.get(sha).is_some_and(|(tests, _)| matches!(tests.state, TestsState::Passed | TestsState::Failed)) {
@@ -216,7 +231,7 @@ pub fn test_all(state: &Path, repo: &Path, worktree: &Path, address: &str, comma
         let recorded = tree(worktree, sha).and_then(|own| runs.iter().rev().find(|(tree, _)| *tree == own).map(|(_, passed)| *passed));
         let passed = match recorded {
             Some(passed) => Some(passed),
-            None if commands.is_empty() => None,
+            None if commands.is_empty() || !ready => None,
             None => {
                 all.insert(sha.clone(), (CommitTests { state: TestsState::Running, at: Some(now) }, now));
                 save(state, address, &all)?;
@@ -225,10 +240,11 @@ pub fn test_all(state: &Path, repo: &Path, worktree: &Path, address: &str, comma
                     fs::create_dir_all(dir(state)).map_err(|error| error.to_string())?;
                     git(worktree, &["worktree", "add", "--quiet", "--detach", "--force", &tree_dir.to_string_lossy(), sha])?;
                     made = true;
+                    ready = setup.is_none_or(|setup| runner(setup, &tree_dir));
                 }
                 git(&tree_dir, &["checkout", "--quiet", "--detach", "--force", sha])?;
                 let _ = git(&tree_dir, &["clean", "--quiet", "-fd"]);
-                Some(commands.iter().all(|command| runner(command, &tree_dir)))
+                ready.then(|| commands.iter().all(|command| runner(command, &tree_dir)))
             }
         };
         let tests = match passed {

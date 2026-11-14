@@ -87,8 +87,17 @@ pub(super) fn written(stages: &[StagePlan]) -> Value {
 
 // The stages as the board and the phone show them: a pushed one by where its requirement stands, the rest locked or open by whether every stage before is met.
 pub fn shown(plans: &[StagePlan]) -> Vec<Stage> {
+    shown_with(plans, &[])
+}
+
+// The same, a met stage that still holds open commits shown open, so they go out before any later stage's and its requirement is met again first.
+pub fn shown_with(plans: &[StagePlan], open: &[&str]) -> Vec<Stage> {
     let mut stages: Vec<Stage> = plans.iter().map(|plan| {
-        let state = if plan.pushed() { plan.kept.unwrap_or(StageState::Pushed) } else { StageState::Locked };
+        let state = match (plan.pushed(), plan.kept) {
+            (true, Some(StageState::Met)) if open.contains(&plan.id.as_str()) => StageState::Open,
+            (true, kept) => kept.unwrap_or(StageState::Pushed),
+            (false, _) => StageState::Locked,
+        };
         Stage {
             id: plan.id.clone(), title: plan.title.clone(), state, requirement: Requirement { kind: plan.kind, detail: plan.detail.clone().filter(|_| plan.kind != RequirementKind::Deploy) },
             through: plan.through.clone(), pushed_at: plan.through.as_ref().map(|_| plan.pushed_at.unwrap_or_default()),

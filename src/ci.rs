@@ -16,6 +16,7 @@ pub const PUSHING_SECONDS: u64 = 300;
 pub const LOG_LINES: usize = 60;
 pub const UNREADABLE_AFTER: u64 = 15 * 60;
 pub const UNSEEN_AFTER: u64 = 30 * 60;
+pub const CHECK_UNREPORTED_AFTER: u64 = 60 * 60;
 pub const GH_VAR: &str = "KEBBIE_GH_BIN";
 pub const CANCELLED_POLL: u64 = 5 * 60;
 pub const CANCELLED_WAIT: u64 = 7 * 24 * 60 * 60;
@@ -141,6 +142,11 @@ impl Watch {
         self.pushed.check.as_ref().filter(|check| check.asked.is_some() && self.running())
     }
 
+    // The round that found the check unreported past its time notes when, so the note says so without a clock.
+    fn check_unreported(&self) -> bool {
+        self.checking().is_some_and(|check| !check.passed && check.asked.zip(self.checked_at).is_some_and(|(asked, checked)| checked.saturating_sub(asked) >= CHECK_UNREPORTED_AFTER))
+    }
+
     fn then_checks(&self) -> String {
         self.pushed.check.as_ref().map(|check| format!(" · then checks: {}", check.what)).unwrap_or_default()
     }
@@ -162,6 +168,7 @@ impl Watch {
         match &self.state {
             State::Failed { what, .. } => format!("CI failed: {what}"),
             State::Running if self.checking().is_some_and(|check| check.passed) => "the check after the push held · kebbie closes it".to_string(),
+            State::Running if self.check_unreported() => format!("its check after the push was never reported in {} min: {}; ask it again, or kebbie done", CHECK_UNREPORTED_AFTER / 60, self.checking().map_or("", |check| check.what.as_str())),
             State::Running if self.checking().is_some() => format!("checking after push: {}", self.checking().map_or("", |check| check.what.as_str())),
             State::Running if !cancelled.is_empty() => format!("CI running: {} cancelled, waits for the next run on {} to pass{}{}", cancelled.join(", "), self.branch(), self.then_checks(), self.unread()),
             State::Running if self.runs.is_empty() && self.unseen_for() >= UNSEEN_AFTER => format!("no CI run of {} seen in {} min, though {} has workflows; check they run on a push{}, or kebbie done{}", self.short(), UNSEEN_AFTER / 60, self.slug, if self.pushed.target.is_empty() { String::new() } else { format!(" to {}", self.pushed.target) }, self.unread()),
@@ -533,6 +540,8 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
                 forget(state, &watch.address);
             } else if check.passed {
                 events.push(checked(state, &watch));
+            } else if check.asked.is_some_and(|asked| now.saturating_sub(asked) >= CHECK_UNREPORTED_AFTER) && !watch.check_unreported() {
+                events.push(check_unreported(state, &Watch { checked_at: Some(now), ..watch.clone() }));
             }
             continue;
         }
@@ -673,6 +682,17 @@ pub fn ask_check(state: &Path, watch: &Watch, landed: &str, now: u64) -> Result<
     crate::hub::notices::settle(crate::hub::notices::Subject::Ci, &watch.address);
     notify::send(&watch.repo, &Notice::from(NotifyEvent::CiGreen, &watch.address, format!("{}: {text}", crate::status::with_titles(&watch.address))));
     Ok(text)
+}
+
+// A check nobody reported: the task waits under Needs you and the lead hears it once; a late report still closes it.
+fn check_unreported(state: &Path, watch: &Watch) -> Event {
+    let _ = save(state, watch);
+    crate::phase::record(state, &watch.address, "ci", &crate::phase::Event::CiUnseen);
+    let text = format!("{} never reported its check after the push of {} in {} min: {}. It waits for the user under Needs you.", watch.address, watch.short(), CHECK_UNREPORTED_AFTER / 60, watch.checking().map_or("", |check| check.what.as_str()));
+    if let Err(error) = messages::to_lead(messages::ToLead::CiHanded, &text) {
+        eprintln!("Could not tell the lead: {error}");
+    }
+    Event { address: watch.address.clone(), kind: Kind::Failed, text }
 }
 
 // The task reported that its check held: it closes as a green push does.
@@ -1160,6 +1180,26 @@ mod tests {
         let _ = fs::remove_dir_all(&state);
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&origin);
+    }
+
+    #[test]
+    fn a_check_after_the_push_nobody_reports_puts_the_task_under_needs_you_once_and_a_late_report_still_closes_it() {
+        let dir = crate::sh::test_dir("ci-check-unreported");
+        let pushed = Pushed { target: "main".to_string(), check: Some(Check { what: "the old key gets 401".to_string(), asked: Some(100), passed: false }), ..Pushed::default() };
+        let watch = Watch { address: "billing@app".to_string(), repo: dir.clone(), slug: "acme/app".to_string(), sha: "abcdef0".to_string(), started_at: 0, checked_at: Some(100), close: true, runs: Vec::new(), state: State::Running, error: None, erring_since: None, pushed };
+        save(&dir, &watch).unwrap();
+        crate::phase::record(&dir, "billing@app", "push", &crate::phase::Event::PushOut { sha: "abcdef0" });
+        let phase = || crate::phase::load(&dir, "billing@app").map(|record| record.phase);
+        assert!(tick_with(&dir, "false", 100 + CHECK_UNREPORTED_AFTER - 1).is_empty(), "the task has its time to run the check");
+        assert_eq!(phase(), Some(crate::phase::Phase::CiRunning { sha: "abcdef0".to_string() }));
+        let events = tick_with(&dir, "false", 100 + CHECK_UNREPORTED_AFTER);
+        assert!(events.len() == 1 && events[0].text.starts_with("billing@app never reported its check after the push of abcdef0 in 60 min"), "{events:?}");
+        assert_eq!(phase(), Some(crate::phase::Phase::NeedsYou(crate::phase::Why::Unseen)));
+        let waiting = load(&dir, "billing@app").unwrap();
+        assert_eq!(waiting.note(), "its check after the push was never reported in 60 min: the old key gets 401; ask it again, or kebbie done");
+        assert!(tick_with(&dir, "false", 100 + 2 * CHECK_UNREPORTED_AFTER).is_empty(), "the lead hears it once");
+        assert!(waiting.checking().is_some(), "the watch stays, so a late report that the check held still closes the task");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

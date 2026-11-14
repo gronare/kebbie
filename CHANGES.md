@@ -23,7 +23,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A subtask that gains a commit after you accepted it keeps its accepted commits pushable.
 - kebbie order move puts a commit elsewhere in the push order, keeping its subtask and acceptance.
 - kebbie order group binds commits that go out together, and the push window brackets them.
-- The keeper tests each unpushed commit on its own once a task reports ready, and the push order marks the result.
+- The keeper tests each unpushed commit on its own once a task reports ready, in a worktree the repo's own setup prepares, and the push order marks the result; by default only in a repo with worktree.setup_command or bin/setup-worktree.
 - kebbie status --json gives each task's subtasks, push order, pushable run and obstacle.
 - Your phone's ready notice says how many subtasks wait for your review.
 - kebbie stage is now kebbie try, and kebbie try --off takes a task off local main.
@@ -36,7 +36,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The lead's reply to your phone, or any reply while you are away, comes as a Lead notification.
 - hub.commands takes "lead" for messages to the lead and the away switch.
 - kebbie tell works from any session on the machine, and the lead sees it as from a Claude session or a shell in that folder.
-- tests.before_push = "full" holds a ready report and every push until the repo's full suite passed on the task's HEAD.
+- tests.before_push = "full" holds a ready report and every push until the repo's full suite passed on the task's HEAD, or, for a push of only its first commits, on the commit that push ends at.
 - kebbie doctor suggests the full suite before push for a repo whose whole suite runs in minutes.
 - kebbie keeps a task's sign-off card as data, with who took each decision from its own records and what changed since the version before.
 - kebbie refuses a card with a part asking you to confirm, or any part beyond Built, Decisions and Also noticed.
@@ -55,7 +55,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - kebbie asks you itself, on the board and the phone, to verify a stage or a task's check, and to close a task it would leave to you.
 - A task asks for a check only you can make with kebbie ask --verify, and works on while it waits.
 - The board and the phone show a task's stages, and the push window stops at the first one not met; update the hub first.
-- A task names a check to run after its push with kebbie report --after-push; once CI is green it runs the check itself and closes when it holds, or waits under Needs you with what failed.
+- A task names a check to run after its push with kebbie report --after-push; once CI is green it runs the check itself and closes when it holds, or waits under Needs you with what failed, or with the check unreported after an hour.
 - When a hub refuses the board, kebbie says the hub has not enabled answering for your account, with the hub's link.
 - The phone answers an agent's prompt on a task's screen with one tap, while that prompt still shows; update the hub first.
 - hub.commands lists what a machine takes through the hub, every kind by default, and only from your account.

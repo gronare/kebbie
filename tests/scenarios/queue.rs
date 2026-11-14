@@ -117,7 +117,7 @@ fn with_require_accept_a_push_takes_only_accepted_subtasks_and_the_task_waits_on
 #[test]
 fn a_late_preparatory_commit_moves_up_holds_the_run_until_accepted_and_each_commit_is_tested_on_its_own() {
     let lab = Lab::new("order");
-    lab.config("[task]\nsandbox = false\ntest_commands = [\"test ! -e broken.txt\"]\n");
+    lab.config("[task]\nsandbox = false\ntest_commands = [\"test ! -e broken.txt\"]\n\n[tests]\nper_commit = true\n");
     let billing = lab.start("billing", "Add refunds", &[]);
     let slot = billing.to_str().unwrap();
     assert!(lab.run_as("billing@app", &["-C", slot, "subtasks", "Add refunds"]).status.success());

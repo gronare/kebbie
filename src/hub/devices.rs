@@ -126,21 +126,20 @@ impl Devices {
         }
     }
 
-    // Records a device whose command was verified, seen as of when it sent it so a held command authorized again changes nothing; true when it is a new request to approve.
+    // Records a device whose command was verified, seen as of when it sent it so a held command authorized again changes nothing; a new one is recorded waiting under either trust, which lets it in under account trust alone; true when it is a new request to approve.
     pub fn seen(&mut self, policy: Policy, device: &VerifiedDevice, sent: u64, now: u64) -> bool {
         let cert = device.cert();
         if let Some(known) = self.record_mut(device.id(), device.signing()) {
             (known.seen, known.name, known.kind) = (sent.min(now).max(known.seen), cert.name.clone(), cert.kind);
             return false;
         }
-        let state = if policy.trust == HubTrust::Account { State::Approved } else { State::Waiting };
-        let record = Device { signing: Bytes32(*device.signing()), name: cert.name.clone(), kind: cert.kind, first_seen: now, seen: now, state, at: now };
+        let record = Device { signing: Bytes32(*device.signing()), name: cert.name.clone(), kind: cert.kind, first_seen: now, seen: now, state: State::Waiting, at: now };
         if self.devices.contains_key(device.id()) {
             self.rekeyed.push(Rekeyed { id: device.id().clone(), device: record });
         } else {
             self.devices.insert(device.id().clone(), record);
         }
-        state == State::Waiting
+        policy.trust == HubTrust::Device
     }
 
     // The waiting devices whose day is up are approved; their ids come back so their notices settle as a manual approval's do.
@@ -217,7 +216,17 @@ impl Drop for Locked {
 }
 
 pub fn load(dir: &Path) -> Devices {
-    std::fs::read_to_string(dir.join(FILE)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+    read(dir).unwrap_or_default()
+}
+
+// A file that is there but does not parse is an error, never no devices, so no approval or denial is forgotten and written over.
+pub fn read(dir: &Path) -> Result<Devices> {
+    let file = dir.join(FILE);
+    match std::fs::read_to_string(&file) {
+        Ok(text) => serde_json::from_str(&text).map_err(|error| format!("{} does not read ({error}); kebbie takes no command from a device until it does: fix it, or remove it to approve each device again", file.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Devices::default()),
+        Err(error) => Err(format!("{}: {error}", file.display())),
+    }
 }
 
 pub(super) fn save(dir: &Path, devices: &Devices) -> Result<()> {
@@ -227,7 +236,7 @@ pub(super) fn save(dir: &Path, devices: &Devices) -> Result<()> {
 // Every change to the file goes through here, so a decision made on the board or in a terminal is never written over by the bridge; an unchanged file is not rewritten, as the keeper's watch fires on each write.
 pub fn change<T>(dir: &Path, change: impl FnOnce(&mut Devices) -> Result<T>) -> Result<T> {
     let _locked = Locked::wait(dir, LOCK)?;
-    let before = load(dir);
+    let before = read(dir)?;
     let mut devices = before.clone();
     let done = change(&mut devices)?;
     if devices != before {

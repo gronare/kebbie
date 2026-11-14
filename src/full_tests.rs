@@ -33,18 +33,24 @@ fn tree(worktree: &Path, rev: &str) -> Option<String> {
 pub struct Gap {
     pub full: String,
     pub why: String,
+    pub end: Option<String>,
 }
 
 // The repo's full run the task still owes on HEAD, if its repo asks for one; a run counts on the code it ran on, so one run before committing counts for the commit that holds the same tree.
 pub fn owed(worktree: &Path, address: &str) -> Option<Gap> {
+    owed_at(worktree, address, None)
+}
+
+// The same for a push that ends at an earlier commit than HEAD, which goes out only on a green run of that commit's own code.
+pub fn owed_at(worktree: &Path, address: &str, end: Option<&str>) -> Option<Gap> {
     let settings = crate::config::resolve(Some(worktree)).ok()?.settings;
     let full = required(&settings)?;
     let state = crate::lead::state_dir().ok()?;
     crate::evidence::settle(&state, address, &crate::evidence::listed_for(&settings), crate::messages::now());
-    let head = git(worktree, &["rev-parse", "HEAD"]).ok()?;
+    let head = git(worktree, &["rev-parse", end.unwrap_or("HEAD")]).ok()?;
     let head_tree = tree(worktree, &head);
     let on_head = |run: &Run| run.code == head || (head_tree.is_some() && tree(worktree, &run.code) == head_tree);
-    missing(&crate::evidence::runs_in(&state, address), &full, on_head).map(|why| Gap { full, why })
+    missing(&crate::evidence::runs_in(&state, address), &full, on_head).map(|why| Gap { full, why, end: end.map(|end| end[..7.min(end.len())].to_string()) })
 }
 
 pub fn report_refusal(gap: &Gap) -> String {
@@ -55,9 +61,13 @@ pub fn report_refusal(gap: &Gap) -> String {
 }
 
 pub fn push_refusal(gap: &Gap, refused: &str, task: &str) -> String {
-    crate::notice::Notice::new(crate::notice::Tone::NotNow, format!("{refused}: its full suite has no green run on HEAD"))
-        .next(format!("Its Claude runs `{}` in its worktree and reports ready; push it again then (tests.before_push = \"full\").", gap.full))
-        .detail("task", task).detail("tests", &gap.why).to_string()
+    let notice = match &gap.end {
+        None => crate::notice::Notice::new(crate::notice::Tone::NotNow, format!("{refused}: its full suite has no green run on HEAD"))
+            .next(format!("Its Claude runs `{}` in its worktree and reports ready; push it again then (tests.before_push = \"full\").", gap.full)),
+        Some(end) => crate::notice::Notice::new(crate::notice::Tone::NotNow, format!("{refused}: its full suite has no green run on {end}, where this push ends"))
+            .next(format!("Push the whole task once its HEAD has a green run of `{}`, or have its Claude run it with {end} checked out (tests.before_push = \"full\").", gap.full)),
+    };
+    notice.detail("task", task).detail("tests", &gap.why).to_string()
 }
 
 #[cfg(test)]
@@ -96,10 +106,12 @@ mod tests {
 
     #[test]
     fn the_refusals_name_the_command_to_run() {
-        let gap = Gap { full: "uv run pytest -q".to_string(), why: "kebbie recorded no run of it in this task".to_string() };
+        let gap = Gap { full: "uv run pytest -q".to_string(), why: "kebbie recorded no run of it in this task".to_string(), end: None };
         let report = report_refusal(&gap);
         assert!(report.starts_with("Not reported ready:") && report.contains("Run `uv run pytest -q` in your worktree") && report.contains("kebbie obstacle"), "{report}");
         let push = push_refusal(&gap, "Not pushed", "billing");
         assert!(push.contains("Not pushed: its full suite has no green run on HEAD") && push.contains("`uv run pytest -q`"), "{push}");
+        let part = push_refusal(&Gap { end: Some("abc1234".to_string()), ..gap }, "Not pushed", "billing");
+        assert!(part.contains("Not pushed: its full suite has no green run on abc1234, where this push ends"), "{part}");
     }
 }

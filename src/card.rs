@@ -186,7 +186,7 @@ fn items(lines: &[&str]) -> Vec<String> {
 }
 
 fn claimed(line: &str) -> Claimed {
-    let lower = line.to_lowercase();
+    let lower = line.to_ascii_lowercase();
     let (line, replaced_by) = match lower.find("replaced by:") {
         Some(at) => (line[..at].trim_end_matches([' ', ';', ',', '—', '-', '·']).to_string(), Some(one_line(&line[at + "replaced by:".len()..])).filter(|text| !text.is_empty())),
         None => (line.to_string(), None),
@@ -296,11 +296,16 @@ fn significant(text: &str) -> BTreeSet<String> {
     text.split(|character: char| !character.is_alphanumeric()).map(str::to_lowercase).filter(|word| word.chars().count() > 3 && word != "because").collect()
 }
 
-fn same_decision(line: &str, record: &Record) -> bool {
-    if record.key.as_ref().is_some_and(|key| line.split(|character: char| !character.is_alphanumeric()).any(|word| word == key)) {
+// A line names its record by key, or claims who took it and shares most of its words; words alone never move a line from the task to someone else.
+fn same_decision(line: &Claimed, record: &Record) -> bool {
+    if record.key.as_ref().is_some_and(|key| line.text.split(|character: char| !character.is_alphanumeric()).any(|word| word == key)) {
         return true;
     }
-    let (ours, theirs) = (significant(line), significant(&record.text));
+    line.by == Some(record.by) && similar(&line.text, &record.text)
+}
+
+fn similar(one: &str, other: &str) -> bool {
+    let (ours, theirs) = (significant(one), significant(other));
     let common = ours.intersection(&theirs).count();
     common >= 2 && common * 2 >= ours.len().min(theirs.len())
 }
@@ -347,14 +352,14 @@ pub fn decisions(claimed: &[Claimed], records: &[Record], red: Option<&str>) -> 
     let mut used = vec![false; records.len()];
     let mut taken: Vec<Decision> = Vec::new();
     let mut unbacked = Vec::new();
-    let matched = |text: &str, used: &mut Vec<bool>| -> Option<usize> {
-        let found = records.iter().enumerate().find(|(index, record)| !used[*index] && same_decision(text, record)).map(|(index, _)| index)?;
+    let matched = |line: &Claimed, used: &mut Vec<bool>| -> Option<usize> {
+        let found = records.iter().enumerate().find(|(index, record)| !used[*index] && same_decision(line, record)).map(|(index, _)| index)?;
         used[found] = true;
         Some(found)
     };
     let mut replacements: Vec<(usize, String)> = Vec::new();
     for line in claimed {
-        let decision = match matched(&line.text, &mut used) {
+        let decision = match matched(line, &mut used) {
             Some(index) => Decision { text: line.text.clone(), by: records[index].by, source: Some(records[index].source), at: Some(records[index].at), replaced_by: None },
             None => {
                 if line.by.is_some_and(|by| by != By::Task) {
@@ -375,8 +380,7 @@ pub fn decisions(claimed: &[Claimed], records: &[Record], red: Option<&str>) -> 
         taken.push(Decision { text: clip(&format!("The latest test run stays red: {cause}"), MAX_DECISION), by: By::Task, source: None, at: None, replaced_by: None });
     }
     for (index, replacement) in replacements {
-        let probe = Record { text: replacement.clone(), by: By::Task, source: Source::Method, at: 0, key: None };
-        let later = taken.iter().enumerate().skip(index + 1).find(|(_, decision)| decision.text == replacement || same_decision(&decision.text, &probe)).map(|(at, _)| at);
+        let later = taken.iter().enumerate().skip(index + 1).find(|(_, decision)| decision.text == replacement || similar(&decision.text, &replacement)).map(|(at, _)| at);
         let at = later.unwrap_or_else(|| {
             taken.push(Decision { text: clip(&replacement, MAX_DECISION), by: By::Task, source: None, at: None, replaced_by: None });
             taken.len() - 1
@@ -620,6 +624,23 @@ mod tests {
         assert_eq!(decisions[1].text, "Keep the old endpoint a week", "the claim of (you) is dropped, its words kept");
         assert_eq!(unbacked, ["Keep the old endpoint a week"], "the task is told which of its lines no record backs");
         assert_eq!(decisions[4].text, "Which file holds the flags: config.toml", "a recorded decision the card left out is added");
+    }
+
+    #[test]
+    fn a_decision_with_letters_whose_lowercase_is_longer_keeps_its_replacement() {
+        let line = claimed("İİİ rounding per line (task) replaced by: per invoice");
+        assert_eq!((line.text.as_str(), line.replaced_by.as_deref()), ("İİİ rounding per line", Some("per invoice")));
+    }
+
+    #[test]
+    fn a_line_the_task_took_is_never_shown_as_yours_for_sharing_words_with_your_answer() {
+        let records = [record("Should refunds show on the invoice page? → Yes, under the total", By::You, Source::Question, 50, None)];
+        for card in ["- Refunds page uses the invoice layout because the design had none (task)", "- Refunds page uses the invoice layout because the design had none"] {
+            let claimed = parse(&format!("**Refunds.**\n\nBuilt:\n- x\n\nDecisions:\n{card}\n")).unwrap().decisions;
+            let (decisions, _) = decisions(&claimed, &records, None);
+            let who: Vec<By> = decisions.iter().map(|decision| decision.by).collect();
+            assert_eq!(who, [By::Task, By::You], "{card}: the task's line stays its own and your answer is listed as itself");
+        }
     }
 
     #[test]

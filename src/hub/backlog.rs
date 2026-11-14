@@ -128,7 +128,8 @@ pub fn rows(items: &[(Entry, Option<String>)], state: &Path, root: Option<&Path>
         let template = templates.of(&entry.source);
         let body = body.as_deref().filter(|body| !body.trim().is_empty());
         let questions = body.map(|body| questions_with(body, &entry.reference, &answers, template)).unwrap_or_default();
-        let goal = body.and_then(|body| template.shown(body, template.goal_key()?).lines().map(str::trim).find(|line| !line.is_empty()).map(str::to_string));
+        let goal = body.and_then(|body| template.shown(body, template.goal_key()?).lines().map(str::trim).find(|line| !line.is_empty()).map(str::to_string))
+            .or_else(|| Some(entry.summary.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|words| entry.shape.kept && !words.is_empty()));
         rows.push(BacklogRow {
             item: item.clone(),
             title: entry.title.clone(),
@@ -649,6 +650,13 @@ mod tests {
         assert!(told.borrow()[1].contains(&format!("kebbie backlog filed kept:{}", kept[0].id)), "{:?}", told.borrow());
         assert!(told.borrow()[1].contains("> rerun it once by itself.") && told.borrow()[1].contains("is a placeholder"), "the lead files the vault note from the user's words: {:?}", told.borrow());
         assert_eq!(idea_on(&shelf, &[Source::Local], &hub(), &idea).0, Outcome::Failed, "a title already in the backlog");
+        assert_eq!(kept[0].words, idea.text.trim(), "the user's words stay with the row, whatever becomes of the message to the lead");
+        let (rows, _) = rows(&[(kept[0].entry(0), None)], &state, None, 0, &templates());
+        assert_eq!(rows[0].goal.as_deref(), Some("When a run goes red on a flaky test, rerun it once by itself. ## Not the push"), "the phone shows them on the row");
+        let silent = |_: &str| -> Result<()> { Err("the lead is not running".to_string()) };
+        let unheard = Shelf { dir: &dir, state: &state, tell: &silent };
+        assert_eq!(idea_on(&unheard, &[Source::Vault], &hub(), &Idea { text: "Another idea".to_string(), repo: None }).0, Outcome::Failed);
+        assert_eq!(crate::backlog_kept::kept_in(&state).len(), 1, "a row is kept only once the lead was told, so trying again adds no second one");
     }
 
     fn desk<'a>(state: &'a Path, found: Option<Found>, tell: &'a dyn Fn(&str) -> Result<()>) -> Desk<'a> {

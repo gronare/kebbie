@@ -288,10 +288,15 @@ pub fn read(_: &Caller, read: &ReviewRead) -> Done {
     }
 }
 
+fn named(items: Vec<Entry>, said: &str) -> Option<Entry> {
+    let at = items.iter().position(|entry| entry.id == said).or_else(|| items.iter().position(|entry| entry.number.to_string() == said))?;
+    items.into_iter().nth(at)
+}
+
 // Accepts a subtask, every commit in it, only while it still ends at the head the phone saw, through kebbie accept's own path.
 pub fn accept_in(root: &Path, entries: Option<data::Entries>, accept: &AcceptSubtask, run: impl FnOnce(&Path, &str, &str) -> crate::sh::Result<String>) -> Done {
     let moved = || refused(Reason::HeadMoved, "That subtask changed since you saw it; open the review again");
-    let Some(entry) = entries.and_then(|entries| entries.items.into_iter().find(|entry| entry.id == accept.subtask)) else { return moved() };
+    let Some(entry) = entries.and_then(|entries| named(entries.items, &accept.subtask)) else { return moved() };
     if entry.head() != Some(accept.head.as_str()) {
         return moved();
     }
@@ -433,6 +438,9 @@ mod tests {
         let (outcome, text) = accept_in(&lab.slot, ready(Mark::Ready), &accept("s2", &lab.shas[2]), |_, task, id| { *ran.borrow_mut() = Some((task.to_string(), id.to_string())); Ok(String::new()) });
         assert_eq!((outcome, text.as_str()), (Outcome::Done, "Accepted Subtask 2 of billing@app"));
         assert_eq!(ran.into_inner(), Some(("billing".to_string(), "s2".to_string())), "by the subtask, so every commit in it");
+        let ran = std::cell::RefCell::new(None);
+        let (outcome, _) = accept_in(&lab.slot, ready(Mark::Ready), &accept("2", &lab.shas[2]), |_, _, id| { *ran.borrow_mut() = Some(id.to_string()); Ok(String::new()) });
+        assert_eq!((outcome, ran.into_inner().as_deref()), (Outcome::Done, Some("s2")), "an older phone app names the step by its number");
         let _ = std::fs::remove_dir_all(&lab.root);
     }
 

@@ -397,14 +397,17 @@ pub fn file_item_on(shelf: &Shelf, sources: &[Source], filing: &Filing, from_lea
             if from_lead {
                 return Notice::new(Tone::You, "Not added: new items go to the vault here").you(format!("Write it as a task note in the vault with the skill {SKILL}.")).err();
             }
-            let id = crate::backlog_kept::keep(shelf.state, filing.line, &item.priority, &item.repo, crate::messages::now())?;
+            let id = crate::backlog_kept::keep(shelf.state, filing.line, filing.words.unwrap_or_default(), &item.priority, &item.repo, crate::messages::now())?;
             let filed = format!("Then run `kebbie backlog filed {}{id}`, so the row kebbie keeps for it on the board gives way to your note.", crate::backlog_kept::PREFIX);
             let text = if item.to_write() {
                 format!("{} {filed}", lead_text(filing, &item.priority, "as a task note in the vault's backlog"))
             } else {
                 format!("{} filed a written-out backlog item; file it as a task note in the vault's backlog as it stands (title \"{}\", priority {}, repo {}). {filed}\n\n{}", filing.by, item.title, item.priority, if item.repo.is_empty() { "not given" } else { &item.repo }, item.body)
             };
-            (shelf.tell)(&text)?;
+            if let Err(error) = (shelf.tell)(&text) {
+                let _ = crate::backlog_kept::release(shelf.state, &id);
+                return Err(error);
+            }
             Notice::new(Tone::Moving, "Sent to the lead").next("It writes the item out and files it in the vault. Its row waits here until the note replaces it.").ok()
         }
         None => Notice::new(Tone::You, "Not added: no backlog takes new items").you(format!("List \"local\" or \"vault\" under [board.backlog] sources in {}.", crate::config::path().display())).err(),

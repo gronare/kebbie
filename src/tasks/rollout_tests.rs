@@ -21,8 +21,13 @@ fn seen(sha: &str, subtask: &str) -> Seen {
 
 // Three subtasks, a commit each, every commit accepted: add the column, backfill it, drop the old one.
 fn migration(stages: Vec<StagePlan>) -> Subtasks {
+    migration_after(stages, &[])
+}
+
+fn migration_after(stages: Vec<StagePlan>, landed: &[&str]) -> Subtasks {
     let plan = Plan { base: "base".to_string(), parts: vec![part("add"), part("backfill"), part("drop")], commits: vec![seen("a", "add"), seen("b", "backfill"), seen("c", "drop")], stages, ..Plan::default() };
-    derive(Some(&plan), &[], &[accepted("a"), accepted("b"), accepted("c")], false).0
+    let landed: Vec<String> = landed.iter().map(|sha| format!("code {sha}")).collect();
+    derive(Some(&plan), &landed, &[accepted("a"), accepted("b"), accepted("c")], false).0
 }
 
 fn pushed(mut stage: StagePlan, state: StageState) -> StagePlan {
@@ -54,20 +59,22 @@ fn the_pushable_run_stops_at_a_stage_that_is_not_met_and_a_subtask_no_stage_name
     assert_eq!(fresh.items.iter().find(|subtask| subtask.id == "backfill").and_then(|subtask| subtask.waits_for.clone()).as_deref(), Some("Stage both to be met"), "an accepted subtask behind the boundary says what it waits for");
     let out = migration(vec![pushed(three[0].clone(), StageState::Pushed), three[1].clone(), three[2].clone()]);
     assert_eq!((out.pushable.as_ref().map(|run| run.count), out.stages[0].state), (Some(1), StageState::Pushed), "pushed and not yet deployed holds the next stage, while a fix in the stage itself may follow");
-    let deployed = migration(vec![pushed(three[0].clone(), StageState::Met), three[1].clone(), three[2].clone()]);
-    assert_eq!((deployed.pushable.as_ref().map(|run| run.count), deployed.stages[1].state), (Some(2), StageState::Open), "a met stage opens the next");
-    let waiting = migration(vec![pushed(three[0].clone(), StageState::Met), pushed(three[1].clone(), StageState::Waiting), three[2].clone()]);
+    let deployed = migration_after(vec![pushed(three[0].clone(), StageState::Met), three[1].clone(), three[2].clone()], &["a"]);
+    assert_eq!((deployed.pushable.as_ref().map(|run| run.through.clone()), deployed.stages[1].state), (Some("b".repeat(40)), StageState::Open), "a met stage opens the next");
+    let unfinished = migration(vec![pushed(three[0].clone(), StageState::Met), three[1].clone(), three[2].clone()]);
+    assert_eq!((unfinished.pushable.as_ref().map(|run| run.count), unfinished.stages[0].state, unfinished.stages[1].state), (Some(1), StageState::Open, StageState::Locked), "a met stage with a commit still to push is open again, and the next waits until it is met with all of it");
+    let waiting = migration_after(vec![pushed(three[0].clone(), StageState::Met), pushed(three[1].clone(), StageState::Waiting), three[2].clone()], &["a", "b"]);
     assert_eq!(waiting.stages.iter().map(|stage| stage.state).collect::<Vec<_>>(), [StageState::Met, StageState::Waiting, StageState::Locked]);
-    let failed = migration(vec![pushed(three[0].clone(), StageState::Met), pushed(three[1].clone(), StageState::Failed), three[2].clone()]);
-    assert_eq!((failed.stages[2].state, failed.pushable.as_ref().map(|run| run.count)), (StageState::Locked, Some(2)), "a failed stage holds the rest");
+    let failed = migration_after(vec![pushed(three[0].clone(), StageState::Met), pushed(three[1].clone(), StageState::Failed), three[2].clone()], &["a", "b"]);
+    assert_eq!((failed.stages[2].state, failed.pushable.as_ref().map(|run| run.count)), (StageState::Locked, None), "a failed stage holds the rest");
 }
 
 #[test]
 fn a_commit_out_of_stage_order_ends_the_pushable_run_and_names_itself() {
     let swapped = [stage("first", RequirementKind::Deploy, &["add", "drop"]), stage("second", RequirementKind::Deploy, &["backfill"])];
-    let subtasks = migration(vec![pushed(swapped[0].clone(), StageState::Met), swapped[1].clone()]);
+    let subtasks = migration_after(vec![pushed(swapped[0].clone(), StageState::Met), swapped[1].clone()], &["a"]);
     assert_eq!(subtasks.out_of_stage, Some("c".repeat(40)), "drop belongs to the first stage but sits after the second's commit");
-    assert_eq!(subtasks.pushable.as_ref().map(|run| run.count), Some(2), "the run stops before it");
+    assert_eq!(subtasks.pushable.as_ref().map(|run| run.count), None, "the first stage is open again while drop waits, so the second's commit waits behind it");
 }
 
 #[test]

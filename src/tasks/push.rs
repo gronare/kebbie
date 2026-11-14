@@ -313,6 +313,11 @@ fn open_shas(path: &Path, upstream: &str) -> Result<Vec<String>> {
     Ok(super::accept::open_commits(path, upstream)?.into_iter().map(|open| open.sha).collect())
 }
 
+// The commit a push of only the first commits ends at, which its full suite is judged on; none for the whole branch.
+fn pushed_end(path: &Path, upstream: &str, through: Through) -> Result<Option<String>> {
+    if through == Through::All { Ok(None) } else { through_sha(path, upstream, through).map(Some) }
+}
+
 // The task's Claude keeps committing while a push of its first commits waits, so only fewer commits than were chosen stop it; the line checks that the chosen ones are unchanged.
 fn through_sha(path: &Path, upstream: &str, through: Through) -> Result<String> {
     match through {
@@ -395,17 +400,27 @@ pub(crate) fn push_as(caller: &Caller, address: &str, head: Option<&str>) -> Dev
     device_push(&state, caller, &repo, &slot, head, &super::line::live_read(), &mut live_push(&state))
 }
 
-// An open commit short of the last is pushed through only while it still ends the pushable run the phone saw; a head on the default branch already is settled; any other head pushes the whole branch.
+// An open commit short of the last is pushed through only while it still ends the pushable run the phone saw; a head on the default branch already is settled; a head no longer on the branch pushes the whole branch only while all of it can go out, since it may have ended a run a rebase rewrote; any other head pushes the whole branch.
 fn through_head(state: &Path, slot: &Slot, address: &str, upstream: &str, head: &str) -> std::result::Result<Through, DevicePush> {
     let open = open_shas(&slot.path, upstream).map_err(DevicePush::Failed)?;
     let short = &head[..7.min(head.len())];
-    if !open.iter().any(|sha| sha == head) && crate::sh::succeeds("git", &["merge-base", "--is-ancestor", head, &crate::repo::tracking(upstream)], Some(&slot.path)) {
-        return Err(DevicePush::Settled(Notice::new(Tone::NotNow, format!("Nothing to push: what you saw is on {} already", main_of(upstream))).detail("task", task_of(slot)).detail("commit", short).to_string()));
+    let moved = || DevicePush::HeadMoved(Notice::new(Tone::You, "Not pushed: what can go out changed since you saw it").you("Look at its push order again and push from there.").detail("task", task_of(slot)).detail("commit", short).to_string());
+    let Some(at) = open.iter().position(|sha| sha == head) else {
+        if crate::sh::succeeds("git", &["merge-base", "--is-ancestor", head, &crate::repo::tracking(upstream)], Some(&slot.path)) {
+            return Err(DevicePush::Settled(Notice::new(Tone::NotNow, format!("Nothing to push: what you saw is on {} already", main_of(upstream))).detail("task", task_of(slot)).detail("commit", short).to_string()));
+        }
+        let subtasks = super::plan::read_now(state, &slot.path, upstream, address);
+        if subtasks.listed() && subtasks.pushable.as_ref().is_none_or(|run| run.count < open.len()) {
+            return Err(moved());
+        }
+        return Ok(Through::All);
+    };
+    if at + 1 == open.len() {
+        return Ok(Through::All);
     }
-    let Some(at) = open.iter().position(|sha| sha == head).filter(|at| at + 1 < open.len()) else { return Ok(Through::All) };
     let subtasks = super::plan::read_now(state, &slot.path, upstream, address);
     if subtasks.listed() && subtasks.pushable.as_ref().is_none_or(|run| run.through != head) {
-        return Err(DevicePush::HeadMoved(Notice::new(Tone::You, "Not pushed: what can go out changed since you saw it").you("Look at its push order again and push from there.").detail("task", task_of(slot)).detail("commit", short).to_string()));
+        return Err(moved());
     }
     Ok(Through::First { count: at + 1, of: open.len() })
 }
@@ -518,7 +533,7 @@ pub(super) fn join(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, thro
         return Notice::new(Tone::NotNow, "Not pushed: a rebase is under way in its worktree").next("Push it once the rebase is finished.").detail("task", &task).err();
     }
     authorize(caller, repo, slot, &upstream, through)?;
-    if let Some(gap) = crate::full_tests::owed(&slot.path, &address) {
+    if let Some(gap) = crate::full_tests::owed_at(&slot.path, &address, pushed_end(&slot.path, &upstream, through)?.as_deref()) {
         return Err(crate::full_tests::push_refusal(&gap, "Not pushed", &task));
     }
     let by = By::of(caller).ok_or_else(|| Notice::new(Tone::Failed, format!("Not pushed: {} may not push it", crate::permit::describe(caller))).detail("task", &task).to_string())?;
@@ -685,7 +700,7 @@ fn prepare(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Thr
     }
     intent::forget(state, &address);
     let pusher = authorize(caller, repo, slot, &upstream, through)?;
-    if let Some(gap) = crate::full_tests::owed(&slot.path, &address) {
+    if let Some(gap) = crate::full_tests::owed_at(&slot.path, &address, pushed_end(&slot.path, &upstream, through)?.as_deref()) {
         if through != Through::All || git(&slot.path, &["rev-parse", "HEAD"])? == before {
             return Err(crate::full_tests::push_refusal(&gap, "Not pushed", &task));
         }
@@ -1461,6 +1476,30 @@ mod tests {
     }
 
     #[test]
+    fn a_push_of_the_first_commits_in_a_full_suite_repo_needs_a_green_run_where_it_ends_not_on_head() {
+        use crate::evidence::{Outcome, Run};
+        use crate::permit::Caller;
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        let pushing = Pushing::new(&dir);
+        let file = crate::config::repo_file(&dir);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "[tests]\nbefore_push = \"full\"\nfull_command = \"scripts/check.sh\"\n").unwrap();
+        let green = |head: &str| crate::evidence::save(&pushing.state, &pushing.address, &Run { command: "scripts/check.sh".to_string(), runner: "scripts/check.sh".to_string(), result: Outcome::Passed, sha: head.to_string(), code: head.to_string(), ..Run::default() }).unwrap();
+        let first = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        green(&commit(&slot.path, "e", "fifth, which fixes what the fourth broke"));
+        let (_, hand) = handed();
+        let part = Through::First { count: 1, of: 2 };
+        let refused = prepare(&pushing.state, &Caller::User, &dir, &slot, part, None, &hand).unwrap_err();
+        assert!(refused.contains(&format!("its full suite has no green run on {}, where this push ends", &first[..7])), "{refused}");
+        assert!(matches!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap(), Prepared::Push(..)), "the whole branch has its green run");
+        green(&first);
+        assert!(matches!(prepare(&pushing.state, &Caller::User, &dir, &slot, part, None, &hand).unwrap(), Prepared::Push(..)), "a green run where the push ends lets it go");
+        let _ = std::fs::remove_file(file);
+        let _ = std::fs::remove_file(crate::evidence::file(&pushing.state, &pushing.address));
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
     fn a_push_kept_open_stays_open_even_through_the_last_commit_and_a_plain_push_closes() {
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         let head = commit(&slot.path, "e", "fifth");
@@ -1714,6 +1753,30 @@ mod tests {
         let landed = git(&origin, &["log", "--format=%s", &main]).unwrap();
         assert!(landed.starts_with("fourth\nlanded after the phone showed the task\n"), "the task's commit on top of what landed: {landed}");
         assert!(intent::load(&pushing.state, &pushing.address).is_none());
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_device_push_of_a_run_whose_end_a_rebase_rewrote_is_refused_and_never_pushes_the_whole_branch() {
+        use crate::permit::Caller;
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let pushing = Pushing::new(&dir);
+        super::super::plan::list_at(&pushing.state, &slot.path, &upstream, &pushing.address, &["Model", "Command"]).unwrap();
+        super::super::plan::done_at(&pushing.state, &slot.path, &upstream, &pushing.address).unwrap();
+        let key = super::super::accept::open_commits(&slot.path, &upstream).unwrap()[0].key.clone();
+        super::super::accept::set_in(&pushing.state, &pushing.address, &key, true).unwrap();
+        commit(&slot.path, "e", "fifth, the command in progress");
+        let seen = super::super::plan::listed_at(&pushing.state, &slot.path, &upstream, &pushing.address);
+        let run = seen.pushable.clone().unwrap();
+        assert_eq!((seen.order.len(), run.count), (2, 1));
+        upstream_commit(&dir, "elsewhere", "x", "someone else's work");
+        git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "rebase", "--quiet", &upstream]).unwrap();
+        let main = main_of(&upstream).to_string();
+        let before = git(&origin, &["rev-parse", &main]).unwrap();
+        let (_, hand) = handed();
+        let pushed = device_push(&pushing.state, &Caller::hub("acc_01"), &dir, &slot, Some(&run.through), &|_, _| None, &mut device_pushes(&pushing.state, &hand));
+        assert!(matches!(&pushed, DevicePush::HeadMoved(said) if said.contains("what can go out changed")), "{pushed:?}");
+        assert_eq!(git(&origin, &["rev-parse", &main]).unwrap(), before, "nothing went out");
         cleanup(dir, origin, &slot);
     }
 

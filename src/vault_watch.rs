@@ -398,7 +398,11 @@ pub fn supervise(state: &Path, detect: impl Fn() -> Option<Cli>, stopped: impl F
             continue;
         };
         let started = Instant::now();
-        let ended = follow(&cli, state);
+        let ended = crate::keeper::unpanicked(|| Ok(follow(&cli, state))).unwrap_or_else(|panicked| {
+            stop(state);
+            *CHILD.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+            panicked
+        });
         if stopped() {
             break;
         }

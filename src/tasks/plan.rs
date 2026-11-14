@@ -335,7 +335,7 @@ fn placed(plan: &mut Plan, kept: &[bool], open: &[&Unpushed]) -> Vec<String> {
             None => lost.push((subtask, 1)),
         }
     }
-    let mut take_lost = |id: &str| match lost.iter_mut().find(|(lost, count)| lost == id && *count > 0) {
+    let take_lost = |lost: &mut Vec<(String, usize)>, id: &str| match lost.iter_mut().find(|(lost, count)| lost == id && *count > 0) {
         Some((_, count)) => {
             *count -= 1;
             true
@@ -349,9 +349,11 @@ fn placed(plan: &mut Plan, kept: &[bool], open: &[&Unpushed]) -> Vec<String> {
             None => {
                 let before = placed.last().cloned();
                 let later = matched[at + 1..].iter().flatten().next().cloned();
-                match (before, later) {
-                    (Some(before), _) if take_lost(&before) => before,
-                    (_, Some(later)) if take_lost(&later) => later,
+                let first_lost = lost.iter().find(|(_, count)| *count > 0).map(|(id, _)| id.clone());
+                match (before, later, first_lost) {
+                    (Some(before), _, _) if take_lost(&mut lost, &before) => before,
+                    (_, Some(later), _) if take_lost(&mut lost, &later) => later,
+                    (_, _, Some(first)) if take_lost(&mut lost, &first) => first,
                     _ => current(plan).unwrap_or_else(|| {
                         let title = open[at].subject.clone();
                         let id = new_id(&title, &ids(&plan.parts));
@@ -401,7 +403,8 @@ pub fn derive(plan: Option<&Plan>, landed: &[String], commits: &[Unpushed], work
         tests: None, stage: None,
     }).collect();
     let cut = rollout::placed(&mut order, &plan.stages);
-    let stages = rollout::shown(&plan.stages);
+    let open_stages: Vec<&str> = order.iter().filter_map(|row| row.stage.as_deref()).collect();
+    let stages = rollout::shown_with(&plan.stages, &open_stages);
     let mut all: Vec<Subtask> = plan.parts.iter().enumerate().map(|(at, part)| {
         let positions: Vec<usize> = owners.iter().enumerate().filter(|(_, owner)| **owner == part.id).map(|(at, _)| at).collect();
         let commits: Vec<Commit> = positions.iter().map(|at| Commit { sha: open[*at].sha.clone(), subject: open[*at].subject.clone(), accepted: open[*at].accepted }).collect();
@@ -524,12 +527,13 @@ pub(super) fn changed<T>(state: &Path, address: &str, change: impl FnOnce(Option
     Ok(out)
 }
 
-// Records which commits each subtask holds now, so a subtask keeps them through a rebase and they still count once they reach the default branch by any road.
+// Records which commits each subtask holds now, so a subtask keeps them through a rebase and they still count once they reach the default branch by any road; nothing is recorded while a rebase or cherry-pick is stopped part-way, whose branch lacks commits it still replays.
 fn listed_in(state: &Path, task: &Task, working: bool) -> Result<Subtasks> {
+    let replaying = crate::repo::replay_in_progress(task.path);
     changed(state, task.address, |plan| {
         let Some(plan) = plan else { return Ok((None, Subtasks::default())) };
         let (subtasks, noted) = read_in(state, task, &plan, working)?;
-        Ok((subtasks.listed().then_some(noted), subtasks))
+        Ok((subtasks.listed().then_some(noted).filter(|_| !replaying), subtasks))
     })
 }
 
@@ -559,6 +563,9 @@ pub fn noted_after(state: &Path, address: &str, input: &Value) -> bool {
     let Ok(found) = git(Path::new(cwd), &["rev-parse", "--show-toplevel", "HEAD"]) else { return false };
     let Some((top, head)) = found.split_once('\n') else { return false };
     if fs::read_to_string(head_file(state, address)).is_ok_and(|noted| noted == head) {
+        return false;
+    }
+    if crate::repo::replay_in_progress(Path::new(top)) {
         return false;
     }
     let noted = located(Path::new(top)).and_then(|(repo, slot, own)| {
@@ -659,9 +666,15 @@ pub fn subtasks(cwd: &Path, words: &[String], asked: &Asked) -> Result<String> {
 
 // A task writes its own subtasks only; the lead and the user write any task's.
 pub(super) fn writes(caller: &Caller, task: &Task) -> Result<()> {
+    writes_to(caller, task.address, "writes its own subtasks and stages")
+}
+
+// A task's plan and push order are its own, the lead's or the user's to change, so who changed them is always one of the three.
+pub(super) fn writes_to(caller: &Caller, address: &str, what: &str) -> Result<()> {
     match caller {
-        Caller::Task(own) if own != task.address => Err(format!("the task {own} writes its own subtasks, not {}'s", task.address)),
-        _ => Ok(()),
+        Caller::Task(own) if own != address => Err(format!("the task {own} {what}, not {address}'s")),
+        Caller::Task(_) | Caller::Lead | Caller::User => Ok(()),
+        other => Err(format!("{} changes no task's plan: the task itself, the lead or you do, from a terminal", crate::permit::describe(other))),
     }
 }
 

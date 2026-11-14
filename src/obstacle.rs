@@ -203,7 +203,13 @@ fn save(state: &Path, address: &str, all: &[Obstacle]) -> Result<()> {
     crate::state::write(&file(state, address), serde_json::to_string_pretty(all).map_err(|error| error.to_string())?)
 }
 
+// Held across each read, change and write of a task's obstacles, so the investigator's decision and a newly raised obstacle never write over each other.
+fn locked(state: &Path, address: &str) -> Result<crate::state::Locked> {
+    crate::state::Locked::wait(&file(state, address).with_extension("lock"))
+}
+
 fn update(state: &Path, address: &str, id: &str, change: impl FnOnce(&mut Obstacle)) -> Result<Option<Obstacle>> {
+    let _held = locked(state, address)?;
     let mut all = load(state, address);
     let Some(found) = all.iter_mut().find(|obstacle| obstacle.id == id) else { return Ok(None) };
     change(found);
@@ -297,6 +303,7 @@ pub fn raise_in(state: &Path, address: &str, worktree: &Path, source: Source, te
         return Err(format!("kebbie obstacle needs what stands in the way: {USAGE}"));
     }
     let on = on.split_whitespace().collect::<Vec<_>>().join(" ");
+    let held = locked(state, address)?;
     let mut all = load(state, address);
     if let Some(seen) = all.iter().find(|obstacle| normal(&obstacle.text) == normal(&text)) {
         let said = match &seen.decision {
@@ -322,6 +329,7 @@ pub fn raise_in(state: &Path, address: &str, worktree: &Path, source: Source, te
     let obstacle = Obstacle { id: format!("o{}", all.len() + 1), at: now, source, text, on, state: state_now, worktree: worktree.to_path_buf(), question: None, decision: None, replan: route == Route::User, found: None };
     all.push(obstacle.clone());
     save(state, address, &all)?;
+    drop(held);
     if route == Route::Investigate && QUEUE.asked(state, address).is_none() {
         QUEUE.want(state, address, worktree, &obstacle.id)?;
     }
@@ -870,6 +878,22 @@ mod tests {
     use crate::trusted_spawn::{SPAWNED, digest};
 
     const BLOCK: &str = "I read src/index.py:88 and the vault note.\n\n```\ndecision: subtask\nreason: the index stores only titles (src/index.py:88), and the lint needs frontmatter\nplan: store frontmatter in the index before the lint step\nsubtask: Store each note's frontmatter in the index\nreplaced by: none\n```";
+
+    #[test]
+    fn a_task_raising_an_obstacle_waits_for_a_decision_being_saved_so_neither_is_written_over() {
+        let state = crate::sh::test_dir("obstacle-at-once");
+        let address = "billing@app";
+        raise_in(&state, address, Path::new("/src/wt1.app"), Source::Review, "the first", "", true, 1).unwrap();
+        let deciding = locked(&state, address).unwrap();
+        let raising = { let state = state.clone(); std::thread::spawn(move || raise_in(&state, address, Path::new("/src/wt1.app"), Source::Review, "the second", "", true, 2).unwrap()) };
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(load(&state, address).len(), 1, "the raise waits while the decision is read, changed and written");
+        drop(deciding);
+        raising.join().unwrap();
+        update(&state, address, "o1", |found| found.state = State::Decided).unwrap();
+        assert_eq!(load(&state, address).iter().map(|obstacle| (obstacle.id.as_str(), obstacle.state == State::Decided)).collect::<Vec<_>>(), [("o1", true), ("o2", false)]);
+        std::fs::remove_dir_all(state).unwrap();
+    }
 
     #[test]
     fn a_long_reason_keeps_its_first_two_sentences_on_the_decision_line() {

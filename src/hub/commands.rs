@@ -609,7 +609,7 @@ fn serve(state: &Path, dir: &Path) {
                 log(&closed_line(broken.as_deref()));
                 closed = broken;
             }
-            match round(dir, WAIT, &accepted(gates.commands, gates.from), Policy { trust: gates.trust, auto: gates.auto }, hands, &crate::messages::now) {
+            match crate::keeper::unpanicked(|| round(dir, WAIT, &accepted(gates.commands, gates.from), Policy { trust: gates.trust, auto: gates.auto }, hands, &crate::messages::now)) {
                 Ok(notes) => {
                     failures = 0;
                     notes.iter().for_each(|note| log(note));
@@ -653,7 +653,7 @@ fn watch(state: &Path, dir: &Path) {
                 continue;
             }
             decided = decisions;
-            match released(dir, hands) {
+            match crate::keeper::unpanicked(|| released(dir, hands)) {
                 Ok(notes) if notes.is_empty() => {}
                 Ok(notes) => {
                     notes.iter().for_each(|note| log(note));
@@ -1276,6 +1276,24 @@ mod tests {
     }
 
     #[test]
+    fn a_devices_file_that_does_not_read_takes_no_command_and_is_never_written_over() {
+        let machine = Machine::new();
+        let seen = Seen::new();
+        let phone = machine.phone("iPhone 16");
+        machine.handle(&seen, DEVICE, &phone.send(&machine.account, &machine.identity, &answer(), now()), now());
+        devices::answer(&machine.dir, phone.id().as_str(), Decision::Deny, now()).unwrap();
+        let file = machine.dir.join(devices::FILE);
+        let unreadable = std::fs::read_to_string(&file).unwrap().replacen("\"denied\"", "\"barred\"", 1);
+        std::fs::write(&file, &unreadable).unwrap();
+        let later = phone.send(&machine.account, &machine.identity, &answer(), now() + 10 * devices::DAY);
+        let refused = with_hands(&seen, |hands| handle(&machine.dir, &machine.identity, &machine.account, &accepts(word("answer-and-push")), DEVICE, &later, hands, now() + 10 * devices::DAY));
+        assert!(matches!(&refused, Err(error) if error.contains("does not read")), "{refused:?}");
+        assert!(devices::answer(&machine.dir, "iPhone 16", Decision::Approve, now()).is_err());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), unreadable, "the denial stays in the file for whoever fixes it");
+        assert_eq!(seen.applied(), 0);
+    }
+
+    #[test]
     fn a_command_that_expires_while_its_device_waits_is_answered_not_approved() {
         let machine = Machine::new();
         let seen = Seen::new();
@@ -1366,8 +1384,11 @@ mod tests {
         let sent = phone.send(&machine.account, &machine.identity, &answer(), now());
         assert!(matches!(machine.handle(&seen, ACCOUNT, &sent, now()), Handled::Applied(_)));
         assert!(seen.told.borrow().is_empty(), "nothing to approve, nothing to tell");
-        assert_eq!(machine.state(&phone), Some(State::Approved), "recorded for kebbie hub devices");
+        assert_eq!(machine.state(&phone), Some(State::Waiting), "recorded for kebbie hub devices, and never as approved by you");
         assert!(matches!(devices::load(&machine.dir).standings(ACCOUNT, now())[phone.id()], kebbie_hub_protocol::DeviceStanding::Approved { .. }));
+        let later = phone.send(&machine.account, &machine.identity, &answer(), now() + 60);
+        assert_eq!(machine.handle(&seen, NEVER, &later, now() + 60), Handled::Held(phone.id().clone()), "turned to device trust, the device waits for your approval");
+        assert!(matches!(devices::load(&machine.dir).standings(NEVER, now() + 60)[phone.id()], kebbie_hub_protocol::DeviceStanding::Waiting { .. }));
     }
 
     #[test]

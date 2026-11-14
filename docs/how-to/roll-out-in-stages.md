@@ -20,6 +20,7 @@ Push a change that must reach production in steps, such as a column rename, one 
 5. Answer Verified when it holds. The next stage opens, and you push it the same way.
 6. After the last stage is met with nothing left to push, kebbie closes the task. `kebbie stages email` shows every stage as `met`.
 
+- If a stage is met while some of its commits are still unpushed, it is open again: its other commits go out on their own push, before any later stage's, and its requirement is asked again.
 - If you answer Not yet, the stage waits and the question stays.
 - If you answer Something is wrong, the stage fails with what you wrote, every later stage stays locked, and the task fixes it in a subtask of that stage; its push asks you again.
 - If CI fails on a stage's push or its check does not hold, the stage fails the same way, and the task gets what failed.

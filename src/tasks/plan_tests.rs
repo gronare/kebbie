@@ -368,6 +368,11 @@ fn a_task_writes_only_its_own_subtasks_and_the_lead_and_the_user_write_any() {
     let refused = write_as(&Caller::Task("search@app".to_string()), &state, &task, &titles(&["Model"]), None).unwrap_err();
     assert!(refused.contains("writes its own subtasks"), "{refused}");
     assert_eq!(load(&state, "billing@app"), None);
+    for caller in [Caller::Agent, Caller::Sandboxed, Caller::LeadSandboxed, Caller::hub("acc_01")] {
+        let refused = write_as(&caller, &state, &task, &titles(&["Model"]), Some("because")).unwrap_err();
+        assert!(refused.contains("changes no task's plan"), "{caller:?}: {refused}");
+    }
+    assert_eq!(load(&state, "billing@app"), None, "none of them is recorded as kebbie or the lead");
     for caller in [Caller::Task("billing@app".to_string()), Caller::Lead, Caller::User] {
         write_as(&caller, &state, &task, &titles(&["Model"]), None).unwrap();
     }
@@ -388,4 +393,42 @@ fn the_shown_subtasks_mark_each_state_with_its_commits_and_what_is_pushable() {
     assert_eq!((value["pushed"].as_u64(), value["last_accepted"].as_str(), value["subtasks"][0]["id"].as_str(), value["subtasks"][0]["state"].as_str(), value["subtasks"][1]["state"].as_str(), value["subtasks"][2]["state"].as_str()), (Some(1), Some("abc"), Some("command"), Some("accepted"), Some("in-progress"), Some("planned")));
     assert_eq!(value["subtasks"][0]["commits"], json!([{ "sha": "abcdef0123", "subject": "Add the command", "accepted": true }, { "sha": "1234567890", "subject": "Wire the command", "accepted": true }]));
     assert_eq!((value["pushable"]["through"].as_str(), value["order"][2]["subtask"].as_str()), (Some("1234567890"), Some("docs")));
+}
+
+#[test]
+fn a_rebase_stopped_on_a_conflict_leaves_each_subtask_its_commits_and_ready_marks() {
+    let (dir, origin, slot, upstream, state, address) = hooked_task();
+    done_at(&state, &slot.path, &upstream, &address).unwrap();
+    commit(&slot.path, "e", "fifth");
+    assert!(noted_after(&state, &address, &bash_in(&slot.path, "git commit -m fifth")));
+    done_at(&state, &slot.path, &upstream, &address).unwrap();
+    let held = |subtasks: &Subtasks| subtasks.items.iter().map(|item| (item.id.clone(), item.commits.iter().map(|commit| commit.subject.clone()).collect::<Vec<_>>(), item.state.clone())).collect::<Vec<_>>();
+    let before = held(&read_now(&state, &slot.path, &upstream, &address));
+    upstream_commit(&dir, "d", "main changed the model's file", "main touches d");
+    assert!(git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "rebase", "--quiet", &upstream]).is_err(), "the rebase stops on its conflict");
+    assert!(!noted_after(&state, &address, &bash_in(&slot.path, "git rebase origin/main")), "nothing is noted from a half-replayed branch");
+    listed_at(&state, &slot.path, &upstream, &address);
+    std::fs::write(slot.path.join("d"), "resolved").unwrap();
+    git(&slot.path, &["add", "d"]).unwrap();
+    git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "-c", "core.editor=true", "rebase", "--continue"]).unwrap();
+    noted_after(&state, &address, &bash_in(&slot.path, "git rebase --continue"));
+    let after = held(&read_now(&state, &slot.path, &upstream, &address));
+    cleanup(dir, origin, &slot);
+    assert_eq!(after, before, "the subtasks hold what they held before the rebase");
+}
+
+#[test]
+fn a_met_stage_with_commits_left_shows_open_and_its_rest_goes_out_before_the_next_stage() {
+    use kebbie_hub_protocol::{RequirementKind, StageState};
+    let mut listed = plan(vec![part("a", "Backfill a", true), part("b", "Backfill b", true), part("c", "Drop column", true)], [seen("a", &["code of aaa"]), seen("b", &["code of bbb"]), seen("c", &["code of ccc"])].concat());
+    listed.stages = vec![
+        StagePlan { id: "fill".to_string(), title: "Backfill".to_string(), kind: RequirementKind::Verified, detail: Some("rows".to_string()), subtasks: vec!["a".to_string(), "b".to_string()], through: Some("f".repeat(40)), pushed_at: Some(1), kept: Some(StageState::Met), met_at: Some(2), note: None },
+        StagePlan { id: "cut".to_string(), title: "Drop".to_string(), kind: RequirementKind::Deploy, detail: None, subtasks: vec!["c".to_string()], through: None, pushed_at: None, kept: None, met_at: None, note: None },
+    ];
+    let open = [commit_of("bbb", "b", true), commit_of("ccc", "c", true)];
+    let (subtasks, _) = derive(Some(&listed), &["code of aaa".to_string()], &open, false);
+    assert_eq!(subtasks.stages.iter().map(|stage| (stage.id.as_str(), stage.state)).collect::<Vec<_>>(), [("fill", StageState::Open), ("cut", StageState::Locked)]);
+    assert_eq!(subtasks.pushable.map(|run| (run.count, run.through)), Some((1, "bbb".to_string())), "the rest of Backfill goes out alone, and Drop waits for it to be met again");
+    let (done, _) = derive(Some(&listed), &["code of aaa".to_string(), "code of bbb".to_string()], &open[1..], false);
+    assert_eq!(done.stages[0].state, StageState::Met, "a met stage with nothing left stays met");
 }
