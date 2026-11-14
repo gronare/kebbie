@@ -57,7 +57,14 @@ pub enum About {
     Prompt { address: String, said: String },
     ItemQuestions { item: ItemKey, title: String, first: String, count: usize },
     NewDevice { device: Id, name: String, added: String, from_devices: bool },
-    Ready { address: String, does: String, commits: usize, review: Option<String> },
+    Ready {
+        address: String,
+        does: String,
+        commits: usize,
+        review: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to_review: Option<usize>,
+    },
     CiFailed { address: String, what: String, done: Option<String> },
     Started { item: ItemKey, title: String, address: String, recipe: Option<String> },
     StartFailed { item: ItemKey, title: String, error: String },
@@ -159,8 +166,13 @@ impl About {
                 let more = if *from_devices { " Or tap to approve it from this device." } else { "" };
                 format!("Added {added}. Approve or deny it in kebbie: N on the board.{more}")
             }
-            About::Ready { does, commits, review, .. } => {
-                let commits = if *commits == 1 { "1 commit".to_string() } else { format!("{commits} commits") };
+            About::Ready { does, commits, review, to_review, .. } => {
+                let commits = match to_review {
+                    Some(1) => "1 subtask to review".to_string(),
+                    Some(many) if *many > 1 => format!("{many} subtasks to review"),
+                    _ if *commits == 1 => "1 commit".to_string(),
+                    _ => format!("{commits} commits"),
+                };
                 match review {
                     Some(review) => format!("{} {commits}, {}", sentence(does), sentence(review)),
                     None => format!("{} {commits}.", sentence(does)),
@@ -634,9 +646,13 @@ mod tests {
         let new = About::NewDevice { device: device.clone(), name: "iPhone 16".to_string(), added: "14:02".to_string(), from_devices: false };
         assert_eq!(texts(&new), ("iPhone 16 wants to make changes on MacBook".to_string(), "Added 14:02. Approve or deny it in kebbie: N on the board.".to_string()));
         assert_eq!(texts(&About::NewDevice { device: device.clone(), name: "iPhone 16".to_string(), added: "14:02".to_string(), from_devices: true }).1, "Added 14:02. Approve or deny it in kebbie: N on the board. Or tap to approve it from this device.");
-        let ready = About::Ready { address: "cache@api".to_string(), does: "Caches the price lookup for an hour".to_string(), commits: 3, review: Some("no review: two lines in one file".to_string()) };
+        let ready = About::Ready { address: "cache@api".to_string(), does: "Caches the price lookup for an hour".to_string(), commits: 3, review: Some("no review: two lines in one file".to_string()), to_review: None };
         assert_eq!(texts(&ready), ("cache · api is ready to push".to_string(), "Caches the price lookup for an hour. 3 commits, no review: two lines in one file.".to_string()));
-        assert_eq!(texts(&About::Ready { address: "cache@api".to_string(), does: "Caches the price lookup for an hour".to_string(), commits: 1, review: None }).1, "Caches the price lookup for an hour. 1 commit.");
+        assert_eq!(texts(&About::Ready { address: "cache@api".to_string(), does: "Caches the price lookup for an hour".to_string(), commits: 1, review: None, to_review: None }).1, "Caches the price lookup for an hour. 1 commit.");
+        let subtasks = |to_review: usize| About::Ready { address: "cache@api".to_string(), does: "Caches the price lookup".to_string(), commits: 7, review: None, to_review: Some(to_review) };
+        assert_eq!(texts(&subtasks(3)).1, "Caches the price lookup. 3 subtasks to review.", "a task in subtasks says how many wait for review once, however many commits they hold");
+        assert_eq!(texts(&subtasks(1)).1, "Caches the price lookup. 1 subtask to review.");
+        assert_eq!(texts(&subtasks(0)).1, "Caches the price lookup. 7 commits.", "with none left to review it counts commits");
         let red = About::CiFailed { address: "web@app".to_string(), what: "ci · e2e · Run playwright".to_string(), done: Some("kebbie sent the task the failing log; it stays under Needs you".to_string()) };
         assert_eq!(texts(&red), ("CI failed on web · app".to_string(), "ci · e2e · Run playwright. kebbie sent the task the failing log; it stays under Needs you.".to_string()));
         let started = About::Started { item: item("Projects/retry.md"), title: "Retry flaky red runs".to_string(), address: "retry@web".to_string(), recipe: Some("feature".to_string()) };
@@ -776,7 +792,7 @@ mod tests {
         assert_eq!(sent[0].header.urgency, Some(Urgency::High));
         assert_eq!(sent[0].header.check_shape(), Ok(()));
         assert_eq!(machine.opened(&approved, &sent)[0].body, "Which queue?");
-        let ready = machine.deliver(&listing, &About::Ready { address: "cache@api".to_string(), does: "Caches it".to_string(), commits: 2, review: None }, None);
+        let ready = machine.deliver(&listing, &About::Ready { address: "cache@api".to_string(), does: "Caches it".to_string(), commits: 2, review: None, to_review: None }, None);
         let mut reached: Vec<&Id> = ready[0].keys.keys().collect();
         reached.sort();
         let mut expected = vec![&approved.cert.device, &quiet.cert.device];
@@ -904,7 +920,7 @@ mod tests {
         browser.knows(&identity.machine, identity.public());
         assert_eq!(browser.open_notice(&envelope, crate::messages::now()).unwrap().title, "checkout · shop", "the listed device opens it");
         assert!(matches!(post_to(&identity, &envelope), Err(Unposted::Dropped(problem)) if problem.contains("409")), "a replayed envelope is refused and dropped");
-        let ready = deliver_in(&dir, &identity, &account, &About::Ready { address: "cache@api".to_string(), does: "Caches it".to_string(), commits: 1, review: None }, None, account_trust, &wire, crate::messages::now()).unwrap();
+        let ready = deliver_in(&dir, &identity, &account, &About::Ready { address: "cache@api".to_string(), does: "Caches it".to_string(), commits: 1, review: None, to_review: None }, None, account_trust, &wire, crate::messages::now()).unwrap();
         assert_eq!(ready, Delivered::default(), "a category the device left off sends nothing");
     }
 

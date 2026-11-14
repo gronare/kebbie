@@ -97,6 +97,17 @@ fn a_released_worktree_loses_its_target_by_default_and_a_repo_names_its_own_fold
 }
 
 #[test]
+fn tests_per_commit_is_on_by_default_and_a_repo_can_turn_it_off() {
+    assert_eq!(settings(&Worktree::default(), &Machine::default()).tests_per_commit, Setting { value: true, layer: Layer::Default });
+    let off = settings(&repo("[tests]\nper_commit = false\n"), &machine("[tests]\nper_commit = true\n"));
+    assert_eq!(off.tests_per_commit, Setting { value: false, layer: Layer::Repo });
+    assert!(parse_machine("[tests]\nper_commit = 1\n", "config.toml").unwrap_err().contains("tests.per_commit: must be true or false"));
+    assert!(unknown_repo("[tests]\neach = true\n").contains("tests.each: unknown key; known keys here: per_commit"));
+    let shown = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: off });
+    assert!(shown.contains("tests.per_commit = false  (repo config)"), "{shown}");
+}
+
+#[test]
 fn ci_watch_is_on_by_default_and_a_repo_can_turn_it_off() {
     assert_eq!(settings(&Worktree::default(), &Machine::default()).ci_watch, Setting { value: true, layer: Layer::Default });
     assert_eq!(settings(&Worktree::default(), &machine("[ci]\nwatch = false\n")).ci_watch, Setting { value: false, layer: Layer::Machine });
@@ -284,7 +295,7 @@ fn a_symlinked_repo_config_loads_and_shows_its_target() {
 #[test]
 fn unknown_keys_are_named_with_the_file_and_ignored_while_bad_values_still_fail() {
     let warned = |text: &str| unknown_in_file(text, "/home/u/.config/kebbie/config.toml", &MACHINE_KEYS);
-    let all = "board, worktree, task, review, investigate, notify, vault, update, restart, keeper, recover, machine, hub, keys, ci, comments, routines, report, issues";
+    let all = "board, worktree, task, review, investigate, notify, vault, update, restart, keeper, recover, machine, hub, keys, ci, tests, comments, routines, report, issues";
     assert_eq!(warned("colour = 1
 "), [format!("/home/u/.config/kebbie/config.toml: colour: unknown key; known keys here: {all}")]);
     assert_eq!(warned("[backlog]\nsources = []\n"), [format!("/home/u/.config/kebbie/config.toml: backlog: unknown key; known keys here: {all}")]);
@@ -303,7 +314,7 @@ fn unknown_keys_are_named_with_the_file_and_ignored_while_bad_values_still_fail(
     assert!(repo_error("[board.backlog]\nsources = []\n").starts_with("/home/u/.config/kebbie/repos/app.toml: board: applies to every repo, so it lives in config.toml; set [board] groups and [board.backlog] sources and ongoing in "));
     assert!(repo_error("colour = 1\n[ci]\nwatch = \"yes\"\n").contains("ci.watch: must be true or false"), "a known key with the wrong type still fails in a repo config");
     let repo_warned = |text: &str| unknown_in_file(text, "/home/u/.config/kebbie/repos/app.toml", &REPO_KEYS);
-    assert_eq!(repo_warned("colour = 1\n"), ["/home/u/.config/kebbie/repos/app.toml: colour: unknown key; known keys here: actions, worktree, task, review, investigate, ci, comments, docs, routines"]);
+    assert_eq!(repo_warned("colour = 1\n"), ["/home/u/.config/kebbie/repos/app.toml: colour: unknown key; known keys here: actions, worktree, task, review, investigate, ci, tests, comments, docs, routines"]);
     assert_eq!(repo_warned("[worktree]\nport = 3000\n"), ["/home/u/.config/kebbie/repos/app.toml: worktree.port: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, server_name, worker_name, clean_on_release"]);
     assert_eq!(repo("colour = 1\n[lint]\nstrict = true\n[worktree]\nport = 3000\ndev_server = \"bin/dev\"\n").dev_server, Some("bin/dev".to_string()), "a repo config reads its known keys past unknown ones");
 }
@@ -678,7 +689,7 @@ fn sample(entry: &Entry) -> String {
 fn each_keys_scope_is_the_files_that_take_it_and_what_its_text_says() {
     let loaded = Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
     let all = entries(&loaded);
-    assert_eq!(all.len(), 49);
+    assert_eq!(all.len(), 50);
     for entry in all {
         let (section, field) = entry.key.rsplit_once('.').unwrap();
         let text = format!("[{section}]\n{field} = {}\n", sample(&entry));

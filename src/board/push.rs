@@ -27,6 +27,7 @@ pub(crate) struct Marks {
     numbers: Vec<Option<usize>>,
     titles: Vec<Option<String>>,
     stays: Vec<tasks::Subtask>,
+    rows: Vec<Option<tasks::Placed>>,
     through: Option<usize>,
     run: bool,
     working: bool,
@@ -40,6 +41,7 @@ impl Marks {
             numbers: commits.iter().map(|commit| subtask(commit).map(|subtask| subtask.number)).collect(),
             titles: commits.iter().map(|commit| subtask(commit).map(|subtask| subtask.title.clone())).collect(),
             stays: subtasks.items.iter().filter(|subtask| subtask.commits.is_empty()).cloned().collect(),
+            rows: commits.iter().map(|commit| subtasks.order.iter().find(|row| row.sha == commit.sha).cloned()).collect(),
             through: last.and_then(|last| commits.iter().position(|commit| commit.sha == last)),
             run: subtasks.listed(),
             accepted,
@@ -119,6 +121,46 @@ impl Marks {
         Span::styled(format!("{shown:>width$} ", width = self.number_width()), style(MUTED))
     }
 
+    fn row(&self, index: usize) -> Option<&tasks::Placed> {
+        self.rows.get(index).and_then(Option::as_ref)
+    }
+
+    // A group's bracket down the left of its commits: ┌ on the first, │ between, └ on the last.
+    fn bracket(&self, index: usize) -> Option<&'static str> {
+        let group = self.row(index)?.group.as_deref()?;
+        let same = |at: usize| self.row(at).and_then(|row| row.group.as_deref()) == Some(group);
+        let above = index > 0 && same(index - 1);
+        let below = same(index + 1);
+        Some(match (above, below) {
+            (false, true) => "┌",
+            (true, true) => "│",
+            (true, false) => "└",
+            (false, false) => "[",
+        })
+    }
+
+    fn grouped(&self) -> bool {
+        self.rows.iter().flatten().any(|row| row.group.is_some())
+    }
+
+    // What follows a commit's subject: its own test run and, for one kebbie moved, where it came from.
+    fn tail(&self, index: usize) -> Vec<Span<'static>> {
+        let Some(row) = self.row(index) else { return Vec::new() };
+        let mut spans = Vec::new();
+        if let Some(tests) = &row.tests {
+            spans.push(match tests.state {
+                kebbie_hub_protocol::TestsState::Passed => Span::styled("  tests ✓", style(GREEN)),
+                kebbie_hub_protocol::TestsState::Failed => Span::styled("  tests ✗", style(YELLOW)),
+                kebbie_hub_protocol::TestsState::Running => Span::styled("  testing…", style(MUTED)),
+                kebbie_hub_protocol::TestsState::NotRun => Span::styled("  not tested", style(MUTED)),
+            });
+        }
+        if let Some(moved) = &row.moved {
+            spans.push(Span::styled(format!("  ↑ moved from {}", moved.from), style(MUTED)));
+        }
+        spans
+    }
+
     fn title(&self, index: usize) -> Option<&str> {
         self.titles.get(index).and_then(Option::as_deref).filter(|_| self.opens_step(index))
     }
@@ -135,16 +177,21 @@ fn commit_line(commit: &tasks::Commit, index: usize, active: bool, marks: &Marks
     if marks.stepped() {
         spans.push(marks.number(marks.step_of(index).filter(|_| marks.opens_step(index))));
     }
+    if marks.grouped() {
+        spans.push(Span::styled(format!("{} ", marks.bracket(index).unwrap_or(" ")), style(MAUVE)));
+    }
     spans.extend([Span::styled(commit.sha.chars().take(7).collect::<String>(), style(MUTED)), Span::raw(" ")]);
     let through = marks.through == Some(index);
     let owner = marks.title(index).map(|title| format!("  · {title}"));
-    let tail = if through { text_width(THROUGH) } else { 0 } + owner.as_deref().map_or(0, |owner| text_width(owner).min(24));
+    let extra = marks.tail(index);
+    let tail = if through { text_width(THROUGH) } else { 0 } + owner.as_deref().map_or(0, |owner| text_width(owner).min(24)) + extra.iter().map(Span::width).sum::<usize>();
     let used: usize = spans.iter().map(Span::width).sum::<usize>() + tail;
-    let subject = if through || owner.is_some() { cut(&subject, width.saturating_sub(used)) } else { subject };
+    let subject = if tail > 0 { cut(&subject, width.saturating_sub(used)) } else { subject };
     spans.push(Span::styled(subject, if active { bold(MAUVE) } else { style(TEXT) }));
     if let Some(owner) = owner {
         spans.push(Span::styled(cut(&owner, 24), style(MUTED)));
     }
+    spans.extend(extra);
     if through {
         spans.push(Span::styled(THROUGH, style(GREEN)));
     }
@@ -388,6 +435,22 @@ mod tests {
         assert_eq!(lines.len(), 7, "the body ends with the message; the keys are drawn apart");
         assert_eq!(push_keys(1, 0, None, false, false, false).to_string(), "Push?  y push and close · p push and keep it open · e edit message · esc cancel");
         assert!(push_keys(3, 1, Some(1), false, false, true).to_string().contains("p push the accepted run, 2 commits and keep it open"), "with subtasks p pushes the run");
+    }
+
+    #[test]
+    fn a_group_is_bracketed_and_a_commit_carries_its_tests_and_where_it_was_moved_from() {
+        let text = |lines: &[Line]| lines.iter().map(|line| line.spans.iter().map(|span| span.content.to_string()).collect::<String>()).collect::<Vec<_>>();
+        let commits: Vec<tasks::Commit> = ["1", "2", "3"].iter().map(|sha| tasks::Commit { sha: sha.repeat(40), message: format!("Commit {sha}") }).collect();
+        let row = |sha: &str, group: Option<&str>| tasks::Placed { sha: sha.repeat(40), subject: format!("Commit {sha}"), subtask: "model".to_string(), group: group.map(str::to_string), ..tasks::Placed::default() };
+        let mut subtasks = tasks::Subtasks { order: vec![row("1", Some("g1")), row("2", Some("g1")), row("3", None)], ..Default::default() };
+        subtasks.order[0].tests = Some(kebbie_hub_protocol::CommitTests { state: kebbie_hub_protocol::TestsState::Passed, at: Some(1) });
+        subtasks.order[2].moved = Some(kebbie_hub_protocol::Moved { from: 1, reason: "first".to_string() });
+        let marks = Marks::of(&commits, vec![false; 3], &subtasks, None);
+        let (lines, first) = push_lines(None, None, &commits, &marks, 2, 80);
+        let rows = text(&lines[first..first + 3]);
+        assert!(rows[0].contains("┌ 1111111 Commit 1") && rows[0].ends_with("tests ✓"), "{rows:?}");
+        assert!(rows[1].contains("└ 2222222 Commit 2"), "{rows:?}");
+        assert!(rows[2].contains("  3333333 Commit 3") && rows[2].ends_with("↑ moved from 1"), "{rows:?}");
     }
 
     fn pushing(app: &mut crate::board::App, commits: usize, card_lines: usize) {

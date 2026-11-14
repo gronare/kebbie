@@ -17,7 +17,14 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A sign-off card has three parts, Built, Decisions with who took each, and Also noticed, and asks you nothing to confirm.
 - A task lists its work as titled subtasks with kebbie subtasks, and adds one later only with its reason, which you see beside it.
 - A task sends its commits to a subtask with kebbie subtasks on and marks it ready with kebbie subtasks done.
-- p in the push window pushes the accepted run, the commits from the top whose subtasks you accepted, and keeps the task open.
+- p in the push window pushes the accepted run, the commits from the top you accepted, and keeps the task open.
+- A subtask that gains a commit after you accepted it keeps its accepted commits pushable.
+- kebbie order move puts a commit elsewhere in the push order, keeping its subtask and acceptance.
+- kebbie order group binds commits that go out together, and the push window brackets them.
+- The keeper tests each unpushed commit on its own once a task reports ready, and the push order marks the result.
+- kebbie status --json gives each task's subtasks, push order, pushable run and obstacle.
+- Your phone's ready notice says how many subtasks wait for your review.
+- kebbie stage is now kebbie try, and kebbie try --off takes a task off local main.
 - A plan from an older kebbie keeps its steps as subtasks with their numbers as ids, and kebbie steps still works.
 - The board shows the rules check on its own line under a task: checking, the project rules it breaks by name, or that you or the lead pushed past it; a passed check shows nothing.
 - Your phone shows a task's subtasks, its push order and pushable run, and its latest obstacle with the decision; update the hub first.

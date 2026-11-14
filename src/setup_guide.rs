@@ -1867,7 +1867,7 @@ mod tests {
         ], "every write is a row of the plan, each tool's under its name, herdr's keys among them");
         let shown = screen(&guide);
         assert!(shown.contains("│ kebbie") && shown.contains("│ Claude Code") && shown.contains("│ Codex") && shown.contains("│ herdr"), "the rows are grouped by the tool they write: {shown}");
-        assert!(shown.contains(&format!("runs: writes {codex}/rules/kebbie.rules, 39 lines")) && shown.contains("⏎ apply all · ← back · esc quit without writing"), "{shown}");
+        assert!(shown.contains(&format!("runs: writes {codex}/rules/kebbie.rules, 42 lines")) && shown.contains("⏎ apply all · ← back · esc quit without writing"), "{shown}");
         assert_eq!((lab.config(), lab.herdr(), lab.calls()), (String::new(), String::new(), String::new()), "nothing is written or run before ⏎ on the last step");
         assert!(!lab.dir.join("codex").exists() && !lab.machine.home.join(".local/bin/kebbie").exists() && !lab.machine.claude_dir.join("settings.json").exists());
         assert!(matches!(guide.key(KeyEvent::from(KeyCode::Esc)), Next::Quit));

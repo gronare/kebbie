@@ -133,7 +133,7 @@ impl Act {
             Act::Follow => "follow",
             Act::Tidy => "tidy",
             Act::Push => "push",
-            Act::Stage => "stage",
+            Act::Stage => "try",
             Act::Done => "done",
             Act::DismissCi => "dismiss_ci",
             Act::RerunCi => "rerun_ci",
@@ -314,6 +314,7 @@ impl Keys {
         let mut errors = Vec::new();
         let mut wanted: Vec<(Act, char)> = Vec::new();
         for (name, value) in entries.iter().filter(|(name, _)| !RETIRED.contains(&name.as_str())) {
+            let name = if name == "stage" { "try" } else { name.as_str() };
             let Some(act) = Act::EVERY.into_iter().find(|act| act.id() == name) else {
                 errors.push(format!("keys.{name}: not an action; the actions are {}", Act::EVERY.iter().filter(|act| act.remappable()).map(|act| act.id()).collect::<Vec<_>>().join(", ")));
                 continue;
@@ -452,6 +453,14 @@ mod tests {
 
     fn entries(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         pairs.iter().map(|(name, value)| (name.to_string(), value.to_string())).collect()
+    }
+
+    #[test]
+    fn the_try_action_reads_its_older_name_stage_too() {
+        let (keys, errors) = Keys::with(&entries(&[("stage", "J")]));
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(keys.codes(Act::Stage), vec![KeyCode::Char('J')]);
+        assert_eq!(Act::Stage.id(), "try");
     }
 
     #[test]

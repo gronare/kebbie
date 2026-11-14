@@ -70,11 +70,11 @@ fn fingerprint_now(path: &Path, upstream: &str, rev: &str) -> Result<String> {
     Ok(commits.join("\n"))
 }
 
-// An approval covers the branch while its commits are the ones the lead checked, less the first few the default branch took in; a commit dropped from the middle or the end changes what goes out.
+// An approval covers what goes out while each of its commits, its message and its change, is one the lead checked, in any order, so a move in the push order or a push of the first commits keeps it and a changed line does not.
 pub(super) fn covers(approved: &str, current: &str) -> bool {
-    let approved: Vec<&str> = approved.lines().map(str::trim).collect();
-    let current: Vec<&str> = current.lines().map(str::trim).collect();
-    !current.is_empty() && approved.ends_with(&current)
+    let mut approved: Vec<&str> = approved.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+    let current: Vec<&str> = current.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+    !current.is_empty() && current.iter().all(|line| approved.iter().position(|one| one == line).map(|at| approved.remove(at)).is_some())
 }
 
 // FNV-1a: stable across Rust versions, unlike DefaultHasher, so an approval survives a kebbie upgrade.
@@ -344,7 +344,8 @@ mod tests {
         commit(&slot.path, "f", "sixth");
         assert!(!approval_holds(&state, "billing@app", &fingerprint(&slot.path, &upstream).unwrap()), "a commit the lead never saw takes the approval back");
         assert!(covers("a\nb\nc", "b\nc") && covers("a\nb\nc", "a\nb\nc"), "the default branch took in the first ones");
-        assert!(!covers("a\nb\nc", "a\nc") && !covers("a\nb\nc", "a\nb") && !covers("a\nb\nc", "c\nb"), "a commit dropped from the middle or the end, or the order changed, is not what the lead checked");
+        assert!(covers("a\nb\nc", "c\na\nb") && covers("a\nb\nc", "a\nb"), "a move in the push order, or a push of the first commits, goes out with checked commits only");
+        assert!(!covers("a\nb\nc", "a\nd") && !covers("a\nb", "a\na") && !covers("a\nb", ""), "a commit the lead never saw, a second copy of one or nothing is not covered");
         std::fs::remove_dir_all(state).unwrap();
         cleanup(dir, origin, &slot);
     }

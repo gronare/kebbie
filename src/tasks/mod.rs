@@ -8,6 +8,7 @@ mod intent;
 mod landed;
 mod launch;
 mod line;
+mod order;
 mod park;
 mod plan;
 mod pool;
@@ -35,10 +36,11 @@ pub(crate) use park::{all as parked_all, Parked, UNPARKED, load as park_of, morn
 pub(crate) use landed::{EVERY as LANDED_EVERY, passed_after_cancel, Unsure as LandedUnsure, mark as landed_mark, tick as landed_tick, tick_cli as landed_tick_cli};
 pub(crate) use red_ci::{dismiss as dismiss_ci, dismissed as ci_dismissed, outside as ci_outside, outside_reason as ci_outside_reason};
 pub(crate) use launch::{Begun, Session, Start, awaits_first_prompt, begin, codex_restart_refusal, codex_resume_args, bypasses, latest_transcript, mark_awaits_prompt, new_session_id, on_profile, own_start_mode, plan_dir, profile_of, cluster_at, record_session, recorded_agent, recorded_session_id, start, task_at, task_role, task_role_now, transcript};
-pub(crate) use plan::{Asked as SubtasksAsked, add_preparatory, noted_after as subtasks_noted_after, seen_in as subtasks_seen_in, subtasks};
+pub(crate) use plan::{Asked as SubtasksAsked, add_preparatory, investigator_added, noted_after as subtasks_noted_after, seen_in as subtasks_seen_in, subtasks};
 #[cfg(test)]
-pub(crate) use plan::{Added as SubtaskAdded, Commit as SubtaskCommit, ordered};
-pub(crate) use plan::{Subtask, Subtasks, State as SubtaskState, Tips as SubtaskTips, read_at as subtasks_read, shown_at as subtasks_shown_at, for_path as subtasks_for, mark as subtask_mark, word as subtask_word};
+pub(crate) use plan::{run_of, Added as SubtaskAdded, Commit as SubtaskCommit, ordered};
+pub(crate) use plan::{Placed, Subtask, Subtasks, State as SubtaskState, order_json, pushable_json, subtasks_json, tests_word, Tips as SubtaskTips, read_at as subtasks_read, shown_at as subtasks_shown_at, for_path as subtasks_for, mark as subtask_mark, word as subtask_word};
+pub(crate) use order::{Asked as OrderAsked, command as order};
 pub(crate) use pool::{Slot, find_task, list, move_work, slots, task_of, task_slots};
 pub(crate) use push::{DevicePush, after_ci, cancel as cancel_push, land, place_in_line, push, push_as, rebase, tidy};
 pub(crate) use stage::{WAIT_CEILING as STAGE_WAIT, stage, staged, tick as stage_tick, unstage};
@@ -48,6 +50,11 @@ use std::path::Path;
 
 use crate::repo::{git, git_writing, name_of};
 use crate::sh::Result;
+
+// The task's commits not yet on the default branch, oldest first, by sha.
+pub(crate) fn open_commits_of(path: &Path, upstream: &str) -> Result<Vec<String>> {
+    Ok(accept::open_commits(path, upstream)?.into_iter().map(|open| open.sha).collect())
+}
 
 // Task names are ASCII for git and herdr, so a letter with a diacritic becomes its base letter instead of a gap.
 pub fn ascii_fold(text: &str) -> String {

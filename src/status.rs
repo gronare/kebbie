@@ -700,6 +700,9 @@ impl Item {
         shown["assessment"] = json!(self.assessment.as_ref().map(crate::assessment::Word::text));
         shown["second_opinion"] = json!(self.second.as_ref().map(crate::review::SecondShown::to_json));
         shown["recipe"] = self.recipe.as_ref().map_or(Value::Null, crate::recipe::Recipe::to_json);
+        shown["subtasks"] = if self.subtasks.listed() { tasks::subtasks_json(&self.subtasks) } else { Value::Null };
+        shown["order"] = if self.subtasks.listed() { tasks::order_json(&self.subtasks) } else { Value::Null };
+        shown["pushable"] = tasks::pushable_json(&self.subtasks);
         shown["obstacle"] = self.obstacle.as_ref().map_or(Value::Null, |obstacle| json!({ "id": obstacle.id, "state": obstacle.state.word(), "text": obstacle.text }));
         shown["parked_until"] = self.parked.map_or(Value::Null, |parked| parked.until.map_or(json!(tasks::UNPARKED), |at| json!(at)));
         shown
@@ -796,9 +799,9 @@ pub fn named(state: &Path, id: &str) -> String {
     }
 }
 
-const COMMAND_WORDS: [&str; 34] = [
-    "tell", "choose", "approve", "push", "land", "review", "follow", "done", "drop", "ci", "dismiss", "outside", "restart", "after", "stage", "unstage",
-    "accept", "accepted", "steps", "subtasks", "report", "ask", "evidence", "move", "reset", "rebase", "tidy", "start", "decide", "defer", "answered", "hold", "retry", "reopen",
+const COMMAND_WORDS: [&str; 36] = [
+    "tell", "choose", "approve", "push", "land", "review", "follow", "done", "drop", "ci", "dismiss", "outside", "restart", "after", "try", "stage", "unstage",
+    "accept", "accepted", "steps", "subtasks", "order", "report", "ask", "evidence", "move", "reset", "rebase", "tidy", "start", "decide", "defer", "answered", "hold", "retry", "reopen",
 ];
 
 // An address right after `kebbie <subcommand>` is the command's argument, which a title in front of it would break.

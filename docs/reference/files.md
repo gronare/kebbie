@@ -95,7 +95,8 @@ The folder is `0700` and its files `0600`. Each file is replaced whole on write.
 | `comments/repos/` | Per GitHub repo, `<owner>~<repo>.json`: the page of its commit comments kebbie reads on from, when it last asked, and gh's last error. |
 | `comments/read/` | The reading under way, per comment: its pid, its Claude's pid, the keeper's record and its log, kept when a reading gave no answer. |
 | `comments/owner.json` | Per GitHub host, the login `gh` is signed in as, asked once a day, whose comments are skipped. |
-| `staged/` | Per repo, `<repo>.json`: the tasks [`kebbie stage`](commands.md#kebbie-stage-name) put on local main, in the order they went on. |
+| `commit-tests/` | Per task, `<task>@<repo>.json`: each unpushed commit's own test result by its sha; `.wanted`, `.running`, `.run` and `.log` the run under way, and `.tree` the throwaway worktree it runs in. |
+| `staged/` | Per repo, `<repo>.json`: the tasks [`kebbie try`](commands.md#kebbie-try-name) put on local main, in the order they went on. |
 
 A `ci/` file holds the pushed sha, the GitHub repo, the runs as last seen, when it started and was last checked, and whether it failed.
 

@@ -224,7 +224,7 @@ mod tests {
     fn the_skill_and_both_roles_send_questions_about_kebbie_to_its_docs() {
         let skill = include_str!("../skills/using-kebbie/SKILL.md");
         let description = skill.lines().find_map(|line| line.strip_prefix("description: ")).unwrap();
-        for trigger in ["set up", "command", "config key", "board key", "tasks", "the lead", "push line", "stage", "sandbox", "profiles", "Codex", "routines", "updates"] {
+        for trigger in ["set up", "command", "config key", "board key", "tasks", "the lead", "push line", "try", "sandbox", "profiles", "Codex", "routines", "updates"] {
             assert!(description.contains(trigger), "the skill's description triggers on {trigger}");
         }
         assert!(skill.contains("kebbie docs <words>") && skill.contains("kebbie help") && skill.contains("Done when the answer names the doc page"), "{skill}");

@@ -32,6 +32,7 @@ pub struct Worktree {
     pub server_name: Option<String>,
     pub worker_name: Option<String>,
     pub ci_watch: Option<bool>,
+    pub tests_per_commit: Option<bool>,
     pub comments_watch: Option<bool>,
     pub comments_days: Option<u64>,
     pub clean_on_release: Option<Vec<String>>,
@@ -66,6 +67,7 @@ fn worktree(table: &Table) -> Result<Worktree> {
         server_name: text(worktree, "server_name", "worktree.server_name")?,
         worker_name: text(worktree, "worker_name", "worktree.worker_name")?,
         ci_watch: None,
+        tests_per_commit: None,
         comments_watch: None,
         comments_days: None,
         clean_on_release: worktree.get("clean_on_release").map(clean_on_release).transpose()?,
@@ -158,6 +160,9 @@ fn with_vault(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
 fn with_ci(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     if let Some(ci) = subtable(table, "ci", "ci")? {
         worktree.ci_watch = flag(ci, "watch", "ci.watch")?;
+    }
+    if let Some(tests) = subtable(table, "tests", "tests")? {
+        worktree.tests_per_commit = flag(tests, "per_commit", "tests.per_commit")?;
     }
     Ok(worktree)
 }

@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use kebbie_hub_protocol::{CommitTests, Moved, OrderRow, TestsState, pushable_of};
 use serde_json::{Value, json};
 
 use crate::lead::state_dir;
@@ -17,6 +18,24 @@ pub struct Plan {
     pub parts: Vec<Part>,
     pub commits: Vec<Seen>,
     pub on: Option<String>,
+    pub groups: Vec<Bound>,
+    pub moved: Vec<MovedAt>,
+}
+
+// Commits that go out together, by their change, so a rebase or a move keeps them bound.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Bound {
+    pub id: String,
+    pub codes: Vec<String>,
+    pub reason: String,
+}
+
+// A commit kebbie moved in the push order: the place it had, counted from 1 at the top, and why.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MovedAt {
+    pub code: String,
+    pub from: u32,
+    pub reason: String,
 }
 
 // A subtask as the plan file holds it: done is the task's word that its work is finished.
@@ -84,15 +103,25 @@ impl Subtask {
     }
 }
 
-// One open commit in the push order, top first, with the subtask it belongs to.
-#[derive(Clone, Debug, PartialEq)]
+// One open commit in the push order, top first, with the subtask it belongs to, whether the user accepted it, the group it goes out with, where it was moved from, and its own test run.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Placed {
     pub sha: String,
     pub subject: String,
     pub subtask: String,
+    pub accepted: bool,
+    pub group: Option<String>,
+    pub moved: Option<Moved>,
+    pub tests: Option<CommitTests>,
 }
 
-// The longest run from the top of the push order whose every commit's subtask is accepted.
+impl Placed {
+    pub fn row(&self) -> OrderRow {
+        OrderRow { sha: self.sha.clone(), subject: self.subject.clone(), subtask: self.subtask.clone(), accepted: self.accepted, group: self.group.clone(), tests: self.tests.clone(), moved: self.moved.clone() }
+    }
+}
+
+// The longest run from the top of the push order whose every commit is accepted and that splits no group.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Run {
     pub count: usize,
@@ -165,7 +194,9 @@ pub fn load(state: &Path, address: &str) -> Option<Plan> {
     if let Some(parts) = value["subtasks"].as_array() {
         let parts = parts.iter().map(|part| Part { id: text(part, "id"), title: text(part, "title"), done: part["done"] == true, extra: part["extra"] == true, added: added_of(&part["added"]) }).filter(|part| !part.id.is_empty()).collect();
         let commits = value["commits"].as_array().map(|commits| commits.iter().map(|seen| Seen { sha: text(seen, "sha"), code: text(seen, "code"), subject: text(seen, "subject"), subtask: text(seen, "subtask") }).collect()).unwrap_or_default();
-        return Some(Plan { base, parts, commits, on: value["on"].as_str().map(str::to_string) });
+        let groups = value["groups"].as_array().map(|groups| groups.iter().map(|group| Bound { id: text(group, "id"), codes: group["codes"].as_array().map(|codes| codes.iter().filter_map(|code| code.as_str().map(str::to_string)).collect()).unwrap_or_default(), reason: text(group, "reason") }).filter(|group| !group.id.is_empty()).collect()).unwrap_or_default();
+        let moved = value["moved"].as_array().map(|moved| moved.iter().map(|one| MovedAt { code: text(one, "code"), from: one["from"].as_u64().unwrap_or(1) as u32, reason: text(one, "reason") }).filter(|one| !one.code.is_empty()).collect()).unwrap_or_default();
+        return Some(Plan { base, parts, commits, on: value["on"].as_str().map(str::to_string), groups, moved });
     }
     Some(migrated(&value, base))
 }
@@ -185,7 +216,7 @@ fn migrated(value: &Value, base: String) -> Plan {
         Part { id: (at + 1).to_string(), title, done, extra: at >= titles.len(), added: None }
     }).collect();
     let commits = held.iter().enumerate().flat_map(|(at, (seen, _))| seen.iter().map(move |(code, subject)| Seen { sha: String::new(), code: code.clone(), subject: subject.clone(), subtask: (at + 1).to_string() })).collect();
-    Plan { base, parts, commits, on: None }
+    Plan { base, parts, commits, ..Plan::default() }
 }
 
 fn save(state: &Path, address: &str, plan: &Plan) -> Result<()> {
@@ -200,7 +231,9 @@ fn save(state: &Path, address: &str, plan: &Plan) -> Result<()> {
         shown
     }).collect();
     let commits: Vec<Value> = plan.commits.iter().map(|seen| json!({ "sha": seen.sha, "code": seen.code, "subject": seen.subject, "subtask": seen.subtask })).collect();
-    crate::state::write(&file(state, address), json!({ "base": plan.base, "subtasks": parts, "commits": commits, "on": plan.on }).to_string())
+    let groups: Vec<Value> = plan.groups.iter().map(|group| json!({ "id": group.id, "codes": group.codes, "reason": group.reason })).collect();
+    let moved: Vec<Value> = plan.moved.iter().map(|one| json!({ "code": one.code, "from": one.from, "reason": one.reason })).collect();
+    crate::state::write(&file(state, address), json!({ "base": plan.base, "subtasks": parts, "commits": commits, "on": plan.on, "groups": groups, "moved": moved }).to_string())
 }
 
 pub fn forget(task: &str, repo: &Path) {
@@ -245,7 +278,7 @@ pub fn relisted(old: Option<&Plan>, now: Option<&Subtasks>, base: &str, titles: 
             let id = new_id(&title, &ids(&parts));
             parts.push(Part { id, title, ..Part::default() });
         }
-        return Ok(Plan { base: base.to_string(), parts, commits: Vec::new(), on: None });
+        return Ok(Plan { base: base.to_string(), parts, ..Plan::default() });
     };
     let pushed: Vec<&str> = now.map(|now| now.pushed.iter().map(|subtask| subtask.id.as_str()).collect()).unwrap_or_default();
     let holding: Vec<&str> = now.map(|now| now.items.iter().filter(|subtask| !subtask.commits.is_empty()).map(|subtask| subtask.id.as_str()).collect()).unwrap_or_default();
@@ -270,7 +303,7 @@ pub fn relisted(old: Option<&Plan>, now: Option<&Subtasks>, base: &str, titles: 
     }
     kept.extend(open.iter().filter(|part| !used.contains(&part.id.as_str()) && holding.contains(&part.id.as_str())).map(|part| Part { extra: true, ..(*part).clone() }));
     let on = old.on.clone().filter(|on| kept.iter().any(|part| part.id == *on));
-    Ok(Plan { base: old.base.clone(), parts: kept, commits: old.commits.clone(), on })
+    Ok(Plan { base: old.base.clone(), parts: kept, commits: old.commits.clone(), on, groups: old.groups.clone(), moved: old.moved.clone() })
 }
 
 // The subtask new commits go to: the one the task named, else the first not done; None when every one is done.
@@ -350,7 +383,18 @@ pub fn derive(plan: Option<&Plan>, landed: &[String], commits: &[Unpushed], work
         plan.on = None;
     }
     let now = current(&plan);
-    let order: Vec<Placed> = open.iter().zip(&owners).map(|(commit, subtask)| Placed { sha: commit.sha.clone(), subject: commit.subject.clone(), subtask: subtask.clone() }).collect();
+    let open_codes: Vec<&str> = open.iter().map(|commit| commit.code.as_str()).collect();
+    for group in plan.groups.iter_mut() {
+        group.codes.retain(|code| open_codes.contains(&code.as_str()));
+    }
+    plan.groups.retain(|group| group.codes.len() >= 2);
+    plan.moved.retain(|moved| open_codes.contains(&moved.code.as_str()));
+    let order: Vec<Placed> = open.iter().zip(&owners).map(|(commit, subtask)| Placed {
+        sha: commit.sha.clone(), subject: commit.subject.clone(), subtask: subtask.clone(), accepted: commit.accepted,
+        group: plan.groups.iter().find(|group| group.codes.contains(&commit.code)).map(|group| group.id.clone()),
+        moved: plan.moved.iter().find(|moved| moved.code == commit.code).map(|moved| Moved { from: moved.from, reason: moved.reason.clone() }),
+        tests: None,
+    }).collect();
     let mut all: Vec<Subtask> = plan.parts.iter().enumerate().map(|(at, part)| {
         let positions: Vec<usize> = owners.iter().enumerate().filter(|(_, owner)| **owner == part.id).map(|(at, _)| at).collect();
         let commits: Vec<Commit> = positions.iter().map(|at| Commit { sha: open[*at].sha.clone(), subject: open[*at].subject.clone(), accepted: open[*at].accepted }).collect();
@@ -367,17 +411,8 @@ pub fn derive(plan: Option<&Plan>, landed: &[String], commits: &[Unpushed], work
         let contiguous = positions.windows(2).all(|pair| pair[1] == pair[0] + 1);
         Subtask { id: part.id.clone(), number: at + 1, title: part.title.clone(), state, commits, pushed, extra: part.extra, added: part.added.clone(), contiguous, waits_for: None }
     }).collect();
-    let accepted = |id: &str, all: &[Subtask]| all.iter().any(|subtask| subtask.id == id && subtask.state == State::Accepted);
-    let count = order.iter().take_while(|row| accepted(&row.subtask, &all)).count();
-    let pushable = order[..count].last().map(|last| {
-        let mut subtasks: Vec<String> = Vec::new();
-        for row in &order[..count] {
-            if !subtasks.contains(&row.subtask) {
-                subtasks.push(row.subtask.clone());
-            }
-        }
-        Run { count, through: last.sha.clone(), subtasks }
-    });
+    let pushable = run_of(&order);
+    let count = pushable.as_ref().map_or(0, |run| run.count);
     let behind = order.get(count).map(|row| row.subtask.clone());
     let title_of = |id: &str, all: &[Subtask]| all.iter().find(|subtask| subtask.id == id).map(|subtask| subtask.title.clone());
     let waits = behind.as_deref().and_then(|id| title_of(id, &all));
@@ -388,10 +423,16 @@ pub fn derive(plan: Option<&Plan>, landed: &[String], commits: &[Unpushed], work
     (Subtasks { pushed, items, order, pushable }, plan)
 }
 
-struct Task<'a> {
-    path: &'a Path,
-    upstream: &'a str,
-    address: &'a str,
+// The pushable run of a push order, by the hub's own rule, so the board, the phone and a push agree on it.
+pub fn run_of(order: &[Placed]) -> Option<Run> {
+    let rows: Vec<OrderRow> = order.iter().map(Placed::row).collect();
+    pushable_of(&rows).map(|run| Run { count: run.count as usize, through: run.through, subtasks: run.subtasks })
+}
+
+pub(super) struct Task<'a> {
+    pub path: &'a Path,
+    pub upstream: &'a str,
+    pub address: &'a str,
 }
 
 static OPEN: super::accept::Cached<Vec<(String, String, String)>> = std::sync::Mutex::new(None);
@@ -431,7 +472,9 @@ fn landed(path: &Path, base: &str, tips: &Tips) -> Vec<String> {
 }
 
 fn current_at(state: &Path, path: &Path, address: &str, plan: &Plan, tips: &Tips, working: bool) -> Result<(Subtasks, Plan)> {
-    Ok(derive(Some(plan), &landed(path, &plan.base, tips), &unpushed(state, path, address, tips)?, working))
+    let (mut subtasks, plan) = derive(Some(plan), &landed(path, &plan.base, tips), &unpushed(state, path, address, tips)?, working);
+    crate::commit_tests::mark(state, address, &mut subtasks.order);
+    Ok((subtasks, plan))
 }
 
 fn read_in(state: &Path, task: &Task, plan: &Plan, working: bool) -> Result<(Subtasks, Plan)> {
@@ -456,7 +499,7 @@ pub(super) fn read_now(state: &Path, path: &Path, upstream: &str, address: &str)
 }
 
 // Read, change and write the plan under the task's own lock, so the hook, the task, the hub and the investigator never write over each other.
-fn changed<T>(state: &Path, address: &str, change: impl FnOnce(Option<Plan>) -> Result<(Option<Plan>, T)>) -> Result<T> {
+pub(super) fn changed<T>(state: &Path, address: &str, change: impl FnOnce(Option<Plan>) -> Result<(Option<Plan>, T)>) -> Result<T> {
     let _held = crate::state::Locked::wait(&lock_file(state, address))?;
     let old = load(state, address);
     let (new, out) = change(old.clone())?;
@@ -628,7 +671,7 @@ fn write_as(caller: &Caller, state: &Path, task: &Task, titles: &[String], becau
     })
 }
 
-fn noted_plan(state: &Path, task: &Task) -> Result<(Subtasks, Plan)> {
+pub(super) fn noted_plan(state: &Path, task: &Task) -> Result<(Subtasks, Plan)> {
     let plan = load(state, task.address).filter(|plan| !plan.parts.is_empty()).ok_or_else(|| format!("{} has no subtasks: {USAGE}", task.address))?;
     read_in(state, task, &plan, false)
 }
@@ -725,6 +768,11 @@ fn inserted(mut plan: Plan, title: &str, before: Option<&str>, added: Added) -> 
     Ok((plan, id))
 }
 
+// Whether the investigator added a preparatory subtask to the task's plan already: it adds one without asking, a second is the user's call.
+pub(crate) fn investigator_added(state: &Path, address: &str) -> bool {
+    load(state, address).is_some_and(|plan| plan.parts.iter().any(|part| part.added.as_ref().is_some_and(|added| added.by == "investigator")))
+}
+
 // A preparatory subtask goes in ahead of the one commits go to now, and the next commits go to it until it is done; its id, or none for a task without subtasks.
 pub(crate) fn add_preparatory(state: &Path, path: &Path, address: &str, title: &str, reason: &str, now: u64) -> Result<Option<String>> {
     let repo = main_checkout(path)?;
@@ -768,9 +816,12 @@ pub fn label(subtask: &Subtask) -> String {
         (State::Accepted, Some(waits)) => format!("accepted · waits for {waits}"),
         (state, _) => word(state).to_string(),
     };
+    let accepted = subtask.commits.iter().filter(|commit| commit.accepted).count();
+    let fresh = subtask.commits.len() - accepted;
     match (&subtask.state, subtask.commits.len()) {
         (State::Planned, _) => String::new(),
         (_, 0) => state,
+        (State::Ready, _) if accepted > 0 => format!("{state} · {accepted} accepted · {}", if fresh == 1 { "1 new commit".to_string() } else { format!("{fresh} new commits") }),
         (_, 1) => format!("{state} · 1 commit"),
         (_, many) => format!("{state} · {many} commits"),
     }
@@ -805,7 +856,7 @@ fn shown(address: &str, subtasks: &Subtasks) -> String {
     lines.join("\n")
 }
 
-fn short(sha: &str) -> &str {
+pub(super) fn short(sha: &str) -> &str {
     &sha[..7.min(sha.len())]
 }
 
@@ -827,30 +878,45 @@ fn subtask_json(subtask: &Subtask) -> Value {
     })
 }
 
+pub fn tests_word(state: TestsState) -> &'static str {
+    match state {
+        TestsState::Passed => "passed",
+        TestsState::Failed => "failed",
+        TestsState::Running => "running",
+        TestsState::NotRun => "not-run",
+    }
+}
+
+// The push order as kebbie subtasks --json and kebbie status --json print it, top first.
+pub fn order_json(subtasks: &Subtasks) -> Value {
+    subtasks.order.iter().map(|row| json!({
+        "sha": row.sha, "subject": row.subject, "subtask": row.subtask, "accepted": row.accepted, "group": row.group,
+        "tests": row.tests.as_ref().map(|tests| json!({ "state": tests_word(tests.state), "at": tests.at })),
+        "moved": row.moved.as_ref().map(|moved| json!({ "from": moved.from, "reason": moved.reason })),
+    })).collect()
+}
+
+pub fn pushable_json(subtasks: &Subtasks) -> Value {
+    subtasks.pushable.as_ref().map_or(Value::Null, |run| json!({ "count": run.count, "through": run.through, "subtasks": run.subtasks }))
+}
+
+pub fn subtasks_json(subtasks: &Subtasks) -> Value {
+    subtasks.items.iter().map(subtask_json).collect()
+}
+
 fn to_json(address: &str, subtasks: &Subtasks, last_accepted: Option<&str>) -> Value {
-    let order: Vec<Value> = subtasks.order.iter().map(|row| json!({ "sha": row.sha, "subject": row.subject, "subtask": row.subtask })).collect();
     json!({
         "task": address, "listed": subtasks.listed(), "pushed": subtasks.pushed.len(), "pushed_subtasks": subtasks.pushed.iter().map(subtask_json).collect::<Vec<_>>(),
-        "subtasks": subtasks.items.iter().map(subtask_json).collect::<Vec<_>>(), "order": order,
-        "pushable": subtasks.pushable.as_ref().map(|run| json!({ "count": run.count, "through": run.through, "subtasks": run.subtasks })), "last_accepted": last_accepted,
+        "subtasks": subtasks.items.iter().map(subtask_json).collect::<Vec<_>>(), "order": order_json(subtasks),
+        "pushable": pushable_json(subtasks), "last_accepted": last_accepted,
     })
 }
 
 // The push order and pushable run of subtasks given whole, their commits in their own order.
 #[cfg(test)]
 pub(crate) fn ordered(mut subtasks: Subtasks) -> Subtasks {
-    subtasks.order = subtasks.items.iter().flat_map(|subtask| subtask.commits.iter().map(|commit| Placed { sha: commit.sha.clone(), subject: commit.subject.clone(), subtask: subtask.id.clone() })).collect();
-    let accepted = |id: &str| subtasks.items.iter().any(|subtask| subtask.id == id && subtask.state == State::Accepted);
-    let count = subtasks.order.iter().take_while(|row| accepted(&row.subtask)).count();
-    subtasks.pushable = subtasks.order[..count].last().map(|last| {
-        let mut ids: Vec<String> = Vec::new();
-        for row in &subtasks.order[..count] {
-            if !ids.contains(&row.subtask) {
-                ids.push(row.subtask.clone());
-            }
-        }
-        Run { count, through: last.sha.clone(), subtasks: ids }
-    });
+    subtasks.order = subtasks.items.iter().flat_map(|subtask| subtask.commits.iter().map(|commit| Placed { sha: commit.sha.clone(), subject: commit.subject.clone(), subtask: subtask.id.clone(), accepted: commit.accepted, ..Placed::default() })).collect();
+    subtasks.pushable = run_of(&subtasks.order);
     subtasks
 }
 

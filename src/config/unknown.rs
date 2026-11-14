@@ -23,9 +23,9 @@ pub(super) fn warn_once<T>(value: T, unknown: &[String]) -> T {
     value
 }
 
-pub(super) const MACHINE_KEYS: [&str; 19] = ["board", "worktree", "task", "review", "investigate", "notify", "vault", "update", "restart", "keeper", "recover", "machine", "hub", "keys", "ci", "comments", "routines", "report", "issues"];
-pub(super) const REPO_KEYS: [&str; 9] = ["actions", "worktree", "task", "review", "investigate", "ci", "comments", "docs", "routines"];
-const SECTION_KEYS: [(&str, &[&str]); 19] = [
+pub(super) const MACHINE_KEYS: [&str; 20] = ["board", "worktree", "task", "review", "investigate", "notify", "vault", "update", "restart", "keeper", "recover", "machine", "hub", "keys", "ci", "tests", "comments", "routines", "report", "issues"];
+pub(super) const REPO_KEYS: [&str; 10] = ["actions", "worktree", "task", "review", "investigate", "ci", "tests", "comments", "docs", "routines"];
+const SECTION_KEYS: [(&str, &[&str]); 20] = [
     ("board", &["groups", "backlog"]),
     ("board.backlog", &["sources", "ongoing", "template"]),
     ("update", &["channel", "agents"]),
@@ -43,6 +43,7 @@ const SECTION_KEYS: [(&str, &[&str]); 19] = [
     ("notify", &["command"]),
     ("vault", &["command"]),
     ("ci", &["watch"]),
+    ("tests", &["per_commit"]),
     ("comments", &["watch", "watch_days"]),
     ("docs", &["required"]),
 ];

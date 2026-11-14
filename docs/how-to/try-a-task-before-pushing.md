@@ -17,7 +17,7 @@ It suits a repo you run from its main checkout, above all kebbie itself when you
 2. Select a task under Ready to push and press `M` (Put on local main to try it, in its options). Or from the command line:
 
    ```bash
-   kebbie stage billing
+   kebbie try billing
    ```
 
    kebbie cherry-picks its commits onto local `main`, unpushed.
@@ -26,16 +26,16 @@ It suits a repo you run from its main checkout, above all kebbie itself when you
 
 4. Check the row. It says `on local main · waiting for your push`.
 
-- If you stage more tasks, each goes on top of the ones before it, in the order you stage them.
-- If a task conflicts with what is already staged, main stays as it was. The task's Claude rebases it onto local main, and kebbie stages it again by itself once it reports ready.
-- If you have your own commits on local main, kebbie refuses to stage or unstage, and leaves main as it is after other pushes, until you push or move them. It never rewrites them.
+- If you put on more tasks, each goes on top of the ones before it, in that order.
+- If a task conflicts with what is already staged, main stays as it was. The task's Claude rebases it onto local main, and kebbie puts it on again by itself once it reports ready.
+- If you have your own commits on local main, kebbie refuses to put a task on or take one off, and leaves main as it is after other pushes, until you push or move them. It never rewrites them.
 
 ## Take a task off
 
 1. Press `M` on the staged task, or run:
 
    ```bash
-   kebbie unstage billing
+   kebbie try billing --off
    ```
 
    Only its commits leave main. The other staged tasks stay, and its branch keeps its commits.

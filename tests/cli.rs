@@ -1918,3 +1918,40 @@ fn a_task_raises_an_obstacle_which_is_kept_queued_listed_and_decided_by_you_and_
     assert!(stdout(&found).starts_with("Nothing under Found by tasks"), "{}", stdout(&found));
     assert!(!lab.run(&["obstacle", "outside", "a", "task"]).status.success(), "a raise outside a task's worktree is refused");
 }
+
+#[test]
+fn kebbie_order_shows_the_push_order_moves_and_groups_and_refuses_what_it_cannot() {
+    let lab = Lab::new("order");
+    let (app, slot) = lab.task_fixture();
+    let (app, slot) = (app.to_str().unwrap(), slot.to_str().unwrap());
+    fs::write(&lab.config, "[task]\nsteps = false\n").unwrap();
+    let off = lab.run_as("billing@app", &["-C", slot, "order"]);
+    assert!(!off.status.success() && stderr(&off).contains("needs task.steps = true"), "{}", stderr(&off));
+    fs::write(&lab.config, "").unwrap();
+    assert!(lab.run_as("billing@app", &["-C", slot, "subtasks", "Add refunds"]).status.success());
+    git(Path::new(app), &["config", "user.name", "Ada"]);
+    git(Path::new(app), &["config", "user.email", "ada@example.com"]);
+    let first = git(Path::new(slot), &["rev-parse", "HEAD"]);
+    fs::write(Path::new(slot).join("later.rb"), "later").unwrap();
+    git(Path::new(slot), &["add", "later.rb"]);
+    git(Path::new(slot), &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "-m", "Add the later part\n\nIt comes later."]);
+    let later = git(Path::new(slot), &["rev-parse", "HEAD"]);
+    let unreasoned = lab.run_as("billing@app", &["-C", slot, "order", "move", &later, "--before", "top"]);
+    assert!(!unreasoned.status.success() && stderr(&unreasoned).contains("needs --because"), "{}", stderr(&unreasoned));
+    let unknown = lab.run_as("billing@app", &["-C", slot, "order", "shuffle"]);
+    assert!(!unknown.status.success() && stderr(&unknown).contains("does not know that"), "{}", stderr(&unknown));
+    let moved = lab.run_as("billing@app", &["-C", slot, "order", "move", &later[..8], "--before", "top", "--because", "it goes first"]);
+    assert!(moved.status.success() && stdout(&moved).contains("1.   ") && stdout(&moved).contains("moved from 2: it goes first"), "{}\n{}", stdout(&moved), stderr(&moved));
+    assert_ne!(git(Path::new(slot), &["rev-parse", "HEAD"]), first, "the commit below the moved one was replayed");
+    let shas: Vec<String> = git(Path::new(slot), &["log", "--reverse", "--format=%H", "origin/main..HEAD"]).lines().map(str::to_string).collect();
+    let grouped = lab.run_as("lead", &["-C", app, "order", "billing", "group", &shas[0][..8], &shas[1][..8], "--because", "they go together"]);
+    assert!(grouped.status.success() && stdout(&grouped).contains("as g1"), "the lead orders any task's commits: {}\n{}", stdout(&grouped), stderr(&grouped));
+    let json: serde_json::Value = serde_json::from_str(&stdout(&lab.run(&["-C", app, "order", "billing", "--json"]))).unwrap();
+    assert_eq!((json["order"][0]["group"].as_str(), json["order"][1]["group"].as_str(), json["order"][0]["accepted"].as_bool()), (Some("g1"), Some("g1"), Some(false)), "{json}");
+    let status: serde_json::Value = serde_json::from_str(&stdout(&lab.run(&["status", "--json"]))).unwrap();
+    let item = status["items"].as_array().unwrap().iter().find(|item| item["name"] == "billing").unwrap();
+    assert_eq!((item["order"].as_array().map(Vec::len), item["subtasks"][0]["id"].as_str()), (Some(2), Some("add-refunds")), "{item}");
+    assert!(lab.run_as("billing@app", &["-C", slot, "order", "ungroup", "g1"]).status.success());
+    let old = run_as_user(&lab, &["-C", app, "unstage", "billing"]);
+    assert!(stderr(&old).contains("kebbie unstage is now kebbie try --off"), "{}", stderr(&old));
+}

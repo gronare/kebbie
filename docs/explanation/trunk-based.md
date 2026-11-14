@@ -75,7 +75,7 @@ The keeper does the watching, every 30 seconds (an open board does with `[keeper
 
 Some repos are run from their main checkout: kebbie itself when you run it from your own clone, or an app whose dev setup lives there. A task's worktree is the wrong place to try those, so a repo can opt in to staging with `worktree.stage_on_main`.
 
-`kebbie stage`, or `M` on the board, puts a ready task's commits on the main checkout's local default branch, unpushed. Several tasks stack there in the order you staged them. You try them together, as they will land, and push main yourself once it is right. See [Try a task before pushing](../how-to/try-a-task-before-pushing.md).
+`kebbie try`, or `M` on the board, puts a ready task's commits on the main checkout's local default branch, unpushed. Several tasks stack there in the order you staged them. You try them together, as they will land, and push main yourself once it is right. See [Try a task before pushing](../how-to/try-a-task-before-pushing.md).
 
 ## Staging stays a straight line
 
@@ -85,7 +85,7 @@ Staging stays inside the trunk-based model rather than beside it:
 - A staged task never goes through the push line, since it goes out with main.
 - It stays open until its commits are on origin, so the keeper closes it like any other landed task.
 
-Two limits keep your own work safe. kebbie never rewrites a commit of yours on local main, so it refuses to stage or unstage while one sits there. A stage that conflicts leaves main exactly as it was and hands the rebase to the task's Claude.
+Two limits keep your own work safe. kebbie never rewrites a commit of yours on local main, so it refuses to put a task on or take one off while one sits there. A stage that conflicts leaves main exactly as it was and hands the rebase to the task's Claude.
 
 ## Dependent work waits instead of stacking
 

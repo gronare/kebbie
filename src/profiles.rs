@@ -17,7 +17,7 @@ pub const KEYS: [&str; 13] = ["about", "for", "agent", "model", "effort", "role"
 const SANDBOX_KEYS: [&str; 5] = ["enabled", "allowed_domains", "allow_write", "excluded_commands", "kubeconfig"];
 const REVIEWER_KEYS: [&str; 7] = ["about", "for", "agent", "model", "effort", "role", "kind"];
 pub const REVIEW_KIND: &str = "review";
-const GUARDED: [&str; 8] = ["push", "stage", "unstage", "approve", "choose", "away", "decide", "after"];
+const GUARDED: [&str; 9] = ["push", "try", "stage", "unstage", "approve", "choose", "away", "decide", "after"];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Profile {
@@ -675,7 +675,7 @@ mod tests {
         }
         let dir = folder("profile-allow", &[("x.toml", "allow = [\"Bash(npm test:*)\", \"Bash(kebbie push:*)\"]\n")]);
         let refused = load_in(&dir, "x").unwrap_err();
-        assert!(refused.contains("x.toml: allow: \"Bash(kebbie push:*)\" would let the task run kebbie push, stage, unstage, approve, choose, away, decide, after"), "{refused}");
+        assert!(refused.contains("x.toml: allow: \"Bash(kebbie push:*)\" would let the task run kebbie push, try, stage, unstage, approve, choose, away, decide, after"), "{refused}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

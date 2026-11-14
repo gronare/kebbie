@@ -13,7 +13,7 @@ Every kebbie command with its options and what it does. `kebbie --help` prints t
 
 kebbie names itself the same way in `kebbie doctor`, the update window and the board's `?` window. kebbie reads `version --built` itself to tell builds apart; a build outside git prints the version alone.
 
-Without a name, `land`, `follow`, `review`, `evidence`, `push`, `stage`, `unstage`, `done`, `drop` and `reset` act on the task whose worktree you are in.
+Without a name, `land`, `follow`, `review`, `evidence`, `push`, `try`, `done`, `drop` and `reset` act on the task whose worktree you are in.
 
 ## Tasks
 
@@ -27,7 +27,7 @@ Without a name, `land`, `follow`, `review`, `evidence`, `push`, `stage`, `unstag
 | [`kebbie park`](#kebbie-park-name---until-when), [`unpark`](#kebbie-unpark-name) | Set a task aside until later, or bring it back now. |
 | [`kebbie recipe`](#kebbie-recipe-task-recipe-why) | The recipes, or how a task is done and why. |
 | [`kebbie push`](#kebbie-push-name) | Put a task in its repo's push line. |
-| [`kebbie stage`](#kebbie-stage-name), [`unstage`](#kebbie-unstage-name) | Put a ready task's commits on local main to try them, or take them off. |
+| [`kebbie try`](#kebbie-try-name), [`try --off`](#kebbie-try-name---off) | Put a ready task's commits on local main to try them, or take them off. |
 | [`kebbie ci`](#kebbie-ci---json) | The CI watches of pushed tasks. |
 | [`kebbie comments`](#kebbie-comments---json) | Colleagues' comments on pushed commits, each with kebbie's reading. |
 | [`kebbie comment`](#kebbie-comment-show-id) | Show one comment, dismiss it or mark its reply sent. |
@@ -41,6 +41,7 @@ Without a name, `land`, `follow`, `review`, `evidence`, `push`, `stage`, `unstag
 | [`kebbie accept`](#kebbie-accept-name-sha) | Accept one of a task's commits, or a whole subtask. |
 | [`kebbie accepted`](#kebbie-accepted-name) | Which of a task's commits are accepted. |
 | [`kebbie subtasks`](#kebbie-subtasks-name-subtask-) | A task's subtasks, the state of each, the push order and the pushable run. |
+| [`kebbie order`](#kebbie-order-name) | A task's push order; move a commit in it, or group commits that go out together. |
 
 ### `kebbie start <name> [prompt]`
 
@@ -239,7 +240,7 @@ How far the task is behind the default branch does not matter. The rebase at its
 
 When origin is on GitHub and `gh` is logged in, the task stays open under CI running instead, and closes as `done` once every workflow run for the pushed commit is green and the check the task named with `report --after-push` holds. See `kebbie ci`. Otherwise the push result ends with `CI not watched:` and the reason.
 
-### `kebbie stage [name]`
+### `kebbie try [name]`
 
 Put a ready task's commits on the main checkout's local default branch, to try them in the real tool before anything is pushed. `M` on the board does the same. Nothing is pushed.
 
@@ -252,7 +253,7 @@ kebbie fetches, brings local main up to origin's default branch (fast-forward, o
 | Outcome | What happens |
 | --- | --- |
 | Clean | Its commits are on local main. In kebbie's own install root on the main channel, kebbie rebuilds with `scripts/build.sh`, and the board and keeper restart onto the new binary. |
-| Conflict | Main is left exactly as it was. The task's Claude gets the conflict as with a push: rebase onto local main, resolve, run the tests, report ready. When it reports ready, kebbie stages it again for whoever asked; a needs-you report drops that. |
+| Conflict | Main is left exactly as it was. The task's Claude gets the conflict as with a push: rebase onto local main, resolve, run the tests, report ready. When it reports ready, kebbie puts it on again for whoever asked; a needs-you report drops that. |
 
 A staged task:
 
@@ -265,20 +266,22 @@ Push main yourself, with `git push` or `p` on the Areas page, and everything sta
 
 kebbie never rewrites commits of your own:
 
-- When local main holds commits that are neither on origin nor a staged task's, `stage` and `unstage` refuse. After another task's push, main is left as it is, with `local main has your own commits a1b2c3d; push or move them, then stage again`.
+- When local main holds commits that are neither on origin nor a staged task's, `try` and `try --off` refuse. After another task's push, main is left as it is, with `local main has your own commits a1b2c3d; push or move them, then try again`.
 - A merge or an empty commit on local main counts as your own.
-- `drop` and `reset` take a staged task off main first, and refuse with `kebbie unstage <task> first` when they cannot.
+- `drop` and `reset` take a staged task off main first, and refuse with `kebbie try <task> --off first` when they cannot.
 - `kebbie move` refuses while tasks are staged.
 
-In kebbie's own install root, `kebbie stage` prints `building kebbie from local main…` before the build starts.
+In kebbie's own install root, `kebbie try` prints `building kebbie from local main…` before the build starts.
 
-### `kebbie unstage [name]`
+### `kebbie try [name] --off`
 
 Take a staged task's commits off local main again, by patch, so they are found after main was rebased. On a staged task, `M` on the board does the same.
 
 - The tasks staged after it stay, in their order.
 - Its branch keeps the commits, and it waits under Ready to push.
 - When a task staged after it builds on its commits, main is left as it was and kebbie says which tasks to take off first.
+
+`kebbie stage` and `kebbie unstage` are the old names of `kebbie try` and `kebbie try --off`. They still work, and say so on stderr.
 
 ### `kebbie ci [--json]`
 
@@ -473,7 +476,29 @@ The task's work as titled subtasks, in the order they go out. A subtask is a sli
 | Option | What it does |
 | --- | --- |
 | `--because "<why>"` | With a new list, marks the subtasks it adds as added, with the reason. |
-| `--json` | The subtasks as `task`, `listed`, `pushed`, `pushed_subtasks`, `subtasks`, `order` (the push order, each commit with `sha`, `subject` and `subtask`), `pushable` (`count`, `through` and `subtasks`, or `null`) and `last_accepted`. Each subtask has `id`, `number`, `title`, `state` (`planned`, `in-progress`, `ready`, `accepted` or `pushed`), `extra`, `contiguous`, `added`, `waits_for`, `commits` (each with `sha`, `subject` and `accepted`) and `pushed`. |
+| `--json` | The subtasks as `task`, `listed`, `pushed`, `pushed_subtasks`, `subtasks`, `order` (the push order, each commit with `sha`, `subject`, `subtask`, `accepted`, `group`, `tests` and `moved`, as `kebbie order --json` gives them), `pushable` (`count`, `through` and `subtasks`, or `null`) and `last_accepted`. Each subtask has `id`, `number`, `title`, `state` (`planned`, `in-progress`, `ready`, `accepted` or `pushed`), `extra`, `contiguous`, `added`, `waits_for`, `commits` (each with `sha`, `subject` and `accepted`) and `pushed`. |
+
+### `kebbie order [name]`
+
+The task's push order, top first: each commit with its subtask, `✓` when you accepted it, its group, its own test run and where kebbie moved it from, then where the pushable run ends. It needs `task.steps` on. In a task's worktree every word is the command's; elsewhere the first word names the task.
+
+| Command | What it does |
+| --- | --- |
+| `kebbie order move <sha> --before <sha\|top> --because "<why>"` | Moves a commit, and its group with it, right before another commit, or to the top. A commit inside a group moves before the whole group. |
+| `kebbie order group <sha> <sha>… --because "<why>"` | Binds commits that go out together: kebbie moves the later ones up to sit right after the first, and the pushable run takes all of them or none. Each group gets an id, `g1`, `g2` and so on. |
+| `kebbie order ungroup <sha\|group>` | Unbinds a group. Its commits stay where they are. |
+
+A move runs in the task's worktree, as a replay of its branch from the first commit that changes place:
+
+- Each commit keeps its subtask and your acceptance, since both belong to its change, and the rules approval holds, since it covers the same commits in any order. A test run of a moved commit is gone, since its sha changed.
+- The commit shows `moved from <place>: <why>` in `kebbie order`, the push window and on the phone, until it is pushed.
+- When a commit does not apply in the new order, the branch is left exactly as it was, and kebbie names the commit and the files it conflicts on.
+- It is refused while a push of the task waits in line, since that push's commits stay as they are until it goes out, while the worktree has uncommitted changes to tracked files, and while a rebase runs there.
+- The task runs it for its own commits, the lead and you for any task's.
+
+| Option | What it does |
+| --- | --- |
+| `--json` | `task`, `order` (each commit with `sha`, `subject`, `subtask`, `accepted`, `group`, `tests` as `state` and `at`, and `moved` as `from` and `reason`) and `pushable`. |
 
 ### `kebbie subtasks [name] add "<subtask>" --because "<why>"`
 
@@ -489,7 +514,7 @@ Marks a subtask ready: its slice of the work is finished and waits for you to re
 
 A new commit goes to the subtask named with `on`, else to the first subtask not done; once every subtask is done, a commit opens an extra subtask titled by its subject. A subtask keeps its commits by their change: a clean rebase, a reworded message or a reorder keeps them in it, and a commit squashed into another stays with the subtask of the change beside it. Its commits need not lie together in the branch. A subtask counts as pushed once all its commits' changes are on the default branch, however they got there: `kebbie push`, a staged task you pushed with main, or a push from elsewhere.
 
-The **push order** is the branch's commits not yet on origin's default branch, oldest first. The **pushable run** is the longest run from its top where every commit's subtask is accepted: `p` in the push window pushes it.
+The **push order** is the branch's commits not yet on origin's default branch, oldest first. The **pushable run** is the longest run from its top where every commit is accepted and no group is split: `p` in the push window pushes it. A subtask that gains a commit after you accepted it keeps its accepted commits in the run; the new commit stops the run at its own place.
 
 | Mark | Means |
 | --- | --- |
@@ -546,6 +571,10 @@ With nothing waiting, it prints `Nothing needs you.` and what is on its way in.
 | `parked_until` | While it is parked: the Unix time it comes back, or `"unparked"` until you bring it back; `null` otherwise. |
 | `recipe` | How it is done: `name`, `shown`, `why` and `by` (`the lead`, `you`, `the task`), or `null` without one. |
 | `assessment` | The assessor's word on its last ready report, such as `review suggested: changes how VAT is rounded`, `no review: wording in two templates`, `review being assessed` or `review not assessed`, or `null`. |
+| `subtasks` | With subtasks listed, each one as `kebbie subtasks --json` gives it; else `null`. |
+| `order` | With subtasks listed, the push order as `kebbie order --json` gives it, with each commit's `accepted`, `group`, `tests` and `moved`; else `null`. |
+| `pushable` | The pushable run, `count`, `through` and `subtasks`, or `null`. |
+| `obstacle` | The obstacle it raised, `id`, `state` and `text`, or `null`. |
 | `phase` | Where it stands as kebbie keeps it, below. |
 
 `phase` holds:

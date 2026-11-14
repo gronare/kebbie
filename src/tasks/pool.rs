@@ -209,7 +209,7 @@ pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, f
     let staged = super::stage::load(&state_dir()?, &repo);
     if !existing && !staged.is_empty() {
         let tasks: Vec<String> = staged.into_iter().map(|entry| entry.task).collect();
-        return Err(format!("{} on local {local}, and kebbie move would take their commits along; push {local}, or take them off with kebbie unstage, first", super::and_list(&tasks).to_string() + if tasks.len() == 1 { " is staged" } else { " are staged" }));
+        return Err(format!("{} on local {local}, and kebbie move would take their commits along; push {local}, or take them off with kebbie try --off, first", super::and_list(&tasks).to_string() + if tasks.len() == 1 { " is staged" } else { " are staged" }));
     }
     if !existing && current != local {
         return Err(format!("The main checkout is on {current}, not {local}; to move that work, use its branch name: kebbie move {current}"));

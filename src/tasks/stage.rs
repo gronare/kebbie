@@ -142,7 +142,7 @@ pub(super) fn take_off_before_discard(state: &Path, caller: &Caller, repo: &Path
     }
     unstage_in(state, caller, repo, slot, &|repo| crate::update::rebuild_staged(repo, false)).map(Some).map_err(|error| {
         let why = Notice::parse(&error).map_or(error.clone(), |notice| notice.headline);
-        Notice::new(Tone::You, format!("Not dropped: it is on local main, and kebbie could not take it off ({why})")).you(format!("Run kebbie unstage {} first.", task_of(slot))).detail("task", task_of(slot)).to_string()
+        Notice::new(Tone::You, format!("Not dropped: it is on local main, and kebbie could not take it off ({why})")).you(format!("Run kebbie try {} --off first.", task_of(slot))).detail("task", task_of(slot)).to_string()
     })
 }
 
@@ -221,7 +221,7 @@ fn foreign(repo: &Path, upstream: &str, entries: &[Entry]) -> Result<Vec<String>
 }
 
 fn foreign_note(local: &str, own: &[String]) -> String {
-    format!("local {local} has your own commits {}; push {local} with them, or take the staged tasks off with kebbie unstage first, then stage again", own.join(", "))
+    format!("local {local} has your own commits {}; push {local} with them, or take the staged tasks off with kebbie try --off first, then try again", own.join(", "))
 }
 
 // With tasks staged, main is rebased onto what went out, unless it holds commits of the user's own; then it is left alone and the user told.
@@ -430,7 +430,7 @@ pub(super) fn stage_in(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, 
     phase::record(state, &address, "stage", &Event::Staged { head: head.as_deref() });
     tell_lead(&format!("{} put {address} on local {local} to try it, unpushed; it stays open until main is pushed.", capitalized(&pusher)));
     let order: Vec<&str> = entries.iter().map(|entry| entry.task.as_str()).collect();
-    let mut notice = Notice::new(Tone::Done, format!("On local {local}: {}", plural(add.len(), "commit"))).next(format!("Try it from the main checkout. Push {local} when it is right, and kebbie closes it once its commits are on origin; or take it off with kebbie unstage {task}."))
+    let mut notice = Notice::new(Tone::Done, format!("On local {local}: {}", plural(add.len(), "commit"))).next(format!("Try it from the main checkout. Push {local} when it is right, and kebbie closes it once its commits are on origin; or take it off with kebbie try {task} --off."))
         .detail("task", &task).detail("staged", order.join(" · ")).detail("checkout", follow);
     drop(turnstile);
     if let Some(built) = rebuild(repo) {
@@ -503,7 +503,7 @@ pub(super) fn refuse_push(state: &Path, repo: &Path, address: &str, task: &str) 
         return Ok(());
     }
     let local = default_branch(repo).map(|upstream| local_of(&upstream).to_string()).unwrap_or_else(|_| "main".to_string());
-    Notice::new(Tone::NotNow, format!("Not pushed: it is on local {local}; push {local}")).next(format!("Push {local} from the main checkout or the Areas page, and kebbie closes it once its commits are on origin; or take it off with kebbie unstage {task}.")).detail("task", task).err()
+    Notice::new(Tone::NotNow, format!("Not pushed: it is on local {local}; push {local}")).next(format!("Push {local} from the main checkout or the Areas page, and kebbie closes it once its commits are on origin; or take it off with kebbie try {task} --off.")).detail("task", task).err()
 }
 
 // The lead's line shows on the board's messages too, so what it says reaches the user there.
@@ -785,7 +785,7 @@ mod tests {
         assert_eq!(on_main(&staging), ["beta"], "no copy of it is left behind as commits nobody staged");
         std::fs::write(staging.dir.join("a"), "edited").unwrap();
         let refused = take_off_before_discard(&staging.state, &Caller::User, &staging.dir, &staging.beta).unwrap_err();
-        assert!(refused.contains("kebbie unstage beta first"), "{refused}");
+        assert!(refused.contains("kebbie try beta --off first"), "{refused}");
         assert_eq!(take_off_before_discard(&staging.state, &Caller::User, &staging.dir, &staging.alpha).unwrap(), None, "an unstaged task has nothing to take off");
         let source = include_str!("finish.rs");
         let discard = &source[source.find("\nfn discard(").unwrap()..];
@@ -798,7 +798,7 @@ mod tests {
         let state = crate::lead::state_dir().unwrap();
         stage_in(&state, &Caller::User, &staging.dir, &staging.alpha, true, &no_hand_over, &built).unwrap();
         let refused = super::super::move_work(&staging.dir, "newer", &[], None, false).unwrap_err();
-        assert!(refused.contains("alpha is staged") && refused.contains("kebbie unstage"), "{refused}");
+        assert!(refused.contains("alpha is staged") && refused.contains("kebbie try --off"), "{refused}");
         forget(&state, &address(&staging, "alpha"));
         let held = Turnstile::try_take(&state, &staging.dir).unwrap();
         assert!(Turnstile::held_here(&state, &staging.dir) && Turnstile::try_take(&state, &staging.dir).is_none());

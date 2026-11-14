@@ -18,7 +18,7 @@ fn seen(subtask: &str, codes: &[&str]) -> Vec<Seen> {
 }
 
 fn plan(parts: Vec<Part>, commits: Vec<Seen>) -> Plan {
-    Plan { base: "base".to_string(), parts, commits, on: None }
+    Plan { base: "base".to_string(), parts, commits, ..Plan::default() }
 }
 
 fn shas(subtasks: &Subtasks) -> Vec<(String, Vec<&str>)> {
@@ -114,22 +114,42 @@ fn an_accepted_subtask_that_gains_a_commit_is_ready_again_with_only_the_new_comm
     let done = Plan { parts: vec![part("model", "Model", true), part("docs", "Docs", false)], on: None, ..noted };
     let (ready, _) = derive(Some(&done), &[], &[accepted[0].clone(), commit_of("bbb", "Fix the model", false)], true);
     assert_eq!((ready.items[0].state.clone(), ready.items[0].commits.iter().map(|commit| commit.accepted).collect::<Vec<_>>()), (State::Ready, vec![true, false]), "the commit read before stays accepted");
+    assert_eq!(ready.pushable.as_ref().map(|run| (run.count, run.through.as_str())), Some((1, "aaa")), "the accepted commit stays pushable; the new one stops the run from its own place");
+    assert_eq!(ready.order.iter().map(|row| row.accepted).collect::<Vec<_>>(), [true, false], "each row says whether its own commit is accepted");
+    assert_eq!(label(&ready.items[0]), "ready · 1 accepted · 1 new commit");
 }
 
 #[test]
-fn the_pushable_run_is_the_longest_from_the_top_whose_every_commit_is_an_accepted_subtasks_and_one_behind_says_what_it_waits_for() {
+fn a_group_is_never_split_by_the_run_and_a_moved_commit_says_where_it_came_from_until_it_is_gone() {
+    let mut listed = plan(vec![part("model", "Model", true), part("docs", "Docs", true)], [seen("model", &["code of aaa", "code of bbb"]), seen("docs", &["code of ccc"])].concat());
+    listed.groups = vec![Bound { id: "g1".to_string(), codes: vec!["code of bbb".to_string(), "code of ccc".to_string(), "code of gone".to_string()], reason: "the docs describe the model".to_string() }];
+    listed.moved = vec![MovedAt { code: "code of bbb".to_string(), from: 3, reason: "it prepares the docs".to_string() }, MovedAt { code: "code of gone".to_string(), from: 1, reason: "x".to_string() }];
+    let commits = [commit_of("aaa", "a", true), commit_of("bbb", "b", true), commit_of("ccc", "c", false)];
+    let (subtasks, noted) = derive(Some(&listed), &[], &commits, false);
+    assert_eq!(subtasks.order.iter().map(|row| row.group.as_deref()).collect::<Vec<_>>(), [None, Some("g1"), Some("g1")]);
+    assert_eq!(subtasks.pushable.as_ref().map(|run| (run.count, run.through.as_str())), Some((1, "aaa")), "bbb is accepted, but its group's other commit is not, so it waits with it");
+    assert_eq!(subtasks.order[1].moved.as_ref().map(|moved| (moved.from, moved.reason.as_str())), Some((3, "it prepares the docs")));
+    assert_eq!((noted.groups[0].codes.len(), noted.moved.len()), (2, 1), "a commit no longer open leaves its group and its move behind");
+    let alone = commits.iter().map(|commit| Unpushed { accepted: true, ..commit.clone() }).collect::<Vec<_>>();
+    assert_eq!(derive(Some(&listed), &[], &alone, false).0.pushable.map(|run| run.count), Some(3));
+    let one_left = [commit_of("aaa", "a", true), commit_of("bbb", "b", true)];
+    assert!(derive(Some(&listed), &[], &one_left, false).1.groups.is_empty(), "a group of one is no group");
+}
+
+#[test]
+fn the_pushable_run_is_the_longest_from_the_top_whose_every_commit_is_accepted_and_one_behind_says_what_it_waits_for() {
     let listed = plan(vec![part("lint", "Lint the index", true), part("store", "Store frontmatter", true), part("docs", "Docs", true)], [seen("lint", &["code of aaa"]), seen("store", &["code of bbb"]), seen("docs", &["code of ccc"]), seen("lint", &["code of ddd"])].concat());
     let commits = |accepted: &[bool]| ["aaa", "bbb", "ccc", "ddd"].iter().zip(accepted).map(|(sha, accepted)| commit_of(sha, sha, *accepted)).collect::<Vec<_>>();
     let (all, _) = derive(Some(&listed), &[], &commits(&[true, true, true, true]), false);
     assert_eq!(all.pushable, Some(Run { count: 4, through: "ddd".to_string(), subtasks: vec!["lint".to_string(), "store".to_string(), "docs".to_string()] }));
     let (held, _) = derive(Some(&listed), &[], &commits(&[true, true, true, false]), false);
-    assert_eq!(held.pushable, None, "the top commit's subtask, lint, waits on its last commit, so nothing goes");
+    assert_eq!(held.pushable.as_ref().map(|run| (run.count, run.through.as_str())), Some((3, "ccc")), "acceptance is per commit: lint's last commit waits, the three accepted above it go");
     let (behind, _) = derive(Some(&listed), &[], &commits(&[true, true, false, true]), false);
     assert_eq!(behind.pushable.as_ref().map(|run| (run.count, run.through.as_str())), Some((2, "bbb")));
     let docs = behind.named("docs").unwrap();
     assert_eq!(docs.state, State::Ready);
-    let accepted_behind = derive(Some(&Plan { parts: vec![part("store", "Store frontmatter", true), part("lint", "Lint the index", false), part("docs", "Docs", true)], ..listed.clone() }), &[], &commits(&[true, true, true, true]), false).0;
-    assert_eq!(accepted_behind.pushable, None, "lint is still in progress");
+    let accepted_behind = derive(Some(&Plan { parts: vec![part("store", "Store frontmatter", true), part("lint", "Lint the index", false), part("docs", "Docs", true)], ..listed.clone() }), &[], &commits(&[false, true, true, true]), false).0;
+    assert_eq!(accepted_behind.pushable, None, "lint's first commit is not accepted");
     let store = accepted_behind.named("store").unwrap();
     assert_eq!((store.waits_for.as_deref(), label(store)), (Some("Lint the index"), "accepted · waits for Lint the index · 1 commit".to_string()));
 }

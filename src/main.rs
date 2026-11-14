@@ -11,6 +11,7 @@ mod changes;
 mod board;
 mod ci;
 mod comments;
+mod commit_tests;
 mod config;
 mod config_edit;
 mod decisions;
@@ -167,8 +168,16 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   subtasks on <id> sends the next commits to it, and kebbie subtasks done [<id>] marks
                                   one ready (by default the one commits go to). kebbie subtasks <name> … does it from
                                   elsewhere, and kebbie subtasks [name] [--json] shows each subtask's state, the push
-                                  order and the pushable run: the commits from the top whose subtasks you accepted.
-                                  kebbie steps is the same command
+                                  order and the pushable run: the commits from the top that you accepted, never
+                                  splitting a group. kebbie steps is the same command
+  kebbie order [name] [--json]    a task's push order, top first, each commit with its subtask, acceptance, group, own
+                                  test run and where it was moved from. kebbie order move <sha> --before <sha|top>
+                                  --because \"<why>\" moves a commit (and its group) by replaying the branch, keeping
+                                  each commit's subtask and acceptance; refused while a push of the task waits in line,
+                                  with uncommitted tracked files, or when a commit does not apply in its new place (the
+                                  branch stays as it was). kebbie order group <sha> <sha>… --because \"<why>\" binds
+                                  commits that go out together, kebbie order ungroup <sha|group> unbinds them; the
+                                  task's for its own commits, the lead's and yours for any task's
   kebbie ask --option \"<label>: <meaning>\" … --recommend <n> <question>
                                   run by a task's Claude to ask you what you want (scope, behaviour, a trade-off that is
                                   yours); a question of how goes to the lead with kebbie tell lead. The question opens
@@ -283,14 +292,14 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   so after the push or before it when its tests or a conflict need it); the user's step, or the lead's for a task the
                                   user gave push permission on the board (a), or in a repo they did on the Areas page (a)
                                   once its reviewer passed its current code; the lead is told what landed
-  kebbie stage [name]             put a ready task's commits on the main checkout's local default branch, unpushed, to
+  kebbie try [name]               put a ready task's commits on the main checkout's local default branch, unpushed, to
                                   try them there (repos with worktree.stage_on_main only); several go on in the order
                                   staged, a conflict goes to its Claude and leaves main as it was; the task stays open
                                   until main is pushed and its commits are on origin, and never goes through the push
                                   line meanwhile; in kebbie's own install root on the main channel, kebbie rebuilds;
                                   the user's step, or the lead's with the permission it would push the task with
-  kebbie unstage [name]           take a staged task's commits off local main again, keeping the others staged and its
-                                  branch as it is
+  kebbie try [name] --off         take a task's commits off local main again, keeping the others there and its branch
+                                  as it is (kebbie stage and kebbie unstage still work, as the old names)
   kebbie ci [--json]              the CI watches: after a full push to a GitHub origin, with gh logged in, the task stays
                                   open under CI running until every workflow run for the pushed commit is green, then
                                   closes as done; a failed run moves it to Needs you and its Claude gets the failing
@@ -485,7 +494,7 @@ impl Arguments {
                 arguments.positionals.extend(input.by_ref());
                 break;
             }
-            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--after-push", "--profile", "--why", "--name", "--until", "--recipe", "--step", "--on", "--id", "--subtask", "--because", "--prepares"].contains(&argument.as_str()) {
+            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--after-push", "--profile", "--why", "--name", "--until", "--recipe", "--step", "--on", "--id", "--subtask", "--because", "--prepares", "--before"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
                 arguments.flags.push(argument);
@@ -749,8 +758,12 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("unpark") => tasks::unpark(&cwd, name),
         Some("push") if arguments.flag("--cancel") => tasks::cancel_push(&cwd, name),
         Some("push") => tasks::push(&cwd, name, arguments.value("--through"), arguments.value("--through").is_some()),
-        Some("stage") => tasks::stage(&cwd, name, true),
-        Some("unstage") => tasks::unstage(&cwd, name),
+        Some("try") if arguments.flag("--off") => tasks::unstage(&cwd, name),
+        Some("try") => tasks::stage(&cwd, name, true),
+        Some(old @ ("stage" | "unstage")) => {
+            eprintln!("kebbie {old} is now kebbie try{}; the old name goes in a later release.", if old == "unstage" { " --off" } else { "" });
+            if old == "stage" { tasks::stage(&cwd, name, true) } else { tasks::unstage(&cwd, name) }
+        }
         Some("tidy") => tasks::tidy(&cwd, Some(name.ok_or("kebbie tidy needs a task name")?), &arguments.rest(2).join(" ")),
         Some("review") if arguments.flag("--run") && arguments.flag("--rules") => rules_check::run(&cwd),
         Some("review") if arguments.flag("--run") => review::run(&cwd),
@@ -764,6 +777,8 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("review") => review::request(&cwd, name, review::Request::Review),
         Some("evidence") => evidence::print(&cwd, name, arguments.flag("--json")),
         Some(command @ ("subtasks" | "steps")) => arguments.only(command, &["--json", "--because", "--prepares"]).and_then(|_| tasks::subtasks(&cwd, arguments.rest(1), &tasks::SubtasksAsked { because: arguments.value("--because"), prepares: arguments.value("--prepares"), as_json: arguments.flag("--json") })),
+        Some("order") if arguments.flag("--run-tests") => commit_tests::run(&cwd),
+        Some("order") => arguments.only("order", &["--json", "--before", "--because"]).and_then(|_| tasks::order(&cwd, arguments.rest(1), &tasks::OrderAsked { before: arguments.value("--before"), because: arguments.value("--because"), as_json: arguments.flag("--json") })),
         Some("accepted") => tasks::accepted_shown(&cwd, name, arguments.flag("--json")),
         Some("accept") => tasks::accept(&cwd, name, arguments.positional(2), arguments.value("--subtask").or(arguments.value("--step")), !arguments.flag("--withdraw")),
         Some("approve") => tasks::approve(&cwd, Some(name.ok_or("kebbie approve needs a task name")?)),

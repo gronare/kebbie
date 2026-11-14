@@ -139,7 +139,7 @@ fn go() -> Result<String> {
 
 // Each of the user's prompts carries what sessions told each other since the lead last looked; the lead pushes only through kebbie push, which checks the user's permission.
 fn settings(kebbie: &str) -> String {
-    let allow = ["peers", "tell", "release", "answered", "messages", "status", "next", "areas", "approve", "review", "land", "push", "stage", "unstage", "decide", "defer", "notify", "issues", "issue"].map(|command| format!("Bash({kebbie} {command}:*)"));
+    let allow = ["peers", "tell", "release", "answered", "messages", "status", "next", "areas", "approve", "review", "land", "push", "try", "stage", "unstage", "decide", "defer", "notify", "issues", "issue"].map(|command| format!("Bash({kebbie} {command}:*)"));
     let settings = json!({
         "hooks": { "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": format!("{} messages --unread", crate::sh::quote(kebbie)) }] }] },
         "permissions": { "allow": allow },
@@ -842,7 +842,7 @@ mod tests {
     #[test]
     fn the_lead_calls_kebbies_own_task_commands_safe_to_let_through_and_recommends_dont_ask_again() {
         let role = role_text(include_str!("../roles/lead.md"), "/opt/kebbie/kebbie", &[Source::Local], false, true);
-        assert!(role.contains("one of kebbie's own task commands (`kebbie peers`, `kebbie tell`, `kebbie ask`, `kebbie obstacle`, `kebbie found`, `kebbie report`, `kebbie subtasks`, `kebbie steps`, `kebbie accepted`, `kebbie routine ok`, `kebbie link`, `kebbie backlog add`, `kebbie config`), that command is safe to let through") && role.contains("recommend the \"don't ask again\" answer for it"), "{role}");
+        assert!(role.contains("one of kebbie's own task commands (`kebbie peers`, `kebbie tell`, `kebbie ask`, `kebbie obstacle`, `kebbie found`, `kebbie report`, `kebbie subtasks`, `kebbie steps`, `kebbie order`, `kebbie accepted`, `kebbie routine ok`, `kebbie link`, `kebbie backlog add`, `kebbie config`), that command is safe to let through") && role.contains("recommend the \"don't ask again\" answer for it"), "{role}");
         assert!(!role.contains("{task_commands}"));
         assert!(role.contains("asks to run git in its own worktree outside the sandbox") && role.contains("never \"don't ask again\", which would let that git run outside every later sandbox"), "a git rule in default.rules would run git unsandboxed in every Codex session: {role}");
     }

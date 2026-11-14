@@ -38,7 +38,7 @@ const SECTIONS: [(&str, &[&str]); 8] = [
     ("Tasks", &["task"]),
     ("Board", &["board"]),
     ("Worktrees", &["worktree"]),
-    ("Review & docs", &["review", "ci", "comments", "docs"]),
+    ("Review & docs", &["review", "ci", "tests", "comments", "docs"]),
     (PROFILES, &[]),
     ("Updates", &["update", "restart", "keeper", "recover"]),
     ("This machine", &["machine", "hub", "notify", "vault"]),

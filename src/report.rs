@@ -76,6 +76,9 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
             crate::hub::notices::send(&ready_notice(cwd, &state, &me, &summary), None);
         }
     }
+    if report.state == "ready" {
+        crate::commit_tests::on_ready(cwd);
+    }
     let check = if report.state == "ready" { review_again(cwd) + &crate::assessment::on_ready(cwd) + &rules_check(cwd) } else { String::new() };
     Ok(format!("Reported to the lead and the board as {me}.{kept}{check}"))
 }
@@ -150,7 +153,9 @@ fn ready_notice(cwd: &Path, state: &Path, me: &str, summary: &str) -> crate::hub
         Some(crate::assessment::Word::Assessing | crate::assessment::Word::NotAssessed) | None => None,
         Some(word) => Some(word.text()),
     };
-    crate::hub::notices::About::Ready { address: me.to_string(), does: summary.to_string(), commits, review }
+    let subtasks = crate::tasks::subtasks_for(cwd, false);
+    let to_review = subtasks.listed().then(|| subtasks.items.iter().filter(|subtask| subtask.state == crate::tasks::SubtaskState::Ready).count());
+    crate::hub::notices::About::Ready { address: me.to_string(), does: summary.to_string(), commits, review, to_review }
 }
 
 // The tasks a ready task must be pushed after, each as task@repo; a bare name is a task in its own repo.

@@ -650,7 +650,7 @@ pub fn carry_out(state: &Path, address: &str, obstacle: &Obstacle, answer: &Answ
     let kind = answer.kind.ok_or("the answer names no decision")?;
     let decision = |kind: Kind| Decision { kind, by: By::Investigator, at: now, reason: answer.reason.clone(), plan: answer.plan.clone(), replaced_by: answer.replaced_by.clone(), subtask: answer.subtask.clone(), task: answer.task.clone() };
     let header = format!("Decision on your obstacle {} ({}), by kebbie's investigator", obstacle.id, obstacle.short());
-    let second = kind == Kind::Subtask && load(state, address).iter().any(|other| other.id != obstacle.id && other.decision.as_ref().is_some_and(|decision| decision.kind == Kind::Subtask && decision.by == By::Investigator));
+    let second = kind == Kind::Subtask && (crate::tasks::investigator_added(state, address) || load(state, address).iter().any(|other| other.id != obstacle.id && other.decision.as_ref().is_some_and(|decision| decision.kind == Kind::Subtask && decision.by == By::Investigator)));
     let asked = match kind {
         Kind::Ask => Some(ask_from(answer).unwrap_or_else(|| replan_question(address, obstacle))),
         Kind::Subtask if second => Some(second_subtask_question(address, obstacle, answer)),
@@ -925,6 +925,22 @@ mod tests {
         forget_in(&state, &address);
         assert!(load(&state, &address).is_empty() && QUEUE.asked(&state, &address).is_none());
         crate::tasks::test_support::cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_task_whose_plan_holds_the_investigators_subtask_already_gets_the_next_one_as_a_question_even_with_its_obstacles_gone() {
+        let state = crate::sh::test_dir("obstacle-plan-second");
+        let address = "billing@app";
+        let plan = r#"{"base":"b","subtasks":[{"id":"store","title":"Store frontmatter","done":false,"added":{"at":1,"reason":"the index stores titles only","by":"investigator"}},{"id":"lint","title":"Lint","done":false}],"commits":[],"on":null}"#;
+        crate::state::write(&state.join("steps").join(format!("{address}.json")), plan).unwrap();
+        assert!(crate::tasks::investigator_added(&state, address), "the plan says the investigator added one");
+        let (obstacle, _) = raised(&state, address, "the frontmatter parser rejects tabs", "Lint");
+        let said = carry_out(&state, address, &obstacle.unwrap(), &parse(BLOCK).unwrap(), 2_000).unwrap();
+        assert!(said.contains("it is the user's call"), "one preparatory subtask is the investigator's to add; a second is asked: {said}");
+        assert_eq!(load(&state, address)[0].state, State::Asked);
+        let plan_after = fs::read_to_string(state.join("steps").join(format!("{address}.json"))).unwrap();
+        assert!(!plan_after.contains("Store each note"), "nothing was added to the plan: {plan_after}");
+        fs::remove_dir_all(state).unwrap();
     }
 
     #[test]

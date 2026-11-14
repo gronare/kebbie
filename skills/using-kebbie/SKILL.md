@@ -1,6 +1,6 @@
 ---
 name: using-kebbie
-description: Answer a question about kebbie itself from kebbie's own docs on this machine. Use when the user asks how to set up kebbie or something in it, what a kebbie command, board key or config key does, or how a kebbie feature works (tasks, the lead, the board, the push line, stage, the sandbox, profiles, Codex, routines, updates).
+description: Answer a question about kebbie itself from kebbie's own docs on this machine. Use when the user asks how to set up kebbie or something in it, what a kebbie command, board key or config key does, or how a kebbie feature works (tasks, the lead, the board, the push line, try, the sandbox, profiles, Codex, routines, updates).
 ---
 
 # Answer from kebbie's docs

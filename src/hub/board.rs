@@ -175,6 +175,22 @@ fn subtask(shown: &crate::tasks::Subtask, rules: Option<&Rules>) -> Option<Subta
     Some(Subtask { id: shown.id.clone(), title: shown.title.clone(), state: subtask_state(&shown.state), commits, added, rules })
 }
 
+// The push order as the phone gets it: a group whose commits do not sit together, or that holds one commit, is left unmarked, as the protocol takes only whole groups; the pushable run was counted with every group, so it splits none.
+fn wire_order(order: &[crate::tasks::Placed]) -> Vec<OrderRow> {
+    let mut rows: Vec<OrderRow> = order.iter().map(crate::tasks::Placed::row).collect();
+    let groups: Vec<String> = rows.iter().filter_map(|row| row.group.clone()).collect();
+    for group in groups {
+        let at: Vec<usize> = rows.iter().enumerate().filter(|(_, row)| row.group.as_deref() == Some(group.as_str())).map(|(at, _)| at).collect();
+        let whole = at.len() >= 2 && at.windows(2).all(|pair| pair[1] == pair[0] + 1) && kebbie_hub_protocol::is_subtask_id(&group);
+        if !whole {
+            for at in at {
+                rows[at].group = None;
+            }
+        }
+    }
+    rows
+}
+
 type Plan = (Option<Vec<Subtask>>, Option<Vec<OrderRow>>, Option<Pushable>, Option<bool>);
 
 fn plan(item: &status::Item, seen: &Seen) -> Plan {
@@ -184,7 +200,7 @@ fn plan(item: &status::Item, seen: &Seen) -> Plan {
     }
     let rules = rules(item);
     let listed: Vec<Subtask> = subtasks.pushed.iter().chain(&subtasks.items).filter_map(|shown| subtask(shown, rules.as_ref())).collect();
-    let order: Vec<OrderRow> = subtasks.order.iter().map(|row| OrderRow { sha: row.sha.clone(), subject: row.subject.clone(), subtask: row.subtask.clone() }).collect();
+    let order = wire_order(&subtasks.order);
     let pushable = subtasks.pushable.as_ref().map(|run| Pushable { count: count(run.count), through: run.through.clone(), subtasks: run.subtasks.clone() });
     (Some(listed), Some(order), pushable, Some(seen.accepting.contains(&item.place)))
 }
@@ -488,6 +504,32 @@ pub(crate) mod tests {
         let board = build(&[item], &[], Vec::new(), None, &Seen::default());
         let options = &board.items[0].question.as_ref().unwrap().options;
         assert_eq!(options.iter().map(|option| option.comment).collect::<Vec<_>>(), [false, true], "the phone asks for a comment exactly where kebbie refuses an answer without one");
+    }
+
+    #[test]
+    fn each_commit_reaches_the_phone_with_its_own_acceptance_group_tests_and_move_and_a_split_group_goes_unmarked() {
+        use crate::tasks::SubtaskState as Listing;
+        use kebbie_hub_protocol::{CommitTests, Moved, TestsState};
+        let mut item = task(Some("working"), Some("working"), 3);
+        let mut model = listed("model", 1, "Model", Listing::Ready, &["a", "b", "c"], false);
+        model.commits[0].accepted = true;
+        item.subtasks = crate::tasks::ordered(crate::tasks::Subtasks { items: vec![model], ..Default::default() });
+        item.subtasks.order[0].group = Some("g1".to_string());
+        item.subtasks.order[1].group = Some("g1".to_string());
+        item.subtasks.order[1].tests = Some(CommitTests { state: TestsState::Passed, at: Some(5) });
+        item.subtasks.order[2].moved = Some(Moved { from: 1, reason: "it prepares the model".to_string() });
+        item.subtasks.pushable = crate::tasks::run_of(&item.subtasks.order);
+        let board = build(std::slice::from_ref(&item), &[], Vec::new(), None, &Seen::default());
+        board.check().unwrap();
+        let order = board.items[0].order.as_ref().unwrap();
+        assert_eq!(order.iter().map(|row| (row.accepted, row.group.as_deref())).collect::<Vec<_>>(), [(true, Some("g1")), (false, Some("g1")), (false, None)]);
+        assert_eq!((order[1].tests.as_ref().map(|tests| tests.state), order[2].moved.as_ref().map(|moved| moved.from)), (Some(TestsState::Passed), Some(1)));
+        assert_eq!(board.items[0].pushable, None, "the accepted commit waits for the other half of its group");
+        item.subtasks.order[2].group = Some("g1".to_string());
+        item.subtasks.order[1].group = None;
+        let split = build(std::slice::from_ref(&item), &[], Vec::new(), None, &Seen::default());
+        split.check().unwrap();
+        assert!(split.items[0].order.as_ref().unwrap().iter().all(|row| row.group.is_none()), "a group whose commits do not sit together goes out unmarked, so the board still checks");
     }
 
     #[test]

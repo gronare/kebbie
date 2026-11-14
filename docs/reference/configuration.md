@@ -70,7 +70,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 | `worktree.dev_worker` | none | either | A second command, such as a job runner, that `b` runs in a worker tab. Unset, there is no `b`. |
 | `worktree.dev_url` | `"http://localhost:{port}"` | either | The running dev server's address, shown on the board as a link. `""` turns the link off. |
 | `worktree.dev_route` | `false` | repo config only | Whether [`kebbie routes`](commands.md#setup-and-maintenance) writes a Caddy site for each of this repo's worktrees. |
-| `worktree.stage_on_main` | `false` | repo config only | Whether [`kebbie stage`](commands.md#kebbie-stage-name) (`M` on the board) may put a ready task's commits on this repo's local default branch. |
+| `worktree.stage_on_main` | `false` | repo config only | Whether [`kebbie try`](commands.md#kebbie-try-name) (`M` on the board) may put a ready task's commits on this repo's local default branch. |
 | `worktree.clean_on_release` | `["target"]` | either | Build output kebbie removes from a worktree when it goes back to the pool. `[]` keeps everything. |
 | `worktree.server_name` | `"server"` | config.toml only | The name of the tab `w` starts, and of the Space's tag in herdr's sidebar while it runs. |
 | `worktree.worker_name` | `"worker"` | config.toml only | The same for `b`'s tab. |
@@ -119,7 +119,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 - A task's shell writes only in its worktree, its temp folder, the package caches (`~/.cargo/registry`, `~/.cargo/git`, `~/.npm`, `~/.cache`) and the repo's shared `.git` folder, except its hooks, config and the other pooled worktrees' git dirs.
 - It reaches only crates.io, static.crates.io, index.crates.io, registry.npmjs.org, github.com, objects.githubusercontent.com, pypi.org and files.pythonhosted.org, and no Unix socket.
 - On macOS it may listen on local ports for a dev server.
-- kebbie's own task commands (`peers`, `tell`, `ask`, `report`, `subtasks`, `routine ok`, `link`, `backlog add`, `config`) run outside it.
+- kebbie's own task commands (`peers`, `tell`, `ask`, `report`, `subtasks`, `order`, `routine ok`, `link`, `backlog add`, `config`) run outside it.
 - On Linux it needs bubblewrap, socat and the seccomp filter (`npm install -g @anthropic-ai/sandbox-runtime`). Without them kebbie refuses to start a task or a review and names what to install.
 - `false` runs them unsandboxed, where a task's shell can pass as you to kebbie's user-only commands. `kebbie doctor`, a task's start and the board's Areas page say so.
 - A profile's `[sandbox] enabled` wins over it.
@@ -245,6 +245,7 @@ commands = ["answer", "prompt", "idea"]
 | Key | Default | Where | What it does |
 | --- | --- | --- | --- |
 | `ci.watch` | `true` | either | Whether kebbie watches CI after a push and closes the task only once every workflow run for the pushed commit is green. |
+| `tests.per_commit` | `true` | either | Whether the keeper tests each of a ready task's unpushed commits on its own and marks the push order with the results. |
 | `comments.watch` | `true` | either | Whether kebbie reads the comments colleagues leave on the commits it pushed and shows each under COMMENTS on the board. |
 | `comments.watch_days` | `7` | either | How many days after a push kebbie checks its commits for new comments, a whole number from 1 to 90. |
 | `update.channel` | `"release"` | config.toml only | What `kebbie update` installs: `"release"`, the highest `vX.Y.Z` tag on origin, or `"main"`, origin's default branch. |
@@ -255,6 +256,8 @@ commands = ["answer", "prompt", "idea"]
 | `recover.enabled` | `true` | config.toml only | Whether kebbie resumes a task whose Claude an API error stopped, and puts a Codex task an API error stopped under Needs you. |
 
 `ci.watch` needs origin on GitHub and `gh` logged in. `false` closes the task right after the push, as for a repo without useful CI. See [Watch CI after a push](../explanation/trunk-based.md#ci-after-the-push).
+
+`tests.per_commit`: when a task reports ready, the keeper runs the test commands the task's own recorded runs used, else `task.test_commands`, on each unpushed commit, one at a time, in a throwaway worktree of kebbie's, and keeps each result by the commit's sha. Nothing waits on it. A commit the task's own run already tested is not run again, and a task in the sandbox gets only those, since kebbie runs none of its code outside the sandbox. The cost is a suite run per commit and a build in the throwaway worktree, so a repo with a slow suite sets it to `false`. At rest nothing runs. See [Test each commit on its own](../how-to/work-in-steps.md#test-each-commit-on-its-own).
 
 `comments.watch` needs what `ci.watch` needs, origin on GitHub and `gh` logged in, and [`kebbie doctor`](requirements.md#what-kebbie-doctor-checks) says when a repo misses either. Your own comments are skipped, and so are a bot's. kebbie asks `gh` for a repo's new commit comments every 12 minutes while any of its pushed commits is watched, in one call however many are, and less often while `gh` fails. A comment already on the board stays there after the days run out. See [Act on comments on pushed commits](../how-to/act-on-comments-on-pushed-commits.md).
 

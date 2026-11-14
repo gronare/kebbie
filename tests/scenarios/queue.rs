@@ -1,4 +1,4 @@
-use crate::lab::{Lab, git, stderr, stdout};
+use crate::lab::{Lab, eventually, git, stderr, stdout};
 
 #[test]
 fn a_task_queued_after_another_waits_on_the_board_and_starts_once_the_first_is_pushed() {
@@ -112,4 +112,52 @@ fn with_require_accept_a_push_takes_only_accepted_subtasks_and_the_task_waits_on
     let all = lab.run_as_user(&["-C", lab.app(), "push", "billing"]);
     assert!(all.status.success() && stdout(&all).contains("closed the task"), "{}\n{}", stdout(&all), stderr(&all));
     assert_eq!(git(&lab.root.join("origin.git"), &["log", "-1", "--format=%s", "main"]), "Document refunds");
+}
+
+#[test]
+fn a_late_preparatory_commit_moves_up_holds_the_run_until_accepted_and_each_commit_is_tested_on_its_own() {
+    let lab = Lab::new("order");
+    lab.config("[task]\nsandbox = false\ntest_commands = [\"test ! -e broken.txt\"]\n");
+    let billing = lab.start("billing", "Add refunds", &[]);
+    let slot = billing.to_str().unwrap();
+    assert!(lab.run_as("billing@app", &["-C", slot, "subtasks", "Add refunds"]).status.success());
+    let first = lab.work(&billing, "refunds.rb", "Add refunds");
+    let second = lab.work(&billing, "refunds.md", "List refunds");
+    let added = lab.run_as("billing@app", &["-C", slot, "subtasks", "add", "Store reasons", "--because", "a refund needs its reason first", "--prepares", "add-refunds"]);
+    assert!(added.status.success(), "{}", stderr(&added));
+    assert!(lab.run_as("billing@app", &["-C", slot, "subtasks", "on", "store-reasons"]).status.success());
+    let late = lab.work(&billing, "reasons.rb", "Store reasons");
+    let other = lab.run_as("search@app", &["-C", slot, "order", "move", &late, "--before", &first, "--because", "x"]);
+    assert!(!other.status.success(), "another task reorders nothing here: {}", stdout(&other));
+    let moved = lab.run_as("billing@app", &["-C", slot, "order", "move", &late, "--before", &first, "--because", "a refund needs its reason first"]);
+    assert!(moved.status.success() && stdout(&moved).contains("Moved "), "{}\n{}", stdout(&moved), stderr(&moved));
+    assert_eq!(git(&billing, &["log", "--reverse", "--format=%s", "origin/main..HEAD"]).lines().collect::<Vec<_>>(), ["Store reasons", "Add refunds", "List refunds"]);
+    for (id, done) in [("store-reasons", true), ("add-refunds", true)] {
+        assert_eq!(lab.run_as("billing@app", &["-C", slot, "subtasks", "done", id]).status.success(), done, "{id}");
+    }
+    assert!(lab.run_as_user(&["-C", lab.app(), "accept", "billing", "--subtask", "add-refunds"]).status.success());
+    let item = lab.item("billing");
+    assert_eq!(item["order"][0]["subtask"], "store-reasons", "{item}");
+    assert_eq!((item["order"][0]["moved"]["from"].as_u64(), item["order"][0]["moved"]["reason"].as_str()), (Some(3), Some("a refund needs its reason first")), "{item}");
+    assert_eq!((item["order"][1]["accepted"].as_bool(), item["order"][0]["accepted"].as_bool()), (Some(true), Some(false)), "the moved commits keep their acceptance: {item}");
+    assert!(item["pushable"].is_null(), "the run grows past the preparatory commit only once it is accepted: {item}");
+    assert_eq!(item["subtasks"].as_array().map(Vec::len), Some(2), "{item}");
+    assert!(lab.run_as_user(&["-C", lab.app(), "accept", "billing", "--subtask", "store-reasons"]).status.success());
+    assert_eq!(lab.item("billing")["pushable"]["count"].as_u64(), Some(3));
+    assert_ne!(git(&billing, &["rev-parse", "HEAD"]), second, "the branch was replayed");
+
+    let broken = lab.work(&billing, "broken.txt", "Break the build");
+    lab.ok(&["-C", slot, "report", "--state", "ready", "--next", "push", "refunds done"]);
+    lab.keeper_round();
+    let tested = || lab.item("billing")["order"].as_array().unwrap().iter().all(|row| ["passed", "failed"].contains(&row["tests"]["state"].as_str().unwrap_or_default()));
+    assert!(eventually(std::time::Duration::from_secs(60), tested), "{}\n{}", lab.item("billing"), lab.keeper_log());
+    let order = lab.item("billing")["order"].clone();
+    let states: Vec<(&str, &str)> = order.as_array().unwrap().iter().map(|row| (row["sha"].as_str().unwrap(), row["tests"]["state"].as_str().unwrap())).collect();
+    assert_eq!(states.iter().map(|(_, state)| *state).collect::<Vec<_>>(), ["passed", "passed", "passed", "failed"], "{order}");
+    assert_eq!(states[3].0, broken);
+    assert!(lab.item("billing")["pushable"]["count"].as_u64() == Some(3), "a failed test gates nothing");
+    assert!(!git(lab.app.as_path(), &["worktree", "list"]).contains("commit-tests"), "the throwaway worktree is gone");
+
+    let old = lab.run_as_user(&["-C", lab.app(), "stage", "billing"]);
+    assert!(stderr(&old).contains("kebbie stage is now kebbie try"), "{}", stderr(&old));
 }

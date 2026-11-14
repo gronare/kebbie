@@ -74,7 +74,8 @@ Some of kebbie's work runs on a clock rather than on a command. The keeper runs 
 | Every | The keeper |
 | --- | --- |
 | 15 seconds | Completes a push that waits for a task's Claude to test the files the default branch changed under it, once the task reports ready with the same commits. |
-| 15 seconds | Puts a staged task whose stage conflicted back on local main once its Claude reports ready, and stops counting a staged task as staged once its commits reached origin. See [`kebbie stage`](../reference/commands.md#kebbie-stage-name). |
+| 15 seconds | Puts a staged task whose stage conflicted back on local main once its Claude reports ready, and stops counting a staged task as staged once its commits reached origin. See [`kebbie try`](../reference/commands.md#kebbie-try-name). |
+| 15 seconds | Starts the test run of each unpushed commit of a task that reported ready, one commit at a time; with no task waiting it reads one folder. See [Test each commit on its own](../how-to/work-in-steps.md#test-each-commit-on-its-own). |
 | 15 seconds | Starts queued tasks once every task they wait for has ended as done. See [`kebbie after`](../reference/commands.md#kebbie-after-name). |
 | 15 seconds, and at least once a minute | With a hub connected from its link, sends the board to the hub sealed to your account when it changes. See [See your board on your phone](../how-to/see-your-board-on-your-phone.md). |
 
