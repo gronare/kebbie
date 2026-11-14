@@ -27,7 +27,7 @@ use kebbie_hub_protocol::SecretKeys;
 
 use crate::doctor::{Check, Level};
 use crate::sh::Result;
-use http::{CALL, Client};
+use http::{CALL, Client, HubError};
 use identity::Identity;
 
 pub const EVERY: u64 = 15;
@@ -240,8 +240,9 @@ pub fn join(state: &Path, url: &str, code: &str, name: &str, now: u64) -> Result
     let url = hub_url(url)?;
     let keys = SecretKeys::generate();
     let client = Client::new(&url, None, CALL);
-    let joined: Joined = client.post("/v1/m/join", &JoinRequest { code: code.trim().to_string(), name: name.to_string(), keys: keys.public() }).map_err(|error| match error.status() {
-        Some(401) => "the hub refused that join code: it is used, expired or mistyped; mint a new one with kebbie-hub admin join-code".to_string(),
+    let joined: Joined = client.post("/v1/m/join", &JoinRequest { code: code.trim().to_string(), name: name.to_string(), keys: keys.public() }).map_err(|error| match (&error, error.status()) {
+        (HubError::ProRequired { url }, _) => connect::second_machine(url.as_deref()),
+        (_, Some(401)) => "the hub refused that join code: it is used, expired or mistyped; mint a new one with kebbie-hub admin join-code".to_string(),
         _ => error.to_string(),
     })?;
     let identity = Identity::new(&client.moved().unwrap_or(url), joined.machine, name, joined.token, &keys, now);

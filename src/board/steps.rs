@@ -42,18 +42,17 @@ pub(super) fn mark_color(state: &SubtaskState) -> Color {
 
 const TITLE_FLOOR: usize = 12;
 
-// The rules part of a ready subtask's label, longest first; the lines under the task's row say it in full, and a check that passed says nothing.
+// The rules part of a ready subtask's label, longest first; the lines under the task's row say it in full, and a check that passed or never ran says nothing here, the task's line says not checked once.
 fn rules_forms(item: &Item, state: &SubtaskState) -> Vec<String> {
     use crate::status::RulesShown;
     if *state != SubtaskState::Ready {
         return Vec::new();
     }
     match item.rules_shown() {
-        None | Some(RulesShown::Ok) => Vec::new(),
+        None | Some(RulesShown::Ok | RulesShown::Unchecked) => Vec::new(),
         Some(RulesShown::Checking { .. }) => vec!["checking project rules".to_string(), "checking".to_string()],
         Some(RulesShown::Breaks { count, .. }) => vec![crate::status::breaks(count), plural(count, "break")],
         Some(RulesShown::Overridden { by, .. }) => vec![crate::status::past_the_check(by), "past the rules".to_string()],
-        Some(RulesShown::Unchecked) => vec![crate::status::UNCHECKED.to_string(), "not checked".to_string()],
     }
 }
 
@@ -374,7 +373,7 @@ pub(crate) mod tests {
         let state = SubtaskState::Ready;
         assert!(rules_forms(&item, &state).is_empty(), "a check that passed says nothing");
         item.git.as_mut().unwrap().approved = false;
-        assert_eq!(rules_forms(&item, &state), vec!["project rules not checked", "not checked"]);
+        assert!(rules_forms(&item, &state).is_empty(), "not checked is the task's, said once on its line");
         item.rules = Some(crate::rules_check::Shown::Broken(1, Vec::new()));
         assert_eq!(rules_forms(&item, &state), vec!["breaks 1 project rule", "1 break"]);
         item.rules = Some(crate::rules_check::Shown::Broken(3, Vec::new()));
@@ -390,6 +389,22 @@ pub(crate) mod tests {
         let mut working = stepped(stripe());
         working.git.as_mut().unwrap().approved = false;
         assert!(rules_forms(&working, &state).is_empty(), "under Working nothing was checked yet, the step says only committed");
+    }
+
+    #[test]
+    fn a_task_with_many_ready_unchecked_subtasks_says_not_checked_once() {
+        let steps = Subtasks { items: (0..16).map(|index| held(index, &format!("Subtask {index}"), &[&format!("{index:07}aaaa")], false)).collect(), ..Subtasks::default() };
+        let mut item = stepped(steps);
+        crate::status::tests::in_phase(&mut item, Phase::Ready { head: None });
+        item.git.as_mut().unwrap().approved = false;
+        assert_eq!(item.rules_shown(), Some(crate::status::RulesShown::Unchecked));
+        let mut app = test_app(vec![item]);
+        app.work_selected = 9;
+        let (rows, _) = render(&mut app, 120, 40);
+        let screen = rows.join("\n");
+        assert_eq!(screen.matches("not checked").count(), 1, "{screen}");
+        assert!(screen.contains(crate::status::UNCHECKED), "{screen}");
+        assert!(step_rows(&rows).iter().all(|row| row.ends_with("ready · 1 commit")), "{screen}");
     }
 
     #[test]

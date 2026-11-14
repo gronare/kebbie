@@ -12,6 +12,8 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The investigator applies your earlier answer in a task instead of asking you the same kind of question again.
 - Subtasks with commits show ready once later work moved past them, even without kebbie subtasks done.
 - s on a task waiting on kebbie's own obstacle question opens that question, not the sign-off card.
+- "project rules not checked" shows once, on the task's line, not on each of its ready subtasks.
+- kebbie hub connect and H on the board say a second machine is part of Hub Pro, with the page to get it.
 
 ## 0.38.0
 

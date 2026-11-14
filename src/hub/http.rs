@@ -9,11 +9,13 @@ const MAX_HOPS: usize = 5;
 const JSON: &str = "application/json";
 pub const CALL: Duration = Duration::from_secs(15);
 pub const LONG_POLL: Duration = Duration::from_secs(35);
+pub const PRO_REQUIRED: &str = "pro-required";
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum HubError {
     Status { status: u16, code: String },
     NotEnabled { url: Option<String> },
+    ProRequired { url: Option<String> },
     Transport(String),
     Redirect(String),
 }
@@ -22,7 +24,7 @@ impl HubError {
     pub fn status(&self) -> Option<u16> {
         match self {
             HubError::Status { status, .. } => Some(*status),
-            HubError::NotEnabled { .. } => Some(402),
+            HubError::NotEnabled { .. } | HubError::ProRequired { .. } => Some(402),
             _ => None,
         }
     }
@@ -39,10 +41,16 @@ impl fmt::Display for HubError {
             HubError::Status { status, code } => write!(formatter, "the hub answered {status} {code}"),
             HubError::NotEnabled { url: Some(url) } => write!(formatter, "This hub has not enabled answering for your account: {url}"),
             HubError::NotEnabled { url: None } => formatter.write_str("This hub has not enabled answering for your account"),
+            HubError::ProRequired { url } => formatter.write_str(&pro_line("That", url.as_deref())),
             HubError::Transport(message) => write!(formatter, "could not reach the hub: {message}"),
             HubError::Redirect(message) => write!(formatter, "the hub's redirect was not followed: {message}"),
         }
     }
+}
+
+// What a hub on a plan without Pro says it refused, with where the plan is changed when it names one.
+pub fn pro_line(what: &str, url: Option<&str>) -> String {
+    url.map_or_else(|| format!("{what} is part of Hub Pro"), |url| format!("{what} is part of Hub Pro: {url}"))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -125,6 +133,9 @@ impl Client {
             if status == 402 && code == kebbie_hub_api::PLAN_INACTIVE {
                 return Err(HubError::NotEnabled { url: body["url"].as_str().map(str::to_string) });
             }
+            if status == 402 && code == PRO_REQUIRED {
+                return Err(HubError::ProRequired { url: body["url"].as_str().map(str::to_string) });
+            }
             return Err(HubError::Status { status, code });
         }
         Err(HubError::Redirect(format!("more than {MAX_HOPS} redirects")))
@@ -206,5 +217,14 @@ mod tests {
         let status = |status| HubError::Status { status, code: String::new() };
         assert!(status(400).is_final() && status(409).is_final() && status(413).is_final());
         assert!(!status(429).is_final() && !status(503).is_final() && !HubError::Transport("down".to_string()).is_final());
+        assert!(HubError::ProRequired { url: None }.is_final());
+    }
+
+    #[test]
+    fn a_refusal_for_want_of_pro_names_hub_pro_never_the_status_code() {
+        let refused = HubError::ProRequired { url: Some("https://kebbie.dev/billing".to_string()) };
+        assert_eq!(refused.to_string(), "That is part of Hub Pro: https://kebbie.dev/billing");
+        assert_eq!(HubError::ProRequired { url: None }.to_string(), "That is part of Hub Pro");
+        assert_eq!(pro_line("A second machine", Some("https://kebbie.dev/billing")), "A second machine is part of Hub Pro: https://kebbie.dev/billing");
     }
 }

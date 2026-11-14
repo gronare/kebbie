@@ -6,7 +6,7 @@ use kebbie_hub_protocol::{ConnectSecret, SecretKeys};
 
 use super::card::{self, Copied, Foot, Row, Tone, piece};
 use super::console::{self, Console, Key, say};
-use super::http::{CALL, Client, HubError};
+use super::http::{CALL, Client, HubError, pro_line};
 use super::identity::{self, Identity};
 use super::pair::{self, Stop};
 use super::qr;
@@ -17,6 +17,10 @@ use crate::sh::Result;
 
 const SLOW_DOWN_STEP: u64 = 5;
 pub const STOPPED: &str = "stopped; this machine is not connected";
+
+pub fn second_machine(url: Option<&str>) -> String {
+    pro_line("A second machine", url)
+}
 
 pub fn hub_name(url: &str) -> String {
     if super::dev().is_some() {
@@ -83,7 +87,10 @@ pub fn start(url: &str, name: &str) -> Result<Pending> {
     let url = super::hub_url(url)?;
     let keys = SecretKeys::generate();
     let client = Client::new(&url, None, CALL);
-    let started: ConnectStarted = client.post("/v1/m/connect", &ConnectStart { name: name.to_string(), keys: keys.public() }).map_err(|error| format!("{} did not start the connect: {error}", hub_name(&url)))?;
+    let started: ConnectStarted = client.post("/v1/m/connect", &ConnectStart { name: name.to_string(), keys: keys.public() }).map_err(|error| match error {
+        HubError::ProRequired { url } => second_machine(url.as_deref()),
+        error => format!("{} did not start the connect: {error}", hub_name(&url)),
+    })?;
     let secret = ConnectSecret::new(&keys.public());
     let expires = Instant::now() + Duration::from_secs(started.expires_in);
     let deadline = expires + Duration::from_secs(started.interval);
@@ -119,6 +126,7 @@ impl Pending {
                 _ => Err(HubError::Status { status: 400, code }.to_string()),
             },
             Err(HubError::Transport(_)) => Ok(Polled::Pending),
+            Err(HubError::ProRequired { url }) => Err(second_machine(url.as_deref())),
             Err(error) => Err(error.to_string()),
         }
     }

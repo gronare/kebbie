@@ -263,6 +263,24 @@ pub(crate) fn serving_requests(respond: impl Fn(&str, &str, &str) -> String + Se
     url
 }
 
+#[test]
+fn a_hub_that_refuses_a_second_machine_for_want_of_pro_says_so_with_its_billing_page() {
+    const BILLING: &str = "https://kebbie.dev/billing";
+    let reply = |status: &str, body: String| format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+    let refused = || serde_json::json!({ "error": "pro-required", "url": BILLING }).to_string();
+    let url = serving(move |path| match path {
+        "/v1/m/connect" => reply("200 OK", serde_json::json!({ "device_code": "d", "user_code": "ABCD-EFGH", "verification_uri": "https://hub/connect", "verification_uri_complete": "https://hub/connect?code=ABCD-EFGH", "interval": 1, "expires_in": 60 }).to_string()),
+        _ => reply("402 Payment Required", refused()),
+    });
+    let said = format!("A second machine is part of Hub Pro: {BILLING}");
+    let mut pending = super::connect::start(&url, "devbox").unwrap();
+    assert_eq!(pending.wait(&mut |_| true).err(), Some(said.clone()), "never the hub answered 402 pro-required");
+    let state = crate::sh::test_dir("hub-join-pro");
+    assert_eq!(super::join(&state, &url, "code", "devbox", now()).err(), Some(said.clone()));
+    let at_start = serving(move |_| reply("402 Payment Required", refused()));
+    assert_eq!(super::connect::start(&at_start, "devbox").err(), Some(said));
+}
+
 fn moved_to(target: &str) -> String {
     let target = target.to_string();
     serving(move |path| format!("HTTP/1.1 308 Permanent Redirect\r\nLocation: {target}{path}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"))
