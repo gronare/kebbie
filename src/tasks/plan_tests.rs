@@ -328,9 +328,9 @@ fn add_needs_a_reason_and_goes_before_the_subtask_it_prepares_and_on_sends_the_n
     let state = state_of(&dir);
     let task = Task { path: &slot.path, upstream: &upstream, address: "billing@app" };
     list_at(&state, &slot.path, &upstream, "billing@app", &["Model", "Command"]).unwrap();
-    assert!(add_as(&Caller::User, &state, &task, "Store frontmatter", "  ", None, 5).unwrap_err().contains("--because"));
-    assert!(add_as(&Caller::User, &state, &task, "Store frontmatter", "the lint reads it", Some("nope"), 5).unwrap_err().contains("no subtask nope to prepare"));
-    assert_eq!(add_as(&Caller::Task("billing@app".to_string()), &state, &task, "Store frontmatter", "the lint\nreads it", Some("command"), 5).unwrap(), "Added Store frontmatter [store-frontmatter].");
+    assert!(add_as(&Caller::User, &state, &task, "Store frontmatter", "  ", None, None, 5).unwrap_err().contains("--because"));
+    assert!(add_as(&Caller::User, &state, &task, "Store frontmatter", "the lint reads it", Some("nope"), None, 5).unwrap_err().contains("no subtask nope to prepare"));
+    assert_eq!(add_as(&Caller::Task("billing@app".to_string()), &state, &task, "Store frontmatter", "the lint\nreads it", Some("command"), None, 5).unwrap(), "Added Store frontmatter [store-frontmatter].");
     let plan = load(&state, "billing@app").unwrap();
     assert_eq!((ids_of(&plan), plan.parts[1].added.clone()), (vec!["model", "store-frontmatter", "command"], Some(Added { at: 5, reason: "the lint reads it".to_string(), by: "task".to_string() })));
     on_as(&Caller::Task("billing@app".to_string()), &state, &task, "command").unwrap();

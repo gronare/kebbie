@@ -56,9 +56,9 @@ The task's note is where the why lives: kebbie writes the recipe and the assesso
 
 ### `rollout-in-stages`
 
-- **When**: the change must reach production in stages with a deploy between them: an expand and contract column rename, a backfill before a constraint, a flag turned on before the old code goes.
-- **Phases**: one task, its subtasks in stage order, each stage's commits above the next stage's in the branch. The prompt says where each stage ends and what must be live before the next starts; the task builds on while a stage is out.
-- **The user**: the push. Each stage goes out as a push of its own once the stage before it is live: the user accepts the stage's subtasks and pushes the accepted run (`p` in the push window, or push from the phone).
+- **When**: the change reaches production in steps with something live between them: a table or column renamed or dropped (expand, then contract), a backfill before a constraint, a migration the next commit needs deployed first, a flag turned on before the old code goes.
+- **Phases**: one task. It lists its subtasks, then declares the stages in push order with `kebbie stages "<title>:<requirement>" …`, each requirement one of `deploy` (the stage's deploy is green), `check:<what the task checks>` (the task runs it once the stage is deployed) or `verified:<what the user verifies>` (a question to the user once it is deployed), and puts each subtask in its stage with `kebbie stages assign <stage> <subtask> …`. Each stage's commits sit above the next stage's. kebbie stops the pushable run at the first stage that is not met, follows CI and the deploy after each stage's push, and opens the next stage when the requirement holds; the task builds on meanwhile. A failed stage holds the rest: the task fixes it in a subtask of that stage (`kebbie subtasks add … --stage <stage>`) or raises it with `kebbie obstacle`.
+- **The user**: a push per stage, and the answer on each verification.
 
 ### `follow-up`
 

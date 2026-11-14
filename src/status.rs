@@ -671,7 +671,7 @@ impl Item {
             let dirty = if git.uncommitted > 0 { format!(" · {}", plural(git.uncommitted, "uncommitted file")) } else { String::new() };
             return format!("{} · ready to push{dirty}{behind}{review}{turn}", plural(git.ahead, "commit"));
         }
-        let mut parts: Vec<String> = self.git_error().map(|_| GIT_UNREAD.to_string()).into_iter().chain(self.obstacle.as_ref().map(crate::obstacle::Shown::note)).chain(self.staged.then(|| STAGED.to_string())).chain(self.phase_note()).chain(self.ci_note()).chain(self.recover_note()).chain(self.push_note()).chain(self.landed.filter(|why| !why.waits_for_you()).and(self.landed_note())).collect();
+        let mut parts: Vec<String> = self.git_error().map(|_| GIT_UNREAD.to_string()).into_iter().chain(self.obstacle.as_ref().map(crate::obstacle::Shown::note)).chain(crate::tasks::rollout::note(&self.subtasks.stages)).chain(self.staged.then(|| STAGED.to_string())).chain(self.phase_note()).chain(self.ci_note()).chain(self.recover_note()).chain(self.push_note()).chain(self.landed.filter(|why| !why.waits_for_you()).and(self.landed_note())).collect();
         if git.ahead > 0 {
             parts.push(plural(git.ahead, "commit"));
         }
@@ -702,6 +702,7 @@ impl Item {
         shown["recipe"] = self.recipe.as_ref().map_or(Value::Null, crate::recipe::Recipe::to_json);
         shown["subtasks"] = if self.subtasks.listed() { tasks::subtasks_json(&self.subtasks) } else { Value::Null };
         shown["order"] = if self.subtasks.listed() { tasks::order_json(&self.subtasks) } else { Value::Null };
+        shown["stages"] = if self.subtasks.stages.is_empty() { Value::Null } else { tasks::rollout::stages_json(&self.subtasks.stages) };
         shown["pushable"] = tasks::pushable_json(&self.subtasks);
         shown["obstacle"] = self.obstacle.as_ref().map_or(Value::Null, |obstacle| json!({ "id": obstacle.id, "state": obstacle.state.word(), "text": obstacle.text }));
         shown["parked_until"] = self.parked.map_or(Value::Null, |parked| parked.until.map_or(json!(tasks::UNPARKED), |at| json!(at)));

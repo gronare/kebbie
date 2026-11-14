@@ -107,6 +107,7 @@ pub(super) fn close_task(cwd: &Path, name: Option<&str>, vault: Option<&crate::v
     forget_session(task_of(&slot), &repo);
     forget_approval(task_of(&slot), &repo);
     super::plan::forget(task_of(&slot), &repo);
+    crate::kebbie_questions::forget(&peers::address(task_of(&slot), &name_of(&repo)));
     crate::commit_tests::forget(task_of(&slot), &repo);
     super::accept::forget(task_of(&slot), &repo);
     crate::permit::forget(&peers::address(task_of(&slot), &name_of(&repo)));
@@ -279,6 +280,7 @@ fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str, kind: Option<
     forget_session(task, &repo);
     forget_approval(task, &repo);
     super::plan::forget(task, &repo);
+    crate::kebbie_questions::forget(&peers::address(task, &name_of(&repo)));
     crate::commit_tests::forget(task, &repo);
     super::accept::forget(task, &repo);
     crate::permit::forget(&peers::address(task, &name_of(&repo)));

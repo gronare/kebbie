@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use kebbie_hub_protocol::{Agent, AgentStatus, Board, Checkout, Ci, CiState, Counts, Git, Group, Item, Later, LaterState, MAX_RULE_NAMES, NextPart, NextRow, OverrideBy, Prompt, PromptOption, PushPermission, Question, QuestionOption, Recover, Report, RoutineSummary, Rules, RulesOverride, RulesState, SecondOpinion, Verdict, VerdictOutcome};
-use kebbie_hub_protocol::{Added, DecidedBy, DecisionKind, MAX_ADDED_REASON_CHARS, MAX_OBSTACLE_CHARS, Obstacle, ObstacleDecision, ObstacleState, OrderRow, Pushable, Subtask, SubtaskState};
+use kebbie_hub_protocol::{Added, DecidedBy, DecisionKind, KebbieQuestion, MAX_ADDED_REASON_CHARS, MAX_OBSTACLE_CHARS, Obstacle, ObstacleDecision, ObstacleState, OrderRow, Pushable, Stage, Subtask, SubtaskState};
 
 use super::blobs::{Attachment, PLAN_LIMIT};
 use crate::menu::Menu;
@@ -22,6 +22,7 @@ pub struct Seen {
     pub home: Option<String>,
     pub accepting: BTreeSet<String>,
     pub obstacles: BTreeMap<String, Obstacle>,
+    pub kebbie: BTreeMap<String, Vec<crate::kebbie_questions::Asked>>,
 }
 
 fn group(group: status::Group) -> Option<Group> {
@@ -191,18 +192,42 @@ fn wire_order(order: &[crate::tasks::Placed]) -> Vec<OrderRow> {
     rows
 }
 
-type Plan = (Option<Vec<Subtask>>, Option<Vec<OrderRow>>, Option<Pushable>, Option<bool>);
+type Plan = (Option<Vec<Subtask>>, Option<Vec<OrderRow>>, Option<Pushable>, Option<bool>, Option<Vec<Stage>>);
+
+// Stages go out only while the push order keeps to them, every group within one stage, so the board still checks; the run kebbie counted stops at them either way.
+fn wire_stages(subtasks: &crate::tasks::Subtasks, order: &mut [OrderRow]) -> Option<Vec<Stage>> {
+    let spans = |group: &str| {
+        let mut stages = order.iter().filter(|row| row.group.as_deref() == Some(group)).map(|row| row.stage.as_deref());
+        let first = stages.next();
+        stages.any(|stage| Some(stage) != first)
+    };
+    let whole = !subtasks.stages.is_empty() && subtasks.out_of_stage.is_none() && !order.iter().filter_map(|row| row.group.as_deref()).any(spans);
+    if !whole {
+        for row in order.iter_mut() {
+            row.stage = None;
+        }
+        return None;
+    }
+    Some(subtasks.stages.clone())
+}
 
 fn plan(item: &status::Item, seen: &Seen) -> Plan {
     let subtasks = &item.subtasks;
     if !subtasks.listed() {
-        return (None, None, None, None);
+        return (None, None, None, None, None);
     }
     let rules = rules(item);
     let listed: Vec<Subtask> = subtasks.pushed.iter().chain(&subtasks.items).filter_map(|shown| subtask(shown, rules.as_ref())).collect();
-    let order = wire_order(&subtasks.order);
+    let mut order = wire_order(&subtasks.order);
+    let stages = wire_stages(subtasks, &mut order);
     let pushable = subtasks.pushable.as_ref().map(|run| Pushable { count: count(run.count), through: run.through.clone(), subtasks: run.subtasks.clone() });
-    (Some(listed), Some(order), pushable, Some(seen.accepting.contains(&item.place)))
+    (Some(listed), Some(order), pushable, Some(seen.accepting.contains(&item.place)), stages)
+}
+
+// kebbie's own questions on the task, at most the protocol's four, a stage named only while it waits on the user.
+fn kebbie_questions(address: &str, stages: Option<&[Stage]>, seen: &Seen) -> Option<Vec<KebbieQuestion>> {
+    let asked = seen.kebbie.get(address).filter(|asked| !asked.is_empty())?;
+    Some(asked.iter().rev().take(kebbie_hub_protocol::MAX_KEBBIE_QUESTIONS).rev().map(|asked| crate::kebbie_questions::wire(asked, stages.unwrap_or_default())).collect())
 }
 
 // A task's latest obstacle as the phone shows it, with the decision on it; one decided in the lead's or the user's own words, which name no kind, stays off.
@@ -246,7 +271,8 @@ pub fn item(item: &status::Item, seen: &Seen) -> Option<Item> {
     }
     let group = group(item.group())?;
     let address = crate::peers::address(&item.name, &item.place);
-    let (subtasks, order, pushable, require_accept) = plan(item, seen);
+    let (subtasks, order, pushable, require_accept, stages) = plan(item, seen);
+    let kebbie_questions = kebbie_questions(&address, stages.as_deref(), seen);
     Some(Item {
         group,
         urgency: item.urgency(),
@@ -271,6 +297,8 @@ pub fn item(item: &status::Item, seen: &Seen) -> Option<Item> {
         pushable,
         require_accept,
         obstacle: seen.obstacles.get(&address).cloned(),
+        stages,
+        kebbie_questions,
         title: item.title.clone(),
         profile: item.profile.clone(),
         recipe: item.recipe.as_ref().map(|recipe| crate::recipe::shown_name(&recipe.name).to_string()),
@@ -366,7 +394,11 @@ fn seen(items: &[status::Item]) -> Seen {
         let latest = crate::obstacle::load(state.as_deref()?, &address).pop()?;
         Some((address, obstacle(&latest)?))
     }).collect();
-    Seen { menus, models, home: std::env::var("HOME").ok(), accepting, obstacles }
+    let mut kebbie: BTreeMap<String, Vec<crate::kebbie_questions::Asked>> = BTreeMap::new();
+    for asked in state.as_deref().map(crate::kebbie_questions::load).unwrap_or_default() {
+        kebbie.entry(asked.address.clone()).or_default().push(asked);
+    }
+    Seen { menus, models, home: std::env::var("HOME").ok(), accepting, obstacles, kebbie }
 }
 
 // HEAD still makes the change the card was written for, by the push dialog's rule; the answer is kept per (card, HEAD) so the board loop runs git only when either moves.
@@ -461,6 +493,33 @@ pub(crate) mod tests {
     pub(crate) fn listed(id: &str, number: usize, title: &str, state: crate::tasks::SubtaskState, shas: &[&str], accepted: bool) -> crate::tasks::Subtask {
         let commits = shas.iter().map(|sha| crate::tasks::SubtaskCommit { sha: sha.repeat(40 / sha.len().max(1)), subject: format!("Subject of {sha}"), accepted }).collect();
         crate::tasks::Subtask { id: id.to_string(), number, title: title.to_string(), state, commits, pushed: Vec::new(), extra: false, added: None, contiguous: true, waits_for: None }
+    }
+
+    #[test]
+    fn a_task_in_stages_reaches_the_phone_with_its_stages_and_kebbies_question_and_out_of_stage_order_with_none() {
+        use crate::tasks::SubtaskState as Listing;
+        use kebbie_hub_protocol::{Requirement, RequirementKind, StageState};
+        let mut item = task(Some("working"), Some("working"), 2);
+        item.subtasks = crate::tasks::ordered(crate::tasks::Subtasks { items: vec![listed("fill", 1, "Backfill", Listing::Accepted, &["a"], true), listed("cut", 2, "Drop", Listing::Accepted, &["b"], true)], ..Default::default() });
+        item.subtasks.order[0].stage = Some("fill".to_string());
+        item.subtasks.order[1].stage = Some("cut".to_string());
+        let stage = |id: &str, state, kind, through: Option<&str>| Stage { id: id.to_string(), title: id.to_string(), state, requirement: Requirement { kind, detail: (kind != RequirementKind::Deploy).then(|| "it holds".to_string()) }, through: through.map(|sha| sha.repeat(40)), pushed_at: through.map(|_| 5), met_at: None, note: None };
+        item.subtasks.stages = vec![stage("fill", StageState::Waiting, RequirementKind::Verified, Some("f")), stage("cut", StageState::Locked, RequirementKind::Deploy, None)];
+        item.subtasks.pushable = crate::tasks::rollout_run(&item.subtasks.order, &item.subtasks.stages);
+        let address = crate::peers::address(&item.name, &item.place);
+        let asked = crate::kebbie_questions::Asked { id: "kq-0a1b2c".to_string(), address: address.clone(), kind: crate::kebbie_questions::Kind::Verify, text: "fill is out. it holds".to_string(), stage: Some("fill".to_string()), at: 9 };
+        let seen = Seen { kebbie: BTreeMap::from([(address, vec![asked])]), ..Seen::default() };
+        let board = build(std::slice::from_ref(&item), &[], Vec::new(), None, &seen);
+        board.check().unwrap();
+        let sent = &board.items[0];
+        assert_eq!(sent.stages.as_ref().map(|stages| stages.len()), Some(2));
+        assert_eq!(sent.pushable.as_ref().map(|run| run.count), Some(1), "the waiting stage holds the drop's commit");
+        let question = &sent.kebbie_questions.as_ref().unwrap()[0];
+        assert_eq!((question.stage.as_deref(), question.options.len()), (Some("fill"), 3));
+        item.subtasks.out_of_stage = Some("b".repeat(40));
+        let out = build(std::slice::from_ref(&item), &[], Vec::new(), None, &seen);
+        out.check().unwrap();
+        assert!(out.items[0].stages.is_none() && out.items[0].order.as_ref().unwrap().iter().all(|row| row.stage.is_none()), "out of stage order, the stages stay off so the board still checks");
     }
 
     #[test]
@@ -646,7 +705,7 @@ pub(crate) mod tests {
         agent.kind = crate::agent::Agent::Codex;
         agent.answer = status::answer_in_space(crate::agent::Agent::Codex);
         let menu = crate::menu::parse_for(CODEX_APPROVAL, crate::agent::Agent::Codex).unwrap();
-        let seen = Seen { menus: BTreeMap::from([("hub@kebbie".to_string(), menu.clone())]), models: BTreeMap::from([("task".to_string(), "gpt-6.1-sol".to_string())]), home: Some("/Users/u".to_string()), accepting: BTreeSet::new(), obstacles: BTreeMap::new() };
+        let seen = Seen { menus: BTreeMap::from([("hub@kebbie".to_string(), menu.clone())]), models: BTreeMap::from([("task".to_string(), "gpt-6.1-sol".to_string())]), home: Some("/Users/u".to_string()), accepting: BTreeSet::new(), obstacles: BTreeMap::new(), kebbie: BTreeMap::new() };
         let board = build(std::slice::from_ref(&item), &[], Vec::new(), None, &seen);
         let shown = &board.items[0];
         let prompt = shown.prompt.as_ref().unwrap();

@@ -32,6 +32,7 @@ mod install_signal;
 mod issue_recheck;
 mod issues;
 mod item_template;
+mod kebbie_questions;
 mod keeper;
 mod keys;
 mod known;
@@ -169,7 +170,18 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   one ready (by default the one commits go to). kebbie subtasks <name> … does it from
                                   elsewhere, and kebbie subtasks [name] [--json] shows each subtask's state, the push
                                   order and the pushable run: the commits from the top that you accepted, never
-                                  splitting a group. kebbie steps is the same command
+                                  splitting a group or passing a stage that is not met. kebbie subtasks add … --stage
+                                  <stage> puts the new subtask in a stage. kebbie steps is the same command
+  kebbie stages \"<title>:<requirement>\" …
+                                  declares a task's stages in push order, for a change that must reach production in
+                                  steps (renames and drops of tables or columns, a backfill before a constraint).
+                                  Each requirement is deploy (the repo's ci.deploy workflow, else CI, green on the
+                                  pushed commit), check:<what the task checks> (the task runs it once it is deployed
+                                  and reports whether it held) or verified:<what you verify> (a question to you once it
+                                  is deployed). Nothing in a stage is pushable until every stage before it is met; a
+                                  failed one holds the rest. kebbie stages assign <stage> <subtask>… puts subtasks in a
+                                  stage (a subtask no stage names goes out with the last); kebbie stages [name] [--json]
+                                  shows them. The task's, the lead's and yours
   kebbie order [name] [--json]    a task's push order, top first, each commit with its subtask, acceptance, group, own
                                   test run and where it was moved from. kebbie order move <sha> --before <sha|top>
                                   --because \"<why>\" moves a commit (and its group) by replaying the branch, keeping
@@ -190,7 +202,9 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   An option ending in \" +comment\" opens a comment field and sends only with your text.
                                   --plan vault:<note> or --plan <file> asks you to approve a plan instead. It waits on
                                   the board, where you answer it, the lead gets a copy, and the answer reaches the task
-                                  as a message from you
+                                  as a message from you. kebbie ask --verify \"<what to check, and where>\" asks you a
+                                  check only you can make (Verified, Not yet, Something is wrong): kebbie's own
+                                  question, beside the task's, so the task works on while it waits
   kebbie obstacle [--on <work>] <what stands in the way>
                                   run by a task's Claude when something on its own path stops a piece of its work as
                                   planned (a missing precondition, a part of the plan that cannot be built as planned, a trap, a red
@@ -494,7 +508,7 @@ impl Arguments {
                 arguments.positionals.extend(input.by_ref());
                 break;
             }
-            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--after-push", "--profile", "--why", "--name", "--until", "--recipe", "--step", "--on", "--id", "--subtask", "--because", "--prepares", "--before"].contains(&argument.as_str()) {
+            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--after-push", "--profile", "--why", "--name", "--until", "--recipe", "--step", "--on", "--id", "--subtask", "--because", "--prepares", "--before", "--verify", "--stage"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
                 arguments.flags.push(argument);
@@ -698,6 +712,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         }
         Some("obstacles") => obstacle::list(name, arguments.flag("--json")),
         Some("found") => found::command(arguments.rest(1), arguments.flag("--json")),
+        Some("ask") if arguments.value("--verify").is_some() => arguments.only("ask", &["--verify"]).and_then(|_| kebbie_questions::ask_from_task(&cwd, arguments.value("--verify").unwrap_or_default())),
         Some("ask") => questions::ask(&cwd, &arguments.values_of("--option"), arguments.value("--recommend"), arguments.value("--plan"), &arguments.rest(1).join(" ")),
         Some("notify") => {
             let text: Vec<String> = std::env::args().skip_while(|argument| argument != "notify").skip(1).collect();
@@ -776,7 +791,8 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("review") if arguments.flag("--second") => review::request(&cwd, name, review::Request::WithSecond),
         Some("review") => review::request(&cwd, name, review::Request::Review),
         Some("evidence") => evidence::print(&cwd, name, arguments.flag("--json")),
-        Some(command @ ("subtasks" | "steps")) => arguments.only(command, &["--json", "--because", "--prepares"]).and_then(|_| tasks::subtasks(&cwd, arguments.rest(1), &tasks::SubtasksAsked { because: arguments.value("--because"), prepares: arguments.value("--prepares"), as_json: arguments.flag("--json") })),
+        Some(command @ ("subtasks" | "steps")) => arguments.only(command, &["--json", "--because", "--prepares", "--stage"]).and_then(|_| tasks::subtasks(&cwd, arguments.rest(1), &tasks::SubtasksAsked { because: arguments.value("--because"), prepares: arguments.value("--prepares"), stage: arguments.value("--stage"), as_json: arguments.flag("--json") })),
+        Some("stages") => arguments.only("stages", &["--json"]).and_then(|_| tasks::stages(&cwd, arguments.rest(1), arguments.flag("--json"))),
         Some("order") if arguments.flag("--run-tests") => commit_tests::run(&cwd),
         Some("order") => arguments.only("order", &["--json", "--before", "--because"]).and_then(|_| tasks::order(&cwd, arguments.rest(1), &tasks::OrderAsked { before: arguments.value("--before"), because: arguments.value("--because"), as_json: arguments.flag("--json") })),
         Some("accepted") => tasks::accepted_shown(&cwd, name, arguments.flag("--json")),

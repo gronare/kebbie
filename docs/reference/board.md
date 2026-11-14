@@ -128,6 +128,14 @@ With [`task.steps`](configuration.md) on and subtasks listed, the task's subtask
 
 A subtask to accept leaves the task in the group its phase gives it, under Working while it builds on. The state word always shows: a long title is shortened at a word with `…` to make room, and only when the title would drop below 12 columns does the rules part shorten (`· 2 breaks`, `· checking`, `· not checked`, `· past the rules`) and then go. Without subtasks, the row is as above. See [Work in subtasks](../how-to/work-in-steps.md).
 
+#### A task in stages
+
+A task with [stages](commands.md#kebbie-stages-name-titlerequirement-) shows one line per stage under its subtasks, `stage N`, its title and where it stands: `after <stage>` while an earlier stage is not met, `open`, `pushed · deploy` (or `· check`, `· verified`) while its push goes through CI, `task checks`, `verify` while kebbie's question waits on you, `met` in green, `failed` in red. The row reads `stage N of M` with what the stage waits for, or what failed. The push window stops at the first stage that is not met.
+
+#### kebbie's own questions
+
+Beside a task's own question, kebbie asks you three things itself, in the inbox (`i`) and on the phone, each answered with its number key: a stage's verification and a check a task asked with `kebbie ask --verify` (`1` Verified, `2` Not yet, `3` Something is wrong with what you saw, `w` in your own words), and whether to close a task it would otherwise leave to you (`1` Close, `2` Not yet). Not yet on a verification leaves it waiting; on a close it lets the task be. Neither holds the task or its messages. kebbie asks to close a task that reports ready with nothing to push, a routine's findings with nothing committed, a task landed on main beside its own open question, and a task you pushed through its last commit and kept open. An answer from the phone waits on the hub up to a week for a machine that sleeps.
+
 While Claude waits on a prompt of its own, such as a permission or trust question, the `you:` line says `answer Claude's prompt in its Space or through the lead`. `g` takes you to its Space, and the lead has the question and its options in its chat. A Codex task on a start-up question says what Codex asks, as `answer Codex in its Space: it asks whether you trust its folder`. See [Claude's own prompts in a task](../explanation/lead-and-away-mode.md#claudes-own-prompts-in-a-task).
 
 The selected task opens in place with its review progress, its question and options, its report, its latest test run, and a warning about files changed in a main checkout outside any task.
@@ -170,7 +178,7 @@ kebbie keeps one phase per task, and only what changes it writes it: its start, 
 - An open question from `kebbie ask`.
 - A review whose findings only ask for your confirmation, marked `confirm what its review asks · <the finding>`: Confirm passes the review, Change it sends your comment to the task.
 - Messages held behind a draft in its input box.
-- A task whose commits are on the default branch that kebbie does not close by itself, marked `landed on main · d closes it` beside a question, or `landed on main, but its worktree has uncommitted changes or a stash` (see [`kebbie done`](commands.md#kebbie-done-name)).
+- A task whose commits are on the default branch that kebbie does not close by itself, marked `landed on main · d closes it` beside a question (kebbie asks you whether to close it), or `landed on main, but its worktree has uncommitted changes or a stash` (see [`kebbie done`](commands.md#kebbie-done-name)).
 - A task that reported needs-you, or ready with nothing committed.
 - A task that reported ready with commits while tracked files are uncommitted, marked `2 uncommitted files hold it: a.md and b.md · p then p pushes the commits and keeps them`. The push window opens on its last commit, so `p` pushes every commit and keeps the task open with the files as they are; its approval is of the commits and stays.
 - With `task.require_accept` on, a ready task with a commit you have not accepted, marked `accept subtask N`.

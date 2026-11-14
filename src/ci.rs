@@ -73,6 +73,8 @@ pub struct Pushed {
     pub note: Option<String>,
     pub logged: Option<bool>,
     pub check: Option<Check>,
+    pub stages: Vec<String>,
+    pub deploy: Option<String>,
 }
 
 // What the task named to verify once its push lands; asked is when kebbie told it to run it, passed once it reported that it held.
@@ -165,8 +167,14 @@ impl Watch {
             State::Running if self.runs.is_empty() && self.unseen_for() >= UNSEEN_AFTER => format!("no CI run of {} seen in {} min, though {} has workflows; check they run on a push{}, or kebbie done{}", self.short(), UNSEEN_AFTER / 60, self.slug, if self.pushed.target.is_empty() { String::new() } else { format!(" to {}", self.pushed.target) }, self.unread()),
             State::Running if self.runs.is_empty() && self.unseen_for() >= APPEAR_SECONDS => format!("CI running: no run of {} seen for {} min, though {} has workflows{}{}", self.short(), self.unseen_for() / 60, self.slug, self.then_checks(), self.unread()),
             State::Running if self.runs.is_empty() => format!("CI running: waiting for runs of {}{}{}", self.short(), self.then_checks(), self.unread()),
+            State::Running if self.waits_for_deploy() => format!("CI green: waiting for a run of {} on {}{}{}", self.pushed.deploy.as_deref().unwrap_or_default(), self.short(), self.then_checks(), self.unread()),
             State::Running => format!("CI running: {}{}{}", self.runs.iter().map(Run::title).collect::<Vec<_>>().join(", "), self.then_checks(), self.unread()),
         }
+    }
+
+    // A push of stages waits for the repo's deploy workflow once the rest is green.
+    fn waits_for_deploy(&self) -> bool {
+        self.pushed.deploy.as_deref().is_some_and(|deploy| !deployed(&self.runs, deploy)) && verdict(&self.runs, u64::MAX) == Verdict::Green
     }
 
     fn unseen_for(&self) -> u64 {
@@ -187,7 +195,7 @@ impl Watch {
             "started_at": self.started_at, "checked_at": self.checked_at, "close": self.close,
             "runs": self.runs.iter().map(Run::to_json).collect::<Vec<_>>(),
             "state": state, "failed_at": failed_at, "failure": failure, "failure_url": failure_url, "error": self.error, "erring_since": self.erring_since,
-            "pushed": { "pusher": self.pushed.pusher, "target": self.pushed.target, "commits": self.pushed.commits, "note": self.pushed.note, "logged": self.pushed.logged, "check": self.pushed.check.as_ref().map(Check::to_json) },
+            "pushed": { "pusher": self.pushed.pusher, "target": self.pushed.target, "commits": self.pushed.commits, "note": self.pushed.note, "logged": self.pushed.logged, "check": self.pushed.check.as_ref().map(Check::to_json), "stages": self.pushed.stages, "deploy": self.pushed.deploy },
         })
     }
 
@@ -205,7 +213,8 @@ impl Watch {
             started_at: value["started_at"].as_u64()?, checked_at: value["checked_at"].as_u64(), close: value["close"].as_bool().unwrap_or(true),
             runs: value["runs"].as_array().map(|runs| runs.iter().filter_map(Run::from_json).collect()).unwrap_or_default(),
             state, error: text("error"), erring_since: value["erring_since"].as_u64(),
-            pushed: Pushed { pusher: pushed_text("pusher"), target: pushed_text("target"), commits: pushed_text("commits"), note: pushed["note"].as_str().map(str::to_string), logged: pushed["logged"].as_bool(), check: Check::from_json(&pushed["check"]) },
+            pushed: Pushed { pusher: pushed_text("pusher"), target: pushed_text("target"), commits: pushed_text("commits"), note: pushed["note"].as_str().map(str::to_string), logged: pushed["logged"].as_bool(), check: Check::from_json(&pushed["check"]),
+                stages: pushed["stages"].as_array().map(|ids| ids.iter().filter_map(|id| id.as_str().map(str::to_string)).collect()).unwrap_or_default(), deploy: pushed["deploy"].as_str().map(str::to_string) },
         })
     }
 }
@@ -233,6 +242,11 @@ pub fn verdict(runs: &[Run], waited: u64) -> Verdict {
     }
     let cancelled = cancelled_workflows(runs);
     if cancelled.is_empty() { Verdict::Green } else { Verdict::Cancelled(cancelled) }
+}
+
+// A run of the deploy workflow on the pushed commit passed.
+fn deployed(runs: &[Run], deploy: &str) -> bool {
+    runs.iter().any(|run| run.title() == deploy && run.done() && PASSED.contains(&run.conclusion.as_str()))
 }
 
 // A workflow run again on the same commit that passed is no longer waiting on anything.
@@ -515,7 +529,7 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
     let mut events = Vec::new();
     for mut watch in all(state).into_iter().filter(|watch| watch.running() && !pushing(state, &watch.address, now)) {
         if let Some(check) = watch.checking() {
-            if !watch.close {
+            if !watch.close && watch.pushed.stages.is_empty() {
                 forget(state, &watch.address);
             } else if check.passed {
                 events.push(checked(state, &watch));
@@ -554,8 +568,13 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
             Verdict::Pending => {
                 let _ = save(state, &watch);
             }
+            Verdict::Green if watch.waits_for_deploy() && now.saturating_sub(watch.started_at) < UNSEEN_AFTER => {
+                let _ = save(state, &watch);
+            }
+            Verdict::Green if watch.waits_for_deploy() => events.push(undeployed(state, &watch)),
             Verdict::Green => events.push(green(state, &watch, format!("CI is green for {}", watch.short()), now)),
             Verdict::NoneRan => match crate::sh::run(gh, &["workflow", "list", "-R", &watch.slug, "--json", "state", "--limit", "100"], Some(&watch.repo)).and_then(|text| has_workflows(&text)) {
+                Ok(false) if !watch.pushed.stages.is_empty() => events.push(staged(state, &watch, format!("No CI ran for {}", watch.short()), Some("no CI ran for it"), now)),
                 Ok(false) => events.push(green(state, &watch, format!("No CI ran for {}", watch.short()), now)),
                 Ok(true) => {
                     let _ = save(state, &watch);
@@ -586,6 +605,9 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
 
 // A task that named a check for after its push runs it now, and closes once it reports that the check held.
 fn green(state: &Path, watch: &Watch, what: String, now: u64) -> Event {
+    if !watch.pushed.stages.is_empty() {
+        return staged(state, watch, what, None, now);
+    }
     if watch.close && watch.pushed.check.as_ref().is_some_and(|check| check.asked.is_none()) {
         let text = ask_check(state, watch, &what, now).unwrap_or_else(|error| {
             let _ = save(state, watch);
@@ -594,6 +616,41 @@ fn green(state: &Path, watch: &Watch, what: String, now: u64) -> Event {
         return Event { address: watch.address.clone(), kind: Kind::Green, text };
     }
     landed(state, watch, what)
+}
+
+// A push of stages rolled out: each stage's requirement is asked for, and the task closes only once every stage is met.
+fn staged(state: &Path, watch: &Watch, what: String, unseen: Option<&str>, now: u64) -> Event {
+    let rolled = crate::tasks::rollout::rolled_out(state, &watch.address, &watch.pushed.stages, unseen, now);
+    if watch.pushed.check.as_ref().is_some_and(|check| check.asked.is_none()) {
+        let text = ask_check(state, watch, &what, now).unwrap_or_else(|error| {
+            let _ = save(state, watch);
+            format!("{what}, but kebbie could not ask {} to run its check of the stage, and tries again: {error}", watch.address)
+        });
+        return Event { address: watch.address.clone(), kind: Kind::Green, text };
+    }
+    if watch.close && rolled.all_met {
+        return landed(state, watch, what);
+    }
+    rolled_on(state, watch, format!("{what}: {}", rolled.text()))
+}
+
+// The watch is done with the push; the stages go on without it.
+fn rolled_on(state: &Path, watch: &Watch, text: String) -> Event {
+    forget(state, &watch.address);
+    crate::hub::notices::settle(crate::hub::notices::Subject::Ci, &watch.address);
+    if let Err(error) = messages::to_lead(messages::ToLead::CiGreen, &format!("{text} ({})", watch.address)) {
+        eprintln!("Could not tell the lead: {error}");
+    }
+    Event { address: watch.address.clone(), kind: Kind::Green, text }
+}
+
+// The rest went green and no run of the deploy workflow showed up: the stages that wait on it fail, so nothing after them goes out on a deploy nobody saw.
+fn undeployed(state: &Path, watch: &Watch) -> Event {
+    let deploy = watch.pushed.deploy.clone().unwrap_or_default();
+    let note = format!("no run of {deploy} on {} in {} min", watch.short(), UNSEEN_AFTER / 60);
+    crate::tasks::rollout::failed(state, &watch.address, &watch.pushed.stages, &note, true);
+    forget(state, &watch.address);
+    Event { address: watch.address.clone(), kind: Kind::Failed, text: format!("{}: {note}; its stages failed", watch.address) }
 }
 
 pub fn check_message(landed: &str, what: &str) -> String {
@@ -621,6 +678,12 @@ pub fn ask_check(state: &Path, watch: &Watch, landed: &str, now: u64) -> Result<
 // The task reported that its check held: it closes as a green push does.
 fn checked(state: &Path, watch: &Watch) -> Event {
     let what = format!("The check after the push of {} held: {}", watch.short(), watch.checking().map_or("", |check| check.what.as_str()));
+    if !watch.pushed.stages.is_empty() {
+        let rolled = crate::tasks::rollout::check_held(state, &watch.address, &watch.pushed.stages, messages::now());
+        if !(watch.close && rolled.all_met) {
+            return rolled_on(state, watch, format!("{what}: {}", rolled.text()));
+        }
+    }
     landed(state, watch, what)
 }
 
@@ -686,6 +749,7 @@ fn failed_run(state: &Path, gh: &str, watch: &mut Watch, run: &Run, now: u64) ->
     }
     watch.state = State::Failed { at: now, what: what.clone(), url: run.url.clone() };
     let _ = save(state, watch);
+    crate::tasks::rollout::failed(state, &watch.address, &watch.pushed.stages, &format!("CI failed: {what}"), false);
     let handed = open && match messages::hand_to(&watch.address, &task_message(watch, run, &format!("{job}{step}"), &log_tail(&log, LOG_LINES), who)) {
         Ok(()) => true,
         Err(error) => {
@@ -867,7 +931,7 @@ mod tests {
         let mut watch = Watch {
             address: "billing@app".to_string(), repo: PathBuf::from("/src/app"), slug: "acme/app".to_string(), sha: "abcdef0123".to_string(),
             started_at: 100, checked_at: Some(130), close: true, runs: vec![run("in_progress", "")], state: State::Running, error: None, erring_since: None,
-            pushed: Pushed { pusher: "the user".to_string(), target: "main".to_string(), commits: "abc Add refunds".to_string(), note: Some("Projects/x.md".to_string()), logged: Some(true), check: Some(Check { what: "the old key gets 401".to_string(), asked: Some(120), passed: false }) },
+            pushed: Pushed { pusher: "the user".to_string(), target: "main".to_string(), commits: "abc Add refunds".to_string(), note: Some("Projects/x.md".to_string()), logged: Some(true), check: Some(Check { what: "the old key gets 401".to_string(), asked: Some(120), passed: false }), stages: Vec::new(), deploy: None },
         };
         save(&state, &watch).unwrap();
         assert_eq!(load(&state, "billing@app").as_ref(), Some(&watch));
@@ -1105,4 +1169,17 @@ mod tests {
         let green = &green[..green.find("\n}\n").unwrap()];
         assert!(green.find("after_ci(").unwrap() < green.find("forget(").unwrap(), "a watch forgotten before the close leaves the task under Needs you until it is gone");
     }
+
+    #[test]
+    fn a_push_of_stages_waits_for_the_deploy_workflow_once_the_rest_is_green() {
+        let mut watch = Watch { address: "email@app".to_string(), repo: PathBuf::from("/src/app"), slug: "acme/app".to_string(), sha: "abcdef0".to_string(), started_at: 0, checked_at: None, close: false, runs: vec![run("completed", "success")], state: State::Running, error: None, erring_since: None, pushed: Pushed { stages: vec!["fill".to_string()], deploy: Some("Deploy".to_string()), ..Pushed::default() } };
+        assert!(watch.waits_for_deploy() && watch.note().starts_with("CI green: waiting for a run of Deploy on abcdef0"), "{}", watch.note());
+        watch.runs.push(Run { name: "Deploy".to_string(), workflow: "Deploy".to_string(), ..run("in_progress", "") });
+        assert!(watch.waits_for_deploy() || verdict(&watch.runs, 600) == Verdict::Pending, "a deploy still running is pending");
+        watch.runs[1] = Run { name: "Deploy".to_string(), workflow: "Deploy".to_string(), ..run("completed", "success") };
+        assert!(!watch.waits_for_deploy(), "its green run is the deploy");
+        let round = Watch::from_json(&watch.to_json()).unwrap();
+        assert_eq!((round.pushed.stages, round.pushed.deploy), (vec!["fill".to_string()], Some("Deploy".to_string())), "kept across rounds");
+    }
+
 }

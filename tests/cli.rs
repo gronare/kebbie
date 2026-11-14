@@ -188,6 +188,27 @@ fn help_lists_every_command_and_an_unknown_command_fails_with_the_usage() {
 }
 
 #[test]
+fn stages_and_a_verification_are_a_tasks_and_refused_outside_one() {
+    let lab = Lab::new("stages");
+    let (repo, slot) = lab.task_fixture();
+    let slot = slot.to_str().unwrap();
+    let early = lab.run(&["-C", slot, "stages", "Expand:deploy"]);
+    assert!(!early.status.success() && stderr(&early).contains("has no subtasks yet: list them with kebbie subtasks first"), "{}", stderr(&early));
+    assert!(lab.run(&["-C", slot, "subtasks", "Expand", "Contract"]).status.success());
+    let declared = lab.run(&["-C", slot, "stages", "Expand:deploy", "Contract:verified:nothing reads the old name"]);
+    assert!(declared.status.success() && stdout(&declared).contains("billing@app has 2 stages now"), "{}\n{}", stdout(&declared), stderr(&declared));
+    assert!(stdout(&lab.run(&["-C", slot, "stages", "assign", "contract", "contract"])).contains("Contract go out in Contract [contract]"));
+    let shown: serde_json::Value = serde_json::from_str(&stdout(&lab.run(&["-C", slot, "stages", "--json"]))).unwrap();
+    assert_eq!(shown["stages"].as_array().unwrap().iter().map(|stage| stage["state"].as_str().unwrap()).collect::<Vec<_>>(), ["open", "locked"]);
+    let unnamed = lab.run(&["-C", repo.to_str().unwrap(), "stages", "Expand:deploy"]);
+    assert!(!unnamed.status.success(), "outside the worktree the first word names the task");
+    let verify = lab.run(&["-C", repo.to_str().unwrap(), "ask", "--verify", "the old key gets 401 in production"]);
+    assert!(!verify.status.success() && stderr(&verify).contains("kebbie ask --verify runs in a task's worktree"), "{}", stderr(&verify));
+    let help = stdout(&lab.run(&["--help"]));
+    assert!(help.contains("kebbie stages") && help.contains("kebbie ask --verify"), "the usage names both");
+}
+
+#[test]
 fn a_command_given_without_its_words_answers_instead_of_crashing() {
     let lab = Lab::new("bare");
     for command in ["hub", "after", "follow", "recipe", "move", "tidy", "link"] {

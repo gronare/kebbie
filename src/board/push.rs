@@ -31,6 +31,7 @@ pub(crate) struct Marks {
     through: Option<usize>,
     run: bool,
     working: bool,
+    bound: Option<usize>,
 }
 
 impl Marks {
@@ -46,6 +47,7 @@ impl Marks {
             run: subtasks.listed(),
             accepted,
             working: false,
+            bound: commits.iter().position(|commit| subtasks.order.iter().find(|row| row.sha == commit.sha).and_then(|row| row.stage.as_deref()).is_some_and(|stage| tasks::rollout::held_by(&subtasks.stages, stage).is_some()) || subtasks.out_of_stage.as_deref() == Some(commit.sha.as_str())),
         }
     }
 
@@ -58,8 +60,10 @@ impl Marks {
         self.through
     }
 
+    // Never past a stage that is not met: the commit before the first one it holds is the last a push may take.
     pub(super) fn last_pushable(&self, commits: usize) -> usize {
-        if self.working { self.through.unwrap_or(0) } else { commits.saturating_sub(1) }
+        let last = if self.working { self.through.unwrap_or(0) } else { commits.saturating_sub(1) };
+        self.bound.map_or(last, |bound| last.min(bound.saturating_sub(1)))
     }
 
     pub(super) fn step_of(&self, index: usize) -> Option<usize> {

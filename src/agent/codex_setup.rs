@@ -359,7 +359,7 @@ mod tests {
         let forms = rule_forms("/home/u/.local/share/kebbie/current/target/release/kebbie", Path::new("/home/u/.local/bin/kebbie"));
         assert_eq!(forms, ["/home/u/.local/share/kebbie/current/target/release/kebbie", "/home/u/.local/bin/kebbie", "kebbie"]);
         let text = rules_text(&forms);
-        assert_eq!(text.lines().count(), 42, "fourteen commands, three forms");
+        assert_eq!(text.lines().count(), 45, "fifteen commands, three forms");
         assert!(text.contains("prefix_rule(pattern=[\"kebbie\", \"tell\"], decision=\"allow\")\n"));
         assert!(text.contains("prefix_rule(pattern=[\"/home/u/.local/bin/kebbie\", \"routine\", \"ok\"], decision=\"allow\")\n"), "a two-word command is two words of the pattern");
         assert!(text.contains("prefix_rule(pattern=[\"/home/u/.local/share/kebbie/current/target/release/kebbie\", \"backlog\", \"add\"], decision=\"allow\")\n"));

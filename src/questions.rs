@@ -291,6 +291,9 @@ pub fn answer_as(caller: &crate::permit::Caller, id: &str, choice: Option<usize>
     if !matches!(caller, Caller::User) && !hub {
         return Err(Unanswered::NotAllowed(format!("answering the user's question is the user's call; {} cannot", crate::permit::describe(caller))));
     }
+    if crate::kebbie_questions::is_ours(id) {
+        return crate::kebbie_questions::answer_as(caller, id, choice, comment).map_err(Unanswered::Invalid);
+    }
     let sessions = peers::sessions().unwrap_or_default();
     let _lock = Lock::take(true)?;
     let messages = messages::load();

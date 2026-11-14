@@ -345,6 +345,9 @@ pub(super) fn pass(state: &Path, world: &World, close: Close, tell: &mut dyn FnM
             match verdict {
                 Ok(Verdict::Unsure(why)) => {
                     if let Some(head) = head(&slot.path) {
+                        if matches!(why, Unsure::Prompt | Unsure::Question) && read_mark(state, &address).is_none_or(|(was, seen, _)| was != why || seen != head) {
+                            let _ = crate::kebbie_questions::ask_close(state, &address, &format!("{task} landed on {main}, but it still waits on {} of its own. Close it?", if why == Unsure::Prompt { "a prompt" } else { "a question" }));
+                        }
                         save_mark(state, &address, why, &head);
                     }
                 }

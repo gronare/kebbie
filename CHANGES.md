@@ -30,6 +30,12 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Your phone shows a task's subtasks, its push order and pushable run, and its latest obstacle with the decision; update the hub first.
 - From your phone you accept a subtask and push the accepted run, while the rest stays in the task.
 - From your phone you start, add to a task or dismiss what tasks found, listed in the backlog.
+- A task declares stages with kebbie stages, and nothing is pushed past a stage until its deploy, check or your verification holds.
+- ci.deploy names the workflow whose green run on a stage's push counts as its deploy.
+- A failed stage holds the stages after it, and the task and the lead hear what failed.
+- kebbie asks you itself, on the board and the phone, to verify a stage or a task's check, and to close a task it would leave to you.
+- A task asks for a check only you can make with kebbie ask --verify, and works on while it waits.
+- The board and the phone show a task's stages, and the push window stops at the first one not met; update the hub first.
 - A task names a check to run after its push with kebbie report --after-push; once CI is green it runs the check itself and closes when it holds, or waits under Needs you with what failed.
 - When a hub refuses the board, kebbie says the hub has not enabled answering for your account, with the hub's link.
 - The phone answers an agent's prompt on a task's screen with one tap, while that prompt still shows; update the hub first.

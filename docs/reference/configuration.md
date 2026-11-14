@@ -245,6 +245,7 @@ commands = ["answer", "prompt", "idea"]
 | Key | Default | Where | What it does |
 | --- | --- | --- | --- |
 | `ci.watch` | `true` | either | Whether kebbie watches CI after a push and closes the task only once every workflow run for the pushed commit is green. |
+| `ci.deploy` | none | either | The name of the workflow that deploys the repo: a stage whose requirement is `deploy` is met once a run of it on the stage's pushed commit is green. None takes CI green on the pushed commit as the deploy. |
 | `tests.per_commit` | `true` | either | Whether the keeper tests each of a ready task's unpushed commits on its own and marks the push order with the results. |
 | `comments.watch` | `true` | either | Whether kebbie reads the comments colleagues leave on the commits it pushed and shows each under COMMENTS on the board. |
 | `comments.watch_days` | `7` | either | How many days after a push kebbie checks its commits for new comments, a whole number from 1 to 90. |

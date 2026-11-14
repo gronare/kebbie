@@ -222,7 +222,7 @@ fn rewritten(state: &Path, task: &Task, change: impl FnOnce(&Plan, &[Open]) -> R
     })
 }
 
-fn move_as(state: &Path, task: &Task, sha: &str, before: &str, reason: &str) -> Result<String> {
+pub(super) fn move_as(state: &Path, task: &Task, sha: &str, before: &str, reason: &str) -> Result<String> {
     rewritten(state, task, |plan, open| {
         let commit = resolve(open, sha)?;
         let moving = unit(plan, open, &commit.sha);

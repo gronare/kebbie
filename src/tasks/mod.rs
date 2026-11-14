@@ -14,6 +14,7 @@ mod plan;
 mod pool;
 mod push;
 mod red_ci;
+pub(crate) mod rollout;
 mod stage;
 mod started;
 #[cfg(test)]
@@ -39,14 +40,27 @@ pub(crate) use launch::{Begun, Session, Start, awaits_first_prompt, begin, codex
 pub(crate) use plan::{Asked as SubtasksAsked, add_preparatory, investigator_added, noted_after as subtasks_noted_after, seen_in as subtasks_seen_in, subtasks};
 #[cfg(test)]
 pub(crate) use plan::{run_of, Added as SubtaskAdded, Commit as SubtaskCommit, ordered};
+#[cfg(test)]
+pub(crate) fn rollout_run(order: &[Placed], stages: &[kebbie_hub_protocol::Stage]) -> Option<plan::Run> {
+    plan::run_in(order, stages, None)
+}
 pub(crate) use plan::{Placed, Subtask, Subtasks, State as SubtaskState, order_json, pushable_json, subtasks_json, tests_word, Tips as SubtaskTips, read_at as subtasks_read, shown_at as subtasks_shown_at, for_path as subtasks_for, mark as subtask_mark, word as subtask_word};
 pub(crate) use order::{Asked as OrderAsked, command as order};
+pub(crate) use rollout::command as stages;
 pub(crate) use pool::{Slot, find_task, list, move_work, slots, task_of, task_slots};
 pub(crate) use push::{DevicePush, after_ci, cancel as cancel_push, land, place_in_line, push, push_as, rebase, tidy};
 pub(crate) use stage::{WAIT_CEILING as STAGE_WAIT, stage, staged, tick as stage_tick, unstage};
 pub(crate) use started::{link, started_items, started_links};
 
 use std::path::Path;
+
+// The task closed as done does it, without its herdr Space, for a test with no herdr.
+#[cfg(test)]
+pub(crate) fn finish_for_test(repo: &Path, task: &str) -> Result<String> {
+    let slot = find_task(repo, Some(task), repo)?;
+    let upstream = crate::repo::default_branch(repo)?;
+    finish::finish(repo, &slot, &upstream, &crate::lead::state_dir()?, None).map(|done| done.to_string())
+}
 
 use crate::repo::{git, git_writing, name_of};
 use crate::sh::Result;

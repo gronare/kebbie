@@ -4,7 +4,7 @@ use ratatui::text::{Line, Span};
 use crate::keys::{self, Act};
 use crate::status::Item;
 use crate::tasks::{self, Subtask, SubtaskState};
-use super::widgets::{BLUE, GREEN, MUTED, SURFACE, TEXT, YELLOW, cut, plural, style, text_width};
+use super::widgets::{BLUE, GREEN, MUTED, RED, SURFACE, TEXT, YELLOW, cut, plural, style, text_width};
 
 const INDENT: &str = "    ";
 
@@ -124,6 +124,27 @@ fn step_line(item: &Item, step: &Subtask, width: usize) -> Line<'static> {
     ])
 }
 
+// The task's stages under its subtasks, each with where it stands; the pushable run stops at the first not met.
+fn stage_lines(stages: &[kebbie_hub_protocol::Stage], width: usize) -> Vec<Line<'static>> {
+    stages.iter().enumerate().map(|(at, stage)| {
+        let color = match stage.state {
+            kebbie_hub_protocol::StageState::Met => GREEN,
+            kebbie_hub_protocol::StageState::Failed => RED,
+            kebbie_hub_protocol::StageState::Pushed | kebbie_hub_protocol::StageState::Waiting => YELLOW,
+            kebbie_hub_protocol::StageState::Open | kebbie_hub_protocol::StageState::Locked => MUTED,
+        };
+        let word = tasks::rollout::stage_word(stage, stages);
+        let head = format!("stage {} ", at + 1);
+        let room = width.saturating_sub(INDENT.len() + 2 + head.len());
+        let (title, label) = fitted(&stage.title, &word, &[], room);
+        let gap = room.saturating_sub(text_width(&title) + text_width(&label));
+        Line::from(vec![
+            Span::raw(INDENT), Span::styled(tasks::rollout::mark(stage.state), style(color)), Span::raw(" "), Span::styled(head, style(MUTED)),
+            Span::styled(title, style(TEXT)), Span::raw(" ".repeat(gap)), Span::styled(label, style(color)),
+        ])
+    }).collect()
+}
+
 pub(super) fn step_lines(item: &Item, highlighted: bool, width: usize) -> Vec<Line<'static>> {
     if !item.subtasks.listed() {
         return Vec::new();
@@ -133,6 +154,7 @@ pub(super) fn step_lines(item: &Item, highlighted: bool, width: usize) -> Vec<Li
         lines.push(Line::from(vec![Span::raw(INDENT), Span::styled(format!("↑ {} pushed", item.subtasks.pushed.len()), style(MUTED))]));
     }
     lines.extend(item.subtasks.items.iter().map(|step| step_line(item, step, width)));
+    lines.extend(stage_lines(&item.subtasks.stages, width));
     if highlighted {
         lines.into_iter().map(|line| line.style(Style::new().bg(SURFACE))).collect()
     } else {

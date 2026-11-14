@@ -39,7 +39,7 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
     let me = peers::me(cwd).filter(|me| me != LEAD_LABEL).ok_or("kebbie report runs in a task's worktree")?;
     report.after = push_after(&report.state, &me, after)?;
     card_goes_with(&report.state, card.is_some(), crate::routines::routine_of(&me).is_some())?;
-    if let Some(watch) = crate::ci::load(&state_dir()?, &me).filter(|watch| watch.close && watch.checking().is_some()) {
+    if let Some(watch) = crate::ci::load(&state_dir()?, &me).filter(|watch| (watch.close || !watch.pushed.stages.is_empty()) && watch.checking().is_some()) {
         let ahead = main_checkout(cwd).and_then(|repo| default_branch(&repo)).and_then(|upstream| crate::repo::ahead_behind(cwd, &upstream)).map_or(0, |(ahead, _)| ahead);
         if let Some(said) = check_reported(&state_dir()?, &me, &watch, &report, &summary, ahead)? {
             return Ok(said);
@@ -79,6 +79,7 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
     if report.state == "ready" {
         crate::commit_tests::on_ready(cwd);
     }
+    ask_to_close(cwd, &state, &me, &report, &summary);
     let check = if report.state == "ready" { review_again(cwd) + &crate::assessment::on_ready(cwd) + &rules_check(cwd) } else { String::new() };
     Ok(format!("Reported to the lead and the board as {me}.{kept}{check}"))
 }
@@ -86,13 +87,15 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
 // While its check after the push runs, a task's report is the check's outcome: ready with nothing left to push is that it held, needs-you that it did not.
 fn check_reported(state: &Path, me: &str, watch: &crate::ci::Watch, report: &Report, summary: &str, ahead: usize) -> Result<Option<String>> {
     let check = watch.checking().map(|check| check.what.clone()).unwrap_or_default();
+    let staged = !watch.pushed.stages.is_empty();
     match report.state.as_str() {
-        "ready" if ahead == 0 => {
+        "ready" if ahead == 0 || staged => {
             let passed = crate::ci::Check { passed: true, ..watch.pushed.check.clone().unwrap_or_default() };
             crate::ci::save(state, &crate::ci::Watch { pushed: crate::ci::Pushed { check: Some(passed), ..watch.pushed.clone() }, ..watch.clone() })?;
             messages::log_report(me, report, summary)?;
             show_in_sidebar(report);
-            Ok(Some("Reported that the check after the push held; kebbie closes the task as done.".to_string()))
+            let then = if staged { "kebbie marks its stage met on its next round" } else { "kebbie closes the task as done" };
+            Ok(Some(format!("Reported that the check after the push held; {then}.")))
         }
         "ready" => {
             crate::ci::forget(state, me);
@@ -102,6 +105,9 @@ fn check_reported(state: &Path, me: &str, watch: &crate::ci::Watch, report: &Rep
         }
         "needs-you" => {
             crate::ci::forget(state, me);
+            if staged {
+                crate::tasks::rollout::failed(state, me, &watch.pushed.stages, &format!("the check did not hold: {}", report.next), false);
+            }
             if let Err(error) = messages::to_lead(messages::ToLead::CiHanded, &format!("The check {me} ran after its push did not hold ({check}): {}. It waits for the user under Needs you.", report.next)) {
                 eprintln!("Could not tell the lead: {error}");
             }
@@ -112,6 +118,23 @@ fn check_reported(state: &Path, me: &str, watch: &crate::ci::Watch, report: &Rep
             show_in_sidebar(report);
             Ok(Some("Reported; kebbie waits for the check's outcome: report ready when it held, needs-you when it did not.".to_string()))
         }
+    }
+}
+
+// A task done with nothing to push, a research task or a routine's findings, would wait for the user to close it by hand; kebbie asks instead, beside whatever else the task waits on.
+fn ask_to_close(cwd: &Path, state: &Path, me: &str, report: &Report, summary: &str) {
+    let routine = crate::routines::routine_of(me).is_some();
+    if !(report.state == "ready" || (routine && report.state == "needs-you")) || crate::ci::load(state, me).is_some() || tasks::pending_push(state, me).is_some() {
+        return;
+    }
+    let nothing = main_checkout(cwd).and_then(|repo| default_branch(&repo)).and_then(|upstream| crate::repo::ahead_behind(cwd, &upstream)).is_ok_and(|(ahead, _)| ahead == 0) && crate::repo::is_clean(cwd).unwrap_or(false);
+    let staged = crate::tasks::rollout::all_met(state, me);
+    if !nothing || !staged {
+        return;
+    }
+    let task = me.split_once('@').map_or(me, |(task, _)| task);
+    if let Err(error) = crate::kebbie_questions::ask_close(state, me, &format!("{task} says it is done: {summary}. Close it?")) {
+        eprintln!("kebbie could not ask you to close {me}: {error}");
     }
 }
 

@@ -428,8 +428,24 @@ pub(super) fn plain(text: &str) -> String {
 }
 
 pub fn answered(caller: &Caller, answer: &Answer) -> Done {
+    answered_with(caller, answer, &crate::kebbie_questions::close)
+}
+
+// The phone's answer: to kebbie's own question it is applied here, Close closing the task through `close`; to any other question it goes to questions::answer_as.
+pub(super) fn answered_with(caller: &Caller, answer: &Answer, close: crate::kebbie_questions::Closer) -> Done {
     use crate::questions::Unanswered;
     let refused = |reason, text: &str| (Outcome::Refused { reason }, plain(text));
+    if crate::kebbie_questions::is_ours(&answer.question) {
+        let asked = crate::lead::state_dir().ok().and_then(|state| crate::kebbie_questions::load(&state).into_iter().find(|asked| asked.id == answer.question));
+        return match asked {
+            None => refused(Reason::AlreadySettled, "That question no longer waits for an answer"),
+            Some(asked) if asked.address != answer.address => refused(Reason::BadRequest, &format!("That question is {}'s, not {}'s", asked.address, answer.address)),
+            Some(_) => match crate::lead::state_dir().and_then(|state| crate::kebbie_questions::answer_in(&state, caller, &answer.question, answer.choice.map(usize::from), &answer.comment, close)) {
+                Ok(text) => (Outcome::Done, plain(&text)),
+                Err(text) => (Outcome::Failed, plain(&text)),
+            },
+        };
+    }
     match crate::questions::asked_by(&answer.question) {
         None => return refused(Reason::AlreadySettled, "That question no longer waits for an answer"),
         Some(from) if from != answer.address => return refused(Reason::BadRequest, &format!("That question is {from}'s, not {}'s", answer.address)),
@@ -672,6 +688,10 @@ mod tests {
             seen.answers.borrow_mut().push((caller.clone(), answer.clone()));
             (Outcome::Done, "Answered".to_string())
         };
+        with_answering(seen, &answer, run)
+    }
+
+    fn with_answering<T>(seen: &Seen, answer: &dyn Fn(&Caller, &Answer) -> Done, run: impl FnOnce(&Hands) -> T) -> T {
         let push = |caller: &Caller, push: &PushApproval| {
             seen.pushes.borrow_mut().push((caller.clone(), push.clone()));
             (Outcome::Done, "Pushed 9f3c2a1 to main".to_string())
@@ -718,7 +738,7 @@ mod tests {
         };
         let relay = || seen.relays.set(seen.relays.get() + 1);
         let notify = |text: &str| seen.told.borrow_mut().push(text.to_string());
-        run(&Hands { answer: &answer, push: &push, prompt: &prompt, idea: &idea, item_answer: &item_answer, start_item: &start_item, item_edit: &item_edit, review_open: &review_open, review_comments: &review_comments, review_read: &review_read, accept_subtask: &accept_subtask, found: &found, relay: &relay, notify: &notify })
+        run(&Hands { answer, push: &push, prompt: &prompt, idea: &idea, item_answer: &item_answer, start_item: &start_item, item_edit: &item_edit, review_open: &review_open, review_comments: &review_comments, review_read: &review_read, accept_subtask: &accept_subtask, found: &found, relay: &relay, notify: &notify })
     }
 
     fn review_of(address: &str) -> kebbie_hub_protocol::Review {
@@ -777,6 +797,56 @@ mod tests {
         fn caller(&self) -> Caller {
             Caller::Hub { account: self.account.as_str().to_string(), name: self.browser.device_name.clone() }
         }
+    }
+
+    #[test]
+    fn kebbies_own_cards_answered_from_the_phone_meet_or_fail_a_stage_and_close_a_task() {
+        use crate::tasks::test_support::{cleanup, task_with_a_commit};
+        use kebbie_hub_protocol::StageState;
+        let mut account = Account::connected();
+        let seen = Seen::new();
+        let state = crate::lead::state_dir().unwrap();
+        let (dir, origin, slot, upstream) = task_with_a_commit("cards");
+        let address = format!("cards-{}@shop", std::process::id());
+        let closed = RefCell::new(Vec::new());
+        let close = |address: &str| {
+            closed.borrow_mut().push(address.to_string());
+            crate::tasks::finish_for_test(&dir, "cards")
+        };
+        let phone = |answer: &Caller, given: &Answer| answered_with(answer, given, &close);
+        let mut answered = |question: &str, choice: Option<u8>, comment: &str| {
+            let sent = account.send(&Payload::Answer(Answer { address: address.clone(), question: question.to_string(), choice, comment: comment.to_string() }));
+            with_answering(&seen, &phone, |hands| round(&account.dir, 0, &accepts(word("answer-and-push")), ACCOUNT, hands, &now)).unwrap();
+            account.result(&sent)
+        };
+        let states = || crate::tasks::rollout::stages_in(&state, &address).iter().map(|stage| (stage.state, stage.note.clone())).collect::<Vec<_>>();
+
+        crate::tasks::rollout::waiting_on_you(&state, &address).unwrap();
+        let card = crate::kebbie_questions::ask_verify(&state, &address, "Backfill is out. every row has its email", Some("fill")).unwrap();
+        let wrong = answered(&card.id, Some(2), "half the rows have no email");
+        assert_eq!(wrong.outcome, Outcome::Done, "{}", wrong.text);
+        assert_eq!(states(), [(StageState::Failed, Some("you said: half the rows have no email".to_string())), (StageState::Locked, None)], "Something is wrong fails the stage with what you saw and holds the next");
+        assert!(crate::kebbie_questions::load(&state).iter().all(|asked| asked.id != card.id), "the card is settled");
+
+        crate::tasks::rollout::waiting_on_you(&state, &address).unwrap();
+        let card = crate::kebbie_questions::ask_verify(&state, &address, "Backfill is out again. every row has its email", Some("fill")).unwrap();
+        let verified = answered(&card.id, Some(0), "");
+        assert_eq!((verified.outcome, verified.text.starts_with("Backfill is met; Drop the old column can be pushed")), (Outcome::Done, true), "{}", verified.text);
+        assert_eq!(states().into_iter().map(|(state, _)| state).collect::<Vec<_>>(), [StageState::Met, StageState::Open], "Verified meets the stage and opens the next");
+        assert!(closed.borrow().is_empty(), "a stage left to push keeps the task open");
+
+        crate::repo::git(&slot.path, &["push", "--quiet", "origin", &format!("HEAD:{}", upstream.trim_start_matches("origin/"))]).unwrap();
+        crate::repo::git(&dir, &["fetch", "--quiet", "origin"]).unwrap();
+        let card = crate::kebbie_questions::ask_close(&state, &address, "cards says it is done: the refunds page. Close it?").unwrap();
+        let wrongly = answered("kq-000000000000", Some(0), "");
+        assert_eq!(wrongly.outcome, Outcome::Refused { reason: Reason::AlreadySettled }, "a card that does not wait is refused");
+        let close_it = answered(&card.id, Some(0), "");
+        assert_eq!(close_it.outcome, Outcome::Done, "{}", close_it.text);
+        assert_eq!(closed.borrow().as_slice(), std::slice::from_ref(&address), "Close closes the task it names");
+        assert!(!crate::repo::branch_exists(&dir, "cards"), "the task is done: its branch is gone");
+        assert!(crate::kebbie_questions::load(&state).iter().all(|asked| asked.address != address), "nothing kebbie asked about it waits");
+        let _ = std::fs::remove_file(state.join("steps").join(format!("{address}.json")));
+        cleanup(dir, origin, &slot);
     }
 
     #[test]

@@ -329,10 +329,11 @@ pub(super) fn pushed_fingerprint(path: &Path, upstream: &str, through: Through) 
 
 fn authorize(caller: &Caller, repo: &Path, slot: &Slot, upstream: &str, through: Through) -> Result<String> {
     let pusher = authorize_as(caller, repo, slot, upstream, through, "Not pushed")?;
+    let take = match through { Through::All => None, Through::First { count, .. } => Some(count) };
     if super::accept::accept_required(repo) {
-        let take = match through { Through::All => None, Through::First { count, .. } => Some(count) };
         super::accept::refuse_unaccepted(&state_dir()?, &peers::address(task_of(slot), &name_of(repo)), task_of(slot), &slot.path, upstream, take, "Not pushed")?;
     }
+    super::rollout::refuse_past_stage(caller, &state_dir()?, &peers::address(task_of(slot), &name_of(repo)), task_of(slot), &slot.path, upstream, take, "Not pushed")?;
     Ok(pusher)
 }
 
@@ -702,11 +703,11 @@ fn went_out(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Ou
 }
 
 #[allow(clippy::too_many_arguments)]
-fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out, pusher: &str, state: &Path, watch: Watch) -> Result<String> {
+pub(super) fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out, pusher: &str, state: &Path, watch: Watch) -> Result<String> {
     let task = task_of(slot).to_string();
     let address = peers::address(&task, &name_of(repo));
     let went = went_out(repo, slot, upstream, through, out)?;
-    let (count, watch) = send(state, repo, slot, upstream, &address, &task, pusher, &went, watch)?;
+    let (count, watch, staged) = send(state, repo, slot, upstream, &address, &task, pusher, &went, watch)?;
     let (vault, log) = after_push(state, repo, slot, &address, &task, &went, &crate::vault_cli::detect);
     let Went { sha, keep_open, rest, pushed, note, target, .. } = went;
     let main = main_of(upstream);
@@ -723,6 +724,17 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out
     };
     let headline = |through: bool| if through { format!("Pushed {} through {short} to {main}", plural(count, "commit")) } else { format!("Pushed {} to {main}", plural(count, "commit")) };
     let said = |notice: Notice| notice.detail("task", &task).detail("commit", short).detail("ci", &ci).detail("log", &logged);
+    if !staged.stages.is_empty() {
+        let rolled = (!matches!(watch, crate::ci::Begin::Watching)).then(|| unwatched_stages(state, repo, &address, &sha, &target, &staged, &watch, keep_open));
+        let stages = rolled.as_ref().map(|rolled| rolled.text()).filter(|text| !text.is_empty()).unwrap_or_else(|| "kebbie follows CI for them, then asks for each stage's requirement".to_string());
+        if !keep_open && !rolled.as_ref().is_some_and(|rolled| rolled.all_met && staged.check.is_none()) {
+            if let Err(error) = messages::to_lead(messages::ToLead::Pushed, &format!("{}: {} to {target}, the last of its stages: {stages}; the task closes once every stage is met.", who_pushed(pusher, &address), plural(count, "commit"))) {
+                eprintln!("Could not tell the lead about the push: {error}");
+            }
+            let notice = said(Notice::new(Tone::Done, headline(false)).next(format!("Stages: {stages}; kebbie closes the task once every stage is met.")));
+            return Ok(notice.detail("checkout", follow_upstream(repo, upstream, &super::stage::load(state, repo))?).to_string());
+        }
+    }
     if !keep_open {
         let check = crate::report::check_in(state, &address);
         if matches!(watch, crate::ci::Begin::Watching) {
@@ -738,7 +750,7 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out
             return Ok(notice.detail("checkout", follow_upstream(repo, upstream, &super::stage::load(state, repo))?).to_string());
         }
         if let Some(check) = check {
-            let pushed = crate::ci::Pushed { pusher: pusher.to_string(), target: target.clone(), commits: pushed.clone(), note: note.clone(), logged: log.as_ref().map(|log| matches!(log, Ok(Some(_)))), check: Some(crate::ci::Check::new(&check)) };
+            let pushed = crate::ci::Pushed { pusher: pusher.to_string(), target: target.clone(), commits: pushed.clone(), note: note.clone(), logged: log.as_ref().map(|log| matches!(log, Ok(Some(_)))), check: Some(crate::ci::Check::new(&check)), stages: Vec::new(), deploy: None };
             let watch = crate::ci::Watch { address: address.clone(), repo: repo.to_path_buf(), slug: String::new(), sha: sha.clone(), started_at: messages::now(), checked_at: None, close: true, runs: Vec::new(), state: crate::ci::State::Running, error: None, erring_since: None, pushed };
             match crate::ci::ask_check(state, &watch, &format!("{short} is on {target}"), messages::now()) {
                 Ok(_) => {
@@ -769,6 +781,24 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out
     Ok(said(Notice::new(Tone::Done, headline(true)).next(after)).detail("checkout", follow_upstream(repo, upstream, &super::stage::load(state, repo))?).to_string())
 }
 
+// A push of stages kebbie cannot follow CI for: each stage is out once pushed, so a check goes to the task now and a deploy or a verification to the user.
+#[allow(clippy::too_many_arguments)]
+fn unwatched_stages(state: &Path, repo: &Path, address: &str, sha: &str, target: &str, staged: &Staged, watch: &crate::ci::Begin, keep_open: bool) -> super::rollout::Rolled {
+    let unseen = match watch {
+        crate::ci::Begin::NotWatched(reason) => format!("CI is not watched: {reason}"),
+        _ => "ci.watch is off".to_string(),
+    };
+    let rolled = super::rollout::rolled_out(state, address, &staged.stages, Some(&unseen), messages::now());
+    if let Some(check) = &staged.check {
+        let pushed = crate::ci::Pushed { check: Some(crate::ci::Check::new(check)), stages: staged.stages.clone(), target: target.to_string(), ..crate::ci::Pushed::default() };
+        let watch = crate::ci::Watch { address: address.to_string(), repo: repo.to_path_buf(), slug: String::new(), sha: sha.to_string(), started_at: messages::now(), checked_at: None, close: !keep_open, runs: Vec::new(), state: crate::ci::State::Running, error: None, erring_since: None, pushed };
+        if let Err(error) = crate::ci::ask_check(state, &watch, &format!("{} is on {target}", &sha[..7.min(sha.len())]), messages::now()) {
+            eprintln!("kebbie could not ask {address} to run its check of the stage: {error}");
+        }
+    }
+    rolled
+}
+
 #[allow(clippy::too_many_arguments)]
 fn kept_open(state: &Path, slot: &Slot, upstream: &str, address: &str, sha: &str, rest: usize, count: usize, clean: bool, landed: &Landed) -> String {
     let (pusher, target, short, main) = (landed.pusher, landed.target, &sha[..7.min(sha.len())], main_of(upstream));
@@ -791,14 +821,20 @@ fn kept_open(state: &Path, slot: &Slot, upstream: &str, address: &str, sha: &str
     if let Err(error) = messages::notify(address, &told) {
         eprintln!("Could not tell {address} about the push: {error}");
     }
-    if clean && rest == 0 { "It stays open, as you chose, with everything on main; close it from its options when you are done.".to_string() } else if clean { format!("It stays open with {} on top.", plural(rest, "commit")) } else { format!("It stays open; its Claude rebases the rest onto {main} when it is ready, and kebbie changed nothing in its worktree.") }
+    if clean && rest == 0 && super::rollout::all_met(state, address) {
+        let task = address.split_once('@').map_or(address, |(task, _)| task);
+        let _ = crate::kebbie_questions::ask_close(state, address, &format!("{task} is on {target} with nothing left to push, and stays open as you chose. Close it?"));
+    }
+    if clean && rest == 0 { "It stays open, as you chose, with everything on main; kebbie asks you whether to close it.".to_string() } else if clean { format!("It stays open with {} on top.", plural(rest, "commit")) } else { format!("It stays open; its Claude rebases the rest onto {main} when it is ready, and kebbie changed nothing in its worktree.") }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn send(state: &Path, repo: &Path, slot: &Slot, upstream: &str, address: &str, task: &str, pusher: &str, went: &Went, watch: Watch) -> Result<(usize, crate::ci::Begin)> {
+fn send(state: &Path, repo: &Path, slot: &Slot, upstream: &str, address: &str, task: &str, pusher: &str, went: &Went, watch: Watch) -> Result<(usize, crate::ci::Begin, Staged)> {
     let sha = &went.sha;
-    let check = crate::report::check_in(state, address).filter(|_| !went.keep_open).map(|check| crate::ci::Check::new(&check));
-    let told_ci = crate::ci::Pushed { pusher: pusher.to_string(), target: went.target.clone(), commits: went.pushed.clone(), note: went.note.clone(), logged: None, check };
+    let touched = super::rollout::touched(state, &slot.path, upstream, address, went.shas.len());
+    let (stages, stage_check, deploy) = super::rollout::for_watch(repo, &touched);
+    let check = stage_check.clone().or_else(|| crate::report::check_in(state, address).filter(|_| !went.keep_open)).map(|check| crate::ci::Check::new(&check));
+    let told_ci = crate::ci::Pushed { pusher: pusher.to_string(), target: went.target.clone(), commits: went.pushed.clone(), note: went.note.clone(), logged: None, check, stages: stages.clone(), deploy };
     let before = crate::ci::load(state, address);
     let phase_before = crate::phase::load(state, address);
     let watch = watch(state, repo, address, sha, !went.keep_open, told_ci);
@@ -807,7 +843,10 @@ fn send(state: &Path, repo: &Path, slot: &Slot, upstream: &str, address: &str, t
     }
     super::plan::seen_in(state, &slot.path);
     match push_prefix(&slot.path, upstream, sha, state) {
-        Ok(count) => Ok((count, watch)),
+        Ok(count) => {
+            super::rollout::mark_pushed(state, address, &stages, sha, messages::now());
+            Ok((count, watch, Staged { stages, check: stage_check }))
+        }
         Err(error) => {
             crate::ci::put_back(state, address, before);
             crate::phase::put_back(state, address, &crate::phase::Phase::CiRunning { sha: sha.clone() }, phase_before);
@@ -817,6 +856,12 @@ fn send(state: &Path, repo: &Path, slot: &Slot, upstream: &str, address: &str, t
 }
 
 type Log = Option<std::result::Result<Option<String>, String>>;
+
+// The stages a push put out, and the task's check when one of them is a check.
+struct Staged {
+    stages: Vec<String>,
+    check: Option<String>,
+}
 
 fn after_push(state: &Path, repo: &Path, slot: &Slot, address: &str, task: &str, went: &Went, vault: &dyn Fn() -> Option<crate::vault_cli::Cli>) -> (Option<crate::vault_cli::Cli>, Log) {
     super::landed::keep_open(state, address, went.keep_open);

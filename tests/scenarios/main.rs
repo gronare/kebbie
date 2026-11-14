@@ -11,5 +11,6 @@ mod restart;
 mod review;
 mod setup;
 mod task_life;
+mod stages;
 mod next;
 mod agents;

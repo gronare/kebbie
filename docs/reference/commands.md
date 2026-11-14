@@ -42,6 +42,7 @@ Without a name, `land`, `follow`, `review`, `evidence`, `push`, `try`, `done`, `
 | [`kebbie accepted`](#kebbie-accepted-name) | Which of a task's commits are accepted. |
 | [`kebbie subtasks`](#kebbie-subtasks-name-subtask-) | A task's subtasks, the state of each, the push order and the pushable run. |
 | [`kebbie order`](#kebbie-order-name) | A task's push order; move a commit in it, or group commits that go out together. |
+| [`kebbie stages`](#kebbie-stages-name-titlerequirement-) | A task's stages: steps to production with a requirement between them. |
 
 ### `kebbie start <name> [prompt]`
 
@@ -478,6 +479,37 @@ The task's work as titled subtasks, in the order they go out. A subtask is a sli
 | `--because "<why>"` | With a new list, marks the subtasks it adds as added, with the reason. |
 | `--json` | The subtasks as `task`, `listed`, `pushed`, `pushed_subtasks`, `subtasks`, `order` (the push order, each commit with `sha`, `subject`, `subtask`, `accepted`, `group`, `tests` and `moved`, as `kebbie order --json` gives them), `pushable` (`count`, `through` and `subtasks`, or `null`) and `last_accepted`. Each subtask has `id`, `number`, `title`, `state` (`planned`, `in-progress`, `ready`, `accepted` or `pushed`), `extra`, `contiguous`, `added`, `waits_for`, `commits` (each with `sha`, `subject` and `accepted`) and `pushed`. |
 
+### `kebbie stages [name] ["<title>:<requirement>" ...]`
+
+Declares a task's stages, in push order, for a change that must reach production in steps: a table or column renamed or dropped, a backfill before a constraint, a migration the next commit needs deployed. A stage is a boundary in the push order with a requirement that must hold before anything after it goes out. It needs `task.steps` on and the task's subtasks listed. In a task's worktree every word is the command's; elsewhere the first word names the task. The task runs it for itself, the lead and you for any task.
+
+```bash
+kebbie stages "Add the column, write both:deploy" "Backfill:verified:every row has its email in production" "Drop the old column:check:no query reads users.mail"
+```
+
+| Requirement | Met when |
+| --- | --- |
+| `deploy` | The stage's push is deployed: a run of the repo's [`ci.deploy`](configuration.md#ci-updates-and-the-keeper) workflow on the pushed commit is green, or, without `ci.deploy`, every CI run on it. Needs `ci.watch` on. |
+| `check:<what the task checks>` | Once the stage is deployed, kebbie sends the task the check, as it does a [`--after-push`](#kebbie-report) check; the task runs it in its own sandbox and reports ready when it holds. kebbie runs nothing itself. |
+| `verified:<what you verify>` | Once the stage is deployed, kebbie asks you, on the board and the phone: Verified, Not yet, or Something is wrong with what you see. |
+
+| Command | What it does |
+| --- | --- |
+| `kebbie stages "<title>:<requirement>" …` | Declares the stages. Declared again, a stage keeps its subtasks and state by its title; a pushed stage stays in the list, first, with its requirement. |
+| `kebbie stages assign <stage> <subtask>…` | Puts subtasks in a stage, named by id, title or number. A subtask no stage names goes out with the last stage. |
+| `kebbie stages [--json]` | Shows each stage, its requirement, its state and its subtasks. |
+
+A stage is `locked` until every stage before it is met, then `open`, `pushed` once kebbie pushed any of it, `waiting` once it is deployed and its check or your verification is asked for, then `met`, or `failed`:
+
+- The pushable run, the push window and `kebbie push` stop at the first stage that is not met; a push past it is refused with what the stage waits for.
+- A met stage opens the next; it never pushes it.
+- A stage fails when CI on its push fails, its check does not hold, you answer Something is wrong, or no run of `ci.deploy` shows up within 30 minutes of CI going green. A failed stage holds every stage after it, and the task and the lead hear what failed. The task fixes it in a subtask of the stage, or raises it with `kebbie obstacle`; the fix's push asks for the requirement again.
+- A commit that sits after a later stage's commits ends the pushable run until the task moves it up with `kebbie order move`.
+- When kebbie cannot see a stage deploy (CI not watched, or no CI ran), it asks you whether it deployed instead.
+- The task closes once its last stage is met and nothing is left to push.
+- The lead pushes a stage only with the task's own push permission, and never one after your verification; a repo's push permission covers no stages.
+- A stage's state lives with the task on its machine, in kebbie's state there. Another machine taking the task over starts from its subtasks and commits, not from where its stages stood.
+
 ### `kebbie order [name]`
 
 The task's push order, top first: each commit with its subtask, `✓` when you accepted it, its group, its own test run and where kebbie moved it from, then where the pushable run ends. It needs `task.steps` on. In a task's worktree every word is the command's; elsewhere the first word names the task.
@@ -502,7 +534,7 @@ A move runs in the task's worktree, as a replay of its branch from the first com
 
 ### `kebbie subtasks [name] add "<subtask>" --because "<why>"`
 
-Adds a subtask to the plan after the first listing, with the reason the plan changed, which you see beside it. It goes at the end, or before the subtask `--prepares <id>` names. `--because` is required.
+Adds a subtask to the plan after the first listing, with the reason the plan changed, which you see beside it. It goes at the end, or before the subtask `--prepares <id>` names. `--because` is required. `--stage <stage>` puts it in one of the task's [stages](#kebbie-stages-name-titlerequirement-).
 
 ### `kebbie subtasks [name] on <id>`
 
@@ -680,6 +712,8 @@ It is yours, or the lead's on your explicit choice. The lead's settings do not a
 | `kebbie subtasks done [<id>]` | The subtask is finished and ready for you. See [`kebbie subtasks done`](#kebbie-subtasks-name-done-id). |
 | `kebbie routine ok <summary>` | A routine's task, when all is well: records the run as ok with the summary and closes the task as `drop` does. |
 | `kebbie ask --option "<label>: <meaning>" … --recommend <n> <question>` | Ask you what you want: scope, behaviour, a trade-off that is yours. |
+| `kebbie ask --verify "<what to check, and where>"` | Ask you a check only you can make: Verified, Not yet or Something is wrong. kebbie's own question, beside the task's own: it holds neither the task nor its messages, and your answer reaches the task as a message. |
+| `kebbie stages "<title>:<requirement>" …` | The task's stages, for a change that reaches production in steps. See [`kebbie stages`](#kebbie-stages-name-titlerequirement-). |
 | `kebbie obstacle [--on <work>] <text>` | Raise an obstacle on the task's own path. See [below](#kebbie-obstacle---on-work-text). |
 | `kebbie found` | What tasks noticed outside their work, under Found by tasks. See [below](#kebbie-found---json). |
 | `kebbie answered <task>` | The task's question was settled elsewhere, dropped, or sent back to be asked again. |

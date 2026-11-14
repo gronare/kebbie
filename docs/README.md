@@ -16,6 +16,7 @@ Tasks
 - [Review a task's changes](how-to/review-a-task.md): read the diff next to Claude and comment line by line.
 - [Send a task to review](how-to/send-a-task-to-review.md): hold the push until a read-only reviewer passes the code.
 - [Push part of a task](how-to/push-part-of-a-task.md): land the first commits and keep the task open.
+- [Roll a change out in stages](how-to/roll-out-in-stages.md): a deploy, a check or your verification between each push.
 - [Act on comments on pushed commits](how-to/act-on-comments-on-pushed-commits.md): each one read on its own merits, fixed in a task or answered.
 - [Work in subtasks](how-to/work-in-steps.md): a task lists its subtasks, you accept them and push the accepted run while it builds on.
 - [Try a task before pushing](how-to/try-a-task-before-pushing.md): put its commits on local main, push main when it is right.

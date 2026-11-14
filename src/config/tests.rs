@@ -689,7 +689,7 @@ fn sample(entry: &Entry) -> String {
 fn each_keys_scope_is_the_files_that_take_it_and_what_its_text_says() {
     let loaded = Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
     let all = entries(&loaded);
-    assert_eq!(all.len(), 50);
+    assert_eq!(all.len(), 51);
     for entry in all {
         let (section, field) = entry.key.rsplit_once('.').unwrap();
         let text = format!("[{section}]\n{field} = {}\n", sample(&entry));

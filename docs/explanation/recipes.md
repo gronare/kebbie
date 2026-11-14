@@ -11,7 +11,7 @@ A recipe is the shape of a task: what it does first and where it stops for you. 
 | `small-fix` | The prompt settles the change: one subtask, the fix with the test that goes red without it, no mockup and no plan. |
 | `feature-with-ui` | A screen to design: a mockup until you say yes, then the task's own plan, then the build in subtasks of small commits. |
 | `task-after-task` | It builds on another task's change, so it is queued until that one is on main. |
-| `rollout-in-stages` | It must reach production in stages, such as an expand and contract rename: one task, a push per stage. |
+| `rollout-in-stages` | It must reach production in stages, such as an expand and contract rename: one task with [stages](../how-to/roll-out-in-stages.md), a push per stage once the stage before it is met. |
 | `follow-up` | A comment on a pushed commit, or red CI after a push. |
 | `research` | A question to settle before anything is built: a task of its own that ends with your choice. |
 | `across-repos` | One change in several repos, as one task with a half per repo or tasks that wait for each other. |
