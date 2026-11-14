@@ -58,18 +58,27 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     if app.page == Page::Areas {
         frame.render_widget(Paragraph::new(status), bottom);
         app.areas.draw(frame, body);
+        if app.areas.is_normal() && matches!(app.mode, Mode::Normal) {
+            draw_corner(frame, app);
+        }
         app.hits = if app.areas.is_normal() { tab_hits } else { Vec::new() };
         return;
     }
     if app.page == Page::Routines {
         frame.render_widget(Paragraph::new(status), bottom);
         app.routines.draw(frame, body);
+        if app.routines.is_normal() && matches!(app.mode, Mode::Normal) {
+            draw_corner(frame, app);
+        }
         app.hits = if app.routines.is_normal() { tab_hits } else { Vec::new() };
         return;
     }
     if app.page == Page::Settings {
         frame.render_widget(Paragraph::new(status), bottom);
         app.settings.draw(frame, body);
+        if app.settings.is_normal() && matches!(app.mode, Mode::Normal) {
+            draw_corner(frame, app);
+        }
         app.hits = if app.settings.is_normal() { tab_hits } else { Vec::new() };
         return;
     }
@@ -204,11 +213,8 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Mode::EditMessage(editor) => draw_editor(frame, editor),
         Mode::Input { label, buffer, .. } => draw_input(frame, label, buffer),
     }
-    if app.toast.as_ref().is_some_and(|toast| toast.at.elapsed() >= TOAST_FOR) {
-        app.toast = None;
-    }
-    if let Some(toast) = app.toast.as_ref().filter(|_| matches!(app.mode, Mode::Normal)) {
-        draw_toast(frame, toast);
+    if matches!(app.mode, Mode::Normal) {
+        draw_corner(frame, app);
     }
     if matches!(app.mode, Mode::Normal) {
         app.hits.extend(tab_hits);
@@ -219,6 +225,15 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     for link in &app.links {
         link_cells(frame.buffer_mut(), link);
     }
+}
+
+// Bottom right: the board's last toast, and above it a line for each push under way.
+fn draw_corner(frame: &mut Frame, app: &mut App) {
+    if app.toast.as_ref().is_some_and(|toast| toast.at.elapsed() >= TOAST_FOR) {
+        app.toast = None;
+    }
+    let top = app.toast.as_ref().and_then(|toast| draw_toast(frame, toast));
+    super::pushing::draw_pushes(frame, app, top);
 }
 
 #[cfg(test)]

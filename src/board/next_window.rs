@@ -11,9 +11,8 @@ use crate::hub::devices::{self, Asked, Decision, Request};
 use crate::keys::Act;
 use crate::next::{self, Next, Part, Row};
 use crate::peers;
-use crate::tasks;
 use super::widgets::{GREEN, MAUVE, MUTED, PEACH, RED, SUBTEXT, SURFACE, TEXT, Spot, bold, centered, cut, hint_line, modal_block, style, text_width};
-use super::{App, Column, Hit, Mode, Page, notices};
+use super::{App, Column, Hit, Mode, Page};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) struct Window {
@@ -393,16 +392,11 @@ impl App {
     pub(super) fn push_all(&mut self, order: Vec<Push>, choice: usize) {
         let only_first = choice == 1;
         let order: Vec<(String, PathBuf)> = order.into_iter().take(if only_first { 1 } else { usize::MAX }).map(|push| (push.name, push.path)).collect();
-        let label = if order.len() == 1 { format!("Pushing {}…", order[0].0) } else { format!("Pushing {} tasks in order…", order.len()) };
-        self.subject = Some(notices::Subject::plain("push"));
-        match self.pusher.clone() {
-            Some(pusher) => self.in_background(label, move || next::push_in_order(&order, |path| pusher(path))),
-            None => self.in_background(label, move || next::push_in_order(&order, |path| tasks::push(path, None, None, false))),
-        }
+        let label = if order.len() == 1 { self.push_label(&order[0].0) } else { format!("Pushing {} tasks in order", order.len()) };
+        let pushed = order.clone();
+        self.push_in_background(label, order, move |pusher| next::push_in_order(&pushed, |path| pusher(path, None, false)));
     }
 }
-
-pub(super) type Pusher = std::sync::Arc<dyn Fn(&std::path::Path) -> crate::sh::Result<String> + Send + Sync>;
 
 #[cfg(test)]
 mod tests {
@@ -534,10 +528,10 @@ mod tests {
         let mut app = app_with(a_day());
         let tried = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let seen = tried.clone();
-        app.pusher = Some(std::sync::Arc::new(move |path| {
+        app.pusher = std::sync::Arc::new(move |path, _, _| {
             seen.lock().unwrap().push(path.to_path_buf());
             if path.ends_with("fix-grid") { Err("Not pushed: rules not checked".to_string()) } else { Ok(String::new()) }
-        }));
+        });
         app.open_next();
         app.handle_key(key(KeyCode::Char('P')), None);
         let rows = render(&mut app, 100, 40).0;
@@ -547,10 +541,14 @@ mod tests {
         let order: Vec<usize> = ["1  card-component", "2  fix-grid", "3  copy-typo"].iter().map(|row| find(&rows, row)[0].1).collect();
         assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{screen}");
         app.handle_key(key(KeyCode::Enter), None);
-        let Mode::Working { result, .. } = &app.mode else { panic!("pushing runs in the background") };
-        let outcome = result.recv().unwrap();
+        assert!(matches!(app.mode, Mode::Normal) && app.pushing(std::path::Path::new("/work/copy-typo")), "pushing runs in the background, the board free meanwhile");
+        let start = std::time::Instant::now();
+        while !matches!(app.mode, Mode::Message(_)) && start.elapsed() < std::time::Duration::from_secs(10) {
+            app.poll_pushes();
+        }
         assert_eq!(*tried.lock().unwrap(), [PathBuf::from("/work/card-component"), PathBuf::from("/work/fix-grid")]);
-        assert!(outcome.unwrap_err().contains("fix-grid did not push, so the rest wait"));
+        let Mode::Message(outcome) = &app.mode else { panic!("the failure opens a window") };
+        assert!(outcome.contains("fix-grid did not push, so the rest wait"), "{outcome}");
     }
 
     // iPhone 16 sent an answer seven minutes ago from a device this machine has not approved.

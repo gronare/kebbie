@@ -23,6 +23,7 @@ mod options;
 mod park;
 mod paste;
 mod push;
+mod pushing;
 pub(crate) mod review;
 pub(crate) mod review_data;
 mod review_draw;
@@ -250,7 +251,9 @@ struct App {
     comment_dir: Option<PathBuf>,
     copier: comments::Copier,
     reopener: comments::Reopener,
-    pusher: Option<next_window::Pusher>,
+    pusher: pushing::Pusher,
+    pushes: Vec<pushing::Pushing>,
+    push_outcomes: Vec<(Notice, notices::Subject)>,
 }
 
 type Updater = std::sync::Arc<dyn Fn() -> Result<String> + Send + Sync>;
@@ -545,7 +548,7 @@ impl App {
 
     // A rebuilt binary takes over only once nothing is open, and never while an update this board runs is going or its summary is unread.
     fn may_restart(&self) -> bool {
-        matches!(self.mode, Mode::Normal | Mode::Help(_) | Mode::Message(_)) && self.update.is_none() && self.agent_offer.is_none() && self.areas.is_idle() && self.routines.is_idle() && self.settings.is_normal()
+        matches!(self.mode, Mode::Normal | Mode::Help(_) | Mode::Message(_)) && self.pushes.is_empty() && self.update.is_none() && self.agent_offer.is_none() && self.areas.is_idle() && self.routines.is_idle() && self.settings.is_normal()
     }
 
     fn show(&mut self, result: Result<String>) {
@@ -612,7 +615,8 @@ impl App {
                 self.quit = true;
             } else {
                 self.ctrl_c = Some(Instant::now());
-                self.say(format!("{} again to quit", map.label(Act::Quit)));
+                let stops = if self.pushes.is_empty() { String::new() } else { ", and the push under way stops where it is".to_string() };
+                self.say(format!("{} again to quit{stops}", map.label(Act::Quit)));
             }
             return;
         }
@@ -933,6 +937,10 @@ impl App {
                             self.show(Notice::new(Tone::NotNow, "No sign-off card yet").next("Its Claude writes one when it reports ready.").ok());
                         }
                     },
+                    Act::Push | Act::Rebase | Act::Tidy | Act::Stage | Act::Done | Act::Reset | Act::Drop if item.path.as_deref().is_some_and(|path| self.pushing(path)) => {
+                        self.about(act_kind(act), &item.name);
+                        self.show(Notice::new(Tone::NotNow, "Already pushing it").next("The board says how the push went once it is done.").ok());
+                    }
                     Act::Stage if item.staged => {
                         if let Some(path) = item.path.clone() {
                             self.about("stage", &item.name);
@@ -1163,7 +1171,7 @@ impl App {
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel).map(|outcome| outcome.details.join("\n"))), update: None, progress_file: None, recheck: None, stale: Vec::new(), stale_at: 0, restart_after_update: false,
             agent_offer: None, agent_mode: std::sync::Arc::new(|| config::agent_updates_in(&config::path())), installer: agent_updates::default_install(),
             filter: None, ctrl_c: None, go_again: None, notice: None, lead_chat: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), lead_fresh_starter: std::sync::Arc::new(crate::lead_restart::fresh_now), lead_checker: std::sync::Arc::new(crate::lead::restart_refusal), lead_restarted: std::sync::Arc::default(), lead_context: None, restart_why: String::new(), devices: Vec::new(), subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
-            comments: Vec::new(), comment_panel: Default::default(), comment_dir: None, copier: comments::default_copier(), reopener: comments::default_reopener(), pusher: None,
+            comments: Vec::new(), comment_panel: Default::default(), comment_dir: None, copier: comments::default_copier(), reopener: comments::default_reopener(), pusher: pushing::live_pusher(), pushes: Vec::new(), push_outcomes: Vec::new(),
         }
     }
 }
@@ -1227,6 +1235,7 @@ pub fn run(overlay: bool) -> Result<String> {
             app.poll_answer();
             app.poll_sending();
             app.take_working_result();
+            app.poll_pushes();
             app.poll_hub();
             app.poll_update();
             app.poll_agent_install();

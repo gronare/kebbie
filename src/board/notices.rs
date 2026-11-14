@@ -13,7 +13,7 @@ use super::widgets::{self, BLUE, FAINT, GREEN, MANTLE, MAUVE, MUTED, PEACH, RED,
 
 pub(super) const TOAST_FOR: Duration = Duration::from_secs(6);
 const WIDTH: u16 = 80;
-const TOAST_WIDTH: u16 = 60;
+pub(super) const TOAST_WIDTH: u16 = 60;
 const LABEL: usize = 8;
 
 // What a notice is about: the kind of step and the task's title, for the window's title; `push` tells which keys the window offers.
@@ -154,11 +154,11 @@ pub(super) fn draw_notice(frame: &mut Frame, notice: &Notice, subject: Option<&S
 }
 
 // Bottom right, above the key line, over whatever the board shows there; it takes no keys.
-pub(super) fn draw_toast(frame: &mut Frame, toast: &Toast) {
+pub(super) fn draw_toast(frame: &mut Frame, toast: &Toast) -> Option<u16> {
     let full = frame.area();
     let width = TOAST_WIDTH.min(full.width.saturating_sub(4));
     if width < 20 {
-        return;
+        return None;
     }
     let inner_width = width.saturating_sub(4) as usize;
     let mut lines = headline(&toast.notice, inner_width);
@@ -172,6 +172,7 @@ pub(super) fn draw_toast(frame: &mut Frame, toast: &Toast) {
     let block = Block::bordered().border_type(BorderType::Rounded).border_style(style(tone_color(toast.notice.tone))).padding(Padding::horizontal(1))
         .title(Span::styled(title, style(MUTED))).style(Style::new().bg(MANTLE));
     frame.render_widget(Paragraph::new(lines).block(block), area);
+    Some(area.y)
 }
 
 #[cfg(test)]

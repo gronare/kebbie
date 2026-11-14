@@ -68,7 +68,8 @@ pub(super) fn absence(item: &Item) -> Option<&'static str> {
     }
 }
 
-pub(super) fn row_facts(item: &Item) -> String {
+// A push this board runs says its step in place of the push line's note, which lags behind it.
+pub(super) fn row_facts(item: &Item, pushing: Option<String>) -> String {
     if item.queued.is_some() {
         return String::new();
     }
@@ -77,7 +78,7 @@ pub(super) fn row_facts(item: &Item) -> String {
     parts.extend(item.git_error().map(|_| crate::status::GIT_UNREAD.to_string()));
     parts.extend(item.ci_note());
     parts.extend(item.recover_note());
-    parts.extend(item.push_note());
+    parts.extend(pushing.or_else(|| item.push_note()));
     if let Some(to_accept) = to_accept_note(item) {
         parts.push(to_accept);
     } else if git.ahead > 0 {
@@ -305,13 +306,17 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
         let start = lines.len();
         let dot = running_dot(item);
         let marker = if item.routine.is_some() { ROUTINE_MARKER } else { "" };
+        let pushing = app.push_note_for(item);
         let facts = match item.parked {
-            Some(parked) => format!("{} · {}", parked.back_now(), row_facts(item)),
-            None => row_facts(item),
+            Some(parked) => format!("{} · {}", parked.back_now(), row_facts(item, pushing.clone())),
+            None => row_facts(item, pushing.clone()),
         };
         let mut line = row(selected, focused, status_icon(item), &item.titled(), place, &facts, width.saturating_sub(if dot { 2 } else { 0 } + marker.chars().count()));
         if let Some(to_accept) = to_accept_note(item) {
             tint(&mut line, &to_accept, YELLOW);
+        }
+        if let Some(pushing) = &pushing {
+            tint(&mut line, pushing, BLUE);
         }
         if !marker.is_empty() {
             line.spans.insert(4, Span::styled(marker, style(MUTED)));
@@ -593,7 +598,7 @@ mod tests {
         item.rules = Some(crate::rules_check::Shown::Checking);
         let (screen, below, color) = shown(&item);
         assert_eq!((below.as_str(), color), ("checking project rules", Some(MUTED)), "{screen}");
-        assert!(!row_facts(&item).contains("rules"), "the row's facts leave it to its line: {}", row_facts(&item));
+        assert!(!row_facts(&item, None).contains("rules"), "the row's facts leave it to its line: {}", row_facts(&item, None));
         item.rules = Some(crate::rules_check::Shown::Broken(2, vec!["Body says why".to_string(), "One change".to_string()]));
         let (screen, below, color) = shown(&item);
         assert_eq!((below.as_str(), color), ("breaks 2 project rules: Body says why · One change", Some(YELLOW)), "{screen}");

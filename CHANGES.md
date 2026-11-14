@@ -7,6 +7,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### What's new
 - lead.profile runs the lead on its own model and effort, picked on the Settings page.
 - L preselects resuming the lead's conversation while work is going on, and a new one when nothing is.
+- Pushing from the board runs in the background, with a line saying each step and the task's row marked pushing.
 
 ### Fixed
 - When one bug or wish waits to be sent, the board's row names it by its title instead of counting it.

@@ -645,7 +645,7 @@ mod tests {
         let (lines, links) = ci_lines(&item, 80);
         assert_eq!(lines.iter().map(Line::to_string).collect::<Vec<_>>(), ["ci      ◐ CI running: CI", "        CI  https://github.com/acme/web/actions/runs/42"]);
         assert_eq!((links[0].shown.as_str(), links[0].url.as_str()), ("https://github.com/acme/web/actions/runs/42", "https://github.com/acme/web/actions/runs/42"));
-        assert_eq!(row_facts(&item), "CI running: CI");
+        assert_eq!(row_facts(&item, None), "CI running: CI");
         assert_eq!(group_color(item.group()), YELLOW);
     }
 
@@ -678,7 +678,7 @@ mod tests {
         assert_eq!(buffer[(column, at as u16)].fg, PEACH);
         let mut fresh = crate::status::tests::task(Some("idle"), None, 0);
         fresh.bypass = true;
-        assert_eq!(row_facts(&fresh), "nothing yet · bypass");
+        assert_eq!(row_facts(&fresh, None), "nothing yet · bypass");
     }
 
     #[test]

@@ -17,7 +17,7 @@ use super::detail::tests_spans;
 use super::editor::{MessageEditor, Rewrite};
 use super::{App, Hit, Mode};
 use super::steps::mark_color;
-use super::widgets::{GREEN, MAUVE, MUTED, SURFACE, TEXT, YELLOW, bold, centered, cut, fit, modal_block, plural, rule, section_header, style, text_width, wrap};
+use super::widgets::{GREEN, MAUVE, MUTED, SURFACE, TEXT, YELLOW, bold, centered, cut, fit, modal_block, rule, section_header, style, text_width, wrap};
 
 // What the push window marks on its commits: which the user accepted, their subtasks by number and title, the subtasks with no commit yet, and the last of the pushable run.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -293,16 +293,10 @@ impl App {
                 let end = marks.end_of(selected);
                 let through = if keep_open { commits.get(end) } else { commits.last() };
                 let Some(through) = through.map(|commit| commit.sha.clone()) else { return };
-                let count = if keep_open { end + 1 } else { commits.len() };
-                let what = if keep_open && marks.pushes_run() { format!("the accepted run, {}", plural(count, "commit")) } else { plural(count, "commit") };
-                let (sender, result) = mpsc::channel();
-                let path_for_subject = path.clone();
-                thread::spawn(move || {
-                    let _ = sender.send(tasks::push(&path, None, Some(&through), keep_open));
-                });
-                let label = if keep_open { format!("Rebasing and pushing {what}; the task stays open…") } else { format!("Rebasing and pushing {what}, then closing the task…") };
-                self.about_path("push", &path_for_subject);
-                self.mode = Mode::Working { label, result };
+                let name = self.tasks.iter().find(|item| item.path.as_deref() == Some(path.as_path())).map_or_else(|| crate::repo::name_of(&path), |item| item.name.clone());
+                let label = self.push_label(&name);
+                let pushed = path.clone();
+                self.push_in_background(label, vec![(name, path)], move |pusher| pusher(&pushed, Some(&through), keep_open));
             }
             KeyCode::Up | KeyCode::Char('k') => self.mode = Mode::ConfirmPush { path, commits, selected: selected.saturating_sub(1), card, tests, marks, scroll: scroll.follow() },
             KeyCode::Down | KeyCode::Char('j') => {

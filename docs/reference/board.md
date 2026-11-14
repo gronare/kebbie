@@ -497,9 +497,9 @@ The item's card shows its title, priority, repo, state, the day it was filed and
 
 `P` opens `Push 3 tasks in this order`, with each task, its commits and what waits on it.
 
-- `Push all three` pushes them one after the other, in the order shown. Each is rebased onto main and joins its repo's push line.
+- `Push all three` pushes them one after the other, in the order shown, in the background like a single push. Each is rebased onto main and joins its repo's push line.
 - `Push card-component only` pushes the first.
-- The first push that is refused stops the rest: the window that follows names it, why, and what is still ready. The rest stay under Ready to push.
+- The first push that is refused stops the rest: the window that opens once the board is at rest names it, why, and what is still ready. The rest stay under Ready to push.
 - `←` `→` choose, `⏎` or a click pushes, `esc` goes back to the list.
 
 `kebbie next` prints the same list. See [Commands](commands.md#seeing-what-is-going-on).
@@ -563,6 +563,14 @@ The keys sit under a rule at the bottom and stay there. A window taller than the
 | `esc`, `q` | Close without pushing. |
 
 In the message editor: `ctrl-s` saves, `ctrl-o` opens your `$EDITOR`, `esc` goes back.
+
+`y` and `p` close the window and push in the background, so the board stays yours to move around, switch pages and act on other tasks meanwhile:
+
+- Bottom right, where the board's notices go by, a line says what the push does: `↻ Pushing Refund mails… rebasing onto main`, then `… pushing to main`. Each push under way has a line of its own; two tasks of the same repo still go out one after the other, in its push line.
+- The task's row reads `pushing… rebasing onto main` in blue until the push is done. On that task, `p`, `e`, `t`, `M`, `d`, `z` and `x` say `Already pushing it` and wait.
+- The outcome takes the line's place: `✓ Pushed 3 commits to main` with `CI runs now`, or where the push went instead, such as its Claude resolving a conflict or running the tests for files main changed under it. These go by by themselves.
+- A push that was refused or needs you opens its window as before, with `⏎ its Space` and `p push again`. While another window is open it waits, and opens once you close that one and are back on the work page.
+- `ctrl-c` twice still quits; the first press says the push under way stops where it is.
 
 Only messages and squashes change here; the code stays identical. A commit that arrives after the window opened stops the push.
 

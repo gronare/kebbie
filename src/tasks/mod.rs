@@ -13,6 +13,7 @@ mod park;
 mod plan;
 mod pool;
 mod push;
+mod push_steps;
 mod red_ci;
 pub(crate) mod rollout;
 mod stage;
@@ -48,6 +49,9 @@ pub(crate) use plan::{Placed, Subtask, Subtasks, State as SubtaskState, order_js
 pub(crate) use order::{Asked as OrderAsked, command as order};
 pub(crate) use rollout::command as stages;
 pub(crate) use pool::{Slot, find_task, list, move_work, slots, task_of, task_slots};
+pub(crate) use push_steps::watched as push_watched;
+#[cfg(test)]
+pub(crate) use push_steps::step as push_step;
 pub(crate) use push::{DevicePush, after_ci, cancel as cancel_push, land, place_in_line, push, push_as, rebase, tidy};
 pub(crate) use stage::{WAIT_CEILING as STAGE_WAIT, stage, staged, tick as stage_tick, unstage};
 pub(crate) use started::{link, started_items, started_links};
@@ -157,9 +161,11 @@ mod tests {
         for call in ["tasks::done(", "tasks::reset(", "tasks::push(", "tasks::start(", "tasks::rebase("] {
             for (at, _) in board.match_indices(call) {
                 let line = board[..at].rsplit('\n').next().unwrap_or_default();
-                assert!(line.contains("move ||") || line.contains("sender.send("), "{call} runs on the board's thread: {line}");
+                assert!(line.contains("move ||") || line.contains("sender.send(") || line.contains("Arc::new(|path, through, keep_open|"), "{call} runs on the board's thread: {line}");
             }
         }
+        let handed: Vec<&str> = board.lines().filter(|line| line.contains("self.pusher")).collect();
+        assert_eq!(handed, ["        let (into, pusher) = (step.clone(), self.pusher.clone());"], "the board's pusher runs only on the thread push_in_background spawns");
         assert!(!board.contains("vault_cli::detect") && !board.contains("vault_cli::cli()"), "the board reads the kept verdict only");
     }
 

@@ -649,6 +649,7 @@ fn prepare(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Thr
     super::stage::refuse_push(state, repo, &address, &task)?;
     let pusher = authorize(caller, repo, slot, &upstream, through)?;
     let by = By::of(caller).ok_or_else(|| Notice::new(Tone::Failed, format!("Not pushed: {} may not push it", crate::permit::describe(caller))).detail("task", &task).to_string())?;
+    super::push_steps::step(&task, &format!("rebasing onto {}", main_of(&upstream)));
     fetch(repo)?;
     let recorded = pushed_fingerprint(&slot.path, &upstream, through)?;
     let seen = messages::latest_reports(&messages::load()).get(&address).map(|report| report.id.clone());
@@ -749,6 +750,7 @@ pub(super) fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through
     let task = task_of(slot).to_string();
     let address = peers::address(&task, &name_of(repo));
     let went = went_out(repo, slot, upstream, through, out)?;
+    super::push_steps::step(&task, &format!("pushing to {}", main_of(upstream)));
     let (count, watch, staged) = send(state, repo, slot, upstream, &address, &task, pusher, &went, watch)?;
     let (vault, log) = after_push(state, repo, slot, &address, &task, &went, &crate::vault_cli::detect);
     let Went { sha, keep_open, rest, pushed, note, target, .. } = went;

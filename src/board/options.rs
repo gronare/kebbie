@@ -376,12 +376,12 @@ mod tests {
         let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 1);
         item.verdict = Some(crate::status::tests::in_review(false, 2, false, false));
         assert_eq!(keys(&item), "gcrvtdauZzx");
-        assert_eq!(row_facts(&item), "1 commit · review: 2 findings · withdraw with v to push without a pass", "the user is the one who acts next");
+        assert_eq!(row_facts(&item, None), "1 commit · review: 2 findings · withdraw with v to push without a pass", "the user is the one who acts next");
         item.agent.as_mut().unwrap().status = "working".to_string();
-        assert_eq!(row_facts(&item), "1 commit · review: 2 findings", "its Claude is at the findings");
+        assert_eq!(row_facts(&item, None), "1 commit · review: 2 findings", "its Claude is at the findings");
         item.agent.as_mut().unwrap().status = "idle".to_string();
         item.unrecorded = Some("script/test is not recorded as a test run: add it to task.test_commands".to_string());
-        assert!(row_facts(&item).ends_with(" · script/test is not recorded as a test run: add it to task.test_commands"), "{}", row_facts(&item));
+        assert!(row_facts(&item, None).ends_with(" · script/test is not recorded as a test run: add it to task.test_commands"), "{}", row_facts(&item, None));
         item.unrecorded = None;
         let withdraw = task_choices(Some(&item), None, None).into_iter().find(|choice| choice.key == 'v').unwrap();
         assert_eq!(withdraw.label, "Withdraw from review", "the push stays the user's: a task in review can always be taken out");
@@ -391,7 +391,7 @@ mod tests {
         item.verdict = Some(crate::status::tests::in_review(false, 2, false, false));
         item.verdict = Some(crate::status::tests::in_review(true, 0, false, false));
         assert_eq!(keys(&item), "gcrvtpdauZzx");
-        assert_eq!(row_facts(&item), "1 commit · reviewed");
+        assert_eq!(row_facts(&item, None), "1 commit · reviewed");
     }
 
     #[test]
@@ -436,19 +436,19 @@ mod tests {
         unchecked.rules = Some(crate::rules_check::Shown::Lead);
         assert!(unchecked.group() == crate::status::Group::ReadyToPush);
         assert!(task_choices(Some(&unchecked), None, None).iter().any(|choice| choice.key == 'p'));
-        assert_eq!(row_facts(&unchecked), "1 commit", "the rules check has a line of its own under the row");
+        assert_eq!(row_facts(&unchecked, None), "1 commit", "the rules check has a line of its own under the row");
     }
 
     #[test]
     fn a_task_without_its_claude_shows_why_and_g_restarts_it() {
         let gone = crate::status::tests::task(None, None, 1);
-        assert_eq!(row_facts(&gone), "no Space · 1 commit");
+        assert_eq!(row_facts(&gone, None), "no Space · 1 commit");
         assert_eq!(task_choices(Some(&gone), None, None)[0].label, "Restart it");
         let mut shell_only = crate::status::tests::task(None, None, 0);
         shell_only.workspace = Some("w1".to_string());
-        assert_eq!(row_facts(&shell_only), "no Claude · nothing yet");
+        assert_eq!(row_facts(&shell_only, None), "no Claude · nothing yet");
         let running = crate::status::tests::task(Some("idle"), None, 0);
-        assert_eq!(row_facts(&running), "nothing yet");
+        assert_eq!(row_facts(&running, None), "nothing yet");
         assert_eq!(task_choices(Some(&running), None, None)[0].label, "Go to its Space");
     }
 
@@ -457,10 +457,10 @@ mod tests {
         let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 1);
         let permission = |item: &Item| task_choices(Some(item), None, None).into_iter().find(|choice| choice.key == 'a').map(|choice| choice.label);
         assert_eq!(permission(&item).as_deref(), Some("Let the lead push it"));
-        assert!(!row_facts(&item).contains("lead may push"));
+        assert!(!row_facts(&item, None).contains("lead may push"));
         item.permit = Some(Permit::Task);
         assert_eq!(permission(&item).as_deref(), Some("Take back push permission"));
-        assert!(row_facts(&item).ends_with("lead may push"), "{}", row_facts(&item));
+        assert!(row_facts(&item, None).ends_with("lead may push"), "{}", row_facts(&item, None));
         assert_eq!(permit_chip(item.permit), Some(("lead may push".to_string(), GREEN)));
         item.permit = Some(Permit::Repo);
         assert_eq!(permission(&item).as_deref(), Some("Let the lead push it"), "the repo's permission is switched on the Areas page");
