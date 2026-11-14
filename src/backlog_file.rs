@@ -210,19 +210,37 @@ pub fn find(item: &str) -> Option<(PathBuf, Item)> {
     Some((file(&dir, &found.stem), found))
 }
 
-// A draft holds every heading: the first section says the lead writes it out, Source keeps the line as typed.
-fn draft_body(by: &str, filed: &str, line: &str, template: &Template) -> String {
+// A draft holds every heading: the first section says the lead writes it out, Source keeps the line or the user's words as typed.
+fn draft_body(by: &str, filed: &str, line: &str, words: Option<&str>, template: &Template) -> String {
     let first = template.sections.first().map_or("background", |section| section.key.as_str());
     let source = if template.heading("source").is_some() { "source" } else { first };
-    let said = format!("{by}, {filed}: \"{}\"", line.trim());
+    let said = match words {
+        Some(words) => format!("{by}, {filed}, in their words:\n\n{}", quoted_block(words)),
+        None => format!("{by}, {filed}: \"{}\"", line.trim()),
+    };
     let texts = if source == first { vec![(first, format!("{TO_WRITE}\n\n{said}"))] } else { vec![(first, TO_WRITE.to_string()), (source, said)] };
     template.body_with(&texts)
 }
 
+// The user's words as a quote, line breaks kept, so a line of theirs never reads as one of the template's headings.
+fn quoted_block(words: &str) -> String {
+    words.trim().lines().map(|line| if line.trim().is_empty() { ">".to_string() } else { format!("> {}", line.trim_end()) }).collect::<Vec<_>>().join("\n")
+}
+
+// A description's first words as a title the lead replaces when it writes the item out.
+pub fn placeholder_title(words: &str) -> String {
+    const WORDS: usize = 6;
+    let all: Vec<&str> = words.split_whitespace().collect();
+    let title = all.iter().take(WORDS).copied().collect::<Vec<_>>().join(" ");
+    if all.len() > WORDS { format!("{}…", title.trim_end_matches(|c: char| c.is_ascii_punctuation())) } else { title }
+}
+
+// `words` is a description in the user's own words, and `line` then only a placeholder title the lead replaces.
 pub struct Filing<'a> {
     pub priority: &'a str,
     pub repo: &'a str,
     pub line: &'a str,
+    pub words: Option<&'a str>,
     pub body: Option<&'a str>,
     pub by: &'a str,
 }
@@ -255,7 +273,7 @@ pub fn item_from_with(filing: &Filing, filed: &str, template: &Template) -> Resu
             }
             ("backlog".to_string(), body.to_string())
         }
-        None => (DRAFT.to_string(), draft_body(filing.by, filed, filing.line, template)),
+        None => (DRAFT.to_string(), draft_body(filing.by, filed, filing.line, filing.words, template)),
     };
     Ok(Item { stem: String::new(), title, priority, repo, status, filed: filed.to_string(), body })
 }
@@ -283,7 +301,7 @@ pub fn migrate(dir: &Path, filed: &str) -> Result<usize> {
         }
         let line = if summary.is_empty() { title.clone() } else { format!("{title} — {summary}") };
         let stem = stem_for(&title, |stem| file(dir, stem).exists());
-        let item = Item { stem: stem.clone(), title, priority, repo: area, status: DRAFT.to_string(), filed: filed.to_string(), body: draft_body(&format!("moved from {OLD_FILE}"), filed, &line, &crate::item_template::local()) };
+        let item = Item { stem: stem.clone(), title, priority, repo: area, status: DRAFT.to_string(), filed: filed.to_string(), body: draft_body(&format!("moved from {OLD_FILE}"), filed, &line, None, &crate::item_template::local()) };
         crate::state::write(&file(dir, &stem), item.text())?;
         moved += 1;
     }
@@ -333,8 +351,12 @@ pub fn tell_new_drafts() {
     }
 }
 
-fn lead_text(who: &str, line: &str, priority: &str, place: &str) -> String {
+fn lead_text(filing: &Filing, priority: &str, place: &str) -> String {
+    let (who, line) = (filing.by, filing.line);
     let priority = if priority == "none" { String::new() } else { format!(" [{priority}]") };
+    if let Some(words) = filing.words {
+        return format!("{who} added an idea to the backlog{priority}, in their words:\n\n{}\n\nIts title \"{}\" is a placeholder. Write it out now with the skill `{SKILL}` from what you know (your conversation with the user, the code, the notes), give it a short title in the user's words, show the user the written item, and save it {place}. If it reached you only now, say that it waited for you.", quoted_block(words), line.trim());
+    }
     format!("{who} added a quick item to the backlog: \"{}\"{priority}. Write it out now with the skill `{SKILL}` from what you know (your conversation with the user, the code, the notes), show the user the written item, and save it {place}. If it reached you only now, say that it waited for you.", line.trim())
 }
 
@@ -362,7 +384,7 @@ pub fn file_item_on(shelf: &Shelf, sources: &[Source], filing: &Filing, from_lea
                     mark_told(shelf.state, shelf.dir, std::slice::from_ref(&item.stem));
                     shown = shown.next(format!("Write it out now with the skill {SKILL}, in that file."));
                 } else {
-                    if (shelf.tell)(&lead_text(filing.by, filing.line, &item.priority, &format!("in its file {}", path.display()))).is_ok() {
+                    if (shelf.tell)(&lead_text(filing, &item.priority, &format!("in its file {}", path.display()))).is_ok() {
                         mark_told(shelf.state, shelf.dir, std::slice::from_ref(&item.stem));
                     }
                     shown = shown.next("The lead writes it out; it waits for the lead when none runs.");
@@ -378,7 +400,7 @@ pub fn file_item_on(shelf: &Shelf, sources: &[Source], filing: &Filing, from_lea
             let id = crate::backlog_kept::keep(shelf.state, filing.line, &item.priority, &item.repo, crate::messages::now())?;
             let filed = format!("Then run `kebbie backlog filed {}{id}`, so the row kebbie keeps for it on the board gives way to your note.", crate::backlog_kept::PREFIX);
             let text = if item.to_write() {
-                format!("{} {filed}", lead_text(filing.by, filing.line, &item.priority, "as a task note in the vault's backlog"))
+                format!("{} {filed}", lead_text(filing, &item.priority, "as a task note in the vault's backlog"))
             } else {
                 format!("{} filed a written-out backlog item; file it as a task note in the vault's backlog as it stands (title \"{}\", priority {}, repo {}). {filed}\n\n{}", filing.by, item.title, item.priority, if item.repo.is_empty() { "not given" } else { &item.repo }, item.body)
             };
@@ -407,7 +429,7 @@ pub fn add(priority: Option<&str>, repo: Option<&str>, words: &[String], from_st
         _ => "An agent".to_string(),
     };
     let from_lead = matches!(caller, crate::permit::Caller::Lead | crate::permit::Caller::LeadSandboxed);
-    file_item(&crate::config::sources()?, &Filing { priority: priority.unwrap_or_default(), repo: repo.unwrap_or_default(), line: &line, body: body.as_deref(), by: &by }, from_lead)
+    file_item(&crate::config::sources()?, &Filing { priority: priority.unwrap_or_default(), repo: repo.unwrap_or_default(), line: &line, words: None, body: body.as_deref(), by: &by }, from_lead)
 }
 
 #[cfg(test)]
@@ -421,7 +443,7 @@ mod tests {
     }
 
     fn quick<'a>(line: &'a str, priority: &'a str) -> Filing<'a> {
-        Filing { priority, repo: "", line, body: None, by: "The user" }
+        Filing { priority, repo: "", line, words: None, body: None, by: "The user" }
     }
 
     fn written() -> String {
@@ -441,6 +463,17 @@ mod tests {
         assert_eq!(item.entry(crate::backlog::epoch_day("2026-11-14").unwrap()).age, "2 d");
         let repo = item_from(&Filing { repo: "web", ..quick("Fix it (app)", "") }, "2026-11-12").unwrap();
         assert_eq!((repo.repo.as_str(), repo.priority.as_str()), ("web", "none"), "--repo wins over the line's own");
+    }
+
+    #[test]
+    fn a_description_files_under_its_first_words_and_keeps_the_words_as_its_source() {
+        assert_eq!(placeholder_title("Dark mode on the board"), "Dark mode on the board", "a short one stands as it is");
+        assert_eq!(placeholder_title("  Let the board\nsort by repo, then by age, newest first "), "Let the board sort by repo…");
+        assert_eq!(placeholder_title("Rerun the flaky red test once, by itself"), "Rerun the flaky red test once…", "no comma before the ellipsis");
+        let words = "Let the board\nsort by repo, then by age.";
+        let item = item_from(&Filing { words: Some(words), ..quick(&placeholder_title(words), "") }, "2026-11-12").unwrap();
+        assert_eq!((item.title.as_str(), item.to_write()), ("Let the board sort by repo…", true));
+        assert_eq!(Template::builtin().text(&item.body, "source"), "The user, 2026-11-12, in their words:\n\n> Let the board\n> sort by repo, then by age.");
     }
 
     #[test]

@@ -58,7 +58,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The phone answers an agent's prompt on a task's screen with one tap, while that prompt still shows; update the hub first.
 - hub.commands lists what a machine takes through the hub, every kind by default, and only from your account.
 - Your phone shows the backlog with each item in full; update the hub first.
-- From your phone you add an idea, answer an item's open questions and start an item as a task.
+- From your phone you describe an idea, which the lead titles and writes out, answer an item's open questions and start an item as a task.
 - A new device's first command waits on the machine until you approve it under N or with kebbie hub devices; update the hub first.
 - hub.trust and hub.auto_approve set which devices a machine takes commands from, and when a waiting one is let in.
 - Your phone gets notifications through the hub: a task's question or prompt, the lead's questions on an idea, a new device, ready to push, a red CI and, if you turn it on, a start, each saying the thing itself; update the hub first.

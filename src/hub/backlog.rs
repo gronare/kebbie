@@ -258,11 +258,11 @@ fn refused(reason: Reason, text: &str) -> Done {
     (Outcome::Refused { reason }, text.to_string())
 }
 
-// The phone's idea is filed as kebbie backlog add from the user files it: a draft item, or a row kebbie keeps while the lead files it in the vault.
+// The phone's idea is a description filed as kebbie backlog add files a short item: a draft under its first words, or a row kebbie keeps while the lead files it in the vault; the lead titles it as it writes it out.
 pub fn idea_on(shelf: &Shelf, sources: &[Source], caller: &Caller, idea: &Idea) -> Done {
-    let line = idea.text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let title = backlog_file::placeholder_title(&idea.text);
     let by = who(caller);
-    let filing = Filing { priority: "", repo: idea.repo.as_deref().unwrap_or_default(), line: &line, body: None, by: &by };
+    let filing = Filing { priority: "", repo: idea.repo.as_deref().unwrap_or_default(), line: &title, words: Some(idea.text.trim()), body: None, by: &by };
     match backlog_file::file_item_on(shelf, sources, &filing, false) {
         Ok(text) => (Outcome::Done, plain(&text)),
         Err(text) => (Outcome::Failed, plain(&text)),
@@ -629,19 +629,25 @@ mod tests {
         let told = RefCell::new(Vec::new());
         let tell = |text: &str| { told.borrow_mut().push(text.to_string()); Ok(()) };
         let shelf = Shelf { dir: &dir, state: &state, tell: &tell };
-        let idea = Idea { text: "Rerun a flaky\nred run once".to_string(), repo: Some("web".to_string()) };
+        let idea = Idea { text: "When a run goes red on a flaky test,\nrerun it once by itself.\n\n## Not the push".to_string(), repo: Some("web".to_string()) };
         let (outcome, text) = idea_on(&shelf, &[Source::Local], &hub(), &idea);
         assert_eq!((outcome, text.as_str()), (Outcome::Done, "Added to the backlog. The lead writes it out; it waits for the lead when none runs."));
         let item = &backlog_file::items(&dir)[0];
-        assert_eq!((item.title.as_str(), item.repo.as_str(), item.state()), ("Rerun a flaky red run once", "web", State::ToWrite));
-        assert!(Template::builtin().text(&item.body, "source").contains("The user on iPhone 16, "), "{}", item.body);
-        assert!(told.borrow()[0].starts_with("The user on iPhone 16 added a quick item to the backlog: \"Rerun a flaky red run once\""), "{:?}", told.borrow());
+        assert_eq!((item.title.as_str(), item.repo.as_str(), item.state()), ("When a run goes red on…", "web", State::ToWrite), "a placeholder of its first words, to write");
+        let source = Template::builtin().text(&item.body, "source");
+        assert!(source.contains("The user on iPhone 16, ") && source.contains("> When a run goes red on a flaky test,\n> rerun it once by itself.\n>\n> ## Not the push"), "the description in the user's words, its lines kept: {}", item.body);
+        assert!(Template::builtin().sections.iter().all(|section| Template::builtin().has(&item.body, &section.key)), "{}", item.body);
+        assert!(!item.body.contains("\n## Not the push"), "a line of theirs never reads as a heading");
+        let first = told.borrow()[0].clone();
+        assert!(first.starts_with("The user on iPhone 16 added an idea to the backlog, in their words:\n\n> When a run goes red on a flaky test,\n> rerun it once by itself."), "{first}");
+        assert!(first.contains("Its title \"When a run goes red on…\" is a placeholder") && first.contains("give it a short title in the user's words"), "{first}");
 
         let (outcome, text) = idea_on(&shelf, &[Source::Vault], &hub(), &Idea { repo: None, ..idea.clone() });
         assert_eq!((outcome, text.as_str()), (Outcome::Done, "Sent to the lead. It writes the item out and files it in the vault. Its row waits here until the note replaces it."));
         let kept = crate::backlog_kept::kept_in(&state);
-        assert_eq!((kept.len(), kept[0].line.as_str(), kept[0].repo.as_str()), (1, "Rerun a flaky red run once", ""));
+        assert_eq!((kept.len(), kept[0].line.as_str(), kept[0].repo.as_str()), (1, "When a run goes red on…", ""), "the board's row carries the placeholder until the note replaces it");
         assert!(told.borrow()[1].contains(&format!("kebbie backlog filed kept:{}", kept[0].id)), "{:?}", told.borrow());
+        assert!(told.borrow()[1].contains("> rerun it once by itself.") && told.borrow()[1].contains("is a placeholder"), "the lead files the vault note from the user's words: {:?}", told.borrow());
         assert_eq!(idea_on(&shelf, &[Source::Local], &hub(), &idea).0, Outcome::Failed, "a title already in the backlog");
     }
 

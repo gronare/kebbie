@@ -74,7 +74,7 @@ impl App {
                 self.mode = Mode::Input { purpose: Purpose::BacklogPriority(text), label, buffer: String::new() };
             }
             Purpose::BacklogPriority(item) => {
-                let result = crate::backlog_file::file_item(&self.sources, &crate::backlog_file::Filing { priority: &text, repo: "", line: &item, body: None, by: "The user" }, false);
+                let result = crate::backlog_file::file_item(&self.sources, &crate::backlog_file::Filing { priority: &text, repo: "", line: &item, words: None, body: None, by: "The user" }, false);
                 self.subject = Some(super::notices::Subject::plain("backlog"));
                 if result.is_ok() {
                     self.backlog = backlog::load();

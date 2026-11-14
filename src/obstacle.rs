@@ -749,7 +749,7 @@ fn file_real_fix(address: &str, obstacle: &Obstacle) -> Result<String> {
     let repo = address.split_once('@').map_or("", |(_, repo)| repo);
     let sources = crate::config::sources()?;
     let line = format!("Replace the workaround {address} took: {}", obstacle.short());
-    crate::backlog_file::file_item(&sources, &crate::backlog_file::Filing { priority: "medium", repo, line: &line, body: None, by: "kebbie's investigator" }, false).map(|_| format!("\"{line}\" in the backlog"))
+    crate::backlog_file::file_item(&sources, &crate::backlog_file::Filing { priority: "medium", repo, line: &line, words: None, body: None, by: "kebbie's investigator" }, false).map(|_| format!("\"{line}\" in the backlog"))
 }
 
 // A running task by that name already builds it; else kebbie queues the new task the lead's way, to start at once.

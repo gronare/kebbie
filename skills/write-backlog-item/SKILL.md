@@ -13,7 +13,7 @@ The item is the user's **intent**, written out: their words are terse on purpose
 
 ## The item
 
-Metadata: a **title** (what changes, a dozen words at most), a **priority** (`urgent`, `high`, `medium` or `low`) and the **repo** (the folder name of the repo the work happens in; starting the item as a task needs it).
+Metadata: a **title** (what changes, a dozen words at most, in the user's words; a short item's title is a draft like its body, and one that ends in `…` is only the first words of the user's description, so write the title anew from the whole of it), a **priority** (`urgent`, `high`, `medium` or `low`) and the **repo** (the folder name of the repo the work happens in; starting the item as a task needs it).
 
 The body is the **template** of the place the item is saved: its sections in order, each a `## ` heading. `kebbie backlog template` prints the template where new items go (`--vault` or `--local` for the other place), marking the required sections and the one the open questions sit under. Fill the template your source gives, every section of it.
 
