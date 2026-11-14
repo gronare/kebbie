@@ -589,6 +589,21 @@ mod tests {
     }
 
     #[test]
+    fn s_on_a_task_whose_only_waiting_question_is_kebbies_obstacle_question_opens_that_question_before_its_card() {
+        let mut app = carded(true);
+        let address = crate::peers::address(&app.tasks[0].name, &app.tasks[0].place);
+        let about = crate::obstacle::question_about(&address, "o3");
+        let asked = format!(r#"{{"id":"k1","at":30,"from":"kebbie","to":"you","kind":"obstacle","about":"{about}","text":"The probe answers not writable for any S3 failure. Fix it?","state":"asked","question":{{"options":[{{"label":"Fix in this branch","meaning":"a subtask first"}},{{"label":"Separate task","meaning":"its own branch"}},{{"label":"Leave it","meaning":"the backlog"}}],"recommend":1}}}}"#);
+        app.questions = crate::messages::fold(&[super::super::test_support::PLAN, asked.as_str()].join("\n"));
+        assert_eq!(app.question_of(&app.tasks[0].clone()), Some(1), "kebbie's question about the task is the task's question");
+        assert!(app.choices().iter().any(|choice| choice.act == Some(Act::Card) && choice.label == "Answer its question"), "the options offer answering it");
+        app.handle_normal(key(KeyCode::Char('s')));
+        assert!(matches!(app.mode, Mode::Questions(_)), "s opens the question window, not the card");
+        let (rows, _) = render(&mut app, 112, 40);
+        assert!(rows.join("\n").contains("question 2/2"), "{}", rows.join("\n"));
+    }
+
+    #[test]
     fn s_opens_the_card_window_with_its_text_images_and_whether_it_is_current() {
         let mut app = carded(false);
         assert!(app.choices().iter().any(|choice| choice.act == Some(Act::Card) && choice.label == "Show the card"));

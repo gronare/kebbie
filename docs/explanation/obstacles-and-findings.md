@@ -15,11 +15,13 @@ The keeper starts kebbie's own investigator on each raised obstacle, the way it 
 | Decision | When | What kebbie does |
 | --- | --- | --- |
 | `workaround` | What it goes around changes anyway, or the real fix is out of proportion and the workaround stays contained | Tells the task to go on, with what replaces the workaround; when nothing does, files the real fix in the backlog. |
-| `subtask` | The missing piece belongs to this task and is small next to it | Adds it to the task's subtasks, with the investigator's reason, ahead of the subtask the task's commits go to now, sends the next commits to it, and tells the task its id. The task marks it done when it is built. One per task needs no answer from you; a second asks you. |
+| `subtask` | The missing piece belongs to this task and is small next to it | Adds it to the task's subtasks, with the investigator's reason, ahead of the subtask the task's commits go to now, sends the next commits to it, and tells the task its id. The task marks it done when it is built. One per task needs no answer from you; a second asks you, unless your earlier answer in the task already covers it. |
 | `task` | The missing piece is work of its own, or the same obstacle was met before | Queues that task to start at once, the lead's way, or points to a running task that builds it. The blocked work waits for it. |
-| `ask` | The trade-off is yours, or the investigator is unsure | Asks you on the board and the phone, with the options and a recommendation. Your answer goes to the task as yours. |
+| `ask` | The trade-off is yours and you have not answered one like it in this task, or the investigator is unsure | Asks you on the board and the phone, with the options and a recommendation. Your answer goes to the task as yours. |
 
 The investigator prefers the way that leaves the code better: make the change easy, then make the easy change.
+
+What you already decided in the task stands: the plan you approved, your answers to its questions and your word on its earlier obstacles. When one of them covers an obstacle's choice, such as fixing the cause rather than working around it, the investigator applies it and the decision names your answer.
 
 Each decision is recorded with who took it: the investigator, the lead or you, never the task itself. `kebbie obstacles` lists them, and the task's note keeps them.
 

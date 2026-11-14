@@ -91,6 +91,20 @@ fn a_subtasks_commits_need_not_lie_together_and_one_added_ahead_takes_the_next_c
 }
 
 #[test]
+fn unmarked_subtasks_with_commits_are_ready_once_a_later_one_holds_commits_and_the_last_once_the_task_reported_ready() {
+    let parts: Vec<Part> = (1..=15).map(|n| part(&format!("s{n}"), &format!("Step {n}"), false)).collect();
+    let noted: Vec<Seen> = (1..=15).flat_map(|n| seen(&format!("s{n}"), &[&format!("code of c{n}")])).collect();
+    let commits: Vec<Unpushed> = (1..=15).map(|n| commit_of(&format!("c{n}"), &format!("Step {n}"), false)).collect();
+    let listed = plan(parts, noted);
+    let expected: Vec<State> = std::iter::repeat_n(State::Ready, 14).chain([State::InProgress]).collect();
+    assert_eq!(states(&derive(Some(&listed), &[], &commits, true).0), expected, "work moved past each of the first fourteen, so only the last is in progress");
+    assert_eq!(states(&derive_reported(Some(&listed), &[], &commits, false, true).0), vec![State::Ready; 15], "the task reported ready, so the last is ready too");
+    assert_eq!(states(&derive_reported(Some(&listed), &[], &commits, true, true).0)[14], State::InProgress, "a task at work again has its last subtask in progress");
+    let on = Plan { on: Some("s3".to_string()), ..listed.clone() };
+    assert_eq!(states(&derive(Some(&on), &[], &commits, true).0)[2], State::InProgress, "the subtask kebbie subtasks on named stays in progress");
+}
+
+#[test]
 fn a_rewritten_commit_stays_in_the_subtask_that_lost_its_change_and_a_new_one_in_between_goes_where_commits_go_now() {
     let listed = plan(vec![part("model", "Model", true), part("command", "Command", false), part("docs", "Docs", false)], [seen("model", &["a1", "a2"]), seen("command", &["b1", "b2"])].concat());
     let rebased = [rewritten_code("x1", "a1"), rewritten_code("x2", "a2"), rewritten_code("x3", "b1"), rewritten_code("x4", "b2")];

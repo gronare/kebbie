@@ -343,6 +343,11 @@ pub fn answer_as(caller: &crate::permit::Caller, id: &str, choice: Option<usize>
     Ok(crate::notice::Notice::new(crate::notice::Tone::Done, "Answered").next(told).detail("task", &message.from).to_string())
 }
 
+// kebbie's own question about a task, on its review or one of its obstacles, which shows and is answered under that task.
+pub fn kebbies_about(message: &Message, address: &str) -> bool {
+    message.about.as_deref() == Some(&crate::review::question_about(address)) || crate::obstacle::is_question_of(message.about.as_deref(), address)
+}
+
 // The task a question shows under on the board and the phone: its asker's, or for kebbie's own question on a task's review or obstacle that task's.
 pub fn shown_under(id: &str) -> Option<String> {
     let message = messages::load().into_iter().find(|message| message.id == id && message.question.is_some())?;

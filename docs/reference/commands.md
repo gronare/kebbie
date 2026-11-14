@@ -447,7 +447,7 @@ Your word that one of the task's commits is right. Only you may run it: kebbie r
 
 - It belongs to the commit's code: a clean rebase or a reworded message keeps it, a changed line takes it back. Two commits with the same change, such as two empty commits, are accepted one at a time.
 - `<sha>` is one of the task's commits not yet pushed.
-- `kebbie accept <name> --subtask <id>` accepts every commit of a subtask at once, named by its id or its number. The subtask must be ready: its task's agent ran `kebbie subtasks done` on it. `--step <id>` is the same option.
+- `kebbie accept <name> --subtask <id>` accepts every commit of a subtask at once, named by its id or its number. The subtask must be ready: its task's agent ran `kebbie subtasks done` on it, or a later subtask holds commits. `--step <id>` is the same option.
 - `kebbie accepted` reads which commits are accepted.
 
 | Option | What it does |
@@ -542,7 +542,7 @@ Sends the task's next commits to that subtask, which is in progress again.
 
 ### `kebbie subtasks [name] done [<id>]`
 
-Marks a subtask ready: its slice of the work is finished and waits for you to review and accept it. Without an id, it marks the one commits go to now. A task's agent runs it in its worktree; you or the lead name the task. It is refused while the subtask holds no commit, and, with `kebbie:work-rules` as the rules skill, while one of its commits lacks a subject, a blank line and a body.
+Marks a subtask ready: its slice of the work is finished and waits for you to review and accept it. A subtask with commits counts as ready without it once a later subtask holds commits, and the last one once the task reports ready. Without an id, it marks the one commits go to now. A task's agent runs it in its worktree; you or the lead name the task. It is refused while the subtask holds no commit, and, with `kebbie:work-rules` as the rules skill, while one of its commits lacks a subject, a blank line and a body.
 
 A new commit goes to the subtask named with `on`, else to the first subtask not done; once every subtask is done, a commit opens an extra subtask titled by its subject. A subtask keeps its commits by their change: a clean rebase, a reworded message or a reorder keeps them in it, and a commit squashed into another stays with the subtask of the change beside it. Its commits need not lie together in the branch. A subtask counts as pushed once all its commits' changes are on the default branch, however they got there: `kebbie push`, a staged task you pushed with main, or a push from elsewhere.
 

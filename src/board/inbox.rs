@@ -156,7 +156,7 @@ fn plan_file(message: &Message) -> Option<PathBuf> {
 impl App {
     pub(super) fn question_of(&self, item: &Item) -> Option<usize> {
         let address = peers::address(&item.name, &item.place);
-        self.questions.iter().position(|question| question.from == address)
+        self.questions.iter().position(|question| question.from == address).or_else(|| self.questions.iter().position(|question| questions::kebbies_about(question, &address)))
     }
 
     fn task_of(&self, from: &str) -> Option<&Item> {

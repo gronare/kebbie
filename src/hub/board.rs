@@ -658,7 +658,7 @@ pub(crate) mod tests {
     fn a_tasks_latest_obstacle_reaches_the_phone_with_its_decision_and_who_took_it() {
         use crate::obstacle::{By, Decision, Kind, Obstacle as Kept, Source, State};
         let kept = |state, decision: Option<Decision>| Kept { id: "o1".to_string(), at: 7, source: Source::Task, text: "the index stores titles only (src/index.py:88)".to_string(), on: String::new(), state, worktree: Default::default(), question: None, decision, replan: false, found: None };
-        let decided = |kind| Some(Decision { kind, by: By::Investigator, at: 8, reason: "The index has no frontmatter.".to_string(), plan: String::new(), replaced_by: None, subtask: Some("Store frontmatter".to_string()), task: None });
+        let decided = |kind| Some(Decision { kind, by: By::Investigator, at: 8, reason: "The index has no frontmatter.".to_string(), plan: String::new(), replaced_by: None, subtask: Some("Store frontmatter".to_string()), task: None, standing: None });
         assert_eq!(obstacle(&kept(State::Investigating, None)).map(|shown| (shown.state, shown.decision)), Some((ObstacleState::Investigating, None)));
         let shown = obstacle(&kept(State::Decided, decided(Kind::Subtask))).unwrap();
         assert_eq!((shown.state, shown.at, shown.decision.as_ref().map(|decision| (decision.kind, decision.by, decision.text.as_str()))), (ObstacleState::Decided, 7, Some((DecisionKind::Subtask, DecidedBy::Investigator, "subtask first: Store frontmatter, because the index has no frontmatter (investigator)"))));

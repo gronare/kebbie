@@ -175,6 +175,13 @@ pub fn load_in(dir: &Path) -> Vec<Message> {
     load_from(&log_in(dir))
 }
 
+// The log with the one rotation keeps beside it, for what must reach back past a rotation, such as a task's answers from the user.
+pub fn load_with_rotated_in(dir: &Path) -> Vec<Message> {
+    let rotated = fs::read_to_string(dir.join(format!("{LOG}.1"))).unwrap_or_default();
+    let current = fs::read_to_string(log_in(dir)).unwrap_or_default();
+    fold(&format!("{rotated}\n{current}"))
+}
+
 pub fn load() -> Vec<Message> {
     state_dir().map(|dir| load_in(&dir)).unwrap_or_default()
 }

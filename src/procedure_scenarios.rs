@@ -161,7 +161,7 @@ fn the_answer_block_the_investigator_is_taught_is_the_one_kebbie_parses() {
     let block = &skill[skill.find("```\ndecision:").expect("the skill shows its answer block") + 4..];
     let block = &block[..block.find("```").unwrap()];
     let keys: Vec<&str> = block.lines().filter_map(|line| line.split_once(':').map(|(key, _)| key.trim())).collect();
-    assert_eq!(keys, ["decision", "reason", "plan", "replaced by", "subtask", "task", "repo", "prompt", "question", "option", "recommend"], "every field kebbie reads, in the skill's order");
+    assert_eq!(keys, ["decision", "reason", "plan", "replaced by", "subtask", "task", "repo", "prompt", "standing", "question", "option", "recommend"], "every field kebbie reads, in the skill's order");
     let filled = "decision: task\nreason: another repo owns the index (notes/src/index.py:88)\nplan: the lint waits\ntask: index-frontmatter\nrepo: notes\nprompt: Store each note's frontmatter in the index";
     let parsed = crate::obstacle::parse(filled).expect("a filled block parses");
     assert_eq!((parsed.task.as_deref(), parsed.repo.as_deref()), (Some("index-frontmatter"), Some("notes")));

@@ -370,7 +370,13 @@ fn placed(plan: &mut Plan, kept: &[bool], open: &[&Unpushed]) -> Vec<String> {
 }
 
 // The subtasks as the branch has them: a commit whose change the default branch gained since base is pushed, however it got there, and a subtask with commits and none left open is pushed; the plan comes back with what each subtask holds now, to be noted.
+#[cfg(test)]
 pub fn derive(plan: Option<&Plan>, landed: &[String], commits: &[Unpushed], working: bool) -> (Subtasks, Plan) {
+    derive_reported(plan, landed, commits, working, false)
+}
+
+// A subtask with commits is done once a later subtask holds commits too, marked or not, so only the last with commits is in progress, and that one is done too once the task reported ready; the subtask `kebbie subtasks on` named stays open.
+pub fn derive_reported(plan: Option<&Plan>, landed: &[String], commits: &[Unpushed], working: bool, reported: bool) -> (Subtasks, Plan) {
     let Some(plan) = plan.filter(|plan| !plan.parts.is_empty()) else { return (Subtasks::default(), Plan::default()) };
     let mut plan = plan.clone();
     let mut landed: Vec<&str> = landed.iter().map(String::as_str).collect();
@@ -405,12 +411,14 @@ pub fn derive(plan: Option<&Plan>, landed: &[String], commits: &[Unpushed], work
     let cut = rollout::placed(&mut order, &plan.stages);
     let open_stages: Vec<&str> = order.iter().filter_map(|row| row.stage.as_deref()).collect();
     let stages = rollout::shown_with(&plan.stages, &open_stages);
+    let last_held = plan.parts.iter().rposition(|part| owners.contains(&part.id));
     let mut all: Vec<Subtask> = plan.parts.iter().enumerate().map(|(at, part)| {
         let positions: Vec<usize> = owners.iter().enumerate().filter(|(_, owner)| **owner == part.id).map(|(at, _)| at).collect();
         let commits: Vec<Commit> = positions.iter().map(|at| Commit { sha: open[*at].sha.clone(), subject: open[*at].subject.clone(), accepted: open[*at].accepted }).collect();
         let pushed: Vec<String> = pushed_seen.iter().filter(|seen| seen.subtask == part.id && !seen.sha.is_empty()).map(|seen| seen.sha.clone()).collect();
         let any_pushed = pushed_seen.iter().any(|seen| seen.subtask == part.id);
-        let state = match (commits.is_empty(), part.done) {
+        let done = part.done || (plan.on.as_deref() != Some(part.id.as_str()) && (last_held.is_some_and(|last| at < last) || (reported && !working)));
+        let state = match (commits.is_empty(), done) {
             (true, _) if any_pushed => State::Pushed,
             (true, _) if working && now.as_deref() == Some(part.id.as_str()) => State::InProgress,
             (true, _) => State::Planned,
@@ -490,7 +498,7 @@ fn landed(path: &Path, base: &str, tips: &Tips) -> Vec<String> {
 }
 
 fn current_at(state: &Path, path: &Path, address: &str, plan: &Plan, tips: &Tips, working: bool) -> Result<(Subtasks, Plan)> {
-    let (mut subtasks, plan) = derive(Some(plan), &landed(path, &plan.base, tips), &unpushed(state, path, address, tips)?, working);
+    let (mut subtasks, plan) = derive_reported(Some(plan), &landed(path, &plan.base, tips), &unpushed(state, path, address, tips)?, working, reported_ready(state, address));
     crate::commit_tests::mark(state, address, &mut subtasks.order);
     Ok((subtasks, plan))
 }
@@ -586,6 +594,10 @@ pub fn seen_in(state: &Path, path: &Path) {
 // The same, with no plan and no error to handle: no subtasks.
 pub fn for_path(path: &Path, working: bool) -> Subtasks {
     state_dir().and_then(|state| subtasks_in(&state, path, working)).unwrap_or_default()
+}
+
+fn reported_ready(state: &Path, address: &str) -> bool {
+    crate::phase::load(state, address).is_some_and(|record| matches!(record.phase, crate::phase::Phase::Ready { .. } | crate::phase::Phase::Staged { .. }))
 }
 
 fn working_now(state: &Path, address: &str) -> bool {

@@ -120,8 +120,8 @@ With [`task.steps`](configuration.md) on and subtasks listed, the task's subtask
 | `N to accept`, yellow | On the row, in place of its commit count: N ready subtasks wait for you to accept them. |
 | `↑ N pushed`, muted | N subtasks are on the default branch already. |
 | `○`, muted | Planned. |
-| `◐ … in progress · N commits`, blue | Its Claude is at work on it, with the commits it holds so far; without commits, just `in progress`. |
-| `● … ready · N commits`, yellow | Its agent ran `kebbie subtasks done` on it: finished, waiting for you to accept it, followed by the task's rules check in short while it is not passed: `· project rules not checked`, `· checking project rules` while the reviewer or the lead checks, `· breaks N project rules` when it found some, `· pushed past the rules check by you` (or `by the lead`) after `kebbie approve`. A passed check adds nothing. |
+| `◐ … in progress · N commits`, blue | Its Claude is at work on it, with the commits it holds so far; without commits, just `in progress`. Only the last subtask with commits is in progress, and only until the task reports ready. |
+| `● … ready · N commits`, yellow | Its agent ran `kebbie subtasks done` on it, or a later subtask holds commits, or it is the last and the task reported ready: finished, waiting for you to accept it, followed by the task's rules check in short while it is not passed: `· project rules not checked`, `· checking project rules` while the reviewer or the lead checks, `· breaks N project rules` when it found some, `· pushed past the rules check by you` (or `by the lead`) after `kebbie approve`. A passed check adds nothing. |
 | `✓ … accepted`, green | You accepted every commit in it. `accepted · waits for <subtask>` when a commit of a subtask you have not accepted lies above one of its own in the push order. |
 | `accept N · r review` | Under the subtasks: the first subtask waiting for you. `r` opens the review, and [`kebbie accept`](commands.md#kebbie-accept-name-sha) accepts it. |
 | `accept subtask N · r review` | With [`task.require_accept`](configuration.md) on, a ready task with a subtask to accept waits under Needs you with this line: it cannot be pushed until subtask N is accepted. |
@@ -357,7 +357,7 @@ A question that asks first, as reset, drop and done do, takes `y` to go ahead an
 
 | Key | Action | Offered when |
 | --- | --- | --- |
-| `s` | Answer its question: the questions window, at this task's question. | It has an open question. |
+| `s` | Answer its question: the questions window, at this task's question. | It has an open question, its own or kebbie's on its review or an obstacle. |
 | `g` | Go to its Space. On a task whose Space or Claude is gone, restart it and resume its conversation. | Always. |
 | `c` | Chat: message its Claude. | Always. |
 | `r` | Open the review split next to its Claude, or go to the one already open in its Space. | Always. |
