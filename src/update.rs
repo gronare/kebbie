@@ -193,7 +193,11 @@ fn finish_in(claude_dir: &Path, state: &Path, tracker: &mut Option<Tracker>) -> 
     step(tracker, progress::PLUGINS, &plugins_said(&claude, updated, vault_installed, &vault), true);
     let mut lines = vec![claude];
     lines.extend(vault);
-    lines.extend(crate::agent::codex::refresh_line(crate::agent::codex::home().as_deref(), &crate::peers::kebbie_command().unwrap_or_default()));
+    let kebbie = crate::peers::kebbie_command().unwrap_or_default();
+    let codex_home = crate::agent::codex::home();
+    lines.extend(crate::agent::codex::refresh_line(codex_home.as_deref(), &kebbie));
+    let link = PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".local/bin/kebbie");
+    lines.extend(crate::agent::codex_setup::refresh_line(codex_home.as_deref(), &crate::agent::codex_setup::rule_forms(&kebbie, &link)));
     lines.extend(crate::push_block::renew_old_blocks(&crate::status::known_repos(&crate::herdr::workspaces().unwrap_or_default(), crate::repo::pooled_checkouts()).into_iter().collect::<Vec<_>>(), state));
     step(tracker, progress::RESTART, "Restarting sessions", false);
     update_check::forget(state);

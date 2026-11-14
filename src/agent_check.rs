@@ -230,7 +230,10 @@ pub fn doctor(given: &Doctor) -> Vec<crate::doctor::Check> {
     checks.push(match codex_setup::rules_placed(given.codex_home, given.rules) {
         codex_setup::Placed::Current => line(Level::Ok, "codex approvals", format!("{rules} lets kebbie's own task commands through"), &[]).brief("rules"),
         codex_setup::Placed::Missing => line(Level::Warn, "codex approvals", format!("{rules} is missing, so Codex asks before each kebbie command a task runs"), &setup),
-        codex_setup::Placed::Differs => line(Level::Warn, "codex approvals", format!("{rules} is not the file this kebbie writes"), &setup),
+        codex_setup::Placed::Differs => match std::fs::read_to_string(codex_setup::rules_path(given.codex_home)).ok().as_deref().and_then(codex_setup::missing_commands).filter(|missing| !missing.is_empty()) {
+            Some(missing) => line(Level::Warn, "codex approvals", format!("{rules} has no line for {}, so Codex asks before a task runs {}", missing.join(", "), if missing.len() == 1 { "it" } else { "them" }), &setup),
+            None => line(Level::Warn, "codex approvals", format!("{rules} is not the file this kebbie writes"), &setup),
+        },
     });
     if given.vault_on {
         let config = given.codex_home.join("config.toml");
@@ -330,6 +333,9 @@ mod tests {
         let notify = doctor(&Doctor { mode: crate::config::AgentUpdates::Notify, vault_on: false, ..given });
         assert_eq!(notify[0].fix, ["sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh'"], "only told: the fix is Codex's own installer");
         assert!(notify.iter().all(|check| check.name != "codex vault"), "no vault, no vault line");
+        codex_setup::write_rules(&codex, &rules.lines().filter(|line| !line.contains("\"obstacle\"")).map(|line| format!("{line}\n")).collect::<String>()).unwrap();
+        let stale = doctor(&Doctor { found: None, ..given }).into_iter().find(|check| check.name == "codex approvals").unwrap();
+        assert!(stale.level == Level::Warn && stale.fact.ends_with("rules/kebbie.rules has no line for obstacle, so Codex asks before a task runs it") && stale.fix == ["kebbie setup codex"], "{:?}", stale.fact);
         codex_setup::write_rules(&codex, &rules).unwrap();
         assert_eq!(doctor(&Doctor { found: None, ..given })[..2].iter().map(|check| (check.level, check.name.as_str())).collect::<Vec<_>>(), [(Level::Ok, "codex update"), (Level::Ok, "codex approvals")]);
         let command = ["/home/me/.local/bin/mindin".to_string()];

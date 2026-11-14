@@ -26,7 +26,7 @@ Its task role is written for Codex. Codex can't run kebbie's setup and rules ski
    | Line | What it writes |
    | --- | --- |
    | `plugin` | kebbie's plugin in Codex's plugin cache. |
-   | `approvals` | `~/.codex/rules/kebbie.rules`, which lets the fourteen commands a task runs, `kebbie report`, `kebbie tell`, `kebbie ask` and `kebbie subtasks` among them, past Codex's approval question. |
+   | `approvals` | `~/.codex/rules/kebbie.rules`, which lets the sixteen commands a task runs, `kebbie report`, `kebbie tell`, `kebbie ask` and `kebbie subtasks` among them, past Codex's approval question. |
    | `vault` | With a vault, `[mcp_servers.vault]` in Codex's `config.toml`, so a Codex task keeps its own note. |
 
 4. Press `⏎`. Nothing is written before it, and `esc` quits without writing.
@@ -84,6 +84,12 @@ Outside a kebbie task's worktree each hook does nothing.
 - Codex installs an enabled plugin again from any marketplace of the same name it finds in the session's repo, and that copy replaces kebbie's. The plugin's id, `kebbie@kebbie-tasks`, is one no Claude or Codex marketplace uses, kebbie's own repo included, and kebbie refuses a Codex task in a repo whose marketplace offers a plugin under it.
 
 The plugin follows kebbie's updates: `kebbie update` and `kebbie setup --yes` rewrite what a new kebbie writes differently, and say `Codex plugin: updated` with the files. If `kebbie doctor` still says the plugin is out of date, run `kebbie setup codex` again: it rewrites the files that changed and prints `kebbie's Codex plugin updated:` with their names. If you want the plugin gone, run `kebbie setup codex --uninstall`.
+
+The rules file follows kebbie's updates too: when `~/.codex/rules/kebbie.rules` is there, `kebbie update` rewrites it with the commands the new kebbie gives a task, and its details say `Codex rules: 16 commands, rewrote ~/.codex/rules/kebbie.rules` or `Codex rules: 16 commands, up to date`. It writes that file alone: `default.rules`, `config.toml` and its vault server stay as they are, and only `kebbie setup codex` writes those. Codex reads its rules when a session starts, so a running Codex task picks up the new file when the update restarts it, as under [Restarts after an update](#restarts-after-an-update).
+
+- A machine without the file gets none, so an update never sets Codex up.
+- A file with a line kebbie did not write, such as one you added, stays as it is, and the update says so; `kebbie setup codex` rewrites it.
+- `kebbie doctor` names the commands a rules file has no line for, such as `~/.codex/rules/kebbie.rules has no line for obstacle, so Codex asks before a task runs it`, with `kebbie setup codex` as the fix.
 
 ## Write a Codex profile
 

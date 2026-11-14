@@ -1330,6 +1330,34 @@ fn an_update_restarts_the_keeper_on_the_new_binary_and_off_starts_none() {
 }
 
 #[test]
+fn an_update_rewrites_codexs_rules_for_kebbie_and_only_on_a_machine_set_up_for_codex() {
+    let lab = Lab::new("codex-rules-update");
+    let codex = lab.home.join(".codex");
+    let root = lab.root.join("install");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(lab.root.join("answers/plugin-list.json"), format!(r#"{{"result":{{"plugins":[{{"plugin_id":"kebbie","plugin_root":"{}","source":{{"kind":"local"}}}}]}}}}"#, root.display())).unwrap();
+    let finish = || {
+        let output = lab.command().env("CODEX_HOME", &codex).args(["update", "--finish"]).output().unwrap();
+        format!("{}{}", stdout(&output), stderr(&output))
+    };
+    assert!(!finish().contains("Codex rules"), "no rules file, no Codex to refresh");
+    assert!(!codex.join("rules").exists());
+    fs::create_dir_all(codex.join("rules")).unwrap();
+    let old = "prefix_rule(pattern=[\"kebbie\", \"tell\"], decision=\"allow\")\n";
+    let default = "prefix_rule(pattern=[\"cargo\", \"test\"], decision=\"allow\")\n";
+    fs::write(codex.join("rules/kebbie.rules"), old).unwrap();
+    fs::write(codex.join("rules/default.rules"), default).unwrap();
+    let config = "model = \"gpt-6.1-sol\"\n";
+    fs::write(codex.join("config.toml"), config).unwrap();
+    let said = finish();
+    assert!(said.lines().any(|line| line == "Codex rules: 16 commands, rewrote ~/.codex/rules/kebbie.rules"), "{said}");
+    let rules = fs::read_to_string(codex.join("rules/kebbie.rules")).unwrap();
+    assert!(rules.contains("prefix_rule(pattern=[\"kebbie\", \"obstacle\"], decision=\"allow\")\n") && rules.contains("\"backlog\", \"--search\""), "{rules}");
+    assert_eq!((fs::read_to_string(codex.join("rules/default.rules")).unwrap(), fs::read_to_string(codex.join("config.toml")).unwrap()), (default.to_string(), config.to_string()), "Codex's own rules and config stay");
+    assert!(finish().lines().any(|line| line == "Codex rules: 16 commands, up to date"));
+}
+
+#[test]
 fn a_keeper_whose_binary_is_replaced_hands_over_to_the_new_one() {
     let lab = Lab::new("keeper-binary");
     let binary = lab.root.join("install/target/release/kebbie");

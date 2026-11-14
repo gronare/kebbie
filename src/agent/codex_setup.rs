@@ -61,6 +61,53 @@ pub fn write_rules(home: &Path, text: &str) -> Result<()> {
     std::fs::write(&path, text).map_err(|error| format!("{}: {error}", path.display()))
 }
 
+// Each line's pattern when every line is a rule letting a kebbie command through, as kebbie writes them; None for a file with any other line.
+fn kebbie_patterns(text: &str) -> Option<Vec<Vec<String>>> {
+    text.lines().filter(|line| !line.trim().is_empty()).map(|line| {
+        let words: Vec<String> = serde_json::from_str(line.strip_prefix("prefix_rule(pattern=")?.strip_suffix(", decision=\"allow\")")?).ok()?;
+        (Path::new(words.first()?).file_name()? == "kebbie").then_some(words)
+    }).collect()
+}
+
+pub fn kebbies_own(text: &str) -> bool {
+    kebbie_patterns(text).is_some()
+}
+
+// The task commands a rules file kebbie wrote has no line for; None when kebbie did not write it.
+pub fn missing_commands(text: &str) -> Option<Vec<&'static str>> {
+    let patterns = kebbie_patterns(text)?;
+    Some(crate::sandbox::TASK_COMMANDS.into_iter().filter(|command| !patterns.iter().any(|words| words[1..].join(" ") == *command)).collect())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Refreshed {
+    Current,
+    Rewritten,
+    Foreign,
+}
+
+// An update rewrites the rules file setup wrote, and only that file; a machine without one, or a file with lines kebbie did not write, is left as it is.
+pub fn refresh_rules(home: &Path, text: &str) -> Option<Result<Refreshed>> {
+    let found = std::fs::read_to_string(rules_path(home)).ok()?;
+    Some(match found == text {
+        true => Ok(Refreshed::Current),
+        false if !kebbies_own(&found) => Ok(Refreshed::Foreign),
+        false => write_rules(home, text).map(|_| Refreshed::Rewritten),
+    })
+}
+
+pub fn refresh_line(home: Option<&Path>, forms: &[String]) -> Option<String> {
+    let home = home?;
+    let shown = crate::area_page::home_relative(&rules_path(home));
+    let commands = crate::sandbox::TASK_COMMANDS.len();
+    refresh_rules(home, &rules_text(forms)).map(|refreshed| match refreshed {
+        Ok(Refreshed::Current) => format!("Codex rules: {commands} commands, up to date"),
+        Ok(Refreshed::Rewritten) => format!("Codex rules: {commands} commands, rewrote {shown}"),
+        Ok(Refreshed::Foreign) => format!("Codex rules: {shown} has lines kebbie did not write, so it stays as it is; kebbie setup codex rewrites it"),
+        Err(error) => format!("Codex rules: {error}"),
+    })
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Server {
     pub command: String,
@@ -372,6 +419,31 @@ mod tests {
         write_rules(&home, &text).unwrap();
         assert_eq!(rules_placed(&home, &text), Placed::Current);
         assert_eq!(rules_placed(&home, &rules_text(&forms[1..])), Placed::Differs);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn an_update_rewrites_the_rules_file_setup_wrote_and_leaves_any_other_alone() {
+        let home = crate::sh::test_dir("codex-rules-refresh");
+        let forms = vec!["/opt/kebbie".to_string(), "kebbie".to_string()];
+        let text = rules_text(&forms);
+        assert_eq!(refresh_rules(&home, &text), None, "a machine setup never wrote rules on gets none");
+        assert!(!rules_path(&home).exists());
+        let older: String = text.lines().filter(|line| !line.contains("\"obstacle\"") && !line.contains("\"--search\"")).map(|line| format!("{line}\n")).collect();
+        write_rules(&home, &older).unwrap();
+        assert_eq!(missing_commands(&older), Some(vec!["obstacle", "backlog --search"]));
+        std::fs::write(home.join("rules/default.rules"), "prefix_rule(pattern=[\"cargo\", \"test\"], decision=\"allow\")\n").unwrap();
+        assert_eq!(refresh_rules(&home, &text), Some(Ok(Refreshed::Rewritten)));
+        assert_eq!(std::fs::read_to_string(rules_path(&home)).unwrap(), text);
+        assert_eq!(missing_commands(&text), Some(Vec::new()));
+        assert_eq!(std::fs::read_to_string(home.join("rules/default.rules")).unwrap(), "prefix_rule(pattern=[\"cargo\", \"test\"], decision=\"allow\")\n", "Codex's own rules stay");
+        assert_eq!(refresh_line(Some(&home), &forms).as_deref(), Some("Codex rules: 16 commands, up to date"));
+        let theirs = format!("{older}prefix_rule(pattern=[\"git\", \"push\"], decision=\"allow\")\n");
+        std::fs::write(rules_path(&home), &theirs).unwrap();
+        assert_eq!(missing_commands(&theirs), None);
+        assert!(refresh_line(Some(&home), &forms).unwrap().ends_with("has lines kebbie did not write, so it stays as it is; kebbie setup codex rewrites it"));
+        assert_eq!(std::fs::read_to_string(rules_path(&home)).unwrap(), theirs, "a line the user added is never dropped");
+        assert_eq!(refresh_line(None, &forms), None);
         let _ = std::fs::remove_dir_all(home);
     }
 

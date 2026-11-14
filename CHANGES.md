@@ -5,6 +5,8 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- kebbie update rewrites Codex's kebbie.rules with the new kebbie's task commands, so a Codex task runs kebbie obstacle and the other new commands without asking.
+- kebbie doctor names the kebbie commands Codex's kebbie.rules has no line for.
 - A task that meets an obstacle in its way stops and raises it with kebbie obstacle, and the board shows it being investigated.
 - kebbie's own investigator decides each obstacle once and carries it out: a workaround, a preparatory subtask, a task first, or a question to you.
 - investigate.profile picks the investigator's profile, Claude or Codex, or none to leave obstacles to the lead.

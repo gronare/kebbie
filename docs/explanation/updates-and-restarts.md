@@ -82,7 +82,7 @@ A marketplace added from GitHub follows GitHub's default branch instead. `kebbie
 
 ## The Codex plugin follows kebbie
 
-kebbie starts a Codex task only on a plugin exactly as it writes it, so an update that changes the hooks would otherwise stop every Codex task. `kebbie update` rewrites kebbie's own plugin folder in Codex's cache when the plugin is installed, and installs nothing for a machine that never turned Codex on. See [`kebbie update`](../reference/commands.md#kebbie-update).
+kebbie starts a Codex task only on a plugin exactly as it writes it, so an update that changes the hooks would otherwise stop every Codex task. `kebbie update` rewrites kebbie's own plugin folder in Codex's cache when the plugin is installed, and installs nothing for a machine that never turned Codex on. It rewrites `~/.codex/rules/kebbie.rules` the same way, so a task's new kebbie commands, such as `kebbie obstacle`, run without Codex asking; Codex reads the file when a session starts, so the restart below brings it to each Codex task. See [`kebbie update`](../reference/commands.md#kebbie-update).
 
 ## Codex itself
 

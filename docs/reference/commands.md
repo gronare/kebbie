@@ -927,7 +927,7 @@ Installs kebbie's Codex plugin in `$CODEX_HOME/plugins/cache/kebbie-tasks/kebbie
 
 It prints each step as it goes (in a terminal the running one is redrawn with its bar and time). Then it prints what's new and fixed from kebbie's `CHANGES.md`, one or two sentences on the restarts, and the details.
 
-When kebbie's [Codex plugin](#kebbie-setup-codex---yes) is installed, it rewrites the files of it this kebbie writes differently, and its details say `Codex plugin: updated <files>` or `Codex plugin: up to date`. A machine without the plugin gets none, and Codex's `config.toml` and `hooks.json` are never touched.
+When kebbie's [Codex plugin](#kebbie-setup-codex---yes) is installed, it rewrites the files of it this kebbie writes differently, and its details say `Codex plugin: updated <files>` or `Codex plugin: up to date`. A machine without the plugin gets none, and Codex's `config.toml` and `hooks.json` are never touched. When `$CODEX_HOME/rules/kebbie.rules` is there, it rewrites it with this kebbie's task commands, and its details say `Codex rules: 16 commands, rewrote <file>` or `Codex rules: 16 commands, up to date`; a file with lines kebbie did not write stays, and `default.rules` is never touched.
 
 With open [kebbie issues](#kebbie-issues), it looks them up on GitHub through `gh` and leaves each one filed on older code to the keeper to recheck against the new commits.
 
