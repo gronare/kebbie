@@ -5,106 +5,37 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
-- kebbie update rewrites Codex's kebbie.rules with the new kebbie's task commands, so a Codex task runs kebbie obstacle and the other new commands without asking.
-- kebbie doctor names the kebbie commands Codex's kebbie.rules has no line for.
-- A task that meets an obstacle in its way stops and raises it with kebbie obstacle, and the board shows it being investigated.
-- kebbie's own investigator decides each obstacle once and carries it out: a workaround, a preparatory subtask, a task first, or a question to you.
-- investigate.profile picks the investigator's profile, Claude or Codex, or none to leave obstacles to the lead.
-- kebbie obstacles lists every obstacle with its decision and who took it: the investigator, the lead or you.
-- Review findings about scope or intent go to the investigator first, so only what stays uncertain reaches you.
-- Found by tasks in the backlog counts what tasks notice outside their work, so a repeat adds to its item.
-- From Found by tasks you start a task, add it to a running task, or dismiss it.
-- With the vault, a task searches the backlog before it files what it noticed, and adds itself to an item already there.
-- A task asks a trade-off that is yours before it builds it, and tells the lead each change to its plan with its reason.
-- A sign-off card has three parts, Built, Decisions with who took each, and Also noticed, and asks you nothing to confirm.
-- A task lists its work as titled subtasks with kebbie subtasks, and adds one later only with its reason, which you see beside it.
-- A task sends its commits to a subtask with kebbie subtasks on and marks it ready with kebbie subtasks done.
-- p in the push window pushes the accepted run, the commits from the top you accepted, and keeps the task open.
-- A subtask that gains a commit after you accepted it keeps its accepted commits pushable.
-- kebbie order move puts a commit elsewhere in the push order, keeping its subtask and acceptance.
-- kebbie order group binds commits that go out together, and the push window brackets them.
-- The keeper tests each unpushed commit on its own once a task reports ready, in a worktree the repo's own setup prepares, and the push order marks the result; by default only in a repo with worktree.setup_command or bin/setup-worktree.
-- kebbie status --json gives each task's subtasks, push order, pushable run and obstacle.
-- Your phone's ready notice says how many subtasks wait for your review.
+- The phone's new screens and notifications need a newer hub, so update the hub first, then kebbie.
+- A new device's first command waits until you approve it under N or with kebbie hub devices, your phone included.
+- Your phone reviews and accepts a task's subtasks, pushes the accepted run and shows its stages and obstacle.
+- Your phone shows the backlog and Found by tasks, where you describe an idea, edit an item or start it.
+- Your phone's Lead thread holds the whole conversation with each machine's lead, and its away switch sets away mode.
+- Your phone gets notifications when a task asks or is ready to push, and answers an agent's prompt with one tap.
+- Steps are now subtasks with kebbie subtasks, and p in the push window pushes the accepted ones.
+- kebbie order move and kebbie order group reorder the push order and bind commits that go out together.
+- A task rolls out in stages with kebbie stages, and kebbie asks you itself to verify one.
+- kebbie report --after-push names a check kebbie runs once CI is green, closing the task when it holds.
+- A task raises an obstacle with kebbie obstacle, and kebbie's investigator decides it once.
+- Found by tasks in the backlog gathers what tasks notice outside their work, for you to start, add or dismiss.
+- A sign-off card has three parts, Built, Decisions with who took each, and Also noticed.
+- The board shows the rules check under a task when it finds a project rule broken.
+- tests.before_push = "full" holds a ready report and every push until the full suite passes on the task's HEAD.
+- The keeper tests each unpushed commit on its own in a repo with worktree setup.
 - kebbie stage is now kebbie try, and kebbie try --off takes a task off local main.
-- A plan from an older kebbie keeps its steps as subtasks with their numbers as ids, and kebbie steps still works.
-- The board shows the rules check on its own line under a task: checking, the project rules it breaks by name, or that you or the lead pushed past it; a passed check shows nothing.
-- Your phone shows a task's subtasks, its push order and pushable run, and its latest obstacle with the decision; update the hub first.
-- Your phone's Lead thread shows the whole conversation with each machine's lead; update the hub first.
-- A message from your phone reaches the lead as your own word once its turn ends and its input box is empty.
-- The away switch on your phone turns away mode on or off, and the lead answers it in the thread.
-- The lead's reply to your phone, or any reply while you are away, comes as a Lead notification.
-- hub.commands takes "lead" for messages to the lead and the away switch.
-- kebbie tell works from any session on the machine, and the lead sees it as from a Claude session or a shell in that folder.
-- tests.before_push = "full" holds a ready report and every push until the repo's full suite passed on the task's HEAD, or, for a push of only its first commits, on the commit that push ends at.
-- kebbie doctor suggests the full suite before push for a repo whose whole suite runs in minutes.
-- kebbie keeps a task's sign-off card as data, with who took each decision from its own records and what changed since the version before.
-- kebbie refuses a card with a part asking you to confirm, or any part beyond Built, Decisions and Also noticed.
-- A task reports ready over a red test run only with the cause it found, which its card shows.
-- Review findings marked scope: or gap: go to the investigator with confirm: ones; bugs and broken rules go to the task.
-- The reviewer checks that each Also noticed line on the card lies outside the task.
-- A thing a second task notices is raised once for its root cause, and every task that found it stops working around it.
-- Keep in backlog leaves an item under Found by tasks, and the card shows the choice.
-- A task searches the backlog and Found by tasks with kebbie backlog --search before it files.
-- Your phone shows the card's decisions with who took them, acts on each noticed line, and sends a task or subtask to a full review; update the hub first.
-- From your phone you accept a subtask and push the accepted run, while the rest stays in the task.
-- From your phone you start, add to a task or dismiss what tasks found, listed in the backlog.
-- A task declares stages with kebbie stages, and nothing is pushed past a stage until its deploy, check or your verification holds.
-- ci.deploy names the workflow whose green run on a stage's push counts as its deploy.
-- A failed stage holds the stages after it, and the task and the lead hear what failed.
-- kebbie asks you itself, on the board and the phone, to verify a stage or a task's check, and to close a task it would leave to you.
-- A task asks for a check only you can make with kebbie ask --verify, and works on while it waits.
-- The board and the phone show a task's stages, and the push window stops at the first one not met; update the hub first.
-- A task names a check to run after its push with kebbie report --after-push; once CI is green it runs the check itself and closes when it holds, or waits under Needs you with what failed, or with the check unreported after an hour.
-- When a hub refuses the board, kebbie says the hub has not enabled answering for your account, with the hub's link.
-- The phone answers an agent's prompt on a task's screen with one tap, while that prompt still shows; update the hub first.
-- hub.commands lists what a machine takes through the hub, every kind by default, and only from your account.
-- Your phone shows the backlog with each item in full; update the hub first.
-- From your phone you describe an idea, which the lead titles and writes out, answer an item's open questions and start an item as a task.
-- A new device's first command waits on the machine until you approve it under N or with kebbie hub devices; update the hub first.
-- hub.trust and hub.auto_approve set which devices a machine takes commands from, and when a waiting one is let in.
-- Your phone gets notifications through the hub: a task's question or prompt, the lead's questions on an idea, a new device, ready to push, a red CI and, if you turn it on, a start, each saying the thing itself; update the hub first.
-- A device you approved approves or denies a new one from its notification, unless hub.approve_from = "machine" keeps that at the machine.
-- A wish about kebbie goes to its maintainers the way a bug does, under the same report.text choice.
-- The lead writes every short backlog item out in full, with background, goal and open questions, the moment it is added.
-- The local backlog is a folder with one file per item; an old backlog.md moves into it once and stays as a backup.
-- Backlog sources take local or vault, not both: new items go to the vault when it is listed, and kebbie doctor says so for an older config.
-- ⏎ on a backlog item opens its card, where you answer its open questions; o opens its options.
-- A backlog row shows whether the item is to write, drafting or waits on your answers, and g asks once before starting one that waits.
-- Backlog items follow the vault's task template when the vault has one, and kebbie backlog template prints the sections.
-- A file named by board.backlog.template sets the sections of local backlog items, and kebbie doctor says when it does not read.
-- From your phone you edit a backlog item's title or any of its sections; update the hub first.
-- From your phone you review a task's waiting subtask: read its files, comment on lines, mark files read and accept it; update the hub first.
-- With the vault's note templates, a task's edits and done wait for the template's required sections.
-- With a vault that states watch, the keeper follows the vault's changes as they happen, instead of starting the vault command every 20 seconds and once for each changed backlog note.
+- kebbie tell works from any session on the machine.
+- The lead writes each short backlog item out in full, and ⏎ on an item opens its card to answer its questions.
+- A backlog source is local or vault, not both, and kebbie doctor flags an older config that lists both.
+- kebbie update refreshes Codex's kebbie.rules, so a Codex task runs kebbie's new commands without asking.
 
 ### Fixed
-- hub.commands = [] takes nothing from the hub, so a device no longer approves or denies another on that machine.
-- A result for a command your device sent is sent again on the next round when the hub could not take it, instead of being lost.
-- Two devices that send a command with the same id each have it held and applied on their own.
-- A notification the hub cannot take at that moment is sent again on the keeper's next rounds for up to an hour; one with wide characters is cut to fit the hub's size limit instead of being refused; its text never shows in the process list.
-- A start your phone asked for says "Starting …", and if it fails the device gets a "Not started" notification that says why.
-- An answer you gave on a backlog item stays with the lead when the board reads the item while the lead is still writing it, and answers or kept items saved at the same moment from the board, the keeper and the CLI are all kept.
-- A device that comes back with another key is a request of its own and never takes over the approval of the device it was; a name or id two devices answer to is refused with each one's key.
-- A command waiting for a device's approval no longer has the keeper rewrite its files and check the command again every second; it is checked again when you approve or deny the device.
-- The keeper's hub round reads the backlog once and writes its notice record only when something changed.
-- A config.toml that does not parse closes the hub to your devices: no commands, and no device let in by time or by account, until it parses again.
-- Approvals, accepted commits and reviews read the stored commits against the remote-tracking branch, with file contents as text, so they match what a push sends.
-- The board and the keeper read each task's git state with about a third of the git calls, and redraw the board only when something on it changes.
-- A board that restarts on a rebuilt kebbie no longer leaves finished child processes behind as zombies.
-- The board and the keeper read vault backlog notes in one pass over the vault index, so they no longer hold a CPU core busy while the backlog is long.
-- A Codex task runs git add and git commit in its worktree without asking you to let them out of the sandbox, and the lead no longer recommends letting git through for good.
-- A reopened bug that went to kebbie's maintainers before is offered and sent again.
-- kebbie issue report says why another install's report or one already sent cannot go, instead of asking.
-- kebbie issue show names the report a bug went as, also when saving the issue failed after the send.
-- task.profile = "none" and review.profile = "none" mean the built-in task and reviewer, not a profile named none.
-- review.second = "always none" is refused, instead of running a second opinion from a profile named none.
-- A skill setting naming a ~/ Markdown file is refused while HOME is unset, instead of sending the task to run it as a skill.
-- A [docs] table in config.toml without required is refused by its own name, no longer as docs.required.
-- A task with no session record takes the profile task.profile names, its kubeconfig included, instead of the built-in task.
-- kebbie status and the board name the profile a task runs or will start with, task.profile included, instead of task.
-- The settings page's title hint reaches the right edge of the screen.
-- A Codex task started with a lone - as its prompt restarts instead of being refused.
+- The board and the keeper use far less CPU and git, also with a long vault backlog.
+- A notification or command result the hub could not take is sent again instead of being lost.
+- A config.toml that does not parse closes the hub to your devices until it parses again.
+- An answer you gave on a backlog item is kept while the lead is still writing the item.
+- Accepted commits and reviews match what a push sends.
+- A Codex task runs git add and git commit in its worktree without asking to leave the sandbox.
+- A task starts with the profile task.profile names, and "none" means kebbie's built-in task or reviewer.
+- A reopened bug that went to kebbie's maintainers is sent again, and kebbie issue report says why one cannot go.
 
 ## 0.37.0
 
