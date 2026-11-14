@@ -193,7 +193,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Mode::ConfirmQueued { name, about, now, nudged } => draw_queued(frame, name, about, *now, *nudged),
         Mode::ConfirmClaimed { entry, about, machine, nudged } => draw_claimed(frame, &entry.title, about, machine, *nudged),
         Mode::ConfirmDrop { name, force, nudged, .. } => draw_drop(frame, name, *force, *nudged),
-        Mode::RestartLead(index) => modal_hits = draw_restart_lead(frame, *index),
+        Mode::RestartLead(index) => modal_hits = draw_restart_lead(frame, *index, &app.restart_why),
         Mode::Park { name, index, date, .. } => modal_hits = super::park::draw_park(frame, name, *index, date.as_deref()),
         Mode::Filter { buffer } => draw_filter(frame, app, buffer),
         Mode::ConfirmPush { .. } => modal_hits = draw_push(frame, app),

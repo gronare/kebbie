@@ -2,12 +2,13 @@ use std::path::PathBuf;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
+use ratatui::text::{Line, Span};
 use ratatui::Frame;
 
 use crate::keys::Act;
 use crate::tasks;
 use super::{App, Hit, Mode};
-use super::widgets::{Choice, confirm_lines, modal, options_lines};
+use super::widgets::{Choice, MUTED, confirm_lines, modal, options_lines, style};
 
 impl App {
     pub(super) fn confirm_reset(&mut self, path: PathBuf, name: String, key: KeyEvent, cancels: bool) {
@@ -132,8 +133,10 @@ pub(super) fn restart_choices() -> Vec<Choice> {
     ]
 }
 
-pub(super) fn draw_restart_lead(frame: &mut Frame, index: usize) -> Vec<(Rect, Hit)> {
-    let area = modal(frame, "Restart the lead".to_string(), options_lines(restart_choices(), index, 56), 62);
+pub(super) fn draw_restart_lead(frame: &mut Frame, index: usize, why: &str) -> Vec<(Rect, Hit)> {
+    let mut lines = options_lines(restart_choices(), index, 56);
+    lines.insert(lines.len() - 1, Line::from(Span::styled(why.to_string(), style(MUTED))));
+    let area = modal(frame, "Restart the lead".to_string(), lines, 62);
     (0..2u16).map(|choice| (Rect::new(area.x, area.y + 1 + 2 * choice, area.width, 2), Hit::Choice(choice as usize))).filter(|(rect, _)| rect.y + 1 < area.bottom()).collect()
 }
 

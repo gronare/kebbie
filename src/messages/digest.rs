@@ -93,7 +93,7 @@ pub(super) fn by_task(dir: &Path, messages: &[&Message], line: impl Fn(&Message)
 }
 
 // What sessions said to each other: not a report, a task's end marker, a question, an answer from the board, the lead's copy of one, or a task's own prompt waiting to be typed.
-pub(super) fn is_told(message: &Message) -> bool {
+pub(crate) fn is_told(message: &Message) -> bool {
     message.report.is_none() && !message.ended && message.question.is_none() && !is_copy(message) && !message.fyi && !matches!(message.kind.as_deref(), Some("answer" | PROMPT_KIND))
 }
 

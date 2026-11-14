@@ -236,6 +236,7 @@ struct App {
     lead_checker: std::sync::Arc<dyn Fn() -> Result<()> + Send + Sync>,
     lead_restarted: std::sync::Arc<std::sync::atomic::AtomicU64>,
     lead_context: Option<f64>,
+    restart_why: String,
     devices: Vec<crate::hub::devices::Request>,
     subject: Option<notices::Subject>,
     shown: Option<notices::Subject>,
@@ -481,7 +482,11 @@ impl App {
     // A restart the user asks for always runs; only the lead's own state refuses it, before the question opens.
     fn restart_lead(&mut self) {
         match (self.lead_checker)() {
-            Ok(()) => self.mode = Mode::RestartLead(0),
+            Ok(()) => {
+                let (index, why) = crate::lead_restart::preset(&self.tasks, &self.messages);
+                self.restart_why = why;
+                self.mode = Mode::RestartLead(index);
+            }
             Err(why) => {
                 self.subject = Some(notices::Subject::plain("lead"));
                 self.show(crate::lead_restart::outcome(Err(why)));
@@ -1154,7 +1159,7 @@ impl App {
             graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel).map(|outcome| outcome.details.join("\n"))), update: None, progress_file: None, recheck: None, stale: Vec::new(), stale_at: 0, restart_after_update: false,
             agent_offer: None, agent_mode: std::sync::Arc::new(|| config::agent_updates_in(&config::path())), installer: agent_updates::default_install(),
-            filter: None, ctrl_c: None, go_again: None, notice: None, lead_chat: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), lead_fresh_starter: std::sync::Arc::new(crate::lead_restart::fresh_now), lead_checker: std::sync::Arc::new(crate::lead::restart_refusal), lead_restarted: std::sync::Arc::default(), lead_context: None, devices: Vec::new(), subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
+            filter: None, ctrl_c: None, go_again: None, notice: None, lead_chat: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), lead_fresh_starter: std::sync::Arc::new(crate::lead_restart::fresh_now), lead_checker: std::sync::Arc::new(crate::lead::restart_refusal), lead_restarted: std::sync::Arc::default(), lead_context: None, restart_why: String::new(), devices: Vec::new(), subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
             comments: Vec::new(), comment_panel: Default::default(), comment_dir: None, copier: comments::default_copier(), reopener: comments::default_reopener(), pusher: None,
         }
     }
@@ -1681,6 +1686,45 @@ mod tests {
         click(&mut app, x as u16, y as u16);
         settle(&mut app);
         assert_eq!((count(&calls), count(&resumed)), (2, 1), "a click on a row picks it");
+    }
+
+    #[test]
+    fn with_work_going_on_l_preselects_resuming_and_says_why_and_enter_resumes() {
+        let mut app = test_app(vec![crate::status::tests::task(Some("working"), None, 0)]);
+        app.lead_checker = std::sync::Arc::new(|| Ok(()));
+        let resumed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = resumed.clone();
+        app.lead_restarter = std::sync::Arc::new(move || {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok("Restarted the lead with its current role and settings, resuming its conversation.".to_string())
+        });
+        app.lead_fresh_starter = std::sync::Arc::new(|| panic!("enter never throws the conversation away while work is going on"));
+        app.lead_context = Some(91.2);
+        let (rows, _) = render(&mut app, 170, 30);
+        assert!(rows.join("\n").contains("The lead's context is 91% full · L to restart it fresh"), "a full context still points at L");
+        app.handle_normal(key(KeyCode::Char('L')));
+        assert!(matches!(app.mode, Mode::RestartLead(1)), "resume is preselected");
+        let (rows, _) = render(&mut app, 120, 30);
+        let screen = rows.join("\n");
+        assert!(screen.contains("▸ Resume this conversation") && screen.contains("  New conversation") && screen.contains("resume: 1 task is working"), "{screen}");
+        press(&mut app, key(KeyCode::Enter));
+        settle(&mut app);
+        assert_eq!(resumed.load(std::sync::atomic::Ordering::SeqCst), 1, "enter resumes");
+    }
+
+    #[test]
+    fn on_an_empty_or_idle_board_l_preselects_a_new_conversation_and_says_nothing_is_going_on() {
+        for tasks in [Vec::new(), vec![crate::status::tests::task(Some("idle"), None, 0)]] {
+            let mut app = test_app(tasks);
+            app.lead_checker = std::sync::Arc::new(|| Ok(()));
+            app.handle_normal(key(KeyCode::Char('L')));
+            assert!(matches!(app.mode, Mode::RestartLead(0)), "fresh is preselected");
+            let (rows, _) = render(&mut app, 120, 30);
+            let screen = rows.join("\n");
+            assert!(screen.contains("▸ New conversation") && screen.contains("fresh: nothing is going on"), "{screen}");
+            press(&mut app, key(KeyCode::Down));
+            assert!(matches!(app.mode, Mode::RestartLead(1)), "resume stays one row away");
+        }
     }
 
     #[test]

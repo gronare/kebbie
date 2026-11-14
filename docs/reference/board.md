@@ -331,7 +331,7 @@ The [bugs and wishes to send](#bugs-and-wishes-to-send) are folded into one row 
 
 When the window closes and Codex has a newer version, the `agent updates` window asks `Which updates?`: `Codex 0.163 → 0.164` with how Codex is installed, or `Skip this time`, asked again on the next `U`. `⏎` runs Codex's own installer and shows when it is done; `esc` closes it. With `update.agents = "auto"` it installs at once and says so; with `"notify"` there is no window. Codex tasks restart on the new version once they are idle, and the board takes the new kebbie only once the window is closed. See [Codex updates](../how-to/run-a-task-with-codex.md#codex-updates).
 
-`L` opens `Restart the lead` with two rows. See [Starting the lead fresh](../explanation/lead-and-away-mode.md#starting-the-lead-fresh).
+`L` opens `Restart the lead` with two rows: `Resume this conversation` is preselected while work is going on, `New conversation` when nothing is, and a line under the rows says why. See [Starting the lead fresh](../explanation/lead-and-away-mode.md#starting-the-lead-fresh).
 
 - `New conversation`, selected, starts its Claude fresh from its role and the vault, the old conversation left on disk.
 - `Resume this conversation` restarts it on the same one, as to pick up a new Claude Code.

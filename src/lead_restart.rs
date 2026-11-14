@@ -1,10 +1,15 @@
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+use crate::board::widgets::plural;
 use crate::keys::{self, Act};
 use crate::keeper::REASONS;
 use crate::known::{self, Record};
+use crate::messages::Message;
 use crate::notice::{Notice, Tone};
 use crate::restart::{HELD, HOOKS_GONE, KEBBIE_UPDATE, LEAD_NO_ROLE, OUTSIDE_LEAD_DIR};
 use crate::sh::Result;
-use crate::status::LEAD_LABEL;
+use crate::status::{Group, Item, LEAD_LABEL};
+use crate::tasks::SubtaskState;
 
 pub fn behind_of(record: Option<&Record>) -> Option<(String, String)> {
     let record = record?;
@@ -86,6 +91,98 @@ pub fn line(stale: &[String], auto: bool, width: usize) -> Option<String> {
     };
     let [long, short] = wordings;
     Some(if crate::board::widgets::text_width(&long) <= width { long } else { short })
+}
+
+pub const FRESH: usize = 0;
+pub const RESUME: usize = 1;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Going {
+    Working,
+    InReview,
+    Obstacle,
+    Question,
+    Owed,
+    Unpushed,
+    Subtasks,
+}
+
+impl Going {
+    fn words(self, one: bool) -> &'static str {
+        match (self, one) {
+            (Going::Working, true) => "is working",
+            (Going::Working, false) => "are working",
+            (Going::InReview, true) => "is in review",
+            (Going::InReview, false) => "are in review",
+            (Going::Obstacle, true) => "has an obstacle open",
+            (Going::Obstacle, false) => "have obstacles open",
+            (Going::Question, true) => "has a question open",
+            (Going::Question, false) => "have questions open",
+            (Going::Owed, true) => "waits on the lead's answer",
+            (Going::Owed, false) => "wait on the lead's answer",
+            (Going::Unpushed, true) => "has unpushed work",
+            (Going::Unpushed, false) => "have unpushed work",
+            (Going::Subtasks, true) => "has open subtasks",
+            (Going::Subtasks, false) => "have open subtasks",
+        }
+    }
+}
+
+// A parked or queued task waits on the user and keeps nothing going; a task counts once, under the first kind that holds.
+fn going(item: &Item, owed: &HashSet<String>) -> Option<Going> {
+    if item.parked.is_some() || item.queued.is_some() || !item.is_task() {
+        return None;
+    }
+    let group = item.group();
+    let unpushed = item.git.as_ref().is_some_and(|git| git.ahead > 0 || git.uncommitted > 0);
+    if group == Group::Working || item.turn_under_way() {
+        Some(Going::Working)
+    } else if group == Group::InReview || item.verdict.as_ref().is_some_and(|shown| shown.running) {
+        Some(Going::InReview)
+    } else if item.obstacle.as_ref().is_some_and(|obstacle| obstacle.state.open()) {
+        Some(Going::Obstacle)
+    } else if item.question.is_some() {
+        Some(Going::Question)
+    } else if owed.contains(&crate::peers::address(&item.name, &item.place)) {
+        Some(Going::Owed)
+    } else if unpushed && matches!(group, Group::ReadyToPush | Group::NeedsYou) {
+        Some(Going::Unpushed)
+    } else if item.subtasks.items.iter().any(|subtask| matches!(subtask.state, SubtaskState::Planned | SubtaskState::InProgress)) {
+        Some(Going::Subtasks)
+    } else {
+        None
+    }
+}
+
+// The tasks whose latest word between them and the lead is their own.
+fn owed_by_lead(messages: &[Message]) -> HashSet<String> {
+    let mut latest: HashMap<&str, &Message> = HashMap::new();
+    for message in messages.iter().filter(|message| crate::messages::is_told(message)) {
+        let task = match (message.from.as_str(), message.to.as_str()) {
+            (LEAD_LABEL, to) if to.contains('@') => to,
+            (from, LEAD_LABEL) if from.contains('@') => from,
+            _ => continue,
+        };
+        latest.insert(task, message);
+    }
+    latest.into_iter().filter(|(task, message)| message.from == *task).map(|(task, _)| task.to_string()).collect()
+}
+
+// The choice L preselects and the line that says why: resume while any work is going on, fresh only when nothing is.
+pub fn preset(items: &[Item], messages: &[Message]) -> (usize, String) {
+    let owed = owed_by_lead(messages);
+    let mut counts: BTreeMap<Going, usize> = BTreeMap::new();
+    for kind in items.iter().filter_map(|item| going(item, &owed)) {
+        *counts.entry(kind).or_default() += 1;
+    }
+    if counts.is_empty() {
+        return (FRESH, "fresh: nothing is going on".to_string());
+    }
+    let parts: Vec<String> = counts.into_iter().enumerate().map(|(position, (kind, count))| {
+        let who = if position == 0 { plural(count, "task") } else { count.to_string() };
+        format!("{who} {}", kind.words(count == 1))
+    }).collect();
+    (RESUME, format!("resume: {}", parts.join(", ")))
 }
 
 pub const CONTEXT_FULL: f64 = 85.0;
@@ -214,5 +311,45 @@ mod tests {
         assert_eq!(context_line(Some(87.4), 120).unwrap(), "The lead's context is 87% full · L to restart it fresh");
         assert_eq!(context_line(Some(85.0), 30).unwrap(), "Lead context 85% · L", "a narrow board takes the short wording");
         assert_eq!(context_line(Some(103.0), 120).unwrap(), "The lead's context is 100% full · L to restart it fresh");
+    }
+
+    #[test]
+    fn l_preselects_resume_while_any_work_is_going_on_and_fresh_only_when_nothing_is() {
+        use crate::phase::{Phase, Why};
+        use crate::status::tests::{in_phase, task};
+        let named = |name: &str, mut item: Item| {
+            item.name = name.to_string();
+            item
+        };
+        let mut ready = named("ready", task(Some("idle"), Some("ready"), 2));
+        in_phase(&mut ready, Phase::Ready { head: None });
+        let mut asks = named("asks", task(Some("idle"), Some("needs-you"), 1));
+        in_phase(&mut asks, Phase::NeedsYou(Why::Report));
+        let mut pushed_asks = named("pushed", task(Some("idle"), Some("needs-you"), 0));
+        in_phase(&mut pushed_asks, Phase::NeedsYou(Why::Report));
+        let mut blocked = named("blocked", task(Some("idle"), None, 0));
+        in_phase(&mut blocked, Phase::Idle);
+        blocked.obstacle = Some(crate::obstacle::Shown { id: "o1".to_string(), state: crate::obstacle::State::Asked, text: "S3 refuses".to_string() });
+        let mut between = named("between", task(Some("idle"), None, 0));
+        in_phase(&mut between, Phase::Idle);
+        between.subtasks.items = vec![crate::tasks::Subtask { id: "s2".to_string(), number: 2, title: "Second".to_string(), state: SubtaskState::Planned, commits: Vec::new(), pushed: Vec::new(), extra: false, added: None, contiguous: true, waits_for: None }];
+        let mut waiting = named("waiting", task(Some("idle"), None, 0));
+        in_phase(&mut waiting, Phase::Idle);
+        let mut parked = named("parked", task(Some("working"), None, 3));
+        parked.parked = Some(crate::tasks::Parked { until: None });
+        let idle = || named("idle", task(Some("idle"), None, 0));
+        assert_eq!(preset(&[], &[]), (FRESH, "fresh: nothing is going on".to_string()), "an empty board starts the lead clean");
+        assert_eq!(preset(&[idle(), pushed_asks.clone(), parked.clone()], &[]), (FRESH, "fresh: nothing is going on".to_string()), "an idle task, a pushed one that asks and a parked one keep nothing going");
+        let working = || named("working", task(Some("working"), None, 0));
+        assert_eq!(preset(&[working(), named("other", task(Some("working"), None, 0)), named("third", task(Some("working"), None, 0))], &[]), (RESUME, "resume: 3 tasks are working".to_string()));
+        assert_eq!(preset(&[ready.clone(), asks.clone()], &[]), (RESUME, "resume: 2 tasks have unpushed work".to_string()), "ready or needs-you with commits not out");
+        assert_eq!(preset(&[blocked.clone()], &[]).1, "resume: 1 task has an obstacle open");
+        assert_eq!(preset(&[between.clone()], &[]).1, "resume: 1 task has open subtasks", "idle between subtasks is still work under way");
+        let told = |id: &str, from: &str, to: &str| format!(r#"{{"id":"{id}","at":10,"from":"{from}","to":"{to}","text":"which queue?"}}"#);
+        let owed = crate::messages::fold(&told("m1", "waiting@web", "lead"));
+        assert_eq!(preset(&[waiting.clone()], &owed).1, "resume: 1 task waits on the lead's answer");
+        let answered = crate::messages::fold(&[told("m1", "waiting@web", "lead"), told("m2", "lead", "waiting@web")].join("\n"));
+        assert_eq!(preset(&[waiting.clone()], &answered).0, FRESH, "a thread the lead answered last is closed");
+        assert_eq!(preset(&[working(), ready, asks, blocked, between, waiting, parked, idle()], &owed).1, "resume: 1 task is working, 1 has an obstacle open, 1 waits on the lead's answer, 2 have unpushed work, 1 has open subtasks", "each task counts once, the kinds in one line");
     }
 }

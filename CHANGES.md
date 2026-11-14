@@ -6,6 +6,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 
 ### What's new
 - lead.profile runs the lead on its own model and effort, picked on the Settings page.
+- L preselects resuming the lead's conversation while work is going on, and a new one when nothing is.
 
 ### Fixed
 - Your phone answers kebbie's own question on a task's obstacle, and the task hears your decision.

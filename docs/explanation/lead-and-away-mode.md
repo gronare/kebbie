@@ -168,6 +168,11 @@ A long conversation fills the lead's context. `L` on the board opens `Restart th
 - `New conversation`, the first row, starts the lead's Claude on a new conversation, in its folder, with its role, settings and skills as at any start.
 - `Resume this conversation` resumes it as before.
 
+Enter picks the preselected row, and a line under the rows says why it is that one, such as `resume: 3 tasks are working` or `fresh: nothing is going on`:
+
+- `Resume this conversation` is preselected while work is going on: a task is working, has an obstacle, a question or open subtasks, is in review, waits on the lead's answer, or is ready or needs you with work not pushed yet. Parked and queued tasks do not count.
+- `New conversation` is preselected only when nothing is going on, so a clean lead does not carry old problems along.
+
 `kebbie lead --restart --fresh` starts it fresh from your own terminal. A refusal, for the reasons above, goes by as a toast before the question opens.
 
 The old conversation stays on disk, where `claude --resume` still finds it. kebbie keeps the new one as the lead's, so later restarts resume that. Nothing starts the lead fresh on its own. The lead's role tells it that a fresh start reads only the role and the vault, so it keeps decisions, plans and where each task stands in the vault's notes as it goes.

@@ -250,7 +250,7 @@ Some staleness survives a restart. When the lead's shell starts the same older C
 
 ## L restarts the lead now
 
-`L` on the board, or a click on the line, opens `Restart the lead`. `Resume this conversation` restarts the lead at once on the same conversation, and `New conversation` starts it fresh, also while you are in its pane.
+`L` on the board, or a click on the line, opens `Restart the lead`. `Resume this conversation` restarts the lead at once on the same conversation, and `New conversation` starts it fresh, also while you are in its pane. Resuming is preselected while work is going on, a new conversation only when nothing is.
 
 - It is refused with the plain reason while the lead works, waits on a question, holds text you have not sent or has background work running. You can press it again later.
 - The keeper and `L` never restart the lead together: each takes the lead's lock first, and the second is refused.
