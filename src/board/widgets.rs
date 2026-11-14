@@ -14,6 +14,7 @@ pub const SUBTEXT: Color = Color::Rgb(0xa6, 0xad, 0xc8);
 pub const MUTED: Color = Color::Rgb(0x6c, 0x70, 0x86);
 pub const FAINT: Color = Color::Rgb(0x45, 0x47, 0x5a);
 pub const SURFACE: Color = Color::Rgb(0x31, 0x32, 0x44);
+pub const RAISED: Color = Color::Rgb(0x58, 0x5b, 0x70);
 pub const MANTLE: Color = Color::Rgb(0x18, 0x18, 0x25);
 pub const MAUVE: Color = Color::Rgb(0xcb, 0xa6, 0xf7);
 pub const PEACH: Color = Color::Rgb(0xfa, 0xb3, 0x87);
@@ -160,7 +161,7 @@ pub fn row(selected: bool, focused: bool, icon: Span<'static>, name: &str, place
 // A line's background only covers its text, so highlighted lines are padded to the column's width.
 pub fn fill(lines: Vec<Line<'static>>, width: usize) -> Vec<Line<'static>> {
     lines.into_iter().map(|mut line| {
-        if line.style.bg == Some(SURFACE) && line.width() < width {
+        if matches!(line.style.bg, Some(SURFACE | RAISED)) && line.width() < width {
             let missing = width - line.width();
             line.spans.push(Span::raw(" ".repeat(missing)));
         }

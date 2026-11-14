@@ -86,6 +86,19 @@ A backlog item's row shows its state in the right field:
 
 ### A task row
 
+Each task is a block, one empty line from the next. The lines under its row hang on a faint rule, `│`, in the column of its status mark, and the last ends in `╰`. The selected task's bar `▌` and background run down its whole block. When the column is too short for every line, the empty lines between tasks go first.
+
+```
+WORKING  2
+
+▌◐ Push from the board without a popup        kebbie · 3 commits
+▌│ recipe: feature with UI, because the push blocks the board
+▌╰ branch  push-notice · wt.kebbie-push-notice
+
+ ◐ Cancelled CI shows as running              kebbie · 1 commit
+ ╰ recipe: small fix
+```
+
 A task row shows its commits, uncommitted and untracked files, and how far it is behind the default branch. Behind is information only: push rebases it when its turn in the push line comes, `e` rebases now, and a task you keep rebased on main catches up by itself.
 
 | Line or mark | Means |
@@ -104,15 +117,15 @@ A task row shows its commits, uncommitted and untracked files, and how far it is
 
 #### A task in subtasks
 
-With [`task.steps`](configuration.md) on and subtasks listed, the task's subtasks not pushed yet sit under its row, one line each, with the subtask's number, title and state:
+With [`task.steps`](configuration.md) on and subtasks listed, the task's subtasks not pushed yet sit under its row, one line each, with the subtask's number, title and state. A task of a single subtask shows no subtask line: the task's own row says it all.
 
 ```
 ◐ Switch the payment provider to Stripe        billing · 1 to accept
-    ↑ 1 pushed
-    ● 2 Charge through a PaymentGateway        ready · 2 commits
-    ◐ 3 Add Stripe as the gateway              in progress · 1 commit
-    ○ 4 Remove the old payment client
-   accept 2 · r review
+│  ↑ 1 pushed
+│  ● 2 Charge through a PaymentGateway        ready · 2 commits
+│  ◐ 3 Add Stripe as the gateway              in progress · 1 commit
+│  ○ 4 Remove the old payment client
+╰ accept 2 · r review
 ```
 
 | Line or mark | Means |
@@ -125,6 +138,17 @@ With [`task.steps`](configuration.md) on and subtasks listed, the task's subtask
 | `✓ … accepted`, green | You accepted every commit in it. `accepted · waits for <subtask>` when a commit of a subtask you have not accepted lies above one of its own in the push order. |
 | `accept N · r review` | Under the subtasks: the first subtask waiting for you. `r` opens the review, and [`kebbie accept`](commands.md#kebbie-accept-name-sha) accepts it. |
 | `accept subtask N · r review` | With [`task.require_accept`](configuration.md) on, a ready task with a subtask to accept waits under Needs you with this line: it cannot be pushed until subtask N is accepted. |
+
+`↓` on the selected task goes into its subtask rows, one at a time, and on to the next task after the last; `↑` goes back the same way, and from the next task lands on the last subtask. The subtask under the cursor is lit, the task keeps its bar, and the keys line at the bottom reads `⏎ opens subtask N · a accepts it · r reads its diff · esc back to the task`. A long list scrolls with the cursor. On a subtask row:
+
+| Key | Action |
+| --- | --- |
+| `⏎` | Open the [subtask view](#the-subtask-view). |
+| `a` | Accept that subtask, as [`kebbie accept <name> --subtask <id>`](commands.md#kebbie-accept-name-sha) does. On the task's own row, `a` stays [let the lead push it](#on-a-task). |
+| `r` | Open the review on that subtask. A review already open in its Space moves to it. |
+| `esc` | Back to the task's row. |
+
+`←` `→` still switch between Work and Backlog.
 
 A subtask to accept leaves the task in the group its phase gives it, under Working while it builds on. The state word always shows: a long title is shortened at a word with `…` to make room, and only when the title would drop below 12 columns does the rules part shorten (`· 2 breaks`, `· checking`, `· not checked`, `· past the rules`) and then go. Without subtasks, the row is as above. See [Work in subtasks](../how-to/work-in-steps.md).
 
@@ -504,6 +528,46 @@ The item's card shows its title, priority, repo, state, the day it was filed and
 - `←` `→` choose, `⏎` or a click pushes, `esc` goes back to the list.
 
 `kebbie next` prints the same list. See [Commands](commands.md#seeing-what-is-going-on).
+
+### The subtask view
+
+Opened by `⏎` on a subtask row, it fills the board:
+
+```
+Switch the payment provider to Stripe › Subtask 2 of 4
+Charge through a PaymentGateway
+ready · 1 commit · 2 files · +102 −12 · 1 of 2 read
+
+COMMITS
+  2222222  Charge through a PaymentGateway
+
+FILES
+  ✓ app/gateway.rb        +38    −12
+  ○ app/stripe.rb         +64
+
+BUILT
+  Every charge goes through one gateway, so the provider is one class.
+
+← → subtask 1 or 3 · r reads the diff · a accepts · esc back to the board
+```
+
+| Part | Shows |
+| --- | --- |
+| The top line | The task's title and which subtask this is, of how many. |
+| The facts | Its state, its commits, its files with the lines added and removed, and how many of the files you marked read in the review. |
+| `OBSTACLE <id>` | First, while an [obstacle](../explanation/obstacles-and-findings.md) raised on this subtask is open: what it is, the investigator's decision and its question to you. `waits for you` while that question is open, and `⏎` then answers it in the questions window. |
+| `COMMITS` | Each commit's short sha and subject. |
+| `FILES` | The subtask's files, from under its first commit to its last, each with its read mark: `✓` read, `○` not. |
+| `BUILT` | What the task wrote in the bodies of the subtask's commit messages, trailers left out. |
+
+| Key | Action |
+| --- | --- |
+| `←` `→` | The previous or next subtask. |
+| `↑` `↓`, `j` `k` | Scroll. |
+| `a` | Accept this subtask; the view stays open and shows it accepted. |
+| `r` | Open the review on this subtask. |
+| `⏎` | Answer the obstacle, while it waits for you. |
+| `esc`, `q` | Back to the board, the cursor on the subtask you were on, showing its new state. |
 
 ### The card window
 

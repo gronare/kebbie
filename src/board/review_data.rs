@@ -370,6 +370,15 @@ pub fn files(dir: &Path, root: &Path, base: &str, range: Option<&Range>) -> Vec<
     }).collect()
 }
 
+// A range's files with their read marks, as the review lists them for a subtask, without a review's scope.
+pub fn range_files(root: &Path, range: &Range) -> Vec<File> {
+    let read_marks = marks(root);
+    numstat(root, &[&range.from, &range.to]).into_iter().map(|(path, added, deleted, new)| {
+        let read = read_marks.contains(&mark_line(root, &path, Some(range)));
+        File { path, added, deleted, new, other: false, read }
+    }).collect()
+}
+
 fn tracked(root: &Path, base: &str, path: &str) -> bool {
     git_ok(root, &["ls-files", "--error-unmatch", "--", path]) || git_ok(root, &["cat-file", "-e", &format!("{base}:{path}")])
 }

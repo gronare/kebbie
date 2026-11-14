@@ -53,7 +53,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     let updates: &[(String, String)] = if app.page == Page::Work { &app.updates } else { &[] };
     let status = match app.notice.as_ref().filter(|(_, at)| at.elapsed() < Duration::from_secs(3)) {
         Some((text, _)) => Line::from(Span::styled(text.clone(), style(PEACH))),
-        None => status_line(full_hints, short_hints, updates, app.usage.as_ref(), bottom.width as usize, messages::now()),
+        None => app.subtask_keys().filter(|_| app.page == Page::Work).unwrap_or_else(|| status_line(full_hints, short_hints, updates, app.usage.as_ref(), bottom.width as usize, messages::now())),
     };
     if app.page == Page::Areas {
         frame.render_widget(Paragraph::new(status), bottom);
@@ -111,24 +111,26 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         frame.render_widget(Paragraph::new(Span::styled(error.clone(), style(RED))).wrap(Wrap { trim: false }), body);
     } else if !app.loaded {
         frame.render_widget(Paragraph::new(Span::styled("looking around…", style(MUTED))), body);
+    } else if matches!(app.mode, Mode::Subtask(_)) {
+        super::subtask_view::draw(frame, app, body);
     } else if full.width >= 150 {
         let [work_area, _, panel_area, _, backlog_area] = Layout::horizontal([
             Constraint::Percentage(33), Constraint::Length(1), Constraint::Percentage(38), Constraint::Length(2), Constraint::Min(20),
         ]).areas(body);
-        let (work, work_selected, work_rows) = work_lines(app, work_area.width as usize, false);
+        let (work, work_selected, work_rows) = work_lines(app, work_area.width as usize, false, work_area.height as usize);
         render_column(frame, work_area, work, work_selected, work_rows, &mut app.hits);
         draw_panel(frame, app, panel_area);
         let (backlog, backlog_selected, backlog_rows) = backlog_lines(app, backlog_area.width as usize);
         render_column(frame, backlog_area, backlog, backlog_selected, backlog_rows, &mut app.hits);
     } else if body.width >= 86 {
         let [work_area, _, backlog_area] = Layout::horizontal([Constraint::Percentage(54), Constraint::Length(4), Constraint::Min(20)]).areas(body);
-        let (work, work_selected, work_rows) = work_lines(app, work_area.width as usize, true);
+        let (work, work_selected, work_rows) = work_lines(app, work_area.width as usize, true, work_area.height as usize);
         render_column(frame, work_area, work, work_selected, work_rows, &mut app.hits);
         let (backlog, backlog_selected, backlog_rows) = backlog_lines(app, backlog_area.width as usize);
         render_column(frame, backlog_area, backlog, backlog_selected, backlog_rows, &mut app.hits);
     } else {
         let width = body.width as usize;
-        let (mut lines, work_selected, mut rows) = work_lines(app, width, true);
+        let (mut lines, work_selected, mut rows) = work_lines(app, width, true, body.height as usize);
         let offset = lines.len() + 1;
         let (backlog, backlog_selected, backlog_rows) = backlog_lines(app, width);
         lines.push(Line::default());
@@ -143,7 +145,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         super::item_card::draw_item_card(frame, card);
     }
     match &app.mode {
-        Mode::Normal | Mode::ItemCard(_) => {}
+        Mode::Normal | Mode::ItemCard(_) | Mode::Subtask(_) => {}
         Mode::Options(index) => modal_hits = draw_options(frame, app, *index),
         Mode::ReviewMenu(menu) => modal_hits = super::send_review::draw_review_menu(frame, menu),
         Mode::Questions(_) => modal_hits = draw_questions(frame, app),

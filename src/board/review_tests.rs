@@ -488,3 +488,20 @@ fn a_refresh_reads_kebbies_marks_and_the_files_again_only_once_something_they_st
     assert_eq!((reads.get(), view.entries.items.len()), (6, 4), "a new commit");
     let _ = fs::remove_dir_all(&repo.root);
 }
+
+#[test]
+fn the_review_opens_on_the_subtask_the_board_names_and_picks_it_again_when_already_open() {
+    let repo = repo("named-subtask");
+    with_steps(&repo, false);
+    fs::write(subtask_file(&repo.dir), "3\n").unwrap();
+    let mut opened = open(repo);
+    assert_eq!(opened.view.selected, Some(Sel::Step(3)), "not the first that waits, the one named");
+    assert!(!subtask_file(&opened.repo.dir).exists(), "the name is read once");
+    opened.view.select(Some(Sel::Step(2)));
+    fs::write(subtask_file(&opened.repo.dir), "3").unwrap();
+    opened.view.refresh();
+    assert_eq!(opened.view.selected, Some(Sel::Step(3)), "an open review picks it on its next refresh");
+    fs::write(subtask_file(&opened.repo.dir), "4").unwrap();
+    opened.view.refresh();
+    assert_eq!(opened.view.selected, Some(Sel::Step(3)), "a subtask without commits leaves the selection");
+}

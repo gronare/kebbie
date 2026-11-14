@@ -114,6 +114,10 @@ pub fn herdr() -> String {
     crate::herdr::bin()
 }
 
+pub fn subtask_file(dir: &Path) -> PathBuf {
+    dir.join("subtask")
+}
+
 pub fn nvim_socket(dir: &Path) -> PathBuf {
     dir.join("nvim.sock")
 }
@@ -178,7 +182,19 @@ impl View {
         view.load();
         view.selected = view.first_waiting();
         view.reload_files(false);
+        view.pick_asked();
         view
+    }
+
+    // The board names a subtask to open on in the review's folder; it is read once, and a subtask without commits is left as it was.
+    fn pick_asked(&mut self) {
+        let file = subtask_file(&self.dir);
+        let Some(number) = data::read_text(&file).and_then(|text| text.parse::<usize>().ok()) else { return };
+        let _ = fs::remove_file(&file);
+        if let Some(index) = self.entries.numbered(number) {
+            let picked = self.sel_of(&self.entries.items[index].clone());
+            self.select(Some(picked));
+        }
     }
 
     // Ok(false) when nothing it reads from moved since the last load, so nothing was read again.
@@ -198,7 +214,9 @@ impl View {
 
     // A selected step that holds no commit now, or a selected commit that left its step, by a rebase or an amend, gives way to the whole branch.
     pub fn refresh(&mut self) {
-        if !self.load() {
+        let loaded = self.load();
+        self.pick_asked();
+        if !loaded {
             return;
         }
         if self.selected.is_some() && self.selected_entry().is_none() {

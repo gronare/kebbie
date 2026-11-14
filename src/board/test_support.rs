@@ -20,6 +20,11 @@ use super::images::{Graphics, spawn_decoder};
 use super::message_log::Fold;
 use super::App;
 
+// A row of a task's block without its margin, the selection bar and the rule it hangs on.
+pub(super) fn untied(row: &str) -> &str {
+    row.trim_start().trim_start_matches('▌').trim_start_matches(['│', '╰']).trim()
+}
+
 pub(super) fn press(app: &mut App, event: KeyEvent) {
     app.handle_key(event, None);
 }

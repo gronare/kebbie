@@ -665,7 +665,7 @@ mod tests {
         let screen = rows.join("\n");
         let (_, card_y) = find(&rows, "CARD ─")[0];
         let (_, image_y) = find(&rows, "IMAGE 1/2 refund-row-desktop.png ─")[0];
-        assert!(image_y > card_y + 4 && rows[card_y + 1].matches('│').count() == 2, "{screen}");
+        assert!(image_y > card_y + 4 && rows[card_y + 1].chars().skip(4).filter(|character| *character == '│').count() == 2, "{screen}");
         assert!(!screen.contains("IMAGES"), "one image at a time, no list: {screen}");
         press(&mut app, key(KeyCode::Right));
         let (rows, _) = render(&mut app, 100, 48);

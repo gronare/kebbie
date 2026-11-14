@@ -118,6 +118,7 @@ split() {
   printf '%s\n' "$base" > "$d/base"
   describe_base "$(resolve_base "$base")" > "$d/label"
   [ $# -gt 0 ] && printf '%s\n' "$@" > "$d/scope"
+  [ -n "${KEBBIE_REVIEW_SUBTASK:-}" ] && printf '%s\n' "$KEBBIE_REVIEW_SUBTASK" > "$d/subtask"
   if review_open "$d"; then
     cat "$d/pane"
   else

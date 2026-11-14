@@ -4,9 +4,28 @@ use ratatui::text::{Line, Span};
 use crate::keys::{self, Act};
 use crate::status::Item;
 use crate::tasks::{self, Subtask, SubtaskState};
-use super::widgets::{BLUE, GREEN, MUTED, RED, SURFACE, TEXT, YELLOW, cut, plural, style, text_width};
+use super::widgets::{BLUE, GREEN, MAUVE, MUTED, RAISED, RED, SURFACE, TEXT, YELLOW, bold, cut, plural, style, text_width};
 
 const INDENT: &str = "    ";
+
+// A task of one subtask is that subtask, so its row would only repeat the task's.
+pub(super) fn rows_shown(item: &Item) -> bool {
+    item.subtasks.pushed.len() + item.subtasks.items.len() > 1
+}
+
+// The subtask rows the cursor walks through: the open ones, as listed.
+pub(super) fn walked(item: &Item) -> &[Subtask] {
+    if rows_shown(item) { &item.subtasks.items } else { &[] }
+}
+
+pub(super) fn subtask_hint(number: usize) -> Line<'static> {
+    let key = |key: String| Span::styled(key, style(MAUVE));
+    let label = |text: &str| Span::styled(text.to_string(), style(MUTED));
+    Line::from(vec![
+        key(keys::map().label(Act::Options)), label(&format!(" opens subtask {number} · ")), key(keys::key(Act::Permit).to_string()), label(" accepts it · "),
+        key(keys::key(Act::Review).to_string()), label(" reads its diff · "), key(keys::map().label(Act::Back)), label(" back to the task"),
+    ])
+}
 
 fn waiting(subtask: &Subtask) -> bool {
     subtask.state == SubtaskState::Ready
@@ -109,7 +128,7 @@ fn fitted(title: &str, state: &str, rules: &[String], room: usize) -> (String, S
     (shortened(title, title_room(label)), label.clone())
 }
 
-fn step_line(item: &Item, step: &Subtask, width: usize) -> Line<'static> {
+fn step_line(item: &Item, step: &Subtask, width: usize, on: bool) -> Line<'static> {
     let number = format!("{} ", step.number);
     let room = width.saturating_sub(INDENT.len() + 2 + number.len());
     let (title, label) = fitted(&step.title, &state_word(item, step), &label_forms(item, step), room);
@@ -118,7 +137,7 @@ fn step_line(item: &Item, step: &Subtask, width: usize) -> Line<'static> {
     let gap = room.saturating_sub(text_width(&title) + text_width(&label));
     Line::from(vec![
         Span::raw(INDENT), Span::styled(tasks::subtask_mark(&step.state), style(color)), Span::raw(" "),
-        Span::styled(number, style(MUTED)), Span::styled(title, style(if planned { MUTED } else { TEXT })),
+        Span::styled(number, style(MUTED)), Span::styled(title, if on { bold(TEXT) } else { style(if planned { MUTED } else { TEXT }) }),
         Span::raw(" ".repeat(gap)), Span::styled(label, style(color)),
     ])
 }
@@ -144,21 +163,29 @@ fn stage_lines(stages: &[kebbie_hub_protocol::Stage], width: usize) -> Vec<Line<
     }).collect()
 }
 
-pub(super) fn step_lines(item: &Item, highlighted: bool, width: usize) -> Vec<Line<'static>> {
+// The line the subtask under the cursor sits on, counted from the first of step_lines.
+pub(super) fn cursor_line(item: &Item, at: usize) -> usize {
+    usize::from(!item.subtasks.pushed.is_empty()) + at
+}
+
+pub(super) fn step_lines(item: &Item, highlighted: bool, width: usize, cursor: Option<usize>) -> Vec<Line<'static>> {
     if !item.subtasks.listed() {
         return Vec::new();
     }
     let mut lines = Vec::new();
-    if !item.subtasks.pushed.is_empty() {
-        lines.push(Line::from(vec![Span::raw(INDENT), Span::styled(format!("↑ {} pushed", item.subtasks.pushed.len()), style(MUTED))]));
+    if rows_shown(item) {
+        if !item.subtasks.pushed.is_empty() {
+            lines.push(Line::from(vec![Span::raw(INDENT), Span::styled(format!("↑ {} pushed", item.subtasks.pushed.len()), style(MUTED))]));
+        }
+        lines.extend(item.subtasks.items.iter().enumerate().map(|(at, step)| step_line(item, step, width, cursor == Some(at))));
     }
-    lines.extend(item.subtasks.items.iter().map(|step| step_line(item, step, width)));
     lines.extend(stage_lines(&item.subtasks.stages, width));
-    if highlighted {
-        lines.into_iter().map(|line| line.style(Style::new().bg(SURFACE))).collect()
-    } else {
-        lines
-    }
+    let on = cursor.filter(|_| rows_shown(item)).map(|at| cursor_line(item, at));
+    lines.into_iter().enumerate().map(|(at, line)| match (on == Some(at), highlighted) {
+        (true, _) => line.style(Style::new().bg(RAISED)),
+        (false, true) => line.style(Style::new().bg(SURFACE)),
+        (false, false) => line,
+    }).collect()
 }
 
 #[cfg(test)]
@@ -226,15 +253,16 @@ pub(crate) mod tests {
         let (rows, buffer) = render(&mut app, 120, 30);
         let screen = rows.join("\n");
         let at = find(&rows, "◐ Switch the payment provider to Stripe")[0].1;
-        let block: Vec<String> = rows[at..at + 6].iter().map(|row| row.trim().to_string()).collect();
+        let block: Vec<String> = rows[at..at + 6].iter().map(|row| untied(row).to_string()).collect();
         assert!(block[0].ends_with("billing · 1 to accept"), "the commits count gives way to what waits for you: {screen}");
         assert_eq!(block[1], "↑ 1 pushed", "{screen}");
         assert!(block[2].starts_with("● 2 Charge through a PaymentGateway ") && block[2].ends_with(" ready · 1 commit"), "{screen}");
         assert!(block[3].starts_with("◐ 3 Add Stripe as the gateway ") && block[3].ends_with(" in progress"), "{screen}");
         assert_eq!(block[4], "○ 4 Remove the old payment client", "a planned step has nothing on the right: {screen}");
         assert_eq!(block[5], "accept 2 · r review", "{screen}");
-        let indent = |row: usize| rows[row].chars().take_while(|character| *character == ' ').count();
-        assert!(indent(at + 1) == indent(at) + 3 && indent(at + 2) == indent(at + 1), "the steps sit indented under the row: {screen}");
+        let column = |row: usize, mark: char| rows[row].chars().position(|character| character == mark).unwrap_or_default();
+        assert!(column(at + 1, '↑') == column(at, '◐') + 3 && column(at + 2, '●') == column(at + 1, '↑'), "the steps sit indented under the row: {screen}");
+        assert_eq!(column(at + 1, '│'), column(at, '◐'), "on the rule under the status glyph: {screen}");
         assert!(find(&rows, "WORKING")[0].1 < at && !screen.contains("NEEDS YOU"), "a step to accept leaves the task under Working: {screen}");
         assert_eq!(cell_fg(&rows, &buffer, "1 to accept"), Some(YELLOW));
         assert_eq!(cell_fg(&rows, &buffer, "↑ 1 pushed"), Some(MUTED));
@@ -323,7 +351,7 @@ pub(crate) mod tests {
     }
 
     fn step_rows(rows: &[String]) -> Vec<String> {
-        rows.iter().filter(|row| row.starts_with("    ") && ['●', '◐', '○', '✓'].iter().any(|mark| row.trim_start().starts_with(&format!("{mark} ")))).map(|row| row.trim().to_string()).collect()
+        rows.iter().map(|row| untied(row)).filter(|row| ['●', '◐', '○', '✓'].iter().any(|mark| row.starts_with(&format!("{mark} ")) && row.chars().nth(2).is_some_and(|digit| digit.is_ascii_digit()))).map(str::to_string).collect()
     }
 
     #[test]

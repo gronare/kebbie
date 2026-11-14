@@ -120,6 +120,11 @@ pub(super) fn focus_pane(pane: &str) -> Result<()> {
     if herdr::focused_pane()?.as_deref() == Some(pane) { Ok(()) } else { Err(format!("herdr did not move the focus to {pane}")) }
 }
 
+// The folder scripts/review.sh keeps a review in, named after the Claude pane it opened beside.
+fn review_dir(state: &std::path::Path, pane: &str) -> PathBuf {
+    state.join("reviews").join(pane.replace([':', '/'], "_"))
+}
+
 fn review_script() -> Option<PathBuf> {
     Some(lead::install_root().ok()?.join("scripts/review.sh"))
 }
@@ -161,6 +166,11 @@ impl App {
 
     // The review opens next to the task's own Claude, so comments reach that agent; one already open in the Space gets the focus instead of a second split.
     pub(super) fn open_review(&mut self, item: &Item) {
+        self.open_review_at(item, None);
+    }
+
+    // On a subtask, the review opens on it: a review already open picks it from its folder, a new one from the split.
+    pub(super) fn open_review_at(&mut self, item: &Item, subtask: Option<usize>) {
         let (Some(path), Some(agent), Some(script)) = (&item.path, &item.agent, review_script()) else {
             self.about("review", &item.name);
             self.show(Notice::new(Tone::NotNow, "No review: its Claude is not running").next(format!("{} starts it; then the review opens beside it.", keys::map().label(Act::Go))).ok());
@@ -169,6 +179,9 @@ impl App {
         if let Some(workspace) = &item.workspace
             && let Some(pane) = open_review_pane(workspace)
         {
+            if let (Some(number), Ok(state)) = (subtask, lead::state_location()) {
+                let _ = std::fs::write(super::review::subtask_file(&review_dir(&state, &agent.pane)), number.to_string());
+            }
             let _ = herdr::focus_workspace(workspace);
             if let Err(error) = focus_pane(&pane) {
                 self.about("review", &item.name);
@@ -180,8 +193,12 @@ impl App {
             }
             return;
         }
-        let output = std::process::Command::new("sh").arg(&script).arg("split").current_dir(path)
-            .env("HERDR_PANE_ID", &agent.pane).output();
+        let mut command = std::process::Command::new("sh");
+        command.arg(&script).arg("split").current_dir(path).env("HERDR_PANE_ID", &agent.pane);
+        if let Some(number) = subtask {
+            command.env("KEBBIE_REVIEW_SUBTASK", number.to_string());
+        }
+        let output = command.output();
         match output {
             Ok(output) if output.status.success() => {
                 if let Some(workspace) = &item.workspace {
@@ -221,7 +238,7 @@ mod tests {
         assert!(!runs_review(&pane(&["sh", "/k/scripts/review.sh", "split"])), "the split command itself is not the review");
         assert!(!runs_review(&pane(&["/k/target/release/kebbie", "review", "billing"])), "sending a task to review is not the split");
         let source = include_str!("space.rs");
-        let open = &source[source.find("fn open_review(").unwrap()..];
+        let open = &source[source.find("fn open_review_at(").unwrap()..];
         let open = &open[..open.find("\n    }\n").unwrap()];
         assert!(open.find("open_review_pane(workspace)").unwrap() < open.find("arg(\"split\")").unwrap(), "an open review is looked for before a split is made");
     }

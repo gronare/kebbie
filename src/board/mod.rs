@@ -34,6 +34,7 @@ mod send_review;
 mod space;
 mod status_bar;
 mod steps;
+mod subtask_view;
 pub(crate) mod terminal;
 #[cfg(test)]
 mod test_support;
@@ -142,6 +143,7 @@ enum Mode {
     Device { id: String, back: next_window::Window },
     Update,
     AgentUpdates,
+    Subtask(Box<subtask_view::View>),
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -254,6 +256,8 @@ struct App {
     pusher: pushing::Pusher,
     pushes: Vec<pushing::Pushing>,
     push_outcomes: Vec<(Notice, notices::Subject)>,
+    subtask_row: Option<(String, String)>,
+    subtask_io: subtask_view::Io,
 }
 
 type Updater = std::sync::Arc<dyn Fn() -> Result<String> + Send + Sync>;
@@ -700,6 +704,7 @@ impl App {
             Mode::Device { id, back } => self.handle_device(id, back, key, act),
             Mode::Update => self.handle_update(key),
             Mode::AgentUpdates => self.handle_agent_updates(key),
+            Mode::Subtask(view) => self.handle_subtask(view, key, act),
             Mode::Report { id, shown, scroll, read, .. } => self.confirm_report(id, shown, scroll, read, key, cancels),
             Mode::ReportAll { shown, scroll, read, .. } => self.confirm_report_all(shown, scroll, read, key, cancels),
             Mode::NoteCard { key: note, scroll, .. } => self.handle_note_card(note, scroll, key, cancels),
@@ -772,6 +777,9 @@ impl App {
         }
         let ctx = self.ctx();
         let Some(act) = keys::map().act(ctx, &key) else { return };
+        if ctx == Ctx::Work && self.subtask_key(act, &key) {
+            return;
+        }
         match act {
             Act::Messages => self.press_m(),
             Act::Hub => self.open_hub(),
@@ -782,6 +790,7 @@ impl App {
                     return;
                 }
                 self.move_selection(if down { 1 } else { -1 });
+                self.landed(down, before);
                 if down && ctx == Ctx::Work && self.work_selected == before {
                     if self.offers.is_empty() { self.focus_fixed() } else { self.focus_offers(0) }
                 }
@@ -1172,6 +1181,7 @@ impl App {
             agent_offer: None, agent_mode: std::sync::Arc::new(|| config::agent_updates_in(&config::path())), installer: agent_updates::default_install(),
             filter: None, ctrl_c: None, go_again: None, notice: None, lead_chat: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), lead_fresh_starter: std::sync::Arc::new(crate::lead_restart::fresh_now), lead_checker: std::sync::Arc::new(crate::lead::restart_refusal), lead_restarted: std::sync::Arc::default(), lead_context: None, restart_why: String::new(), devices: Vec::new(), subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
             comments: Vec::new(), comment_panel: Default::default(), comment_dir: None, copier: comments::default_copier(), reopener: comments::default_reopener(), pusher: pushing::live_pusher(), pushes: Vec::new(), push_outcomes: Vec::new(),
+            subtask_row: None, subtask_io: Default::default(),
         }
     }
 }

@@ -8,7 +8,7 @@ use crate::status::{Checkout, Group, Item};
 use crate::tasks;
 use super::card::card_hint;
 use super::detail::unfolded_lines;
-use super::steps::{accept_wanted, step_lines, to_accept_note};
+use super::steps::{accept_wanted, cursor_line, step_lines, to_accept_note};
 use crate::config::OngoingAt;
 use super::{App, BacklogRow, Column, Hit, item_card};
 use super::widgets::{BLUE, FAINT, GREEN, MAUVE, MUTED, PEACH, RED, SUBTEXT, SURFACE, TEAL, TEXT, YELLOW, bold, card_text, chips, column_title, cut, group_line, options_hint, plural, row, style, wrap};
@@ -235,7 +235,32 @@ fn running_dot(item: &Item) -> bool {
     item.server || item.worker
 }
 
-pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line<'static>>, usize, Rows) {
+// The lines under a task's title hang on a rule in the column of its status glyph, beside the selection bar when it is selected.
+fn hang(lines: &mut [Line<'static>], bar: Span<'static>, highlight: bool) {
+    let last = lines.len().saturating_sub(1);
+    for (at, line) in lines.iter_mut().enumerate() {
+        if let Some(first) = line.spans.first_mut()
+            && let Some(rest) = first.content.strip_prefix("  ").map(str::to_string)
+        {
+            first.content = rest.into();
+        }
+        line.spans.insert(0, bar.clone());
+        line.spans.insert(1, Span::styled(if at == last { "╰" } else { "│" }, style(FAINT)));
+        if highlight && line.style.bg != Some(super::widgets::RAISED) {
+            line.style = line.style.bg(SURFACE);
+        }
+    }
+}
+
+// The empty lines between tasks are the first to go when the column is too short for them.
+fn without_spacers(lines: Vec<Line<'static>>, selected_line: usize, rows: Rows, spacers: &[usize]) -> (Vec<Line<'static>>, usize, Rows) {
+    let before = |line: usize| spacers.iter().filter(|spacer| **spacer < line).count();
+    let kept = lines.into_iter().enumerate().filter(|(at, _)| !spacers.contains(at)).map(|(_, line)| line).collect();
+    let rows = rows.into_iter().map(|(start, end, hit)| (start - before(start), end - before(end), hit)).collect();
+    (kept, selected_line - before(selected_line), rows)
+}
+
+pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usize) -> (Vec<Line<'static>>, usize, Rows) {
     let open = app.column == Column::Work;
     let focused = open && !app.in_messages && !app.offer_panel.focused && !app.comment_panel.focused;
     let on_task = open && !app.comment_panel.focused;
@@ -263,6 +288,7 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
     let mut current: Option<Group> = None;
     let tasks = app.tasks.clone();
     let mut rows = Vec::new();
+    let mut spacers = Vec::new();
     for (index, item) in tasks.iter().enumerate() {
         if index == boundary {
             put_comments(app, &mut lines, &mut rows, &mut selected_line, current.is_some());
@@ -298,10 +324,13 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
             lines.push(group_line(item.group().title(), count, group_color(item.group())));
             current = Some(item.group());
         }
+        spacers.push(lines.len());
+        lines.push(Line::default());
         let selected = index == app.work_selected;
         if selected {
             selected_line = lines.len();
         }
+        let cursor = if selected && focused { app.subtask_at(item) } else { None };
         let place = (app.checkouts.len() > 1).then_some(item.place.as_str());
         let start = lines.len();
         let dot = running_dot(item);
@@ -327,7 +356,10 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
         lines.push(line);
         lines.extend(how_lines(item, selected && on_task && unfold, width));
         lines.extend(rules_lines(item, selected && on_task && unfold, width));
-        lines.extend(step_lines(item, selected && on_task && unfold, width));
+        if let Some(at) = cursor {
+            selected_line = lines.len() + cursor_line(item, at);
+        }
+        lines.extend(step_lines(item, selected && on_task && unfold, width, cursor));
         if let Some(wanted) = item.wanted(&keys::key(Act::Go).to_string()).or_else(|| item.verdict_wanted()).or_else(|| accept_wanted(item)) {
             lines.extend(wanted_lines(&wanted, PEACH, selected && on_task && unfold, width));
         } else if let Some(waiting) = item.waiting() {
@@ -336,13 +368,17 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
         if selected && on_task && unfold {
             let (detail, links) = unfolded_lines(app, item, width.saturating_sub(4));
             lines.extend(detail.into_iter().map(|line| {
-                let mut spans = vec![Span::raw("    ")];
+                let mut spans = vec![Span::raw("   ")];
                 spans.extend(line.spans);
                 Line::from(spans).style(Style::new().bg(SURFACE))
             }));
             app.links.extend(links);
-            lines.push(app.s_gives(item).map_or_else(options_hint, |gives| card_hint(&gives)));
+            if cursor.is_none() {
+                lines.push(app.s_gives(item).map_or_else(options_hint, |gives| card_hint(&gives)));
+            }
         }
+        let bar = if selected { Span::styled("▌", style(if focused { MAUVE } else { FAINT })) } else { Span::raw(" ") };
+        hang(&mut lines[start + 1..], bar, selected && focused);
         rows.push((start, lines.len(), Hit::Task(index)));
     }
     if tasks.is_empty() {
@@ -366,6 +402,9 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
         for leftover in leftovers {
             lines.push(Line::from(vec![Span::styled("! ", style(YELLOW)), Span::styled(leftover, style(MUTED))]));
         }
+    }
+    if lines.len() > height {
+        return without_spacers(lines, selected_line, rows, &spacers);
     }
     (lines, selected_line, rows)
 }
@@ -552,7 +591,7 @@ mod tests {
         let (rows, buffer) = render(&mut app, 120, 30);
         let screen = rows.join("\n");
         let at = find(&rows, "billing")[0].1;
-        assert_eq!(rows[at + 1].trim(), "review: changes how VAT is rounded", "{screen}");
+        assert_eq!(untied(&rows[at + 1]), "review: changes how VAT is rounded", "{screen}");
         let (x, y) = find(&rows, "review: changes")[0];
         assert_eq!(buffer[(x as u16, y as u16)].fg, MUTED);
         let (narrow, _) = render(&mut app, 40, 30);
@@ -562,17 +601,17 @@ mod tests {
         let mut app = test_app(vec![item.clone()]);
         app.work_selected = 9;
         let (rows, _) = render(&mut app, 120, 30);
-        assert_eq!(rows[at + 1].trim(), "review not assessed · v", "no answer is a suggestion too: {}", rows.join("\n"));
+        assert_eq!(untied(&rows[at + 1]), "review not assessed · v", "no answer is a suggestion too: {}", rows.join("\n"));
         item.assessment = Some(crate::assessment::Word::Suggested { reason: "changes how VAT is rounded".to_string() });
         let mut app = test_app(vec![item.clone()]);
         app.work_selected = 9;
         let (rows, _) = render(&mut app, 120, 30);
-        assert_eq!(rows[at + 1].trim(), "review suggested: changes how VAT is rounded · v", "a suggestion names the key that sends the task to review: {}", rows.join("\n"));
+        assert_eq!(untied(&rows[at + 1]), "review suggested: changes how VAT is rounded · v", "a suggestion names the key that sends the task to review: {}", rows.join("\n"));
         item.verdict = Some(crate::status::tests::in_review(false, 0, false, true));
         let mut app = test_app(vec![item.clone()]);
         app.work_selected = 9;
         let (rows, _) = render(&mut app, 120, 30);
-        assert_eq!(rows[at + 1].trim(), "review: changes how VAT is rounded", "once sent, it is the review: {}", rows.join("\n"));
+        assert_eq!(untied(&rows[at + 1]), "review: changes how VAT is rounded", "once sent, it is the review: {}", rows.join("\n"));
         item.assessment = None;
         item.verdict = None;
         let mut app = test_app(vec![item]);
@@ -588,7 +627,7 @@ mod tests {
             app.work_selected = 9;
             let (rows, buffer) = render(&mut app, 120, 30);
             let at = find(&rows, "billing")[0].1;
-            let below = rows[at + 1].trim().to_string();
+            let below = untied(&rows[at + 1]).to_string();
             let color = find(&rows, &below).first().map(|(x, y)| buffer[(*x as u16, *y as u16)].fg);
             (rows.join("\n"), below, color)
         };
@@ -623,15 +662,15 @@ mod tests {
         let mut app = test_app(vec![item.clone()]);
         let (open, _) = render(&mut app, 120, 30);
         let at = find(&open, "billing")[0].1;
-        assert_eq!((open[at + 1].trim(), open[at + 2].trim()), ("recipe: small fix, because one function and its test ·", "review: changes VAT rounding"), "the open task shows the why whole: {}", open.join("\n"));
+        assert_eq!((untied(&open[at + 1]), untied(&open[at + 2])), ("recipe: small fix, because one function and its test ·", "review: changes VAT rounding"), "the open task shows the why whole: {}", open.join("\n"));
         app.work_selected = 9;
         let (rows, _) = render(&mut app, 120, 30);
-        assert_eq!(rows[at + 1].trim(), "recipe: small fix · review: changes VAT rounding", "{}", rows.join("\n"));
+        assert_eq!(untied(&rows[at + 1]), "recipe: small fix · review: changes VAT rounding", "{}", rows.join("\n"));
         item.assessment = None;
         let mut app = test_app(vec![item.clone()]);
         app.work_selected = 9;
         let (rows, _) = render(&mut app, 120, 30);
-        assert_eq!(rows[find(&rows, "billing")[0].1 + 1].trim(), "recipe: small fix", "{}", rows.join("\n"));
+        assert_eq!(untied(&rows[find(&rows, "billing")[0].1 + 1]), "recipe: small fix", "{}", rows.join("\n"));
         item.recipe = None;
         let mut app = test_app(vec![item]);
         let (rows, _) = render(&mut app, 120, 30);
@@ -866,5 +905,63 @@ mod tests {
         assert!(rows.join("\n").contains("line 60 of the problem"), "{}", rows.join("\n"));
         press(&mut app, key(KeyCode::Esc));
         assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    fn four_tasks() -> Vec<Item> {
+        ["push-notice", "ci-cancelled", "subtask-steps", "feed-hang"].iter().map(|name| {
+            let mut item = crate::status::tests::task(Some("working"), None, 1);
+            item.name = name.to_string();
+            crate::status::tests::in_phase(&mut item, crate::phase::Phase::Working);
+            item.recipe = Some(crate::recipe::Recipe { name: "small-fix".to_string(), why: format!("{name} needs it"), by: "the lead".to_string() });
+            item
+        }).collect()
+    }
+
+    fn work_side(row: &str) -> String {
+        row.chars().take(62).collect::<String>()
+    }
+
+    #[test]
+    fn tasks_stand_as_blocks_a_line_apart_each_hanging_on_a_rule_under_its_status_glyph() {
+        let mut app = test_app(four_tasks());
+        let (rows, _) = render(&mut app, 120, 40);
+        let screen = rows.join("\n");
+        let group = find(&rows, "WORKING")[0].1;
+        assert!(work_side(&rows[group + 1]).trim().is_empty(), "a line under the group's title: {screen}");
+        let mut ends = Vec::new();
+        for name in ["push-notice", "ci-cancelled", "subtask-steps", "feed-hang"] {
+            let at = find(&rows, &format!("◐ {name}"))[0].1;
+            assert!(work_side(&rows[at - 1]).trim().is_empty(), "an empty line before {name}: {screen}");
+            let glyph = rows[at].chars().position(|character| character == '◐').unwrap();
+            let rule = |row: usize| rows[row].chars().nth(glyph);
+            let mut end = at + 1;
+            while rule(end) == Some('│') {
+                end += 1;
+            }
+            assert!(end > at + 1 || name != "push-notice", "the open task's recipe wraps over lines on the rule: {screen}");
+            assert_eq!(rule(end), Some('╰'), "{name}'s block ends on ╰ under its glyph: {screen}");
+            assert!(work_side(&rows[end]).contains("recipe") || work_side(&rows[end]).contains("options"), "{screen}");
+            ends.push((at, end));
+        }
+        let (first, last) = ends[0];
+        assert!(rows[first..=last].iter().all(|row| row.chars().nth(2) == Some('▌')), "the bar runs down the whole selected block: {screen}");
+        let (_, buffer) = render(&mut app, 120, 40);
+        assert_eq!(buffer[(3, last as u16)].fg, FAINT, "the rule is drawn faint");
+        assert_eq!(buffer[(20, last as u16)].bg, SURFACE, "the selection's background covers the block's last line");
+        let (second, second_end) = ends[1];
+        assert!((second..=second_end).all(|row| rows[row].chars().nth(2) == Some(' ')), "{screen}");
+    }
+
+    #[test]
+    fn a_short_column_drops_the_empty_lines_between_tasks_first_and_keeps_the_rule_and_the_bar() {
+        let mut app = test_app(four_tasks());
+        let (rows, _) = render(&mut app, 120, 18);
+        let screen = rows.join("\n");
+        let group = find(&rows, "WORKING")[0].1;
+        assert!(rows[group + 1].contains("▌◐ push-notice"), "no empty line under the group's title: {screen}");
+        let second = find(&rows, "◐ ci-cancelled")[0].1;
+        assert!(rows[second - 1].contains('╰') && rows[second - 1].chars().nth(2) == Some('▌'), "the task above ends right over it, its bar kept: {screen}");
+        let third = find(&rows, "◐ subtask-steps")[0].1;
+        assert!(rows[third - 1].contains('╰'), "{screen}");
     }
 }

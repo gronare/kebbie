@@ -76,7 +76,7 @@ struct Sheet {
     left: &'static [usize],
     right: &'static [usize],
     narrow: &'static [usize],
-    card: Option<usize>,
+    footers: &'static [usize],
     others: [(Act, &'static str); 2],
 }
 
@@ -161,11 +161,25 @@ const WORK: Sheet = Sheet {
             bind(&[Act::OpenImage], "open the image", "open image"),
             bind(&[Act::Push], "push", "push"),
         ]),
+        group("ON A SUBTASK ROW", &[
+            bind(&[Act::Move], "walk in and out", "walk"),
+            bind(&[Act::Options], "open it", "open"),
+            bind(&[Act::Permit], "accept it", "accept"),
+            bind(&[Act::Review], "its review", "review"),
+            bind(&[Act::Back], "the task", "back"),
+        ]),
+        group("IN THE SUBTASK VIEW", &[
+            bind(&[Act::Switch], "previous · next", "prev · next"),
+            bind(&[Act::Options], "answer", "answer"),
+            bind(&[Act::Permit], "accept", "accept"),
+            bind(&[Act::Review], "its review", "review"),
+            bind(&[Act::Back], "the board", "back"),
+        ]),
     ],
     left: &[0, 1, 2, 3],
     right: &[4, 5, 6, 7],
-    narrow: &[0, 1, 4, 5, 6, 2, 7, 3, 8],
-    card: Some(8),
+    narrow: &[0, 1, 4, 5, 6, 2, 7, 3, 8, 9, 10],
+    footers: &[8, 9, 10],
     others: [(Act::AreasPage, "areas"), (Act::RoutinesPage, "routines")],
 };
 
@@ -197,7 +211,7 @@ const AREAS: Sheet = Sheet {
     left: &[0, 1, 2],
     right: &[3, 4],
     narrow: &[0, 1, 3, 4, 2],
-    card: None,
+    footers: &[],
     others: [(Act::WorkPage, "work"), (Act::RoutinesPage, "routines")],
 };
 
@@ -225,7 +239,7 @@ const ROUTINES: Sheet = Sheet {
     left: &[0, 1, 2, 3],
     right: &[4, 5],
     narrow: &[0, 1, 4, 5, 2, 3],
-    card: None,
+    footers: &[],
     others: [(Act::WorkPage, "work"), (Act::AreasPage, "areas")],
 };
 
@@ -351,9 +365,10 @@ fn wide_lines(keys: &Keys, sheet: &Sheet, lead: bool, update: Option<&str>, back
     }
     body.push(Line::default());
     let mut footer = vec![report_line()];
-    if let Some(card) = sheet.card {
-        let mut spans = vec![Span::styled("in the card window", style(MUTED))];
-        for (position, item) in shown_items(keys, sheet, &sheet.groups[card], lead, None, false).into_iter().enumerate() {
+    for &index in sheet.footers {
+        let group = &sheet.groups[index];
+        let mut spans = vec![Span::styled(group.name.to_lowercase(), style(MUTED))];
+        for (position, item) in shown_items(keys, sheet, group, lead, None, false).into_iter().enumerate() {
             spans.push(Span::styled(if position == 0 { "  " } else { " · " }, style(MUTED)));
             spans.push(Span::styled(item.key, style(MAUVE)));
             spans.push(Span::styled(format!(" {}", item.wide), style(MUTED)));
@@ -505,6 +520,8 @@ mod tests {
         assert!(row_with(&rows, "U         update kebbie").contains("↑ 0.26.0"), "{screen}");
         assert!(screen.contains("h         hide or show the lead's chat") && screen.contains("ctrl+c    twice: quit the board"), "{screen}");
         assert!(screen.contains("in the card window  ← → image · ↑ ↓ j k scroll · f fullscreen · o open the image · p push"), "{screen}");
+        assert!(screen.contains("on a subtask row  ↑ ↓ j k walk in and out · ⏎ open it · a accept it · r its review · esc the task"), "{screen}");
+        assert!(screen.contains("in the subtask view  ← → previous · next · ⏎ answer · a accept · r its review · esc the board"), "{screen}");
         assert!(screen.contains("areas (2) and routines (3) show their own keys here when you are on them · any key closes") && !screen.contains("↓ more"), "{screen}");
         assert!(screen.contains(&crate::shown_kebbie()), "the window names the kebbie that runs: {screen}");
         assert!(screen.contains("a problem with kebbie? ask the lead: the bugs it saves wait under Work to be sent") && !screen.contains("bug reports"), "{screen}");
@@ -541,7 +558,7 @@ mod tests {
         assert!(matches!(app.mode, Mode::Help(_)), "↓ scrolls instead of closing");
         let (rows, _) = render(&mut app, 80, 21);
         let screen = rows.join("\n");
-        assert!(screen.contains("DEV SERVERS") && screen.contains("IN THE CARD WINDOW") && !screen.contains("↓ more") && !screen.contains("MOVE AROUND"), "{screen}");
+        assert!(screen.contains("IN THE CARD WINDOW") && screen.contains("IN THE SUBTASK VIEW") && !screen.contains("↓ more") && !screen.contains("MOVE AROUND"), "{screen}");
         press(&mut app, key(KeyCode::PageUp));
         press(&mut app, key(KeyCode::PageUp));
         let (rows, _) = render(&mut app, 80, 21);

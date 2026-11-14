@@ -8,6 +8,8 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - lead.profile runs the lead on its own model and effort, picked on the Settings page.
 - L preselects resuming the lead's conversation while work is going on, and a new one when nothing is.
 - Pushing from the board runs in the background, with a line saying each step and the task's row marked pushing.
+- The board's ↓ walks into a task's subtasks, and ⏎ opens one with its commits, files and what it built.
+- The board shows each task as a block, a line apart, with the selection running down the whole block.
 
 ### Fixed
 - A cancelled CI run shows as CI cancelled under Needs you, with G to re-run and C to dismiss, instead of CI running.

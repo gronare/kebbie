@@ -257,7 +257,7 @@ fn coming(items: &[Item]) -> Option<String> {
     let stepped = working.iter().filter_map(|item| {
         let total = item.subtasks.pushed.len() + item.subtasks.items.len();
         let done = item.subtasks.pushed.len() + item.subtasks.items.iter().filter(|step| matches!(step.state, crate::tasks::SubtaskState::Ready | crate::tasks::SubtaskState::Accepted)).count();
-        (total > 0).then_some((*item, (done + 1).min(total), total))
+        (total > 1).then_some((*item, (done + 1).min(total), total))
     }).max_by(|(_, done, total), (_, other_done, other_total)| (done * other_total).cmp(&(other_done * total)));
     if let Some((item, step, total)) = stepped {
         return Some(format!("{} (subtask {step} of {total})", item.titled()));

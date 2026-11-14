@@ -542,7 +542,7 @@ mod tests {
         app.tasks[0].report.as_mut().unwrap().text = "mock at https://claude.ai/artifact/abc123 ready".to_string();
         let (rows, _) = render(&mut app, 84, 50);
         let screen = rows.join("\n");
-        let lines: Vec<&str> = screen.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+        let lines: Vec<&str> = screen.lines().map(untied).filter(|line| !line.is_empty()).collect();
         let row = lines.iter().position(|line| line.contains("search-filters")).unwrap_or_else(|| panic!("{screen}"));
         let worker = format!("worker  ○ off · {} starts it", keys::key(Act::Worker));
         assert_eq!(lines[row + 1..row + 5], ["branch  search-filters · wt2.web", "server  ● running  https://wt2.web.test", worker.as_str(), "link    https://claude.ai/artifact/abc123"], "{screen}");
@@ -578,7 +578,7 @@ mod tests {
         let screen = rows.join("\n");
         assert!(screen.contains("○ Board task rows") && !screen.contains("○ rows-say-what"), "the title, not the branch: {screen}");
         assert!(!screen.contains("you:") && !screen.contains('…'), "{screen}");
-        let wanted: String = rows.iter().skip_while(|row| !row.contains("Board task rows")).skip(1).take_while(|row| !row.contains("READY TO PUSH")).map(|row| row.trim()).collect::<Vec<_>>().join(" ");
+        let wanted: String = rows.iter().skip_while(|row| !row.contains("Board task rows")).skip(1).take_while(|row| !row.contains("READY TO PUSH")).map(|row| untied(row)).filter(|row| !row.is_empty()).collect::<Vec<_>>().join(" ");
         assert_eq!(wanted.trim(), "approve the mock of the task rows for Needs you, Working and Ready to push before anything is built");
         assert!(!screen.contains("review the 2 commits"), "the lead approved it, so Ready to push asks nothing: {screen}");
     }
