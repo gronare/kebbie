@@ -23,7 +23,7 @@ The status line shows:
 | `⚠N` on Routines | N routine runs wait for you with findings. |
 | Counts | What needs you (tasks, and devices waiting for your approval), tasks that are working, are in review, are ready to push and wait for CI, and waiting questions. |
 | `◆ N to accept`, yellow | N subtasks of tasks working in subtasks wait for you to accept them. |
-| `! N bugs to send` | Bugs and wishes about kebbie, saved here, wait for you to send them to its maintainers, on their row under Work, such as `! 1 bug and 2 wishes to send`. |
+| `! N bugs to send` | Bugs and wishes about kebbie, saved here, wait for you to send them to its maintainers, on their row under Work, such as `! 1 bug and 2 wishes to send`; one alone is named, `! A wish to send: <title>`. |
 | Plan usage | How much of the plan is used. |
 | `↻ N stale` | Claude sessions or Codex tasks wait to be restarted. |
 | `☾ away` | Away mode is on. |
@@ -69,7 +69,7 @@ Work:
 - Under the groups: the [parked line](#parked) while you have parked tasks.
 - Under the tasks: the [bugs and wishes to send](#bugs-and-wishes-to-send), folded into one row until you open them, and the main checkouts with files changed outside any task.
 - A folded row, the parked line, the comments or the bugs and wishes to send, is selected like a task: `⏎` or a click on it once selected opens it, and `esc` on a row inside folds it back with the selection on the row.
-- After an update's recheck fixed some bugs, `✓ Fixed in kebbie <version>: N bugs you ran into` with their titles. `i` shows the list and clears the line.
+- After an update's recheck fixed some bugs, `✓ Fixed in kebbie <version>: N bugs you ran into` with their titles. `i` shows the list and clears the line; `X` clears it without opening the list.
 
 Backlog: FOUND BY TASKS lists what tasks noticed outside their work. A `◆` and `2×` mark one found more than once; the selected item shows whole, with its repo and who found it (`found 2× · by billing, search`). See [`kebbie found`](commands.md#kebbie-found---json).
 
@@ -604,7 +604,7 @@ The answers sit on one row at the bottom under an `ANSWER` header, each as its k
 
 ### Bugs and wishes to send
 
-Folded, the bugs and wishes are one row under the tasks, `! 2 bugs to send · ⏎ shows them`; `↓` from the last task selects it.
+Folded, the bugs and wishes are one row under the tasks, `! 2 bugs to send · ⏎ shows them`, or the title when only one waits, `! A bug to send: <title> · ⏎ shows it`; `↓` from the last task selects it.
 
 | Key | Action |
 | --- | --- |
@@ -882,7 +882,7 @@ inbox = "I"
 new = "N"
 ```
 
-The actions are `work_page`, `areas_page`, `routines_page`, `settings_page`, `hide_chat`, `messages`, `hub`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `rebase`, `follow`, `tidy`, `push`, `try` (the older name `stage` still reads), `done`, `dismiss_ci`, `rerun_ci`, `park`, `reset`, `drop`, `start_at`, `refresh`, `away`, `update`, `restart_lead`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, `item_options` (`o` in the Backlog column), and `close` (`q`).
+The actions are `work_page`, `areas_page`, `routines_page`, `settings_page`, `hide_chat`, `messages`, `hub`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `rebase`, `follow`, `tidy`, `push`, `try` (the older name `stage` still reads), `done`, `dismiss_ci`, `dismiss_fixed`, `rerun_ci`, `park`, `reset`, `drop`, `start_at`, `refresh`, `away`, `update`, `restart_lead`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, `item_options` (`o` in the Backlog column), and `close` (`q`).
 
 - The key is one plain character.
 - `esc`, `ctrl+c`, `⏎`, the arrows, `j` `k` and `tab` stay where they are, and so do the keys inside a window or a text field.

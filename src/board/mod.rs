@@ -783,6 +783,7 @@ impl App {
             Act::Back | Act::Close => self.at_top(Some(act)),
             Act::Help => self.mode = Mode::Help(Default::default()),
             Act::Inbox => self.open_questions(None),
+            Act::DismissFixed => self.dismiss_fixed(),
             Act::Options if self.on_parked_line() => self.show_parked(true),
             Act::Options => {
                 let has_selection = match self.column {

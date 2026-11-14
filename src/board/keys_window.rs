@@ -116,6 +116,7 @@ const WORK: Sheet = Sheet {
             bind(&[Act::Inbox], "inbox: questions, one at a time", "inbox"),
             bind(&[Act::Messages], "messages", "messages"),
             bind(&[Act::Away], "away mode", "away mode"),
+            bind(&[Act::DismissFixed], "dismiss the Done in kebbie line", "dismiss"),
             bind(&[Act::Park], "park a task, or bring it back", "park"),
         ]),
         group("THE BOARD", &[

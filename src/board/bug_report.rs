@@ -103,6 +103,16 @@ pub(super) fn indicator(offers: &[Offer], compact: bool) -> Option<String> {
     (!offers.is_empty()).then(|| if compact { format!("! {}", offers.len()) } else { format!("! {} to send", counted(offers)) })
 }
 
+fn folded_text(offers: &[Offer], key: &str, width: usize) -> String {
+    let [offer] = offers else { return format!("{} to send · {key} shows them", counted(offers)) };
+    let kind = if offer.report.kind() == ReportKind::Wish { "wish" } else { "bug" };
+    let tail = format!(" · {key} shows it");
+    let prefix = format!("A {kind} to send: ");
+    let room = width.saturating_sub(prefix.chars().count() + tail.chars().count() + 3);
+    let title = wrap(&offer.report.title, room.max(1), 1).into_iter().next().unwrap_or_default();
+    format!("{prefix}{title}{tail}")
+}
+
 // The lines, each offer's rows, and the line of the selected offer when the list has the focus, all counted from `first`.
 pub(super) fn offer_lines(app: &App, width: usize, first: usize) -> (Vec<Line<'static>>, Rows, Option<usize>) {
     if app.offers.is_empty() {
@@ -113,7 +123,7 @@ pub(super) fn offer_lines(app: &App, width: usize, first: usize) -> (Vec<Line<'s
     let mut selected_line = None;
     if !panel.shown {
         let marker = if panel.focused { Span::styled("▌", bold(MAUVE)) } else { Span::raw(" ") };
-        let text = format!("{} to send · {} shows them", counted(&app.offers), keys::map().label(Act::Options));
+        let text = folded_text(&app.offers, &keys::map().label(Act::Options), width);
         let line = Line::from(vec![marker, Span::styled("! ", style(YELLOW)), Span::styled(text, style(YELLOW))]);
         if panel.focused {
             selected_line = Some(first + 1);
@@ -153,17 +163,26 @@ pub(super) fn fixed_lines(fixed: Option<&Fixed>, questions: bool, width: usize) 
         lines.push(Line::from(Span::styled(format!("  … and {more} more"), style(MUTED))));
     }
     let after = if questions { ", once the questions are answered" } else { "" };
-    lines.push(Line::from(Span::styled(format!("  {} shows the list{after}", keys::key(Act::Inbox)), style(MUTED))));
+    lines.push(Line::from(Span::styled(format!("  {} shows the list{after} · {} dismisses", keys::key(Act::Inbox), keys::key(Act::DismissFixed)), style(MUTED))));
     lines
 }
 
 impl App {
-    pub(super) fn open_fixed(&mut self) -> bool {
-        let Some(fixed) = self.fixed.take() else { return false };
+    fn mark_fixed_seen(&mut self) -> Option<Fixed> {
+        let fixed = self.fixed.take()?;
         self.fixed_seen = self.fixed_seen.max(fixed.last);
         if let Ok(state) = crate::lead::state_dir() {
             let _ = crate::issue_recheck::dismiss(&state, &fixed, crate::messages::now());
         }
+        Some(fixed)
+    }
+
+    pub(super) fn dismiss_fixed(&mut self) {
+        self.mark_fixed_seen();
+    }
+
+    pub(super) fn open_fixed(&mut self) -> bool {
+        let Some(fixed) = self.mark_fixed_seen() else { return false };
         let notice = fixed.titles.iter().fold(Notice::new(Tone::Done, crate::issue_recheck::headline(&fixed, crate::config::channel().unwrap_or_default())).next("kebbie issues --all lists them, each with the commit that fixed it."), |notice, title| notice.detail("fixed", title));
         self.subject = Some(super::notices::Subject::plain("issues"));
         self.show_as(notice.ok(), true);
@@ -427,14 +446,14 @@ mod tests {
         assert!(!screen(&mut app).contains("to send"), "no bugs, no count");
         app.offers = offers;
         let shown = screen(&mut app);
-        assert!(shown.contains(" ! 1 bug to send ") && !shown.contains("Send to kebbie's maintainers?") && !shown.contains("push hid git's error"), "folded at first: {shown}");
-        assert_eq!(row_of(&mut app, "to send · ⏎"), "   ! 1 bug to send · ⏎ shows them", "one row under the tasks, not selected");
+        assert!(shown.contains(" ! A bug to send: push hid git's error · ⏎ shows it") && !shown.contains("Send to kebbie's maintainers?") && !shown.contains("! a1b2c3"), "folded at first: {shown}");
+        assert_eq!(row_of(&mut app, "to send: "), "   ! A bug to send: push hid git's error · ⏎ shows it", "one row under the tasks, not selected");
 
         press(&mut app, key(KeyCode::Char('B')));
         assert!(!app.offer_panel.shown && !app.offer_panel.focused, "B is no key any more");
         press(&mut app, key(KeyCode::Down));
         assert!(app.offer_panel.focused && !app.offer_panel.shown, "↓ from the last task selects the folded row");
-        assert_eq!(row_of(&mut app, "to send · ⏎"), "  ▌! 1 bug to send · ⏎ shows them");
+        assert_eq!(row_of(&mut app, "to send: "), "  ▌! A bug to send: push hid git's error · ⏎ shows it");
         press(&mut app, key(KeyCode::Enter));
         let shown = screen(&mut app);
         assert!(shown.contains("Send to kebbie's maintainers?  1") && shown.contains("! a1b2c3  push hid git's error") && shown.contains("  ⏎ asks to send · a sends all · n keeps it here · esc hides them "), "{shown}");
@@ -463,6 +482,18 @@ mod tests {
         assert!(matches!(app.mode, Mode::Normal) && app.offers.len() == 1 && app.offer_panel.focused, "esc decides later, back in the list");
         press(&mut app, key(KeyCode::Char('i')));
         assert!(matches!(app.mode, Mode::Questions(_)), "i is the questions");
+    }
+
+    #[test]
+    fn a_single_wish_waiting_is_named_by_its_title_and_cut_to_the_width() {
+        let state = crate::sh::test_dir("board-report-one-wish");
+        filed(&state, "b2c3d4", "wish", "Route a file drop to the pane under the pointer");
+        let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
+        app.offers = offers_in(&state, true, &scrub);
+        assert_eq!(folded_text(&app.offers, "⏎", 120), "A wish to send: Route a file drop to the pane under the pointer · ⏎ shows it");
+        assert!(screen(&mut app).contains(" ! A wish to send: Route a"), "the board row carries it");
+        let narrow = folded_text(&app.offers, "⏎", 40);
+        assert!(narrow.starts_with("A wish to send: Route a") && narrow.ends_with(" · ⏎ shows it") && narrow.chars().count() <= 37, "{narrow}");
     }
 
     #[test]
@@ -733,7 +764,7 @@ mod tests {
         app.fixed = Some(Fixed { version: "0.26.3".to_string(), titles: titles.clone(), bugs: titles.clone(), wishes: 0, last: 500 });
         let (rows, _) = render(&mut app, 120, 40);
         let screen = rows.join("\n");
-        assert!(screen.contains("✓ Fixed in kebbie 0.26.3: 4 bugs you ran into") && screen.contains("  i shows the list"), "{screen}");
+        assert!(screen.contains("✓ Fixed in kebbie 0.26.3: 4 bugs you ran into") && screen.contains("  i shows the list · X dismisses"), "{screen}");
         assert!(screen.contains("  push hid git's error") && screen.contains("  stage lost a commit") && !screen.contains("a fourth") && screen.contains("… and 1 more"), "{screen}");
         press(&mut app, key(KeyCode::Char('i')));
         assert!(app.fixed.is_none() && app.fixed_seen == 500, "the line goes once it was opened, and a snapshot read before it cannot bring it back");
@@ -742,10 +773,23 @@ mod tests {
         app.fixed = Some(Fixed { version: "0.26.3".to_string(), titles: vec!["x".to_string()], bugs: vec!["x".to_string()], wishes: 0, last: 600 });
         app.questions = crate::messages::fold(QUESTION);
         let hint = |questions: bool| fixed_lines(app.fixed.as_ref(), questions, 120).iter().map(|line| line.to_string()).collect::<Vec<_>>().join("\n");
-        assert!(hint(true).contains("i shows the list, once the questions are answered"), "{}", hint(true));
-        assert!(hint(false).ends_with("i shows the list"), "{}", hint(false));
+        assert!(hint(true).contains("i shows the list, once the questions are answered · X dismisses"), "{}", hint(true));
+        assert!(hint(false).ends_with("i shows the list · X dismisses"), "{}", hint(false));
         press(&mut app, key(KeyCode::Esc));
         press(&mut app, key(KeyCode::Char('i')));
         assert!(matches!(app.mode, Mode::Questions(_)) && app.fixed.is_some(), "questions come first");
+    }
+
+    #[test]
+    fn the_dismiss_key_clears_the_fixed_block_without_opening_the_list_and_a_refresh_leaves_it_gone() {
+        let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
+        let fixed = Fixed { version: "main".to_string(), titles: vec!["a dark theme for shop".to_string()], bugs: Vec::new(), wishes: 1, last: 700 };
+        app.fixed = Some(fixed.clone());
+        assert!(screen(&mut app).contains("a dark theme for shop"));
+        press(&mut app, key(KeyCode::Char('X')));
+        assert!(app.fixed.is_none() && app.fixed_seen == 700 && matches!(app.mode, Mode::Normal), "no list opens");
+        assert!(!screen(&mut app).contains("a dark theme for shop"), "the block is gone");
+        app.fixed = Some(fixed).filter(|fixed| fixed.last > app.fixed_seen);
+        assert!(app.fixed.is_none(), "a snapshot read before it cannot bring it back");
     }
 }
