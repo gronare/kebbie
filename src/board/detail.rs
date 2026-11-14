@@ -71,7 +71,7 @@ fn recap(output: &str) -> String {
 }
 
 impl App {
-    fn detail(&mut self, item: &Item) -> Option<std::rc::Rc<Detail>> {
+    pub(super) fn detail(&mut self, item: &Item) -> Option<std::rc::Rc<Detail>> {
         let path = item.path.clone()?;
         let asked = self.asked_details.get(&path).is_some_and(|at| at.elapsed() < Duration::from_secs(4));
         if !asked && let Some(requests) = &self.detail_requests {
@@ -541,7 +541,7 @@ mod tests {
         card.text.push_str("\nThe mock: https://claude.ai/artifact/abc123, and the server https://wt2.web.test.");
         app.tasks[0].report.as_mut().unwrap().text = "mock at https://claude.ai/artifact/abc123 ready".to_string();
         let (rows, _) = render(&mut app, 84, 50);
-        let screen = rows.join("\n");
+        let screen = above_card(&rows).join("\n");
         let lines: Vec<&str> = screen.lines().map(untied).filter(|line| !line.is_empty()).collect();
         let row = lines.iter().position(|line| line.contains("search-filters")).unwrap_or_else(|| panic!("{screen}"));
         let worker = format!("worker  ○ off · {} starts it", keys::key(Act::Worker));
@@ -574,7 +574,7 @@ mod tests {
         ready.report.as_mut().unwrap().report.as_mut().unwrap().next = "review the 2 commits and the card, then push and close".to_string();
         let mut app = test_app(vec![item, ready]);
         app.work_selected = 1;
-        let (rows, _) = render(&mut app, 84, 40);
+        let rows = above_card(&render(&mut app, 84, 40).0);
         let screen = rows.join("\n");
         assert!(screen.contains("○ Board task rows") && !screen.contains("○ rows-say-what"), "the title, not the branch: {screen}");
         assert!(!screen.contains("you:") && !screen.contains('…'), "{screen}");

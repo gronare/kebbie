@@ -27,7 +27,7 @@ The Areas page needs the vault. The main checkout must be on the default branch,
    kebbie doctor
    ```
 
-3. On the board, press `2` for the Areas page.
+3. On the board, press `3` for the Areas page.
 
 4. Select the repo's area and press `R`.
 

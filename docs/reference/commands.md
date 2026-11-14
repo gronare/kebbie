@@ -101,7 +101,7 @@ The queued tasks, each with what it waits for and that task's state (`working`, 
 | Option | What it does |
 | --- | --- |
 | `--now` | Start it now anyway, from the default branch; its prompt says which tasks it waited for were not done. |
-| `--drop` | Drop the wait. Nothing was started; the backlog item it was queued from shows in the Backlog column again. |
+| `--drop` | Drop the wait. Nothing was started; the backlog item it was queued from shows on the Backlog page again. |
 | `--at <time>` | Set or move the time it starts at, in the words `kebbie start --at` takes. |
 
 `kebbie start <name> "<prompt>" --after <task>` queues a task. It gets no worktree, Space or Claude while it waits, and shows under Queued on the board.
@@ -396,7 +396,7 @@ Throw a task away. Refuses while it has uncommitted changes or unpushed commits,
 
 ### `kebbie reset [name]`
 
-Stop a task for good: discard its changes and commits, free its worktree, close its Space, tell the lead what was thrown away, and put the backlog item it was started from back in the Backlog column.
+Stop a task for good: discard its changes and commits, free its worktree, close its Space, tell the lead what was thrown away, and put the backlog item it was started from back on the Backlog page.
 
 ### `kebbie link <name> <item>`
 

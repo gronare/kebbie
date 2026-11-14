@@ -34,8 +34,8 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 
 | Key | Default | Where | What it does |
 | --- | --- | --- | --- |
-| `board.backlog.sources` | `["local"]` | config.toml only | Where the Backlog column finds work and new items are written: `"local"` or `"vault"`, and `"linear"` beside either. See [Backlog sources](#backlog-sources). |
-| `board.backlog.ongoing` | `"top"` | config.toml only | Where the Backlog column shows ONGOING, the vault notes in progress: `"top"`, `"bottom"` or `"hidden"`. |
+| `board.backlog.sources` | `["local"]` | config.toml only | Where the backlog finds work and new items are written: `"local"` or `"vault"`, and `"linear"` beside either. See [Backlog sources](#backlog-sources). |
+| `board.backlog.ongoing` | `"top"` | config.toml only | Where the Backlog page shows ONGOING, the vault notes in progress: `"top"`, `"bottom"` or `"hidden"`. |
 | `board.backlog.template` | none | config.toml only | A file with the sections of local backlog items. See [Backlog sources](#backlog-sources). |
 | `board.groups` | the order below | config.toml only | The order of the Work column's groups. |
 | `[keys]` | the board's own | config.toml only | The board's keys by action, a table of strings, as `inbox = "I"`. See [Board](board.md#keys-in-configtoml). |

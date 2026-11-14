@@ -73,7 +73,7 @@ pub fn load() -> Backlog {
     Backlog { updated, vault, entries: items.into_iter().map(|(entry, _)| entry).collect() }
 }
 
-// Each entry with its item's markdown where kebbie has it, from the same single read the Backlog column takes.
+// Each entry with its item's markdown where kebbie has it, from the same single read the Backlog page takes.
 pub fn with_bodies() -> Bodied {
     read_all().2
 }
@@ -291,7 +291,7 @@ fn sort<T: Clone>(entries: &mut [T], entry_of: impl Fn(&T) -> &Entry, changed_at
     }
 }
 
-// An item a running task came from, or a vault note closed since the snapshot, leaves the Backlog column without waiting for a refresh; a reset task's note shows again even while it still reads active. A task started before local items were files names its item local:<Title>.
+// An item a running task came from, or a vault note closed since the snapshot, leaves the Backlog page without waiting for a refresh; a reset task's note shows again even while it still reads active. A task started before local items were files names its item local:<Title>.
 fn still_backlog(entries: Vec<Entry>, status: impl Fn(&str) -> Option<String>, running: &HashSet<String>) -> Vec<Entry> {
     entries.into_iter()
         .filter(|entry| !running.contains(&entry.reference) && !(entry.source == "local" && running.contains(&crate::backlog_file::reference(&entry.title))))
@@ -375,7 +375,7 @@ pub fn not_configured() -> String {
 }
 
 fn nothing_to_refresh(sources: &[Source]) -> String {
-    if sources.contains(&Source::Local) { format!("The Backlog column reads {} as it changes; there is nothing for the lead to refresh.", local_dir()) } else { not_configured() }
+    if sources.contains(&Source::Local) { format!("The Backlog page reads {} as it changes; there is nothing for the lead to refresh.", local_dir()) } else { not_configured() }
 }
 
 pub fn refresh_label(sources: &[Source]) -> String {
@@ -439,7 +439,7 @@ fn local_file_of(item: &str) -> String {
 
 pub fn reset_notice(item: &str) -> String {
     match local_title(item) {
-        Some(title) => format!(" Nobody works on the backlog item \"{title}\" now; its file {} shows in the Backlog column again.", local_file_of(item)),
+        Some(title) => format!(" Nobody works on the backlog item \"{title}\" now; its file {} shows on the Backlog page again.", local_file_of(item)),
         None => format!(" Nobody works on {item} now: set it back to backlog."),
     }
 }
@@ -461,7 +461,7 @@ fn role_wanted(source: Source) -> &'static str {
 
 fn role_finding(source: Source) -> &'static str {
     match source {
-        Source::Local => "the local backlog (the board's Backlog column, or `kebbie backlog`) by priority",
+        Source::Local => "the local backlog (the board's Backlog page, or `kebbie backlog`) by priority",
         Source::Vault => "the vault backlog by priority",
         Source::Linear => "Linear (assigned to the user, current cycle)",
     }
@@ -484,7 +484,7 @@ const KEPT_TASKS: &str = "Every task kebbie starts has its own note in the vault
 
 fn local_role() -> String {
     format!(
-        "The Backlog column reads `{dir}` as it changes: one markdown file per item, its header naming the title, priority, repo and status. \
+        "The Backlog page reads `{dir}` as it changes: one markdown file per item, its header naming the title, priority, repo and status. \
          You keep this folder: file new work as under Taking in ideas, change a priority or rewrite an item in its file, and delete an item's file once its task is pushed or the user drops it. \
          An item's reference is `local:` and its file name without `.md` (to `kebbie start --backlog`); `kebbie backlog add` prints it, and the file name stays when the title changes.\n\n\
          `kebbie backlog` marks each item that is not ready: `to write`, a short item the user added (with `n` on the board, `kebbie backlog add`, or a file of their own) or one moved from the old one-file backlog, and `drafting`, one you are writing out or whose questions wait for the user. \

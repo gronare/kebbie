@@ -88,7 +88,7 @@ const fn group(name: &'static str, items: &'static [Item]) -> Group {
     Group { name, note: ("", ""), items }
 }
 
-const PAGES: &[Act] = &[Act::WorkPage, Act::AreasPage, Act::RoutinesPage, Act::SettingsPage];
+const PAGES: &[Act] = &[Act::WorkPage, Act::BacklogPage, Act::AreasPage, Act::RoutinesPage, Act::SettingsPage];
 
 const WINDOWS: Group = group("WINDOWS", &[
     bind(&[Act::Back], "one step back", "back"),
@@ -105,8 +105,8 @@ const WORK: Sheet = Sheet {
     groups: &[
         group("MOVE AROUND", &[
             bind(&[Act::Move], "move", "move"),
-            bind(&[Act::Switch], "work · backlog", "work · backlog"),
-            bind(PAGES, "work · areas · routines · settings", "pages"),
+            bind(&[Act::Switch], "the card beside the tasks, to scroll it", "card focus"),
+            bind(PAGES, "the pages, from work to settings", "pages"),
             bind(&[Act::Filter], "filter the column", "filter"),
             bind(&[Act::Lead], "the lead's chat", "lead's chat"),
             bind(&[Act::HideChat], "hide or show the lead's chat", "hide chat"),
@@ -190,7 +190,7 @@ const AREAS: Sheet = Sheet {
         group("MOVE AROUND", &[
             bind(&[Act::Move], "move", "move"),
             bind(&[Act::Switch], "list · detail", "list · detail"),
-            bind(PAGES, "work · areas · routines · settings", "pages"),
+            bind(PAGES, "the pages, from work to settings", "pages"),
             bind(&[Act::Lead], "the lead's chat", "lead's chat"),
         ]),
         WAITING,
@@ -221,7 +221,7 @@ const ROUTINES: Sheet = Sheet {
     groups: &[
         group("MOVE AROUND", &[
             bind(&[Act::Move], "move", "move"),
-            bind(PAGES, "work · areas · routines · settings", "pages"),
+            bind(PAGES, "the pages, from work to settings", "pages"),
             bind(&[Act::Lead], "the lead's chat", "lead's chat"),
         ]),
         WAITING,
@@ -522,7 +522,7 @@ mod tests {
         assert!(screen.contains("in the card window  ← → image · ↑ ↓ j k scroll · f fullscreen · o open the image · p push"), "{screen}");
         assert!(screen.contains("on a subtask row  ↑ ↓ j k walk in and out · ⏎ open it · a accept it · r its review · esc the task"), "{screen}");
         assert!(screen.contains("in the subtask view  ← → previous · next · ⏎ answer · a accept · r its review · esc the board"), "{screen}");
-        assert!(screen.contains("areas (2) and routines (3) show their own keys here when you are on them · any key closes") && !screen.contains("↓ more"), "{screen}");
+        assert!(screen.contains("areas (3) and routines (4) show their own keys here when you are on them · any key closes") && !screen.contains("↓ more"), "{screen}");
         assert!(screen.contains(&crate::shown_kebbie()), "the window names the kebbie that runs: {screen}");
         assert!(screen.contains("a problem with kebbie? ask the lead: the bugs it saves wait under Work to be sent") && !screen.contains("bug reports"), "{screen}");
         assert!(!screen.contains("one at a time with tab") && !screen.contains("worktree.dev_server"), "the long texts stay out: {screen}");
@@ -540,13 +540,13 @@ mod tests {
     fn at_80_columns_the_keys_window_packs_up_to_three_keys_a_row_and_scrolls() {
         let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
         press(&mut app, key(KeyCode::Char('?')));
-        let (rows, _) = render(&mut app, 80, 21);
+        let (rows, _) = render(&mut app, 80, 22);
         let screen = rows.join("\n");
         assert!(screen.contains("╭ keys · work ─"), "{screen}");
         let row = row_with(&rows, "↑ ↓ j k   move");
-        assert!(row.contains("← →   work · backlog"), "{row}");
-        let row = row_with(&rows, "1 2 3 ,   pages");
-        assert!(row.contains("/     filter") && row.contains("tab  lead's chat"), "{row}");
+        assert!(row.contains("← →   card focus"), "{row}");
+        row_with(&rows, "1 2 3 4 , pages");
+        assert!(row_with(&rows, "/         filter").contains("tab   lead's chat"), "{screen}");
         let row = row_with(&rows, "p         push");
         assert!(row.contains("v     to review") && row.contains("r    open review"), "{row}");
         assert!(row_with(&rows, "END IT").contains("asks first"));
@@ -556,12 +556,12 @@ mod tests {
             press(&mut app, key(KeyCode::Down));
         }
         assert!(matches!(app.mode, Mode::Help(_)), "↓ scrolls instead of closing");
-        let (rows, _) = render(&mut app, 80, 21);
+        let (rows, _) = render(&mut app, 80, 22);
         let screen = rows.join("\n");
         assert!(screen.contains("IN THE CARD WINDOW") && screen.contains("IN THE SUBTASK VIEW") && !screen.contains("↓ more") && !screen.contains("MOVE AROUND"), "{screen}");
         press(&mut app, key(KeyCode::PageUp));
         press(&mut app, key(KeyCode::PageUp));
-        let (rows, _) = render(&mut app, 80, 21);
+        let (rows, _) = render(&mut app, 80, 22);
         assert!(rows.join("\n").contains("MOVE AROUND"));
         press(&mut app, key(KeyCode::Char('x')));
         assert!(matches!(app.mode, Mode::Normal));
@@ -572,7 +572,7 @@ mod tests {
         let rows = rows_of(crate::keys::map(), Ctx::Areas, false, 150, 40, &mut Scroll::default());
         let screen = rows.join("\n");
         assert!(screen.contains("╭ keys · areas ─") && screen.contains("THE SELECTED AREA") && screen.contains("l         its vault log") && screen.contains("A–Z       the repo's own actions"), "{screen}");
-        assert!(screen.contains("work (1) and routines (3) show their own keys here"), "{screen}");
+        assert!(screen.contains("work (1) and routines (4) show their own keys here"), "{screen}");
         assert!(screen.contains("a problem with kebbie? ask the lead"), "{screen}");
         for gone in ["THE SELECTED TASK", "DEV SERVERS", "send to review", "away mode", "in the card window", "filter the column"] {
             assert!(!screen.contains(gone), "{gone}: {screen}");

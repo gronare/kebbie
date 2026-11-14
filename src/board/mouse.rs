@@ -16,7 +16,7 @@ impl App {
     pub(super) fn mouse(&mut self, event: MouseEvent, terminal: &mut DefaultTerminal) {
         let hit = self.hit_at(event.column, event.row);
         if let (Some(Hit::Tab(page)), MouseEventKind::Down(MouseButton::Left)) = (hit, event.kind) {
-            if page == Page::Settings { self.open_settings() } else { self.page = page }
+            if page == Page::Settings { self.open_settings() } else { self.go_page(page) }
             return;
         }
         if self.page == Page::Settings {
@@ -57,6 +57,7 @@ impl App {
                 match hit {
                     Some(Hit::Task(_)) if normal => (self.column, self.in_messages, self.offer_panel.focused, self.comment_panel.focused) = (Column::Work, false, false, false),
                     Some(Hit::Entry(_)) if normal => (self.column, self.in_messages, self.offer_panel.focused, self.comment_panel.focused) = (Column::Backlog, false, false, false),
+                    Some(Hit::Beside) if normal => self.focus_beside(),
                     Some(Hit::Offer(_)) if normal && (!self.offer_panel.focused || self.offer_panel.on_fixed) => self.focus_offers(self.offer_panel.selected),
                     Some(Hit::Fixed) if normal && !self.fixed_focused() => self.focus_fixed(),
                     Some(Hit::Comment(_)) if normal && !self.comment_panel.focused => self.focus_comments(self.comment_panel.selected),
@@ -67,7 +68,9 @@ impl App {
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 match (hit, &mut self.mode) {
+                    (Some(Hit::Beside), Mode::Normal) => self.focus_beside(),
                     (Some(Hit::Task(index)), Mode::Normal) => {
+                        self.beside.focused = false;
                         let again = self.column == Column::Work && self.work_selected == index && !self.in_messages && !self.offer_panel.focused && !self.comment_panel.focused;
                         (self.column, self.work_selected, self.in_messages, self.offer_panel.focused, self.comment_panel.focused) = (Column::Work, index, false, false, false);
                         if again && self.on_parked_line() {

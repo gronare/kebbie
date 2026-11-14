@@ -56,7 +56,7 @@ The vault also makes Claude state the problem before it starts changing code. A 
 | Done | Waits until the note has its solution and decisions. kebbie tells the task what is missing, and once they are written it closes the note. |
 | Reset and drop | Put the note back in the backlog. |
 | Plans | `kebbie ask --plan vault:<note>` asks you to approve a plan written in the task's note. |
-| The board | The Backlog column lists ONGOING, the project notes in progress, where [`board.backlog.ongoing`](../reference/configuration.md#keys) puts them. The Areas page lists the vault's system notes with their repos. |
+| The board | The Backlog page lists ONGOING, the project notes in progress, where [`board.backlog.ongoing`](../reference/configuration.md#keys) puts them. The Areas page lists the vault's system notes with their repos. |
 
 ## Edits wait for the Problem
 

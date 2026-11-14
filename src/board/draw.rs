@@ -45,7 +45,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     frame.render_widget(Paragraph::new(line), top);
     let tab_hits: Vec<(Rect, Hit)> = tabs.into_iter().map(|(x, width, page)| (Rect::new(top.x + x, top.y, width, 1), Hit::Tab(page))).collect();
     let (full_hints, short_hints) = match app.page {
-        Page::Work => hint_lines(app.selected_s_opens(), app.lead_chat.is_some()),
+        Page::Work | Page::Backlog => hint_lines(app.ctx(), app.selected_s_opens(), app.lead_chat.is_some()),
         Page::Areas => area_page::Page::hint_lines(),
         Page::Routines => crate::routine_page::Page::hint_lines(),
         Page::Settings => app.settings.hint_lines(),
@@ -88,7 +88,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         frame.render_widget(Paragraph::new(Span::styled(line, style(color))), row);
         tab_hits.push((row, Hit::Key(keys::map().code(act))));
     }
-    tab_hits.extend(hint_hits(&status, bottom, app.selected_s_opens(), app.lead_chat.is_some()));
+    tab_hits.extend(hint_hits(&status, bottom, app.ctx(), app.selected_s_opens(), app.lead_chat.is_some()));
     frame.render_widget(Paragraph::new(status), bottom);
     let (message_lines, first_message) = messages_lines(app, fold, messages_area.height as usize, messages_area.width as usize);
     let shown_messages = message_lines.len();
@@ -113,6 +113,9 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         frame.render_widget(Paragraph::new(Span::styled("looking around…", style(MUTED))), body);
     } else if matches!(app.mode, Mode::Subtask(_)) {
         super::subtask_view::draw(frame, app, body);
+    } else if app.column == Column::Backlog {
+        let (backlog, backlog_selected, backlog_rows) = backlog_lines(app, body.width as usize);
+        render_column(frame, body, backlog, backlog_selected, backlog_rows, &mut app.hits);
     } else if full.width >= 150 {
         let [work_area, _, panel_area, _, backlog_area] = Layout::horizontal([
             Constraint::Percentage(33), Constraint::Length(1), Constraint::Percentage(38), Constraint::Length(2), Constraint::Min(20),
@@ -120,24 +123,19 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         let (work, work_selected, work_rows) = work_lines(app, work_area.width as usize, false, work_area.height as usize);
         render_column(frame, work_area, work, work_selected, work_rows, &mut app.hits);
         draw_panel(frame, app, panel_area);
-        let (backlog, backlog_selected, backlog_rows) = backlog_lines(app, backlog_area.width as usize);
-        render_column(frame, backlog_area, backlog, backlog_selected, backlog_rows, &mut app.hits);
+        app.draw_beside(frame, backlog_area);
     } else if body.width >= 86 {
         let [work_area, _, backlog_area] = Layout::horizontal([Constraint::Percentage(54), Constraint::Length(4), Constraint::Min(20)]).areas(body);
         let (work, work_selected, work_rows) = work_lines(app, work_area.width as usize, true, work_area.height as usize);
         render_column(frame, work_area, work, work_selected, work_rows, &mut app.hits);
-        let (backlog, backlog_selected, backlog_rows) = backlog_lines(app, backlog_area.width as usize);
-        render_column(frame, backlog_area, backlog, backlog_selected, backlog_rows, &mut app.hits);
+        app.draw_beside(frame, backlog_area);
     } else {
         let width = body.width as usize;
-        let (mut lines, work_selected, mut rows) = work_lines(app, width, true, body.height as usize);
-        let offset = lines.len() + 1;
-        let (backlog, backlog_selected, backlog_rows) = backlog_lines(app, width);
+        let (mut lines, work_selected, rows) = work_lines(app, width, true, body.height as usize);
+        let (head, card, _) = app.beside_lines(width);
         lines.push(Line::default());
-        lines.extend(backlog);
-        rows.extend(backlog_rows.into_iter().map(|(start, end, hit)| (start + offset, end + offset, hit)));
-        let selected = if app.column == Column::Work { work_selected } else { offset + backlog_selected };
-        render_column(frame, body, lines, selected, rows, &mut app.hits);
+        lines.extend(head.into_iter().chain(card));
+        render_column(frame, body, lines, work_selected, rows, &mut app.hits);
     }
 
     let mut modal_hits = Vec::new();
@@ -247,7 +245,7 @@ mod tests {
     use crate::board::{Column, Mode};
 
     #[test]
-    fn at_170_columns_the_selected_task_has_a_detail_panel_between_work_and_backlog_and_its_link_only_there() {
+    fn at_170_columns_the_selected_task_has_a_detail_panel_between_work_and_its_card_and_its_link_only_there() {
         let mut app = test_app(vec![served("search-filters"), crate::status::tests::task(Some("working"), None, 0)]);
         with_detail(&mut app);
         let (rows, buffer) = render(&mut app, 170, 40);
@@ -255,7 +253,7 @@ mod tests {
         let urls = find(&rows, "https://wt2.web.test");
         assert_eq!(urls.len(), 1, "{screen}");
         let (work_x, _) = find(&rows, "WORK")[0];
-        let (backlog_x, _) = find(&rows, "BACKLOG")[0];
+        let (backlog_x, _) = find(&rows, "CARD")[0];
         assert!(work_x < urls[0].0 && urls[0].0 < backlog_x, "the address is in the middle column: {screen}");
         let (x, y) = urls[0];
         assert_eq!(link_of(&buffer[(x as u16, y as u16)]).map(|link| link.0).as_deref(), Some("https://wt2.web.test"), "the panel's address is a link");
@@ -267,28 +265,28 @@ mod tests {
     }
 
     #[test]
-    fn below_86_columns_backlog_sits_under_work_and_the_details_unfold_under_the_selected_row() {
+    fn below_86_columns_the_card_sits_under_work_and_the_details_unfold_under_the_selected_row() {
         let mut app = test_app(vec![served("search-filters"), crate::status::tests::task(Some("working"), None, 0)]);
         with_detail(&mut app);
         let (rows, _) = render(&mut app, 84, 50);
         let screen = rows.join("\n");
         let (_, work_y) = find(&rows, "WORK")[0];
-        let (_, backlog_y) = find(&rows, "BACKLOG")[0];
+        let (_, backlog_y) = find(&rows, "CARD")[0];
         let (_, row_y) = find(&rows, "▌○ search-filters")[0];
         let (_, url_y) = find(&rows, "https://wt2.web.test")[0];
         assert!(work_y < row_y && row_y < url_y && url_y < backlog_y, "{screen}");
-        assert!(!screen.contains("a1f3c2e"), "commits stay in the wide panel: {screen}");
+        assert!(!screen.contains("a1f3c2e Wire"), "the panel's commit line stays in the wide panel: {screen}");
         assert!(rows[row_y].trim_end().ends_with('●'), "{}", rows[row_y]);
     }
 
     #[test]
-    fn at_112_columns_work_and_backlog_sit_side_by_side_with_the_details_unfolded_in_work() {
+    fn at_112_columns_work_and_its_card_sit_side_by_side_with_the_details_unfolded_in_work() {
         let mut app = test_app(vec![served("search-filters"), crate::status::tests::task(Some("working"), None, 0)]);
         with_detail(&mut app);
         let (rows, buffer) = render(&mut app, 112, 40);
         let screen = rows.join("\n");
         let (work_x, work_y) = find(&rows, "WORK")[0];
-        let (backlog_x, backlog_y) = find(&rows, "BACKLOG")[0];
+        let (backlog_x, backlog_y) = find(&rows, "CARD")[0];
         assert!(work_y == backlog_y && work_x < backlog_x, "{screen}");
         let (_, row_y) = find(&rows, "▌○ search-filters")[0];
         let urls = find(&rows, "https://wt2.web.test");
@@ -296,7 +294,7 @@ mod tests {
         let (url_x, url_y) = urls[0];
         assert!(url_y > row_y && url_x < backlog_x, "the details unfold under the row, in Work: {screen}");
         assert_eq!(link_of(&buffer[(url_x as u16, url_y as u16)]).map(|link| link.0).as_deref(), Some("https://wt2.web.test"));
-        assert!(!screen.contains("a1f3c2e"), "commits stay in the wide panel: {screen}");
+        assert!(!screen.contains("a1f3c2e Wire"), "the panel's commit line stays in the wide panel: {screen}");
     }
 
     #[test]

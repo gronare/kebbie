@@ -232,7 +232,7 @@ impl App {
             }
             Some(Act::Back | Act::Close) if open => self.fold_comments(),
             Some(Act::Back | Act::Close) => self.comment_panel.focused = false,
-            Some(Act::Switch) => (self.comment_panel.focused, self.column) = (false, Column::Backlog),
+            Some(Act::Switch) => self.focus_beside(),
             Some(Act::Messages) => {
                 self.comment_panel.focused = false;
                 self.press_m();

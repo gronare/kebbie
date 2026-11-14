@@ -6,7 +6,7 @@ Have kebbie run a check on a schedule, as a task that reports what it finds or p
 
 ## Add one from the board
 
-1. Press `3` on the board for the Routines page.
+1. Press `4` on the board for the Routines page.
 
 2. Press `n`.
 

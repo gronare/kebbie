@@ -14,7 +14,7 @@ The run's Claude works in Claude's `auto` permission mode, since nobody is there
 
 ## Runs show on the board like any task
 
-On the board a run's task shows a `routine` marker next to its name and reports like any other task. The Routines page (`3`) lists the routines themselves, with their last runs, and marks its tab with `⚠` while a run's findings wait for you. The lead knows routine tasks come from kebbie and treats them like the rest.
+On the board a run's task shows a `routine` marker next to its name and reports like any other task. The Routines page (`4`) lists the routines themselves, with their last runs, and marks its tab with `⚠` while a run's findings wait for you. The lead knows routine tasks come from kebbie and treats them like the rest.
 
 ## The keeper starts runs when they are due
 

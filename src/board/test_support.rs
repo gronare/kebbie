@@ -118,6 +118,11 @@ pub(super) fn assert_whole_link(buffer: &ratatui::buffer::Buffer, url: &str, row
     assert!(!copies.is_empty() && text.is_empty() && copies.iter().all(|(copy, _)| whole(copy)) && ids.len() == 1 && spans >= rows, "{what}: {url} is linked as {copies:?} with {text:?} left over and ids {ids:?}:\n{screen}");
 }
 
+// The rows above the card a narrow board stacks under the tasks.
+pub(super) fn above_card(rows: &[String]) -> Vec<String> {
+    rows.iter().take_while(|row| !row.trim_start().starts_with("CARD ")).cloned().collect()
+}
+
 pub(super) fn find(rows: &[String], text: &str) -> Vec<(usize, usize)> {
     rows.iter().enumerate().filter_map(|(y, row)| row.find(text).map(|byte| (row[..byte].chars().count(), y))).collect()
 }

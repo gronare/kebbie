@@ -10,6 +10,8 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Pushing from the board runs in the background, with a line saying each step and the task's row marked pushing.
 - The board's ↓ walks into a task's subtasks, and ⏎ opens one with its commits, files and what it built.
 - The board shows each task as a block, a line apart, with the selection running down the whole block.
+- The backlog has its own board page on 2, with every title whole; Areas and Routines move to 3 and 4.
+- The Work page shows the selected task's card beside the tasks, and it follows the cursor.
 
 ### Fixed
 - A cancelled CI run shows as CI cancelled under Needs you, with G to re-run and C to dismiss, instead of CI running.

@@ -65,8 +65,10 @@ fn pills(app: &App, compact: bool) -> Vec<Span<'static>> {
 
 pub(super) fn header(app: &App, width: u16) -> (Line<'static>, Vec<(u16, u16, Page)>) {
     let mut spans = pills(app, false);
-    let fresh = match app.page {
-        Page::Work => format!("backlog: {}   ", backlog::freshness(&app.sources, &app.backlog)),
+    let shown = app.shown_page();
+    let fresh = match shown {
+        Page::Work => String::new(),
+        Page::Backlog => format!("backlog: {}   ", backlog::freshness(&app.sources, &app.backlog)),
         Page::Areas => format!("vault index: {}   ", backlog::age(app.areas.synced)),
         Page::Routines | Page::Settings => String::new(),
     };
@@ -74,8 +76,8 @@ pub(super) fn header(app: &App, width: u16) -> (Line<'static>, Vec<(u16, u16, Pa
     let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
     let waiting = app.routines.waiting();
     let warning = if waiting > 0 { format!("⚠{waiting} ") } else { String::new() };
-    let full = [(" 1 Work ", Page::Work), (" 2 Areas ", Page::Areas), (" 3 Routines ", Page::Routines), (" , Settings ", Page::Settings)];
-    let short = full.map(|(label, page)| if page == app.page { (label, page) } else { (&label[..3], page) });
+    let full = [(" 1 Work ", Page::Work), (" 2 Backlog ", Page::Backlog), (" 3 Areas ", Page::Areas), (" 4 Routines ", Page::Routines), (" , Settings ", Page::Settings)];
+    let short = full.map(|(label, page)| if page == shown { (label, page) } else { (&label[..3], page) });
     let width_of = |tabs: &[(&str, Page)]| tabs.iter().map(|(label, _)| label.chars().count()).sum::<usize>() + warning.chars().count();
     let tabs = if used + width_of(&full) <= width as usize { full } else { short };
     if used + width_of(&tabs) > width as usize {
@@ -90,7 +92,7 @@ pub(super) fn header(app: &App, width: u16) -> (Line<'static>, Vec<(u16, u16, Pa
         spans.push(Span::styled(fresh, style(MUTED)));
         let mut x = width as usize - tabs_width;
         for (label, page) in tabs {
-            let lit = app.page == page;
+            let lit = shown == page;
             spans.push(Span::styled(label, if lit { bold(MAUVE).bg(SURFACE) } else { style(MUTED) }));
             let mut taken = label.chars().count();
             if page == Page::Routines && !warning.is_empty() {
@@ -111,8 +113,9 @@ mod tests {
     use crate::config::Source;
 
     #[test]
-    fn the_work_page_dates_the_vault_backlog_by_the_snapshot_its_rows_come_from() {
+    fn the_backlog_page_dates_the_vault_backlog_by_the_snapshot_its_rows_come_from() {
         let mut app = test_app(Vec::new());
+        app.column = crate::board::Column::Backlog;
         let now = crate::messages::now();
         app.sources = vec![Source::Vault];
         app.backlog.updated = Some(now - 562 * 3600);

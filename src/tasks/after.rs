@@ -684,7 +684,7 @@ pub(crate) fn drop_in(state: &Path, caller: &Caller, name: &str) -> Result<Strin
     }
     release_watches(state, &waits);
     let back = waits.iter().find_map(|wait| wait.backlog.as_deref());
-    Notice::new(Tone::Done, "Dropped the wait; nothing was started").next(if back.is_some() { "Its backlog item is back in the Backlog column." } else { "" })
+    Notice::new(Tone::Done, "Dropped the wait; nothing was started").next(if back.is_some() { "Its backlog item is back on the Backlog page." } else { "" })
         .detail("task", waits.iter().map(Wait::address).collect::<Vec<_>>().join(" and ")).detail("item", back.unwrap_or_default()).ok()
 }
 
@@ -1599,9 +1599,9 @@ mod tests {
     fn dropping_a_wait_puts_its_backlog_item_back() {
         let state = crate::sh::test_dir("after-drop");
         save(&state, &Wait { backlog: Some("local:Fix login".to_string()), ..wait_for("web-billing", "web", &["billing@api"]) }).unwrap();
-        assert!(held_items(&state).contains("local:Fix login"), "the Backlog column hides it while it waits");
+        assert!(held_items(&state).contains("local:Fix login"), "the Backlog page hides it while it waits");
         let said = drop_in(&state, &Caller::User, "web-billing").unwrap();
-        assert_eq!(said, "✓ Dropped the wait; nothing was started\n  next: Its backlog item is back in the Backlog column.\n  task: web-billing@web\n  item: local:Fix login");
+        assert_eq!(said, "✓ Dropped the wait; nothing was started\n  next: Its backlog item is back on the Backlog page.\n  task: web-billing@web\n  item: local:Fix login");
         assert!(held_items(&state).is_empty() && all(&state).is_empty());
         let source = include_str!("started.rs");
         assert!(source.contains("super::after::held_items(&state)"), "started_items takes in what waits hold");

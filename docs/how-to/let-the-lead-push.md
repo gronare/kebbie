@@ -14,7 +14,7 @@ The lead may now push the task once its commits pass the rules check of the read
 
 ## Every reviewed task in a repo
 
-1. Press `2` on the board for the Areas page.
+1. Press `3` on the board for the Areas page.
 2. Select the repo's area.
 3. Press `a`.
 4. Send tasks in that repo to review with `v`.

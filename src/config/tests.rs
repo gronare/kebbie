@@ -183,7 +183,7 @@ fn an_empty_file_is_every_default() {
     assert_eq!(load_machine(&missing).unwrap(), Machine::default());
     assert_eq!(load_repo(&missing).unwrap(), Worktree::default());
     let defaults = settings(&Worktree::default(), &Machine::default());
-    assert_eq!(defaults.sources, Setting { value: vec![Source::Local], layer: Layer::Default }, "a fresh install has a working Backlog column");
+    assert_eq!(defaults.sources, Setting { value: vec![Source::Local], layer: Layer::Default }, "a fresh install has a working Backlog page");
     assert_eq!(defaults.setup_skill, Setting { value: DEFAULT_SETUP_SKILL.to_string(), layer: Layer::Default });
     assert_eq!(defaults.setup_command, Setting { value: None, layer: Layer::Default }, "none means bin/setup-worktree when it exists");
     assert_eq!(defaults.dev_server, Setting { value: None, layer: Layer::Default });
@@ -436,7 +436,7 @@ fn ongoing_sits_on_top_unless_config_toml_moves_or_hides_it() {
     assert_eq!(machine("[board.backlog]\nongoing = \"hidden\"\n").ongoing, Some(OngoingAt::Hidden));
     assert_eq!(error("[board.backlog]\nongoing = \"left\"\n"), "/home/u/.config/kebbie/config.toml: board.backlog.ongoing: \"left\" is not a place; use \"top\", \"bottom\" or \"hidden\"");
     let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
-    assert!(shown.contains("board.backlog.ongoing = \"top\"  (default)\n  Where the Backlog column shows ONGOING"), "{shown}");
+    assert!(shown.contains("board.backlog.ongoing = \"top\"  (default)\n  Where the Backlog page shows ONGOING"), "{shown}");
 }
 
 #[test]

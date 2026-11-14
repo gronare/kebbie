@@ -67,7 +67,7 @@ pub(super) fn body(message: &str) -> Vec<String> {
         .map(|lines| lines.join(" ")).collect()
 }
 
-fn load(path: &Path, address: &str, subtask: &Subtask) -> Loaded {
+pub(super) fn load(path: &Path, address: &str, subtask: &Subtask) -> Loaded {
     let files = range_of(subtask).map(|range| data::range_files(path, &range)).unwrap_or_default();
     let built = subtask.commits.iter().flat_map(|commit| body(&data::message(path, &commit.sha))).collect();
     let obstacle = crate::lead::state_dir().ok().and_then(|state| crate::obstacle::load(&state, address).into_iter().rev().find(|obstacle| obstacle.state.open() && obstacle.on == subtask.title));
@@ -78,7 +78,7 @@ fn waits_for_you(obstacle: &Obstacle) -> bool {
     obstacle.state == State::Asked || obstacle.decision.as_ref().is_some_and(|decision| decision.kind == Kind::Ask)
 }
 
-fn address_of(item: &Item) -> String {
+pub(super) fn address_of(item: &Item) -> String {
     peers::address(&item.name, &item.place)
 }
 
@@ -98,7 +98,7 @@ fn label(text: &str) -> Span<'static> {
     Span::styled(text.to_string(), style(MUTED))
 }
 
-fn section(title: &str) -> Line<'static> {
+pub(super) fn section(title: &str) -> Line<'static> {
     Line::from(Span::styled(title.to_string(), bold(LAVENDER)))
 }
 

@@ -20,6 +20,7 @@ pub enum Act {
     Move,
     Switch,
     WorkPage,
+    BacklogPage,
     AreasPage,
     RoutinesPage,
     SettingsPage,
@@ -97,8 +98,8 @@ const ALL: &[Ctx] = &[Work, Backlog, Areas, Routines];
 const PAGES: &[Ctx] = &[Work, Backlog, Areas, Routines, Settings];
 
 impl Act {
-    pub const EVERY: [Act; 51] = [
-        Act::Options, Act::ItemOptions, Act::Move, Act::Switch, Act::WorkPage, Act::AreasPage, Act::RoutinesPage, Act::SettingsPage, Act::Lead, Act::HideChat, Act::Messages, Act::Hub, Act::Help, Act::Inbox, Act::Next, Act::New, Act::Go, Act::Chat,
+    pub const EVERY: [Act; 52] = [
+        Act::Options, Act::ItemOptions, Act::Move, Act::Switch, Act::WorkPage, Act::BacklogPage, Act::AreasPage, Act::RoutinesPage, Act::SettingsPage, Act::Lead, Act::HideChat, Act::Messages, Act::Hub, Act::Help, Act::Inbox, Act::Next, Act::New, Act::Go, Act::Chat,
         Act::Review, Act::Card, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Rebase, Act::Follow, Act::Tidy, Act::Push, Act::Stage, Act::Done, Act::DismissCi, Act::RerunCi, Act::Park, Act::Reset, Act::Drop, Act::StartAt, Act::Refresh, Act::Away,
         Act::Update, Act::RestartLead, Act::Filter, Act::AreaRefresh, Act::Log, Act::Edit, Act::Pause, Act::Delete, Act::Fullscreen, Act::OpenImage, Act::Back, Act::Close, Act::Quit,
     ];
@@ -110,6 +111,7 @@ impl Act {
             Act::Move => "move",
             Act::Switch => "switch",
             Act::WorkPage => "work_page",
+            Act::BacklogPage => "backlog_page",
             Act::AreasPage => "areas_page",
             Act::RoutinesPage => "routines_page",
             Act::SettingsPage => "settings_page",
@@ -170,8 +172,9 @@ impl Act {
             Act::OpenImage => Default::Fixed(&[KeyCode::Char('o')], "o"),
             Act::Quit => Default::CtrlC,
             Act::WorkPage => Default::Char('1'),
-            Act::AreasPage => Default::Char('2'),
-            Act::RoutinesPage => Default::Char('3'),
+            Act::BacklogPage => Default::Char('2'),
+            Act::AreasPage => Default::Char('3'),
+            Act::RoutinesPage => Default::Char('4'),
             Act::SettingsPage => Default::Char(','),
             Act::HideChat => Default::Char('h'),
             Act::Messages => Default::Char('m'),
@@ -226,12 +229,13 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::Options, on: &[Backlog], help: "the selected item's card: its sections and open questions, which you answer there; an ongoing note's card; on a row kebbie keeps or a Linear issue, its options", hint: Hint::Both },
     Binding { act: Act::ItemOptions, on: &[Backlog], help: "options for the selected backlog item, each one explained", hint: Hint::No },
     Binding { act: Act::Options, on: &[Areas], help: "actions for the selected area (in the detail: run the selected action)", hint: Hint::Both },
-    Binding { act: Act::Switch, on: BOARD, help: "switch between work and backlog", hint: Hint::No },
+    Binding { act: Act::Switch, on: &[Work], help: "move focus between the tasks and the card beside them, where ↑ ↓ pgup pgdn scroll it", hint: Hint::No },
     Binding { act: Act::Options, on: &[Routines], help: "options for the selected routine (on a narrow board: open it, then options)", hint: Hint::No },
     Binding { act: Act::Switch, on: &[Areas], help: "list · detail", hint: Hint::No },
     Binding { act: Act::Move, on: ALL, help: "move", hint: Hint::No },
     Binding { act: Act::Move, on: &[Card], help: "in the card window: scroll", hint: Hint::No },
     Binding { act: Act::WorkPage, on: PAGES, help: "the work page", hint: Hint::No },
+    Binding { act: Act::BacklogPage, on: PAGES, help: "the backlog page: the backlog's items whole across the width, with their own keys", hint: Hint::No },
     Binding { act: Act::AreasPage, on: PAGES, help: "the areas page", hint: Hint::No },
     Binding { act: Act::RoutinesPage, on: PAGES, help: "the routines page; ⚠ on its tab counts the runs whose findings wait for you", hint: Hint::No },
     Binding { act: Act::SettingsPage, on: ALL, help: "the settings page: every key kebbie config shows, with its value, the layer it comes from and what it does, changed in place", hint: Hint::No },
@@ -243,7 +247,7 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::Hub, on: BOARD, help: "the kebbie hub, to see this board on your phone: not connected, choose the kebbie hub or your own and connect through the browser (a link, a code to check and a QR code); connected, this machine on its hub, when the board last went out and where to sign in to see it, n to rename it, l to leave", hint: Hint::No },
     Binding { act: Act::Filter, on: BOARD, help: "filter the selected column: type part of a name, ⏎ keeps it, esc clears it", hint: Hint::No },
     Binding { act: Act::New, on: &[Work], help: "new task", hint: Hint::No },
-    Binding { act: Act::New, on: &[Backlog], help: "in the Backlog column: a new item, one line the lead writes out (a new task when no backlog takes new items)", hint: Hint::No },
+    Binding { act: Act::New, on: &[Backlog], help: "on the Backlog page: a new item, one line the lead writes out (a new task when no backlog takes new items)", hint: Hint::No },
     Binding { act: Act::Go, on: BOARD, help: "go to the task's Space, or start the backlog item", hint: Hint::No },
     Binding { act: Act::Chat, on: &[Work], help: "chat: message the task's Claude", hint: Hint::No },
     Binding { act: Act::Review, on: &[Work], help: "open the task's review next to its Claude, or go to the one already open", hint: Hint::No },
@@ -503,11 +507,12 @@ mod tests {
     }
 
     #[test]
-    fn the_routines_page_is_3_everywhere_and_has_its_own_letters() {
+    fn the_routines_page_is_4_everywhere_and_has_its_own_letters() {
         let keys = Keys::defaults();
         let at = |ctx, code| keys.act(ctx, &KeyEvent::from(code));
         for ctx in [Work, Backlog, Areas, Routines] {
-            assert_eq!(at(ctx, KeyCode::Char('3')), Some(Act::RoutinesPage), "{ctx:?}");
+            assert_eq!(at(ctx, KeyCode::Char('4')), Some(Act::RoutinesPage), "{ctx:?}");
+            assert_eq!((at(ctx, KeyCode::Char('2')), at(ctx, KeyCode::Char('3'))), (Some(Act::BacklogPage), Some(Act::AreasPage)), "{ctx:?}");
         }
         assert_eq!((at(Routines, KeyCode::Char('e')), at(Routines, KeyCode::Char('p')), at(Routines, KeyCode::Char('D'))), (Some(Act::Edit), Some(Act::Pause), Some(Act::Delete)));
         assert_eq!((at(Routines, KeyCode::Char('g')), at(Routines, KeyCode::Char('s')), at(Routines, KeyCode::Char('n'))), (Some(Act::Go), Some(Act::Card), Some(Act::New)));
@@ -522,7 +527,7 @@ mod tests {
         for ctx in [Work, Backlog, Areas] {
             assert_eq!(at(ctx, KeyCode::Char('f')), None, "{ctx:?}");
         }
-        assert_eq!((at(Work, KeyCode::Char('o')), at(Backlog, KeyCode::Char('o')), at(Areas, KeyCode::Char('o'))), (None, Some(Act::ItemOptions), None), "in the Backlog column o is an item's options, as ⏎ opens its card");
+        assert_eq!((at(Work, KeyCode::Char('o')), at(Backlog, KeyCode::Char('o')), at(Areas, KeyCode::Char('o'))), (None, Some(Act::ItemOptions), None), "on the Backlog page o is an item's options, as ⏎ opens its card");
         assert_eq!(at(Card, KeyCode::Char('f')), Some(Act::Fullscreen));
         assert_eq!(at(Card, KeyCode::Char('o')), Some(Act::OpenImage));
         assert_eq!(at(Card, KeyCode::Char('p')), Some(Act::Push));

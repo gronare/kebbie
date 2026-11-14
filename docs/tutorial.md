@@ -127,7 +127,7 @@ kebbie pushes to a repo's remote, so the practice repo gets a remote of its own 
 
 1. In herdr, press `prefix+space`, unless setup has taken you there already.
 
-   kebbie creates the lead Space when there is none and moves it to the top of herdr's Spaces. On the left is the board, with the Work column, the Backlog column and the status line. On the right is the lead, a Claude that keeps track of your tasks. The Work column is empty.
+   kebbie creates the lead Space when there is none and moves it to the top of herdr's Spaces. On the left is the board, with the Work column, the card of the selected task beside it and the status line; `2` shows the backlog. On the right is the lead, a Claude that keeps track of your tasks. The Work column is empty.
 
 2. Press `tab` on the board. Focus moves to the lead's chat, and `prefix+f` from the chat brings it back to the board.
 

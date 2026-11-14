@@ -215,14 +215,14 @@ mod tests {
         let (rows, _) = render(&mut app, 120, 30);
         let screen = rows.join("\n");
         assert!(screen.contains("↻ Pushing Refund mails… rebasing onto main"), "the notice says what it does: {screen}");
-        let (_, row) = find(&rows, "Refund mails")[0];
+        let (_, row) = find(&rows, "Refund mails").into_iter().find(|(x, _)| *x < 60).unwrap();
         assert!(rows[row].contains("pushing… rebasing onto main"), "its row says so too: {}", rows[row]);
         let before = app.work_selected;
         press(&mut app, key(KeyCode::Char('j')));
         assert_ne!(app.work_selected, before, "j moves while the push runs");
         press(&mut app, key(KeyCode::Char('k')));
         assert_eq!(app.work_selected, before, "k moves back");
-        press(&mut app, key(KeyCode::Char('2')));
+        press(&mut app, key(KeyCode::Char('3')));
         assert_eq!(app.page, Page::Areas, "the page switches while the push runs");
         press(&mut app, key(KeyCode::Char('1')));
         assert_eq!(app.page, Page::Work);

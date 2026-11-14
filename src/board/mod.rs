@@ -1,3 +1,4 @@
+mod beside;
 mod bug_report;
 mod card;
 mod columns;
@@ -98,6 +99,7 @@ use threads::{DetailRequest, spawn_ci_watcher, spawn_detailer, spawn_refresher, 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Page {
     Work,
+    Backlog,
     Areas,
     Routines,
     Settings,
@@ -160,6 +162,7 @@ enum Hit {
     Offer(usize),
     Fixed,
     Comment(usize),
+    Beside,
     Key(KeyCode),
 }
 
@@ -258,6 +261,7 @@ struct App {
     push_outcomes: Vec<(Notice, notices::Subject)>,
     subtask_row: Option<(String, String)>,
     subtask_io: subtask_view::Io,
+    beside: beside::Beside,
 }
 
 type Updater = std::sync::Arc<dyn Fn() -> Result<String> + Send + Sync>;
@@ -401,6 +405,25 @@ impl App {
                 None => false,
             },
         }
+    }
+
+    // The Backlog page is the board's Backlog column on its own across the width, so self.page stays Work and the column says which of the two shows.
+    fn go_page(&mut self, page: Page) {
+        self.beside.focused = false;
+        match page {
+            Page::Work | Page::Backlog => {
+                (self.page, self.column) = (Page::Work, if page == Page::Backlog { Column::Backlog } else { Column::Work });
+                if page == Page::Backlog {
+                    (self.in_messages, self.offer_panel.focused, self.comment_panel.focused) = (false, false, false);
+                }
+            }
+            other => self.page = other,
+        }
+    }
+
+    // The tab that is lit.
+    fn shown_page(&self) -> Page {
+        if self.page == Page::Work && self.column == Column::Backlog { Page::Backlog } else { self.page }
     }
 
     fn ctx(&self) -> Ctx {
@@ -628,9 +651,10 @@ impl App {
         if self.page == Page::Settings {
             if self.at_rest() {
                 match map.act(Ctx::Settings, &key) {
-                    Some(Act::WorkPage) => return self.page = Page::Work,
-                    Some(Act::AreasPage) => return self.page = Page::Areas,
-                    Some(Act::RoutinesPage) => return self.page = Page::Routines,
+                    Some(Act::WorkPage) => return self.go_page(Page::Work),
+                    Some(Act::BacklogPage) => return self.go_page(Page::Backlog),
+                    Some(Act::AreasPage) => return self.go_page(Page::Areas),
+                    Some(Act::RoutinesPage) => return self.go_page(Page::Routines),
                     _ => {}
                 }
             }
@@ -642,7 +666,7 @@ impl App {
                 Page::Areas => Ctx::Areas,
                 Page::Routines => Ctx::Routines,
                 Page::Settings => Ctx::Settings,
-                Page::Work => self.ctx(),
+                Page::Work | Page::Backlog => self.ctx(),
             };
             match map.act(ctx, &key) {
                 Some(Act::Lead) => {
@@ -654,9 +678,10 @@ impl App {
                     return;
                 }
                 Some(Act::HideChat) => return self.toggle_chat(),
-                Some(Act::WorkPage) => return self.page = Page::Work,
-                Some(Act::AreasPage) => return self.page = Page::Areas,
-                Some(Act::RoutinesPage) => return self.page = Page::Routines,
+                Some(Act::WorkPage) => return self.go_page(Page::Work),
+                Some(Act::BacklogPage) => return self.go_page(Page::Backlog),
+                Some(Act::AreasPage) => return self.go_page(Page::Areas),
+                Some(Act::RoutinesPage) => return self.go_page(Page::Routines),
                 Some(Act::SettingsPage) => return self.open_settings(),
                 Some(Act::Inbox) => {
                     self.page = Page::Work;
@@ -769,6 +794,9 @@ impl App {
         if self.in_messages {
             return self.handle_messages(key);
         }
+        if self.beside_key(&key) {
+            return;
+        }
         if self.comment_panel.focused {
             return self.handle_comments(key);
         }
@@ -795,7 +823,7 @@ impl App {
                     if self.offers.is_empty() { self.focus_fixed() } else { self.focus_offers(0) }
                 }
             }
-            Act::Switch => self.column = if self.column == Column::Work { Column::Backlog } else { Column::Work },
+            Act::Switch => self.focus_beside(),
             Act::Back | Act::Close => self.at_top(Some(act)),
             Act::Help => self.mode = Mode::Help(Default::default()),
             Act::Inbox => self.open_questions(None),
@@ -1181,7 +1209,7 @@ impl App {
             agent_offer: None, agent_mode: std::sync::Arc::new(|| config::agent_updates_in(&config::path())), installer: agent_updates::default_install(),
             filter: None, ctrl_c: None, go_again: None, notice: None, lead_chat: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), lead_fresh_starter: std::sync::Arc::new(crate::lead_restart::fresh_now), lead_checker: std::sync::Arc::new(crate::lead::restart_refusal), lead_restarted: std::sync::Arc::default(), lead_context: None, restart_why: String::new(), devices: Vec::new(), subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
             comments: Vec::new(), comment_panel: Default::default(), comment_dir: None, copier: comments::default_copier(), reopener: comments::default_reopener(), pusher: pushing::live_pusher(), pushes: Vec::new(), push_outcomes: Vec::new(),
-            subtask_row: None, subtask_io: Default::default(),
+            subtask_row: None, subtask_io: Default::default(), beside: Default::default(),
         }
     }
 }
@@ -1213,6 +1241,7 @@ pub fn run(overlay: bool) -> Result<String> {
     app.offer_panel.shown = bug_report::load_shown(app.offer_panel.file.as_deref());
     app.comment_panel.file = comments::panel_file();
     app.comment_panel.folded_at = comments::load_folded(app.comment_panel.file.as_deref());
+    app.beside.spawn_loader();
     if let Ok(state) = std::env::var(RESTART_STATE) {
         let mut parts = state.splitn(3, '\t');
         match parts.next() {
@@ -1325,6 +1354,7 @@ pub fn run(overlay: bool) -> Result<String> {
                 }
             }
             changed |= app.take_images();
+            changed |= app.beside.take_loads();
             app.areas.tick();
             app.routines.tick();
             let mut repos: Vec<PathBuf> = app.tasks.iter().filter_map(|item| item.repo.clone()).chain(app.areas.repos()).collect();
@@ -1417,7 +1447,7 @@ mod tests {
         let mut app = test_app(Vec::new());
         app.handle_key(KeyEvent::from(KeyCode::Char('h')), None);
         assert_eq!(app.notice.as_ref().map(|(text, _)| text.as_str()), Some("h hides the lead's chat only on the board in the lead Space"));
-        assert!(!hint_lines(None, false).0.to_string().contains("h chat") && hint_lines(None, true).0.to_string().contains("h chat"));
+        assert!(!hint_lines(Ctx::Work, None, false).0.to_string().contains("h chat") && hint_lines(Ctx::Work, None, true).0.to_string().contains("h chat"));
         assert!(!shown(keys::map(), Ctx::Work, false).iter().any(|(key, _)| key == "h") && shown(keys::map(), Ctx::Work, true).iter().any(|(key, _)| key == "h"));
         assert!(!header(&app, 200).0.to_string().contains("chat hidden"));
         app.lead_chat = Some(true);
@@ -1503,7 +1533,7 @@ mod tests {
     }
 
     #[test]
-    fn three_opens_the_routines_page_its_tab_counts_the_runs_waiting_on_you_and_enter_goes_to_the_run() {
+    fn four_opens_the_routines_page_its_tab_counts_the_runs_waiting_on_you_and_enter_goes_to_the_run() {
         let mut run = crate::status::tests::task(Some("idle"), Some("needs-you"), 0);
         (run.name, run.place) = ("cluster-health-20261019-0600".to_string(), "infra".to_string());
         let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0), run]);
@@ -1514,14 +1544,14 @@ mod tests {
         };
         let state = crate::routines::State { last_start: Some(1), last_task: Some("cluster-health-20261019-0600@infra".to_string()), last_outcome: Some(crate::routines::Outcome::Findings), ..Default::default() };
         app.routines.shown(vec![(routine, state)]);
-        assert!(header(&app, 200).0.to_string().ends_with(" 1 Work  2 Areas  3 Routines ⚠1  , Settings "), "{}", header(&app, 200).0);
-        press(&mut app, key(KeyCode::Char('3')));
+        assert!(header(&app, 200).0.to_string().ends_with(" 1 Work  2 Backlog  3 Areas  4 Routines ⚠1  , Settings "), "{}", header(&app, 200).0);
+        press(&mut app, key(KeyCode::Char('4')));
         assert_eq!(app.page, Page::Routines);
         let (rows, _) = render(&mut app, 120, 30);
         let screen = rows.join("\n");
         assert!(screen.contains("▌⚠ Cluster health") && screen.contains("⏎ options · n new · g run now · e edit · p pause · s last report · ? keys"), "{screen}");
-        assert!(header(&app, 70).0.to_string().ends_with(" 1  2  3 Routines ⚠1  , "), "a narrow header names only the page it is on: {}", header(&app, 70).0);
-        let (x, y) = find(&rows, "3 Routines")[0];
+        assert!(header(&app, 70).0.to_string().ends_with(" 1  2  3  4 Routines ⚠1  , "), "a narrow header names only the page it is on: {}", header(&app, 70).0);
+        let (x, y) = find(&rows, "4 Routines")[0];
         assert_eq!(app.hit_at(x as u16, y as u16), Some(Hit::Tab(Page::Routines)));
         press(&mut app, key(KeyCode::Enter));
         press(&mut app, key(KeyCode::Enter));
@@ -1529,6 +1559,41 @@ mod tests {
         assert_eq!(app.selected_task().map(|item| item.name).as_deref(), Some("cluster-health-20261019-0600"), "with the run selected");
         app.routines.tasks.clear();
         assert!(!header(&app, 200).0.to_string().contains('⚠'), "a closed run's findings wait for no one");
+    }
+
+    #[test]
+    fn two_opens_the_backlog_page_across_the_width_with_whole_titles_and_its_own_keys() {
+        let mut app = test_app(vec![served("search-filters")]);
+        let title = "Retry a failed CI push once before telling anyone, with the run's own log";
+        app.backlog.entries = vec![crate::backlog::Entry { source: "vault".to_string(), title: title.to_string(), priority: "high".to_string(), area: "web".to_string(), reference: "Projects/retry.md".to_string(), summary: String::new(), age: "3 d".to_string(), shape: Default::default() },
+            crate::backlog::Entry { source: "vault".to_string(), title: "Session drops on reload".to_string(), priority: "low".to_string(), area: "shop".to_string(), reference: "Projects/session.md".to_string(), summary: String::new(), age: "6 d".to_string(), shape: Default::default() }];
+        let work = render(&mut app, 140, 40).0;
+        assert!(!work.join("\n").contains("BACKLOG") && !header(&app, 200).0.to_string().contains("backlog:"), "Work has no backlog now: {}", work.join("\n"));
+        press(&mut app, key(KeyCode::Char('2')));
+        assert!(app.page == Page::Work && app.column == Column::Backlog && app.shown_page() == Page::Backlog);
+        let (rows, buffer) = render(&mut app, 140, 40);
+        let screen = rows.join("\n");
+        assert!(rows[1].ends_with(" 1 Work  2 Backlog  3 Areas  4 Routines  , Settings   "), "{}", rows[1]);
+        assert!(header(&app, 200).0.to_string().contains("backlog: "), "the Backlog page dates its items: {}", header(&app, 200).0);
+        let (x, y) = find(&rows, "2 Backlog")[0];
+        assert_eq!(buffer[(x as u16, y as u16)].fg, crate::board::widgets::MAUVE, "its tab is lit");
+        assert!(screen.contains(title) && screen.contains("Session drops on reload") && !screen.contains("WORK") && !screen.contains("CARD"), "whole titles across the width: {screen}");
+        assert_eq!(app.hit_at(x as u16, y as u16), Some(Hit::Tab(Page::Backlog)));
+        press(&mut app, key(KeyCode::Char('j')));
+        assert_eq!(app.backlog_selected, 1, "j moves through the items");
+        press(&mut app, key(KeyCode::Char('l')));
+        assert!(matches!(&app.mode, Mode::Input { purpose: Purpose::BacklogLaterName(entry), .. } if entry.title == "Session drops on reload"), "l starts it later");
+        app.mode = Mode::Normal;
+        press(&mut app, key(KeyCode::Char('n')));
+        assert!(matches!(&app.mode, Mode::Input { purpose: Purpose::BacklogItem, .. }), "n adds an item");
+        app.mode = Mode::Normal;
+        press(&mut app, key(KeyCode::Char('3')));
+        assert_eq!(app.page, Page::Areas);
+        press(&mut app, key(KeyCode::Char('1')));
+        assert!(app.page == Page::Work && app.column == Column::Work && app.shown_page() == Page::Work, "1 is the Work page again");
+        press(&mut app, key(KeyCode::Char('2')));
+        press(&mut app, key(KeyCode::Char('4')));
+        assert_eq!(app.page, Page::Routines);
     }
 
     #[test]
@@ -1545,7 +1610,7 @@ mod tests {
         assert!(screen.contains("↑ ↓ key · ← → section · ⏎ pick · d back to default · tab machine / repo · / search · esc board"), "the hint line names the page's keys: {screen}");
         assert!(header(&app, 200).0.to_string().ends_with(" , Settings "), "{}", header(&app, 200).0);
         press(&mut app, key(KeyCode::Down));
-        press(&mut app, key(KeyCode::Char('2')));
+        press(&mut app, key(KeyCode::Char('3')));
         assert_eq!(app.page, Page::Areas, "the page keys work from the settings page");
         press(&mut app, key(KeyCode::Char(',')));
         press(&mut app, key(KeyCode::Esc));

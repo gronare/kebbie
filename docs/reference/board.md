@@ -8,12 +8,12 @@ A board you quit in the lead Space starts again the next time you press `prefix+
 
 | Part | Shows |
 | --- | --- |
-| Status line, top | The page tabs, `1 Work  2 Areas  3 Routines  , Settings`, then counts and markers, below. |
+| Status line, top | The page tabs, `1 Work  2 Backlog  3 Areas  4 Routines  , Settings`, then counts and markers, below. |
 | Lead line, under the status line | Whether the lead still runs an old kebbie, while it counts as stale. |
 | Context line, under it | While the lead's context is 85% full or more: `The lead's context is N% full · L to restart it fresh`. |
 | Hub line, under it | While the hub refuses the board because it has not enabled answering for your account: `This hub has not enabled answering for your account: <link> · H hub`. |
 | Work, left | Tasks from every repo with a worktree pool, grouped, in the order of [`board.groups`](configuration.md). |
-| Backlog, right | Vault notes in progress, under ONGOING, and the items from the configured sources, by priority. |
+| Card, right | The [card](#the-card-beside-the-tasks) of the task under the cursor, or of the subtask. |
 | Messages, bottom | What sessions tell each other, newest last. |
 
 The status line shows:
@@ -32,7 +32,7 @@ The status line shows:
 | `⇣ updating kebbie · U` | An update whose window you hid runs. |
 | `✓ kebbie updated · U` | The update's summary waits for you. |
 
-In a narrow pane the two columns stack, and the status line keeps only the counts that are not zero, without their words, so the page tabs still fit.
+In a narrow pane the card sits under the tasks, and the status line keeps only the counts that are not zero, without their words, so the page tabs still fit.
 
 The lead line shows while the lead is stale, and says what happens next:
 
@@ -71,9 +71,15 @@ Work:
 - A folded row, the parked line, the comments, the bugs and wishes to send or the fixed block, is selected like a task: `⏎` or a click on it once selected opens it, and `esc` on a row inside folds it back with the selection on the row.
 - After an update's recheck fixed some bugs, `✓ Fixed in kebbie <version>: N bugs you ran into` with their titles, below the bugs and wishes to send. `i` shows the list and clears the block. `↓` selects it like a row, and `⏎` on it offers **Show the list** or **Hide this**, which clears it without the list; it does not come back.
 
-Backlog: FOUND BY TASKS lists what tasks noticed outside their work. A `◆` and `2×` mark one found more than once; the selected item shows whole, with its repo and who found it (`found 2× · by billing, search`). See [`kebbie found`](commands.md#kebbie-found---json).
+The backlog has its own [page](#backlog-page).
 
-Backlog: ONGOING lists vault project notes in progress (status active, or draft without a priority) when the vault is on. It sits above the items, below them or nowhere, by [`board.backlog.ongoing`](configuration.md).
+## Backlog page
+
+Press `2` to open it and `1` to go back. It shows the backlog across the whole width, so every title shows whole, with the status line's `backlog:` saying how fresh it is.
+
+FOUND BY TASKS lists what tasks noticed outside their work. A `◆` and `2×` mark one found more than once; the selected item shows whole, with its repo and who found it (`found 2× · by billing, search`). See [`kebbie found`](commands.md#kebbie-found---json).
+
+ONGOING lists vault project notes in progress (status active, or draft without a priority) when the vault is on. It sits above the items, below them or nowhere, by [`board.backlog.ongoing`](configuration.md).
 
 A backlog item's row shows its state in the right field:
 
@@ -328,17 +334,17 @@ kebbie never posts a reply.
 
 | Key | Action |
 | --- | --- |
-| `⏎` | Options for the selected task. In the Backlog column, the item's card. |
+| `⏎` | Options for the selected task. On the Backlog page, the item's card. |
 | `↑` `↓`, `j` `k` | Move. |
-| `←` `→` | Switch between Work and Backlog. |
-| `1`, `2`, `3`, `,` | The Work page, the Areas page, the Routines page, the [Settings page](#settings-page). |
+| `←` `→` | Focus the card beside the tasks, where `↑` `↓` `pgup` `pgdn` scroll it, and back to the tasks. |
+| `1`, `2`, `3`, `4`, `,` | The Work page, the [Backlog page](#backlog-page), the Areas page, the Routines page, the [Settings page](#settings-page). |
 | `tab` | Move focus to the lead's chat, showing it first when it is hidden. |
 | `h` | Hide the lead's chat so the board takes the whole width while the chat runs on, or show it again. Only on the board in the lead Space. See [Hiding the chat](../explanation/lead-and-away-mode.md#hiding-the-chat). |
 | `N` | [Next](#the-next-window): what needs you, in the order to do it. |
 | `i` | The inbox: the questions waiting on you, opened at the first. Works on the Areas page too. |
 | `m` | Messages: once shows them on one line, again opens them, again hides them. |
 | `H` | The [hub](#the-hub-window) window, to see this board on your phone. |
-| `n` | New task: a name, then an optional prompt. Starts in the background. In the Backlog column, a new item. |
+| `n` | New task: a name, then an optional prompt. Starts in the background. On the Backlog page, a new item. |
 | `/` | Filter the selected column: type part of a name, `⏎` keeps the filter, `esc` clears it. |
 | `R` | Ask the lead to refresh the backlog. |
 | `A` | Away mode on or off. |
@@ -442,7 +448,7 @@ For an older Claude Code, or when the inbox refuses a message, kebbie types it i
 - It types into a Claude's input box only when the box is empty. While you have a draft there, a message to that Claude waits and goes in once the box is clear.
 - After typing, kebbie checks the conversation for it. When Claude has not taken it, kebbie presses Enter again after 5, 10 and 20 seconds, and after 40 seconds the board says it was not delivered.
 
-### In the Backlog column
+### On the Backlog page
 
 | Key | Action | Offered when |
 | --- | --- | --- |
@@ -528,6 +534,37 @@ The item's card shows its title, priority, repo, state, the day it was filed and
 - `←` `→` choose, `⏎` or a click pushes, `esc` goes back to the list.
 
 `kebbie next` prints the same list. See [Commands](commands.md#seeing-what-is-going-on).
+
+### The card beside the tasks
+
+The right of the Work page shows the card of the task under the cursor, and changes as the cursor moves:
+
+```
+CARD   Push from the board without a popup
+──────────────────────────────────────────────────
+working · kebbie · 2 commits · 1 of 2 subtasks accepted
+
+BUILT
+  A push runs on its own thread; a line at the bottom says each step.
+
+DECISIONS
+  Only a refused push opens a window.
+
+COMMITS
+  a1b2c3d  Run the push in the background
+```
+
+| Part | Shows |
+| --- | --- |
+| The facts | The task's group, its repo, its commits and, for a task in subtasks, how many are accepted. `no card yet` until it wrote one, `code changed since the card` when its code moved on. |
+| The card's sections | Its [sign-off card](#the-card-window), section by section: BUILT, DECISIONS, ALSO NOTICED and the rest, as `s` and the hub show it. |
+| `RECIPE`, `LAST REPORT` | For a task without a card: the recipe it runs and why, and its last report with its age. |
+| `COMMITS` | Each commit's short sha and subject. |
+
+- On a subtask row it shows that subtask as the [subtask view](#the-subtask-view) does.
+- On a row that is not a task, such as the bugs to send, the Done block or a comment, it says so in one line.
+- `→` or a click focuses it, and `↑` `↓` `pgup` `pgdn` then scroll it; `←` or `esc` gives the keys back to the tasks.
+- `s` opens the card in its window, with its images.
 
 ### The subtask view
 
@@ -807,7 +844,7 @@ A new name is checked as [`machine.name`](configuration.md#keys) is. A `config.t
 
 ![The Areas page: areas with their repos, actions and vault log](../assets/clips/areas-page.webp)
 
-Press `2` to open it and `1` to go back. It needs the vault: it lists the vault's system notes with their repos. `kebbie areas` prints the same.
+Press `3` to open it and `1` to go back. It needs the vault: it lists the vault's system notes with their repos. `kebbie areas` prints the same.
 
 It reads a snapshot of the vault where the vault server answers one, which works with a vault hosted on a server, and the local vault index where it does not. When the vault states `watch`, the keeper follows the vault with one long-lived `watch` and writes each change into the snapshot as it comes; otherwise it fetches the snapshot every 20 seconds, or the full board does while the keeper is off. The status line's `vault index:` says how long ago the snapshot last changed. A snapshot holds the last 50 lines of each log note.
 
@@ -832,7 +869,7 @@ It reads a snapshot of the vault where the vault server answers one, which works
 
 ## Routines page
 
-Press `3` to open it. It lists every routine from config.toml and the repo configs, one row each: its last run's outcome, its name, its schedule, and how its last run stands or when it runs next.
+Press `4` to open it. It lists every routine from config.toml and the repo configs, one row each: its last run's outcome, its name, its schedule, and how its last run stands or when it runs next.
 
 - Routines whose findings wait for you come first, paused ones last.
 - The selected routine shows on the right: what it does in your words, its repo, what it may do and its last few runs.
@@ -955,7 +992,7 @@ inbox = "I"
 new = "N"
 ```
 
-The actions are `work_page`, `areas_page`, `routines_page`, `settings_page`, `hide_chat`, `messages`, `hub`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `rebase`, `follow`, `tidy`, `push`, `try` (the older name `stage` still reads), `done`, `dismiss_ci`, `rerun_ci`, `park`, `reset`, `drop`, `start_at`, `refresh`, `away`, `update`, `restart_lead`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, `item_options` (`o` in the Backlog column), and `close` (`q`).
+The actions are `work_page`, `backlog_page`, `areas_page`, `routines_page`, `settings_page`, `hide_chat`, `messages`, `hub`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `rebase`, `follow`, `tidy`, `push`, `try` (the older name `stage` still reads), `done`, `dismiss_ci`, `rerun_ci`, `park`, `reset`, `drop`, `start_at`, `refresh`, `away`, `update`, `restart_lead`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, `item_options` (`o` on the Backlog page), and `close` (`q`).
 
 - The key is one plain character.
 - `esc`, `ctrl+c`, `⏎`, the arrows, `j` `k` and `tab` stay where they are, and so do the keys inside a window or a text field.
@@ -973,6 +1010,7 @@ The actions are `work_page`, `areas_page`, `routines_page`, `settings_page`, `hi
 | Click a folded row, the parked line or the bugs and wishes to send | Select it. Click again to open it. |
 | Click a bug to send | Select it. Click again to show its report. |
 | Click a comment | Select it. Click again to open its window. |
+| Click the card beside the tasks | Focus it, so the scroll keys scroll it. |
 | Click a row in Next | Select it. Click again to open it. |
 | Scroll | Move through whatever is under the pointer. |
 | Click outside a window | Close it, except the routine steps, which keep what you typed. |

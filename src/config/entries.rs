@@ -65,7 +65,7 @@ fn entries_with(loaded: &Loaded, board_keys: &crate::keys::Keys) -> Vec<Entry> {
     key("board.backlog.sources", quoted(&names), sources.layer, Kind::List, Scope::Machine,
         "Where the board's Backlog tab finds work and where new items are written: \"local\" (the backlog folder next to the machine config) or \"vault\", one of them, and \"linear\", which is only read; config.toml only.");
     key("board.backlog.ongoing", format!("{:?}", ongoing.value.key()), ongoing.layer, Kind::Choice(OngoingAt::ALL.map(OngoingAt::key).to_vec()), Scope::Machine,
-        "Where the Backlog column shows ONGOING, the vault notes in progress: \"top\" above the backlog, \"bottom\" below it, \"hidden\" not at all; config.toml only.");
+        "Where the Backlog page shows ONGOING, the vault notes in progress: \"top\" above the backlog, \"bottom\" below it, \"hidden\" not at all; config.toml only.");
     key("board.backlog.template", or_none(backlog_template.value.as_ref()), backlog_template.layer, Kind::Text, Scope::Machine,
         "A file with the sections local backlog items are written in, as JSON or TOML: sections, each with a key, a heading and whether it is required, and questions, the key of the section that holds the open questions; a relative path is read from the folder of config.toml. Unset, local items use kebbie's own: Background, Goal, What we know, Open questions, Out of scope and Source. Vault items follow the vault's task template. config.toml only.");
     let order: Vec<&str> = groups.value.iter().map(|group| group.key()).collect();

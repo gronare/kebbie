@@ -660,21 +660,22 @@ mod tests {
         item.recipe = Some(crate::recipe::Recipe { name: "small-fix".to_string(), why: "one function and its test".to_string(), by: "the lead".to_string() });
         item.assessment = Some(crate::assessment::Word::Review { reason: "changes VAT rounding".to_string() });
         let mut app = test_app(vec![item.clone()]);
+        let work = |rows: &[String], at: usize| untied(&rows[at].chars().take(66).collect::<String>()).to_string();
         let (open, _) = render(&mut app, 120, 30);
-        let at = find(&open, "billing")[0].1;
-        assert_eq!((untied(&open[at + 1]), untied(&open[at + 2])), ("recipe: small fix, because one function and its test ·", "review: changes VAT rounding"), "the open task shows the why whole: {}", open.join("\n"));
+        let at = find(&open, "○ billing")[0].1;
+        assert_eq!((work(&open, at + 1).as_str(), work(&open, at + 2).as_str()), ("recipe: small fix, because one function and its test ·", "review: changes VAT rounding"), "the open task shows the why whole: {}", open.join("\n"));
         app.work_selected = 9;
         let (rows, _) = render(&mut app, 120, 30);
-        assert_eq!(untied(&rows[at + 1]), "recipe: small fix · review: changes VAT rounding", "{}", rows.join("\n"));
+        assert_eq!(work(&rows, at + 1), "recipe: small fix · review: changes VAT rounding", "{}", rows.join("\n"));
         item.assessment = None;
         let mut app = test_app(vec![item.clone()]);
         app.work_selected = 9;
         let (rows, _) = render(&mut app, 120, 30);
-        assert_eq!(untied(&rows[find(&rows, "billing")[0].1 + 1]), "recipe: small fix", "{}", rows.join("\n"));
+        assert_eq!(work(&rows, find(&rows, "○ billing")[0].1 + 1), "recipe: small fix", "{}", rows.join("\n"));
         item.recipe = None;
         let mut app = test_app(vec![item]);
         let (rows, _) = render(&mut app, 120, 30);
-        assert!(!rows.join("\n").contains("recipe:"), "a task started by hand without a recipe shows none: {}", rows.join("\n"));
+        assert!(!above_card(&render(&mut app, 84, 30).0).join("\n").contains("recipe:"), "a task started by hand without a recipe shows none: {}", rows.join("\n"));
     }
 
     #[test]
@@ -695,6 +696,7 @@ mod tests {
             Ongoing { key: "Projects/web-billing.md".to_string(), title: "web billing".to_string(), area: "web".to_string(), task: None, claim: Some(claim(&day(2), &day(2))), ..Ongoing::default() },
             Ongoing { key: "Projects/web-old.md".to_string(), title: "web old".to_string(), area: "web".to_string(), task: None, claim: Some(claim(&day(30), &day(20))), ..Ongoing::default() },
         ];
+        app.column = Column::Backlog;
         let (rows, _) = render(&mut app, 200, 50);
         let screen = rows.join("\n");
         assert!(screen.contains("working on devbox · billing") && !screen.contains("no task · ⏎ details"), "{screen}");
@@ -727,13 +729,14 @@ mod tests {
             Ongoing { key: "Projects/search-filters.md".to_string(), title: "search filters".to_string(), area: "web".to_string(), task: Some("search-filters@web".to_string()), claim: None, ..Ongoing::default() },
             Ongoing { key: "Projects/docs-refresh.md".to_string(), title: "docs refresh".to_string(), area: "shop".to_string(), task: None, claim: None, ..Ongoing::default() },
         ];
+        let screen = render(&mut app, 84, 50).0.join("\n");
+        assert!(screen.contains("note    vault: Projects/search-filters.md"), "the task shows its note: {screen}");
+        app.column = Column::Backlog;
         let (rows, _) = render(&mut app, 84, 50);
         let screen = rows.join("\n");
         let (_, backlog) = find(&rows, "BACKLOG")[0];
         let (_, ongoing) = find(&rows, "ONGOING")[0];
         assert!(backlog < ongoing && screen.contains("task search-filters@web") && screen.contains("no task · ⏎ details"), "{screen}");
-        assert!(screen.contains("note    vault: Projects/search-filters.md"), "the task shows its note: {screen}");
-        app.column = Column::Backlog;
         app.backlog_selected = 1;
         assert_eq!(app.choices()[0].label, "Resume as task");
         app.act(Act::Go);
@@ -756,7 +759,7 @@ mod tests {
             item("Session drops on reload", "Projects/session.md", "vault", "6 d", Shape { state: Some(State::Ready), ..Shape::default() }),
             item("ci push retry flaky", "kept:abc123", "kept", "0 d", Shape { state: Some(State::ToWrite), kept: true, ..Shape::default() }),
         ];
-        app.backlog_selected = 2;
+        (app.column, app.backlog_selected) = (Column::Backlog, 2);
         let (rows, buffer) = render(&mut app, 124, 30);
         let screen = rows.join("\n");
         for wanted in ["Rounding per invoice", "2 questions · 3 d", "drafting · 0 d", "the lead is writing it out from the code, the", "Session drops on reload", "to write · 0 d", "the lead files it in the vault"] {

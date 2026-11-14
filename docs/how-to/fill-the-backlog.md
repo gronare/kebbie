@@ -1,8 +1,8 @@
 # Fill the backlog
 
-Give the board's Backlog column work to start from: a local folder or the vault, with Linear beside either.
+Give the board's Backlog page work to start from: a local folder or the vault, with Linear beside either.
 
-![The Backlog column by priority; g starts an item as a task, which puts its plan to you](../assets/clips/backlog.webp)
+![The backlog by priority; g starts an item as a task, which puts its plan to you](../assets/clips/backlog.webp)
 
 ## Pick the sources
 
@@ -13,7 +13,7 @@ Give the board's Backlog column work to start from: a local folder or the vault,
    sources = ["vault", "linear"]
    ```
 
-2. Press `R` on the board. The lead reads the vault and Linear, and the Backlog column updates when it has saved what it found.
+2. Press `R` on the board. The lead reads the vault and Linear, and the Backlog page updates when it has saved what it found.
 
 If you use `"vault"`, it needs the [vault plugin](connect-the-vault.md).
 
@@ -25,7 +25,7 @@ If you want no backlog, set `sources = []`.
 
 Write what you want in a line. The lead writes it out in full at once, from your conversation, the code and the notes, and shows you the written item.
 
-On the board, move to the Backlog column and press `n`, then enter the line and a priority. Or from a shell:
+On the board, press `2` for the Backlog page and press `n`, then enter the line and a priority. Or from a shell:
 
 ```bash
 kebbie backlog add --priority high "Fix login — the session drops on reload (app)"
@@ -56,7 +56,7 @@ A vault note written before the vault had its task template shows as to write to
 
 ## Answer an item's questions
 
-1. Select the item in the Backlog column and press `⏎`. Its card opens.
+1. Select the item on the Backlog page and press `⏎`. Its card opens.
 
 2. Pick a question with `↑` `↓` and press `a`, type your answer and press `⏎`.
 
@@ -68,7 +68,7 @@ Press `R` on the board. The lead reads the sources, and the column updates when 
 
 ## Start an item
 
-1. Select it in the Backlog column.
+1. Select it on the Backlog page.
 
 2. Press `g`. It starts as a task with the whole item as its prompt, and leaves the column while the task runs. While questions on it wait on you, `g` says so first; press `g` again to start it anyway.
 

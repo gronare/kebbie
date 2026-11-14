@@ -248,7 +248,7 @@ impl App {
             Some(Act::Move) if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) => self.leave_fixed(),
             Some(Act::Options) => self.mode = Mode::FixedOptions(0),
             Some(Act::Back | Act::Close) => (self.offer_panel.focused, self.offer_panel.on_fixed) = (false, false),
-            Some(Act::Switch) => (self.offer_panel.focused, self.offer_panel.on_fixed, self.column) = (false, false, super::Column::Backlog),
+            Some(Act::Switch) => self.focus_beside(),
             Some(Act::Messages) => {
                 (self.offer_panel.focused, self.offer_panel.on_fixed) = (false, false);
                 self.press_m();
@@ -345,7 +345,7 @@ impl App {
             Some(Act::Options) => self.show_offers(),
             Some(Act::Back | Act::Close) if shown => self.set_shown(false),
             Some(Act::Back | Act::Close) => self.offer_panel.focused = false,
-            Some(Act::Switch) => (self.offer_panel.focused, self.column) = (false, super::Column::Backlog),
+            Some(Act::Switch) => self.focus_beside(),
             Some(Act::Messages) => {
                 self.offer_panel.focused = false;
                 self.press_m();

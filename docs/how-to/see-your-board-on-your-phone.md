@@ -115,7 +115,7 @@ What reaches a machine is its own choice, set by [`hub.commands`](../reference/c
 
 ### Work the backlog from your phone
 
-**Backlog** lists each machine's backlog as its board's Backlog column shows it, with whether an item is to write, drafting or ready and how many of its questions wait on you. Open an item to read it in full. A device that makes changes also:
+**Backlog** lists each machine's backlog as its board's Backlog page shows it, with whether an item is to write, drafting or ready and how many of its questions wait on you. Open an item to read it in full. A device that makes changes also:
 
 - **Adds an idea.** Tap **New idea**, describe what you want and pick the machine. It waits in the backlog under its first words until the lead writes it out and gives it a title, your description kept as its source.
 - **Answers an open question.** Pick the question on the item and write your answer. It waits with the lead until the lead folds it into the item, on the phone and on the board's card alike.

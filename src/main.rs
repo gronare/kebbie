@@ -361,7 +361,7 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
   kebbie done --landed            one round of that check, as the keeper runs it every minute
   kebbie drop [name] [--force]    throw a task away; --force discards uncommitted work and unpushed commits
   kebbie reset [name]             stop a task for good: discard its work, free its worktree, close its Space, and put
-                                  the backlog item it was started from back in the Backlog column
+                                  the backlog item it was started from back on the Backlog page
   kebbie profiles [--json]        the profiles a task can start with (kebbie start --profile, task.profile): the built-in
                                   task, reviewer and ops (ssh, scp and rsync outside the sandbox), then each file in
                                   ~/.config/kebbie/profiles, with what each is for; the board's Settings page (,) sets

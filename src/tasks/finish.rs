@@ -26,7 +26,7 @@ pub fn reset(cwd: &Path, name: Option<&str>) -> Result<String> {
     let address = peers::address(&task, &name_of(&repo));
     let vault = items.iter().any(|item| crate::vault_cli::is_note(item)).then(crate::vault_cli::detect).flatten();
     let dropped = discard(&repo, Some(&task), true, "reset", None)?;
-    let mut shown = Notice::new(Tone::Done, "Reset: its work is discarded").next(if items.is_empty() { "Its worktree is free for the next task.".to_string() } else { "Its backlog item is back in the Backlog column.".to_string() });
+    let mut shown = Notice::new(Tone::Done, "Reset: its work is discarded").next(if items.is_empty() { "Its worktree is free for the next task.".to_string() } else { "Its backlog item is back on the Backlog page.".to_string() });
     shown.details = dropped.details;
     let mut notice = format!("The user reset {task}: it is gone, and its work was discarded and will never be pushed.");
     if !discarded.is_empty() {
