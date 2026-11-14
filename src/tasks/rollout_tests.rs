@@ -171,7 +171,7 @@ fn green(dir: &Path, sha: &str) {
 }
 
 fn watching(state: &Path, repo: &Path, address: &str, sha: &str, close: bool, pushed: crate::ci::Pushed) -> crate::ci::Begin {
-    let watch = crate::ci::Watch { address: address.to_string(), repo: repo.to_path_buf(), slug: "acme/app".to_string(), sha: sha.to_string(), started_at: 0, checked_at: None, close, runs: Vec::new(), state: crate::ci::State::Running, error: None, erring_since: None, pushed };
+    let watch = crate::ci::Watch { address: address.to_string(), repo: repo.to_path_buf(), slug: "acme/app".to_string(), sha: sha.to_string(), started_at: 0, checked_at: None, close, runs: Vec::new(), state: crate::ci::State::Running, error: None, erring_since: None, following: None, pushed };
     crate::ci::save(state, &watch).unwrap();
     crate::ci::Begin::Watching
 }

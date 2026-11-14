@@ -270,29 +270,60 @@ pub(crate) fn passed_later(watch: &crate::ci::Watch, failed: &[String], gh: &str
     passing_later(watch, failed, gh).iter().any(|sha| ancestor(&watch.repo, &watch.sha, sha))
 }
 
-// The later commit must be known here for the ancestry check, so a clone that lacks one fetches first.
-pub(crate) fn passed_after_cancel(watch: &crate::ci::Watch, cancelled: &[String], gh: &str) -> bool {
-    let shas = passing_later(watch, cancelled, gh);
-    if shas.iter().any(|sha| !crate::sh::succeeds("git", &["cat-file", "-e", &format!("{sha}^{{commit}}")], Some(&watch.repo))) {
-        let _ = super::fetch(&watch.repo);
-    }
-    shas.iter().any(|sha| ancestor(&watch.repo, &watch.sha, sha))
+// What became of a cancelled watch's workflows on the branch: a later push that holds the commit passed them, or still runs them, which a concurrency cancel hands the watch to.
+#[derive(Debug, PartialEq)]
+pub(crate) enum AfterCancel {
+    Passed,
+    Following(String),
+    Nothing,
 }
 
-// The shas of later pushes on the branch on which every named workflow passed.
-fn passing_later(watch: &crate::ci::Watch, failed: &[String], gh: &str) -> Vec<String> {
-    if failed.is_empty() {
+// The later commit must be known here for the ancestry check, so a clone that lacks one fetches first.
+pub(crate) fn after_cancel(watch: &crate::ci::Watch, cancelled: &[String], gh: &str) -> AfterCancel {
+    let later = later_runs(watch, cancelled, gh);
+    if later.iter().any(|run| !crate::sh::succeeds("git", &["cat-file", "-e", &format!("{}^{{commit}}", run.sha)], Some(&watch.repo))) {
+        let _ = super::fetch(&watch.repo);
+    }
+    let holding: Vec<&LaterRun> = later.iter().filter(|run| ancestor(&watch.repo, &watch.sha, &run.sha)).collect();
+    let mut passed: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for run in holding.iter().filter(|run| run.status == "completed" && run.conclusion == "success") {
+        passed.entry(run.sha.as_str()).or_default().push(run.workflow.as_str());
+    }
+    if passed.values().any(|workflows| cancelled.iter().all(|workflow| workflows.contains(&workflow.as_str()))) {
+        return AfterCancel::Passed;
+    }
+    holding.iter().find(|run| run.status != "completed").map_or(AfterCancel::Nothing, |run| AfterCancel::Following(run.sha.clone()))
+}
+
+struct LaterRun {
+    sha: String,
+    workflow: String,
+    status: String,
+    conclusion: String,
+}
+
+// The runs of the named workflows on later pushes to the branch, newest first as gh lists them.
+fn later_runs(watch: &crate::ci::Watch, workflows: &[String], gh: &str) -> Vec<LaterRun> {
+    if workflows.is_empty() {
         return Vec::new();
     }
     let target = if watch.pushed.target.is_empty() { default_branch(&watch.repo).map(|upstream| upstream.trim_start_matches("origin/").to_string()).unwrap_or_default() } else { watch.pushed.target.clone() };
     let Ok(listed) = crate::sh::run(gh, &["run", "list", "-R", &watch.slug, "--branch", &target, "--event", "push", "--limit", "100", "--json", "databaseId,name,status,conclusion,workflowName,url,headSha,event"], Some(&watch.repo)) else { return Vec::new() };
     let Ok(Value::Array(entries)) = serde_json::from_str::<Value>(&listed) else { return Vec::new() };
+    entries.iter().filter(|entry| entry["event"] == "push").filter_map(|entry| {
+        let sha = entry["headSha"].as_str()?;
+        let run = crate::ci::parse_runs(&Value::Array(vec![entry.clone()]).to_string()).unwrap_or_default().pop()?;
+        (sha != watch.sha && workflows.iter().any(|workflow| workflow == run.title())).then(|| LaterRun { sha: sha.to_string(), workflow: run.title().to_string(), status: run.status.clone(), conclusion: run.conclusion.clone() })
+    }).collect()
+}
+
+// The shas of later pushes on the branch on which every named workflow passed.
+fn passing_later(watch: &crate::ci::Watch, failed: &[String], gh: &str) -> Vec<String> {
     let mut passed: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for entry in entries.iter().filter(|entry| entry["event"] == "push" && entry["status"] == "completed" && entry["conclusion"] == "success") {
-        let (Some(sha), Some(run)) = (entry["headSha"].as_str(), crate::ci::parse_runs(&Value::Array(vec![entry.clone()]).to_string()).unwrap_or_default().pop()) else { continue };
-        passed.entry(sha.to_string()).or_default().push(run.title().to_string());
+    for run in later_runs(watch, failed, gh).into_iter().filter(|run| run.status == "completed" && run.conclusion == "success") {
+        passed.entry(run.sha).or_default().push(run.workflow);
     }
-    passed.into_iter().filter(|(sha, workflows)| *sha != watch.sha && failed.iter().all(|workflow| workflows.contains(workflow))).map(|(sha, _)| sha).collect()
+    passed.into_iter().filter(|(_, workflows)| failed.iter().all(|workflow| workflows.contains(workflow))).map(|(sha, _)| sha).collect()
 }
 
 fn stale(repo: &Path) -> bool {
@@ -799,7 +830,7 @@ mod tests {
         let mut red = crate::status::tests::task(Some("idle"), None, 1);
         red.ci = Some(crate::ci::Watch {
             address: "billing@web".to_string(), repo: PathBuf::new(), slug: "acme/web".to_string(), sha: "abc".to_string(), started_at: 1, checked_at: None, close: true, runs: Vec::new(),
-            state: crate::ci::State::Failed { at: 2, what: "deploy · release · Deploy".to_string(), url: String::new() }, error: None, erring_since: None, pushed: crate::ci::Pushed::default(),
+            state: crate::ci::State::Failed { at: 2, what: "deploy · release · Deploy".to_string(), url: String::new() }, error: None, erring_since: None, following: None, pushed: crate::ci::Pushed::default(),
         });
         red.ci_outside = Some("pushed outside the deploy window".to_string());
         crate::status::tests::rederive(&mut red);
@@ -851,7 +882,7 @@ mod tests {
         let passed = crate::ci::Run { id: 2, name: "lint".to_string(), workflow: "lint".to_string(), status: "completed".to_string(), conclusion: "success".to_string(), url: "u".to_string() };
         crate::ci::Watch {
             address: address.to_string(), repo: dir.to_path_buf(), slug: "acme/app".to_string(), sha: sha.to_string(), started_at: 1, checked_at: None, close, runs: vec![failed, passed],
-            state: crate::ci::State::Failed { at: 2, what: "deploy · release · Deploy".to_string(), url: String::new() }, error: None, erring_since: None, pushed: crate::ci::Pushed::default(),
+            state: crate::ci::State::Failed { at: 2, what: "deploy · release · Deploy".to_string(), url: String::new() }, error: None, erring_since: None, following: None, pushed: crate::ci::Pushed::default(),
         }
     }
 
@@ -874,7 +905,7 @@ mod tests {
         assert!(!stale(&dir), "and was fetched just now");
         let watch = crate::ci::Watch { sha: watched.clone(), state: crate::ci::State::Running, ..red_watch(&dir, "billing@app", &watched, true) };
         let gh = fake_gh(&dir, &format!("[{}]", run(&later, "deploy", "success", "push")));
-        assert!(passed_after_cancel(&watch, &["deploy".to_string()], &gh), "the passing commit is fetched before its ancestry is read");
+        assert_eq!(after_cancel(&watch, &["deploy".to_string()], &gh), AfterCancel::Passed, "the passing commit is fetched before its ancestry is read");
         std::fs::remove_dir_all(other).unwrap();
         cleanup(dir, origin, &slot);
     }
@@ -912,6 +943,30 @@ mod tests {
         pass(&state, &world(&repos, &seen, &[], &green), &mut closing_by_finish(&state, &upstream), &mut |_| {});
         assert!(!branch_exists(&dir, "billing"), "landed and its deploy green later: it closes");
         assert!(crate::ci::load(&state, &address).is_none() && intent::pending(&state, &address).is_none(), "the red watch and the push waiting for its fix go");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_cancelled_ci_closes_its_task_once_a_later_run_on_main_that_carries_it_passes() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        on_main(&dir, &slot, &upstream);
+        git(&dir, &["merge", "--quiet", "--ff-only", &upstream]).unwrap();
+        let landing = git(&dir, &["rev-parse", &upstream]).unwrap();
+        upstream_commit(&dir, "fix", "toolchain", "the hang fixed");
+        let later = git(&dir, &["rev-parse", &upstream]).unwrap();
+        let address = peers::address("billing", &name_of(&dir));
+        let mut watch = red_watch(&dir, &address, &landing, true);
+        watch.runs[0].conclusion = "cancelled".to_string();
+        watch.state = crate::ci::State::Cancelled { at: 2, what: "deploy · test (3.11)".to_string(), url: String::new() };
+        crate::ci::save(&state, &watch).unwrap();
+        assert_eq!(verdict(&state, &slot, &address, &upstream, &idle(), &mut |_| false).unwrap(), Verdict::Later, "cancelled and nothing passed since: it stays");
+        let green = fake_gh(&dir, &format!("[{}]", run(&later, "deploy", "success", "push")));
+        let repos = [dir.clone()];
+        let seen = herdr(&slot, "idle");
+        pass(&state, &world(&repos, &seen, &[], &green), &mut closing_by_finish(&state, &upstream), &mut |_| {});
+        assert!(!branch_exists(&dir, "billing"), "a later run of the cancelled workflow passed: it closes without the user");
+        assert!(crate::ci::load(&state, &address).is_none());
         cleanup(dir, origin, &slot);
     }
 

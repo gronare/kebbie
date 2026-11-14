@@ -301,7 +301,7 @@ mod tests {
         let run = crate::ci::Run { id: 42, name: "CI".to_string(), workflow: "CI".to_string(), status: "in_progress".to_string(), conclusion: String::new(), url: LONG.to_string() };
         item.ci = Some(crate::ci::Watch {
             address: "billing@web".to_string(), repo: PathBuf::new(), slug: "acme/web".to_string(), sha: "abcdef0".to_string(),
-            started_at: 0, checked_at: None, close: true, runs: vec![run], state: crate::ci::State::Running, error: None, erring_since: None, pushed: crate::ci::Pushed::default(),
+            started_at: 0, checked_at: None, close: true, runs: vec![run], state: crate::ci::State::Running, error: None, erring_since: None, following: None, pushed: crate::ci::Pushed::default(),
         });
         crate::status::tests::rederive(&mut item);
         let mut app = test_app(vec![item]);

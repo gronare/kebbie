@@ -75,8 +75,11 @@ pub(super) fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_wo
     if item.is_some_and(reruns_ci) {
         choices.push(choice(Act::RerunCi, "Re-run CI", "gh runs its failed or cancelled runs again; kebbie watches them and closes the task once they are green"));
     }
-    if item.and_then(|item| item.ci.as_ref()).is_some_and(|ci| !ci.running()) {
-        choices.push(choice(Act::DismissCi, "Dismiss the red CI", "the failure is not the code's (a deploy window, infra, a flake): kept on record, and the task closes once its commits are on main (asks first)"));
+    match item.and_then(|item| item.ci.as_ref()).map(|ci| &ci.state) {
+        Some(crate::ci::State::Failed { .. }) => choices.push(choice(Act::DismissCi, "Dismiss the red CI", "the failure is not the code's (a deploy window, infra, a flake): kept on record, and the task closes once its commits are on main (asks first)")),
+        Some(crate::ci::State::Cancelled { .. }) => choices.push(choice(Act::DismissCi, "Dismiss the cancelled CI", "leave the run cancelled: kept on record, and the task closes once its commits are on main (asks first)")),
+        Some(crate::ci::State::Unknown { .. }) => choices.push(choice(Act::DismissCi, "Dismiss the unknown CI", "gh could not read its runs: kept on record, and the task closes once its commits are on main (asks first)")),
+        Some(crate::ci::State::Running) | None => {}
     }
     if item.is_some_and(Item::is_task) && !out {
         choices.push(if item.is_some_and(|item| item.permit == Some(Permit::Task)) {
@@ -120,7 +123,7 @@ fn pushed_out(item: &Item) -> bool {
 
 // A pushed task whose CI failed or was cancelled, with nothing left on its branch.
 pub(super) fn reruns_ci(item: &Item) -> bool {
-    pushed_out(item) && item.ci.as_ref().is_some_and(|ci| !ci.running() || !ci.cancelled().is_empty())
+    pushed_out(item) && item.ci.as_ref().is_some_and(|ci| !ci.rerunnable().is_empty() && (!ci.running() || !ci.cancelled().is_empty()))
 }
 
 fn trunk(git: &crate::status::Git) -> &str {
@@ -326,7 +329,7 @@ mod tests {
         let run = crate::ci::Run { id: 7, name: "deploy".to_string(), workflow: "deploy".to_string(), status: "completed".to_string(), conclusion: conclusion.to_string(), url: String::new() };
         crate::ci::Watch {
             address: "billing@web".to_string(), repo: std::path::PathBuf::new(), slug: "acme/web".to_string(), sha: "abc".to_string(), started_at: 1, checked_at: None, close: true, runs: vec![run],
-            state, error: None, erring_since: None, pushed: crate::ci::Pushed::default(),
+            state, error: None, erring_since: None, following: None, pushed: crate::ci::Pushed::default(),
         }
     }
 
@@ -563,7 +566,7 @@ mod tests {
         let run = |id: u64, name: &str| crate::ci::Run { id, name: name.to_string(), workflow: name.to_string(), status: "completed".to_string(), conclusion: "failure".to_string(), url: format!("https://github.com/acme/web/actions/runs/{id}") };
         item.ci = Some(crate::ci::Watch {
             address: "search-filters@web".to_string(), repo: std::path::PathBuf::new(), slug: "acme/web".to_string(), sha: "abcdef0".to_string(),
-            started_at: 0, checked_at: None, close: true, runs: vec![run(42, "CI"), run(43, "Lint")], state: crate::ci::State::Running, error: None, erring_since: None, pushed: crate::ci::Pushed::default(),
+            started_at: 0, checked_at: None, close: true, runs: vec![run(42, "CI"), run(43, "Lint")], state: crate::ci::State::Running, error: None, erring_since: None, following: None, pushed: crate::ci::Pushed::default(),
         });
         let long = format!("https://claude.ai/artifact/{}", "a1b2c3d4".repeat(12));
         item.report.as_mut().unwrap().text = format!("mock at {long} and the PR https://github.com/acme/web/pull/7, also https://docs.example.org/guide");

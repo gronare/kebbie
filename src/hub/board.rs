@@ -149,6 +149,8 @@ fn ci(item: &status::Item) -> Option<Ci> {
     Some(match &item.ci.as_ref()?.state {
         crate::ci::State::Running => Ci { state: CiState::Running, failure: None },
         crate::ci::State::Failed { what, .. } => Ci { state: CiState::Failed, failure: Some(what.clone()) },
+        crate::ci::State::Cancelled { what, .. } => Ci { state: CiState::Failed, failure: Some(format!("cancelled: {what}")) },
+        crate::ci::State::Unknown { error, .. } => Ci { state: CiState::Failed, failure: Some(format!("unknown: gh could not read it: {error}")) },
     })
 }
 

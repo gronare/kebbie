@@ -327,7 +327,8 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
   kebbie ci [--json]              the CI watches: after a full push to a GitHub origin, with gh logged in, the task stays
                                   open under CI running until every workflow run for the pushed commit is green, then
                                   closes as done; a failed run moves it to Needs you and its Claude gets the failing
-                                  job's log ([ci] watch = false turns it off); the keeper checks every 30 seconds
+                                  job's log, a cancelled one to Needs you as CI cancelled unless a newer run on the
+                                  branch follows it ([ci] watch = false turns it off); the keeper checks every 30 seconds
   kebbie ci tick                  one round of checks for every running watch, as the board does
   kebbie ci outside \"<reason>\"    run by a task's Claude: its red CI is outside the code (deploy window, infra,
                                   secrets, a flake); the row says so, nothing is waived

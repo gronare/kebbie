@@ -634,7 +634,7 @@ mod tests {
         let state = crate::sh::test_dir("report-checked");
         let me = format!("checked-{}@app", std::process::id());
         let check = Check { what: "the old key gets 401".to_string(), asked: Some(10), passed: false };
-        let watch = Watch { address: me.clone(), repo: PathBuf::from("/src/app"), slug: String::new(), sha: "abcdef0".to_string(), started_at: 0, checked_at: None, close: true, runs: Vec::new(), state: State::Running, error: None, erring_since: None, pushed: Pushed { check: Some(check.clone()), ..Pushed::default() } };
+        let watch = Watch { address: me.clone(), repo: PathBuf::from("/src/app"), slug: String::new(), sha: "abcdef0".to_string(), started_at: 0, checked_at: None, close: true, runs: Vec::new(), state: State::Running, error: None, erring_since: None, following: None, pushed: Pushed { check: Some(check.clone()), ..Pushed::default() } };
         let report = |state: &str, next: &str| Report { state: state.to_string(), next: next.to_string(), head: Some("abc".to_string()), after: Vec::new() };
         let begin = || {
             crate::ci::save(&state, &watch).unwrap();

@@ -10,6 +10,8 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Pushing from the board runs in the background, with a line saying each step and the task's row marked pushing.
 
 ### Fixed
+- A cancelled CI run shows as CI cancelled under Needs you, with G to re-run and C to dismiss, instead of CI running.
+- A CI watch gh cannot read for 15 minutes ends as CI unknown instead of running forever.
 - When one bug or wish waits to be sent, the board's row names it by its title instead of counting it.
 - The board's "Done in kebbie" line is selected like a task, and ⏎ on it shows its list or hides it for good.
 - Your phone answers kebbie's own question on a task's obstacle, and the task hears your decision.

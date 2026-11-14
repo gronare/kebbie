@@ -361,7 +361,6 @@ impl Item {
         match self.phase()? {
             Phase::Closing => Some("pushed · kebbie closes it".to_string()),
             Phase::NeedsYou(Why::Failed) => Some("kebbie could not finish its push or close it; the lead has why".to_string()),
-            Phase::NeedsYou(Why::Unreadable) => Some(format!("gh has not read its CI for {} minutes", crate::ci::UNREADABLE_AFTER / 60)),
             Phase::NeedsYou(Why::LeftLine) => Some(self.left_note()),
             Phase::NeedsYou(Why::Unseen) => self.ci.as_ref().map(crate::ci::Watch::note),
             Phase::NeedsYou(Why::NotStaged) => Some(format!("kebbie could not put it on local main again within {} minutes; stage it once the main checkout is clear", tasks::STAGE_WAIT / 60)),
@@ -485,6 +484,8 @@ impl Item {
         if let Some(ci) = self.ci.as_ref().filter(|ci| !reported_after(ci.since())) {
             match ci.state {
                 crate::ci::State::Failed { .. } => return Phase::CiRed { sha: ci.sha.clone() },
+                crate::ci::State::Cancelled { .. } => return Phase::NeedsYou(Why::Cancelled),
+                crate::ci::State::Unknown { .. } => return Phase::NeedsYou(Why::Unreadable),
                 crate::ci::State::Running if ci.close => return Phase::CiRunning { sha: ci.sha.clone() },
                 crate::ci::State::Running => {}
             }
@@ -534,7 +535,7 @@ impl Item {
         if self.blocked_on_a_prompt() {
             return self.agent.as_ref().map(|agent| agent.answer.as_str());
         }
-        if self.turn_under_way() || self.recovering().is_some() || matches!(self.phase(), Some(Phase::Pushing { .. } | Phase::CiRunning { .. } | Phase::CiRed { .. } | Phase::Closing)) {
+        if self.turn_under_way() || self.recovering().is_some() || matches!(self.phase(), Some(Phase::Pushing { .. } | Phase::CiRunning { .. } | Phase::CiRed { .. } | Phase::NeedsYou(Why::Cancelled | Why::Unreadable) | Phase::Closing)) {
             return None;
         }
         if let Some(held) = &self.held_by_draft {
@@ -566,7 +567,7 @@ impl Item {
         if let Some(landed) = self.landed_note() {
             return Some(landed);
         }
-        if self.recovering().is_some() || matches!(self.phase(), Some(Phase::CiRed { .. })) {
+        if self.recovering().is_some() || matches!(self.phase(), Some(Phase::CiRed { .. } | Phase::NeedsYou(Why::Cancelled | Why::Unreadable))) {
             return None;
         }
         if let Some(held) = &self.held_by_draft {
@@ -1560,7 +1561,7 @@ pub(crate) mod tests {
     fn watched(state: crate::ci::State, close: bool) -> crate::ci::Watch {
         crate::ci::Watch {
             address: "billing@web".to_string(), repo: PathBuf::new(), slug: "acme/web".to_string(), sha: "abcdef0".to_string(),
-            started_at: 10, checked_at: None, close, runs: Vec::new(), state, error: None, erring_since: None, pushed: crate::ci::Pushed::default(),
+            started_at: 10, checked_at: None, close, runs: Vec::new(), state, error: None, erring_since: None, following: None, pushed: crate::ci::Pushed::default(),
         }
     }
 

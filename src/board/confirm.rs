@@ -37,7 +37,7 @@ impl App {
         match key.code {
             KeyCode::Char('y') => {
                 self.about("ci", &name);
-                self.in_background(format!("Dismissing the red CI of {name}…"), move || tasks::dismiss_ci(&path, Some(&name), None));
+                self.in_background(format!("Dismissing the CI of {name}…"), move || tasks::dismiss_ci(&path, Some(&name), None));
             }
             _ if cancels => {}
             _ => self.mode = Mode::ConfirmDismiss { path, name, nudged: true },
@@ -113,7 +113,7 @@ pub(super) fn draw_done(frame: &mut Frame, name: &str, nudged: bool) {
 }
 
 pub(super) fn draw_dismiss(frame: &mut Frame, name: &str, nudged: bool) {
-    modal(frame, "dismiss the red CI".to_string(), confirm_lines(name, Some("Its failed run is kept on record with the reason its Claude gave, the push waiting for a fix is dropped, and the task closes once its commits are on main."), "Dismiss the red CI?", nudged), 72);
+    modal(frame, "dismiss its CI".to_string(), confirm_lines(name, Some("Its failed, cancelled or unread run is kept on record with the reason its Claude gave, the push waiting for a fix is dropped, and the task closes once its commits are on main."), "Dismiss its CI?", nudged), 72);
 }
 
 pub(super) fn draw_queued(frame: &mut Frame, name: &str, about: &str, now: bool, nudged: bool) {
@@ -164,14 +164,14 @@ mod tests {
         assert!(!crate::board::options::task_choices(Some(&item), None, None).iter().any(|choice| choice.act == Some(crate::keys::Act::DismissCi)));
         item.ci = Some(crate::ci::Watch {
             address: "billing@web".to_string(), repo: PathBuf::new(), slug: "acme/web".to_string(), sha: "abc".to_string(), started_at: 1, checked_at: None, close: true, runs: Vec::new(),
-            state: crate::ci::State::Failed { at: 2, what: "deploy · release · Deploy".to_string(), url: String::new() }, error: None, erring_since: None, pushed: crate::ci::Pushed::default(),
+            state: crate::ci::State::Failed { at: 2, what: "deploy · release · Deploy".to_string(), url: String::new() }, error: None, erring_since: None, following: None, pushed: crate::ci::Pushed::default(),
         });
         assert!(crate::board::options::task_choices(Some(&item), None, None).iter().any(|choice| choice.act == Some(crate::keys::Act::DismissCi) && choice.label == "Dismiss the red CI"));
         let mut app = test_app(vec![item]);
         app.handle_normal(key(KeyCode::Char('C')));
         assert!(matches!(app.mode, Mode::ConfirmDismiss { nudged: false, .. }), "C asks before it dismisses");
         let (rows, _) = render(&mut app, 100, 30);
-        assert!(rows.join("\n").contains("Dismiss the red CI?"));
+        assert!(rows.join("\n").contains("Dismiss its CI?"));
         press(&mut app, key(KeyCode::Esc));
         assert!(matches!(app.mode, Mode::Normal));
     }

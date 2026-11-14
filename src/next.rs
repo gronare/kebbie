@@ -181,7 +181,7 @@ fn stopped(item: &Item) -> (char, String, String, Option<u64>) {
         return ('?', what, short, Some(message.at));
     }
     if ci_red(item) && !item.wants_you_now() {
-        let failed = item.ci.as_ref().and_then(|watch| match watch.state { crate::ci::State::Failed { at, .. } => Some(at), crate::ci::State::Running => None });
+        let failed = item.ci.as_ref().and_then(|watch| match watch.state { crate::ci::State::Failed { at, .. } => Some(at), _ => None });
         let agent = item.agent.as_ref().map_or("agent", |agent| agent.kind.name());
         let why = match (&item.ci_outside, &item.agent) {
             (Some(reason), _) => format!("its {agent} says outside the code: {reason}"),

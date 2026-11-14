@@ -75,10 +75,16 @@ pub(crate) fn dismiss_as(state: &Path, caller: &Caller, cwd: &Path, name: Option
     };
     let why = why.map(str::trim).filter(|why| !why.is_empty()).map(str::to_string).or_else(|| outside_reason(state, &address)).unwrap_or_else(|| "dismissed by the user".to_string());
     let what = match &watch.state {
-        crate::ci::State::Failed { what, url, .. } => json!({ "what": what, "url": url }),
+        crate::ci::State::Failed { what, url, .. } | crate::ci::State::Cancelled { what, url, .. } => json!({ "what": what, "url": url }),
+        crate::ci::State::Unknown { error, .. } => json!({ "what": error }),
         crate::ci::State::Running => json!({}),
     };
-    let entry = json!({ "sha": watch.sha, "failed": what, "why": why, "at": messages::now() });
+    let named = match &watch.state {
+        crate::ci::State::Cancelled { .. } => "cancelled",
+        crate::ci::State::Unknown { .. } => "unknown",
+        crate::ci::State::Failed { .. } | crate::ci::State::Running => "red",
+    };
+    let entry = json!({ "sha": watch.sha, "failed": what, "state": named, "why": why, "at": messages::now() });
     let mut record = read(state, &address);
     record.as_object_mut().map(|record| record.remove("outside"));
     let mut archived = dismissed(state, &address);
@@ -92,11 +98,11 @@ pub(crate) fn dismiss_as(state: &Path, caller: &Caller, cwd: &Path, name: Option
     super::after::red_ci_superseded(state, &address);
     crate::phase::record(state, &address, "dismiss", &crate::phase::Event::Dismissed { kept_open: super::landed::kept_open(state, &address) });
     let then = if super::landed::kept_open(state, &address) { "It stays open, as the user chose when pushing it." } else { "kebbie closes the task once its commits are on the default branch." };
-    let text = format!("The user dismissed the red CI of {address} on {}: {why}. {then}", watch.short());
+    let text = format!("The user dismissed the {named} CI of {address} on {}: {why}. {then}", watch.short());
     if let Err(error) = messages::to_lead(messages::ToLead::CiDismissed, &text) {
         eprintln!("Could not tell the lead: {error}");
     }
-    Notice::new(Tone::Done, "Dismissed the red CI").next(then).detail("task", task).detail("why", why).ok()
+    Notice::new(Tone::Done, format!("Dismissed the {named} CI")).next(then).detail("task", task).detail("why", why).ok()
 }
 
 pub fn dismiss(cwd: &Path, name: Option<&str>, why: Option<&str>) -> Result<String> {
@@ -111,7 +117,7 @@ mod tests {
     fn red_watch(dir: &Path, address: &str) -> crate::ci::Watch {
         crate::ci::Watch {
             address: address.to_string(), repo: dir.to_path_buf(), slug: "acme/app".to_string(), sha: "abcdef0123".to_string(), started_at: 1, checked_at: None, close: true, runs: Vec::new(),
-            state: crate::ci::State::Failed { at: 2, what: "deploy · release · Deploy".to_string(), url: "https://ci/1".to_string() }, error: None, erring_since: None, pushed: crate::ci::Pushed::default(),
+            state: crate::ci::State::Failed { at: 2, what: "deploy · release · Deploy".to_string(), url: "https://ci/1".to_string() }, error: None, erring_since: None, following: None, pushed: crate::ci::Pushed::default(),
         }
     }
 

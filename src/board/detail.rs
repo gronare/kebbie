@@ -162,7 +162,11 @@ pub(super) fn server_line(item: &Item, configured: bool, name: &str, width: usiz
 
 fn ci_lines(item: &Item, width: usize) -> (Vec<Line<'static>>, Vec<Link>) {
     let Some(ci) = &item.ci else { return (Vec::new(), Vec::new()) };
-    let (mark, color) = if ci.running() { ("◐ ", YELLOW) } else { ("● ", PEACH) };
+    let (mark, color) = match ci.state {
+        crate::ci::State::Running => ("◐ ", YELLOW),
+        crate::ci::State::Cancelled { .. } | crate::ci::State::Unknown { .. } => ("○ ", MUTED),
+        crate::ci::State::Failed { .. } => ("● ", PEACH),
+    };
     let mut lines = vec![field("ci", vec![Span::styled(mark, style(color)), Span::styled(item.ci_note().unwrap_or_else(|| ci.note()), style(TEXT))])];
     let mut links = Vec::new();
     for (title, url) in ci_urls(item).into_iter().take(4) {
@@ -178,7 +182,7 @@ fn ci_lines(item: &Item, width: usize) -> (Vec<Line<'static>>, Vec<Link>) {
 fn ci_urls(item: &Item) -> Vec<(String, String)> {
     let Some(ci) = &item.ci else { return Vec::new() };
     let mut urls: Vec<(String, String)> = ci.runs.iter().map(|run| (run.title().to_string(), run.url.clone())).collect();
-    if urls.is_empty() && let crate::ci::State::Failed { url, .. } = &ci.state {
+    if urls.is_empty() && let crate::ci::State::Failed { url, .. } | crate::ci::State::Cancelled { url, .. } = &ci.state {
         urls.push(("run".to_string(), url.clone()));
     }
     urls.into_iter().filter(|(_, url)| !url.is_empty()).collect()
@@ -639,7 +643,7 @@ mod tests {
         let run = crate::ci::Run { id: 42, name: "CI".to_string(), workflow: "CI".to_string(), status: "in_progress".to_string(), conclusion: String::new(), url: "https://github.com/acme/web/actions/runs/42".to_string() };
         item.ci = Some(crate::ci::Watch {
             address: "billing@web".to_string(), repo: PathBuf::new(), slug: "acme/web".to_string(), sha: "abcdef0".to_string(),
-            started_at: 0, checked_at: None, close: true, runs: vec![run], state: crate::ci::State::Running, error: None, erring_since: None, pushed: crate::ci::Pushed::default(),
+            started_at: 0, checked_at: None, close: true, runs: vec![run], state: crate::ci::State::Running, error: None, erring_since: None, following: None, pushed: crate::ci::Pushed::default(),
         });
         crate::status::tests::rederive(&mut item);
         let (lines, links) = ci_lines(&item, 80);

@@ -795,7 +795,7 @@ pub(super) fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through
         }
         if let Some(check) = check {
             let pushed = crate::ci::Pushed { pusher: pusher.to_string(), target: target.clone(), commits: pushed.clone(), note: note.clone(), logged: log.as_ref().map(|log| matches!(log, Ok(Some(_)))), check: Some(crate::ci::Check::new(&check)), stages: Vec::new(), deploy: None };
-            let watch = crate::ci::Watch { address: address.clone(), repo: repo.to_path_buf(), slug: String::new(), sha: sha.clone(), started_at: messages::now(), checked_at: None, close: true, runs: Vec::new(), state: crate::ci::State::Running, error: None, erring_since: None, pushed };
+            let watch = crate::ci::Watch { address: address.clone(), repo: repo.to_path_buf(), slug: String::new(), sha: sha.clone(), started_at: messages::now(), checked_at: None, close: true, runs: Vec::new(), state: crate::ci::State::Running, error: None, erring_since: None, following: None, pushed };
             match crate::ci::ask_check(state, &watch, &format!("{short} is on {target}"), messages::now()) {
                 Ok(_) => {
                     crate::phase::record(state, &address, "push", &crate::phase::Event::PushOut { sha: &sha });
@@ -835,7 +835,7 @@ fn unwatched_stages(state: &Path, repo: &Path, address: &str, sha: &str, target:
     let rolled = super::rollout::rolled_out(state, address, &staged.stages, Some(&unseen), messages::now());
     if let Some(check) = &staged.check {
         let pushed = crate::ci::Pushed { check: Some(crate::ci::Check::new(check)), stages: staged.stages.clone(), target: target.to_string(), ..crate::ci::Pushed::default() };
-        let watch = crate::ci::Watch { address: address.to_string(), repo: repo.to_path_buf(), slug: String::new(), sha: sha.to_string(), started_at: messages::now(), checked_at: None, close: !keep_open, runs: Vec::new(), state: crate::ci::State::Running, error: None, erring_since: None, pushed };
+        let watch = crate::ci::Watch { address: address.to_string(), repo: repo.to_path_buf(), slug: String::new(), sha: sha.to_string(), started_at: messages::now(), checked_at: None, close: !keep_open, runs: Vec::new(), state: crate::ci::State::Running, error: None, erring_since: None, following: None, pushed };
         if let Err(error) = crate::ci::ask_check(state, &watch, &format!("{} is on {target}", &sha[..7.min(sha.len())]), messages::now()) {
             eprintln!("kebbie could not ask {address} to run its check of the stage: {error}");
         }
@@ -1185,7 +1185,7 @@ mod tests {
     }
 
     fn watching(state: &Path, repo: &Path, address: &str, sha: &str, close: bool, pushed: crate::ci::Pushed) -> crate::ci::Begin {
-        let watch = crate::ci::Watch { address: address.to_string(), repo: repo.to_path_buf(), slug: "acme/app".to_string(), sha: sha.to_string(), started_at: 0, checked_at: None, close, runs: Vec::new(), state: crate::ci::State::Running, error: None, erring_since: None, pushed };
+        let watch = crate::ci::Watch { address: address.to_string(), repo: repo.to_path_buf(), slug: "acme/app".to_string(), sha: sha.to_string(), started_at: 0, checked_at: None, close, runs: Vec::new(), state: crate::ci::State::Running, error: None, erring_since: None, following: None, pushed };
         crate::ci::save(state, &watch).unwrap();
         crate::ci::Begin::Watching
     }
