@@ -136,6 +136,9 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   dev_url names, proxied to localhost:<port>, for the repos that turn on
                                   worktree.dev_route (opt-in per repo); --plain-http serves each as http://<host> for
                                   a proxy in front that ends TLS; writes nothing
+  kebbie job run [<name>]         run the repo's job of that name ([jobs] in its repo config) on another machine of
+                                  your hub account that has worker.enabled, on this worktree as it stands; prints its
+                                  output and exits as the job did; no name lists the repo's jobs
   kebbie status [--json]          every task and Claude session, grouped by what it needs from you
   kebbie next                     what needs you, in the order to do it: what is stopped on you, what to push in
                                   which order, what to read; the same list N shows on the board
@@ -841,6 +844,8 @@ fn run(arguments: &Arguments) -> Result<String> {
             tasks::link(&cwd, name, &arguments.rest(2).join(" "))
         }
         Some("docs") => docs::print(arguments.rest(1)),
+        Some("job") if name == Some("run") => jobs::run(&cwd, arguments.positional(2)),
+        Some("job") => Err("kebbie job run <name> runs the repo's job of that name on another machine of your hub account; kebbie job run lists the repo's jobs".to_string()),
         Some("profiles") => profiles::print(arguments.flag("--json")),
         Some("hub") => hub::cli(name, arguments.rest(2), arguments.value("--name")),
         Some("config") if name == Some("edit") => settings_page::edit(&cwd, arguments.value("--repo")),

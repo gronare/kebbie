@@ -1,18 +1,26 @@
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
+use kebbie_hub::{Gated, Refusal};
 use kebbie_hub_api::{AccountMachine, AccountMachines};
-use kebbie_hub_protocol::{AccountKey, Id, Job, JobEnd, Prefix, SecretKeys};
+use kebbie_hub_protocol::{AccountKey, Id, Job, JobEnd, JobReport, Kind, ListedMachine, Payload, Prefix, SecretKeys};
 
-use super::cluster;
+use super::cluster::{self, Cluster};
+use super::master::{self, Asked, Bases, Followed, Hub, Sent};
 use super::worker::{self, Batch, Queued, Seen};
 use super::*;
-
-fn row(seed: u8, name: &str, os: Option<&str>, seen: Option<u64>) -> AccountMachine {
-    AccountMachine { machine: machine(seed), name: name.to_string(), worker_os: os.map(str::to_string), last_seen: seen }
-}
+use crate::hub::commands::{self, Hands};
+use crate::hub::devices::Policy;
+use crate::hub::http::{CALL, Client};
+use crate::hub::identity;
+use crate::hub::tests::{TestHub, connected_named, member, open_gated_hub, open_hub};
 
 fn machine(seed: u8) -> Id {
     Id::ulid(Prefix::Machine, 1, [seed; 10]).unwrap()
+}
+
+fn row(seed: u8, name: &str, os: Option<&str>, seen: Option<u64>) -> AccountMachine {
+    AccountMachine { machine: machine(seed), name: name.to_string(), worker_os: os.map(str::to_string), last_seen: seen }
 }
 
 #[test]
@@ -34,10 +42,34 @@ fn names_from_the_other_machine_never_leave_their_folder_and_names_for_the_hub_a
 }
 
 #[test]
+fn a_worker_is_picked_by_its_system_or_its_name_and_the_one_heard_from_last_wins() {
+    let me = machine(1);
+    let cluster = Cluster { keys: Default::default(), rows: vec![row(1, "devbox", Some("linux"), Some(500)), row(2, "MacBook", Some("macos"), Some(100)), row(3, "studio", Some("macos"), Some(300)), row(4, "laptop", None, Some(900)), row(5, "old-box", Some("linux"), Some(50))] };
+    let picked = |on: Option<&str>| cluster::pick(&cluster, &me, on).map(|row| row.name.clone());
+    assert_eq!(picked(Some("macos")).as_deref(), Some("studio"), "of two Macs, the one heard from last");
+    assert_eq!(picked(Some("macbook")).as_deref(), Some("MacBook"), "by its name, in any case");
+    assert_eq!(picked(Some("linux")).as_deref(), Some("old-box"), "never this machine itself");
+    assert_eq!(picked(None).as_deref(), Some("studio"), "any worker, never a machine that is none");
+    assert_eq!(picked(Some("windows")), None);
+    assert!(master::no_worker(Some("macos")).starts_with("No machine of your hub account on macos runs jobs.") && master::no_worker(None).contains("set [worker] enabled = true"));
+}
+
+#[test]
 fn a_list_the_account_did_not_sign_trusts_no_machine() {
     let account = AccountKey { account: Id::account([3; 16]), version: 1, keys: SecretKeys::generate().public() };
     let unsigned = AccountMachines { list: None, machines: vec![row(2, "mac", Some("macos"), Some(1))] };
     assert!(cluster::verify(&unsigned, &account).unwrap_err().contains("not signed by the account"));
+}
+
+#[test]
+fn the_base_a_worker_has_is_kept_per_worker_and_repo() {
+    let mut bases = Bases::default();
+    assert_eq!(bases.base(&machine(2), "app"), None);
+    bases.record(&machine(2), "app", "a1");
+    bases.record(&machine(2), "web", "b1");
+    bases.record(&machine(3), "app", "c1");
+    bases.record(&machine(2), "app", "a2");
+    assert_eq!((bases.base(&machine(2), "app"), bases.base(&machine(2), "web"), bases.base(&machine(3), "app"), bases.base(&machine(3), "web")), (Some("a2"), Some("b1"), Some("c1"), None));
 }
 
 #[test]
@@ -91,6 +123,52 @@ fn a_job_the_inbox_hands_over_again_is_queued_once_and_jobs_wait_in_the_order_th
     let _ = std::fs::remove_dir_all(dir);
 }
 
+fn sent(worker: Id) -> Sent {
+    Sent { id: cluster::new_id().unwrap(), worker, worker_name: "studio".into(), repo: "app".into(), name: "build".into(), commit: "a".repeat(40), base: None, blobs: Vec::new(), at: 100 }
+}
+
+#[test]
+fn only_the_jobs_own_worker_reports_on_it_and_each_report_counts_once() {
+    let state = crate::sh::test_dir("jobs-report");
+    let job = sent(machine(2));
+    std::fs::create_dir_all(state.join("jobs")).unwrap();
+    std::fs::write(master::part(&state, &job.id, "sent.json"), serde_json::to_string(&job).unwrap()).unwrap();
+    let report = |seq: u32, log: &str, end: Option<JobEnd>| JobReport { job: job.id.clone(), seq, log: log.into(), end };
+    let log = || std::fs::read_to_string(master::part(&state, &job.id, "log")).unwrap_or_default();
+    assert_eq!(master::report(&state, &machine(2), &report(0, "compiling\n", None), 110), None);
+    let forged = master::report(&state, &machine(9), &report(1, "forged\n", Some(JobEnd::Exited { code: 0, artifacts: Vec::new() })), 111).unwrap();
+    assert!(forged.starts_with("jobs: refused a report on build from") && forged.contains("the job went to studio"), "{forged}");
+    assert!(!master::part(&state, &job.id, "end.json").exists() && log() == "compiling\n", "another machine's report ends nothing and prints nothing");
+    assert_eq!(master::report(&state, &machine(2), &report(0, "compiling\n", None), 112), None);
+    assert_eq!(log(), "compiling\n", "a report handed over again is not printed twice");
+    assert!(master::report(&state, &machine(2), &report(1, "linking\n", Some(JobEnd::Exited { code: 65, artifacts: Vec::new() })), 113).unwrap().contains("ended"));
+    assert!(master::report(&state, &machine(2), &JobReport { job: cluster::new_id().unwrap(), seq: 0, log: String::new(), end: None }, 114).unwrap().contains("no job this machine runs has that id"));
+    let mut printed = String::new();
+    let followed = master::follow(&state, &job, &mut |text| printed.push_str(text), &mut || {}, &|| 120);
+    assert!(matches!(followed, Followed::Ended(JobEnd::Exited { code: 65, .. })) && printed == "compiling\nlinking\n");
+    let _ = std::fs::remove_dir_all(state);
+}
+
+#[test]
+fn a_worker_that_sends_nothing_for_ten_minutes_is_given_up_on_while_one_that_reports_is_waited_for() {
+    let state = crate::sh::test_dir("jobs-silent");
+    let job = sent(machine(2));
+    std::fs::create_dir_all(state.join("jobs")).unwrap();
+    std::fs::write(master::part(&state, &job.id, "sent.json"), serde_json::to_string(&job).unwrap()).unwrap();
+    let clock = std::cell::Cell::new(100);
+    let mut pauses = 0;
+    let followed = master::follow(&state, &job, &mut |_| {}, &mut || {
+        pauses += 1;
+        clock.set(clock.get() + 300);
+        if pauses <= 4 {
+            master::report(&state, &machine(2), &JobReport { job: job.id.clone(), seq: pauses, log: String::new(), end: None }, clock.get());
+        }
+    }, &|| clock.get());
+    assert!(matches!(followed, Followed::Silent));
+    assert_eq!((pauses, clock.get()), (7, 2_200), "twenty minutes of reports are waited for, then ten silent ones end it");
+    let _ = std::fs::remove_dir_all(state);
+}
+
 fn git(dir: &Path, args: &[&str]) -> String {
     crate::repo::git(dir, args).unwrap()
 }
@@ -108,6 +186,22 @@ fn repo(root: &Path) -> PathBuf {
 fn commit(top: &Path, message: &str) {
     git(top, &["add", "."]);
     git(top, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", message]);
+}
+
+#[test]
+fn a_snapshot_holds_uncommitted_and_untracked_files_and_leaves_the_worktree_as_it_was() {
+    let root = crate::sh::test_dir("jobs-snapshot");
+    let top = repo(&root);
+    let head = git(&top, &["rev-parse", "HEAD"]);
+    assert_eq!(snapshot(&top, "clean").unwrap(), head, "a clean worktree runs as its commit");
+    std::fs::write(top.join("tracked.txt"), "edited\n").unwrap();
+    std::fs::write(top.join("new.txt"), "untracked\n").unwrap();
+    let sha = snapshot(&top, "dirty").unwrap();
+    assert!(sha != head && git(&top, &["rev-parse", "HEAD"]) == head && git(&top, &["status", "--porcelain"]).lines().count() == 2, "the branch, the index and the files are left as they were");
+    assert_eq!(git(&top, &["show", &format!("{sha}:new.txt")]), "untracked");
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    assert_eq!(snapshot(&top, "again").unwrap(), sha, "an unchanged worktree is the same commit, so a worker that has it needs nothing sent");
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
@@ -148,5 +242,196 @@ fn a_worker_with_no_repo_runs_a_bundle_takes_a_later_one_from_its_base_and_asks_
     assert!(matches!(&end, JobEnd::Failed { reason } if reason.starts_with("the worker could not take the commit")), "{end:?}");
     let failing = worker::execute(&queued(&second, None, "true"), &data, &|_| Err("the hub answered 404 not-found".to_string()), &mut |_, _| {}, &|| false, &crate::typing::now_ms);
     assert_eq!(failing, JobEnd::Failed { reason: "the worker could not fetch the bundle: the hub answered 404 not-found".into() });
+    let _ = std::fs::remove_dir_all(root);
+}
+
+fn inbox_round(dir: &Path) -> Vec<String> {
+    let hands = Hands {
+        answer: &|_, _| unreachable!(),
+        push: &|_, _| unreachable!(),
+        prompt: &|_, _| unreachable!(),
+        idea: &|_, _| unreachable!(),
+        item_answers: &|_, _| unreachable!(),
+        start_item: &|_, _| unreachable!(),
+        item_edit: &|_, _| unreachable!(),
+        item_write: &|_, _| unreachable!(),
+        review_open: &|_, _| unreachable!(),
+        review_comments: &|_, _| unreachable!(),
+        review_read: &|_, _| unreachable!(),
+        accept_subtask: &|_, _| unreachable!(),
+        found: &|_, _| unreachable!(),
+        review_send: &|_, _| unreachable!(),
+        lead: &|_, _, _| unreachable!(),
+        relay: &|| {},
+        notify: &|_| {},
+    };
+    commands::round(dir, 0, &[], Policy { trust: crate::config::HubTrust::Account, auto: crate::config::AutoApprove::Day }, &hands, &crate::messages::now).unwrap()
+}
+
+struct Machine {
+    state: PathBuf,
+    dir: PathBuf,
+    identity: identity::Identity,
+    account: AccountKey,
+}
+
+impl Machine {
+    fn connected(hub: &TestHub, browser: &mut kebbie_hub_fakes::browser::Browser, name: &str) -> Machine {
+        let state = connected_named(hub, &hub.url, browser, name);
+        let dir = identity::dir(&state);
+        let identity = identity::load_at(&dir).unwrap().unwrap();
+        let account = identity.account.clone().unwrap().key;
+        Machine { state, dir, identity, account }
+    }
+
+    fn client(&self) -> Client {
+        Client::new(&self.identity.url, Some(self.identity.token()), CALL)
+    }
+
+    fn work(&self) {
+        worker::register(&self.client(), true, None, crate::messages::now()).unwrap();
+    }
+
+    fn hub(&self) -> Hub<'_> {
+        Hub { state: &self.state, dir: &self.dir, identity: &self.identity, account: &self.account }
+    }
+}
+
+// The worker's keeper in one step: its inbox round queues what came, then it runs the oldest queued job to its end.
+fn worker_round(worker: &Machine, data: &Path, seen: &RefCell<Vec<Queued>>) {
+    inbox_round(&worker.dir);
+    if let Some((file, queued)) = worker::next_queued(&worker.dir) {
+        worker::run_one(&worker.dir, &worker.identity, &worker.account, &worker.client(), data, &queued, &|| false);
+        std::fs::remove_file(file).unwrap();
+        seen.borrow_mut().push(queued);
+    }
+}
+
+#[test]
+fn a_master_runs_its_worktree_as_it_stands_on_a_worker_of_its_hub_account_end_to_end() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let (master, worker) = (Machine::connected(&hub, &mut browser, "devbox"), Machine::connected(&hub, &mut browser, "studio"));
+    worker.work();
+    let root = crate::sh::test_dir("jobs-e2e");
+    let (top, data) = (repo(&root), root.join("worker-data"));
+    std::fs::write(top.join("tracked.txt"), "edited\n").unwrap();
+    std::fs::write(top.join("new.txt"), "untracked\n").unwrap();
+    let ran: RefCell<Vec<Queued>> = RefCell::new(Vec::new());
+    let run = |command: &str| {
+        let def = Def { run: command.to_string(), on: Some(worker::os()) };
+        let asked = Asked { top: &top, repo: "app".to_string(), name: "build".to_string(), def: &def };
+        let mut printed = String::new();
+        let ended = master::go(&master.hub(), &asked, &mut |text| printed.push_str(text), &mut || {
+            worker_round(&worker, &data, &ran);
+            inbox_round(&master.dir);
+        }, &crate::messages::now);
+        (ended, printed)
+    };
+    let (ended, printed) = run("cat tracked.txt new.txt; echo $KEBBIE_JOB $KEBBIE_JOB_TASK $KEBBIE_JOB_MASTER");
+    assert_eq!(ended, Ok("kebbie: build passed on studio".to_string()), "{printed}");
+    assert!(printed.starts_with("kebbie: studio runs build for app on ") && printed.ends_with("edited\nuntracked\nbuild billing-refunds devbox\n"), "uncommitted and untracked files run too: {printed}");
+    let first = ran.borrow()[0].job.commit.clone();
+    assert_eq!(ran.borrow()[0].job.base, None, "the first job carries the whole history");
+    assert!(git(&top, &["for-each-ref", REF]).is_empty() && std::fs::read_dir(master.state.join("jobs")).unwrap().flatten().all(|entry| !entry.file_name().to_string_lossy().starts_with("cmd_")), "the snapshot's ref and the job's files go when it ends");
+    let blob = ran.borrow()[0].job.bundle[0].id.clone();
+    assert!(master.client().get_bytes(&format!("/v1/m/blobs/{blob}")).is_err(), "and so do its blobs on the hub");
+
+    let (ended, printed) = run("echo failing; exit 3");
+    assert_eq!((ended, printed.ends_with("failing\n")), (Err("kebbie: build failed on studio with exit 3".to_string()), true), "{printed}");
+    assert_eq!(ran.borrow()[1].job.base.as_deref(), Some(first.as_str()), "the next job builds on what the worker took");
+    assert!(ran.borrow()[1].job.bundle.is_empty(), "an unchanged worktree sends no bundle at all");
+
+    std::fs::write(top.join("third.txt"), "three\n").unwrap();
+    commit(&top, "three");
+    let (ended, printed) = run("ls");
+    assert_eq!(ended, Ok("kebbie: build passed on studio".to_string()), "{printed}");
+    assert!(printed.ends_with("new.txt\nthird.txt\ntracked.txt\n"), "{printed}");
+    assert_eq!(ran.borrow()[2].job.base.as_deref(), Some(first.as_str()));
+    assert!(!ran.borrow()[2].job.bundle.is_empty());
+
+    std::fs::remove_dir_all(data.join("app/.store")).unwrap();
+    std::fs::write(top.join("fourth.txt"), "four\n").unwrap();
+    let (ended, printed) = run("cat fourth.txt");
+    assert_eq!(ended, Ok("kebbie: build passed on studio".to_string()), "{printed}");
+    assert!(printed.contains("lacks the commit this job builds on, so it gets the whole history\n") && printed.ends_with("four\n"), "{printed}");
+    assert_eq!(ran.borrow().iter().skip(3).map(|queued| queued.job.base.is_some()).collect::<Vec<_>>(), [true, false], "sent once from the base, then once whole");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_report_from_a_machine_that_is_not_the_jobs_worker_is_refused_end_to_end() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let (master, worker, stranger) = (Machine::connected(&hub, &mut browser, "devbox"), Machine::connected(&hub, &mut browser, "studio"), Machine::connected(&hub, &mut browser, "intruder"));
+    worker.work();
+    stranger.work();
+    let cluster = cluster::fetch(&master.dir, &master.client(), &master.account).unwrap();
+    let decoy = Job { repo: "app".into(), name: "lint".into(), command: "true".into(), task: "x".into(), commit: "a".repeat(40), base: None, bundle: Vec::new(), on: None };
+    let to_stranger = cluster::seal_to(&master.identity, &master.account, &stranger.identity.machine, &cluster.keys[&stranger.identity.machine], cluster::new_id().unwrap(), &Payload::Job(decoy), crate::messages::now()).unwrap();
+    cluster::post(&master.client(), &to_stranger).unwrap();
+    let root = crate::sh::test_dir("jobs-e2e-forged");
+    let (top, data) = (repo(&root), root.join("worker-data"));
+    let def = Def { run: "echo real".to_string(), on: Some("studio".to_string()) };
+    let asked = Asked { top: &top, repo: "app".to_string(), name: "build".to_string(), def: &def };
+    let ran = RefCell::new(Vec::new());
+    let forged = RefCell::new(Vec::new());
+    let mut printed = String::new();
+    let ended = master::go(&master.hub(), &asked, &mut |text| printed.push_str(text), &mut || {
+        if forged.borrow().is_empty() {
+            let sent: Sent = std::fs::read_dir(master.state.join("jobs")).unwrap().flatten().find(|entry| entry.file_name().to_string_lossy().ends_with(".sent.json")).map(|entry| serde_json::from_str(&std::fs::read_to_string(entry.path()).unwrap()).unwrap()).unwrap();
+            let keys = cluster::sender(&stranger.dir, &stranger.client(), &stranger.account, &master.identity.machine).unwrap().0;
+            let report = JobReport { job: sent.id.clone(), seq: 0, log: "forged\n".into(), end: Some(JobEnd::Exited { code: 0, artifacts: Vec::new() }) };
+            let envelope = cluster::seal_to(&stranger.identity, &stranger.account, &master.identity.machine, &keys, cluster::new_id().unwrap(), &Payload::JobReport(report), crate::messages::now()).unwrap();
+            cluster::post(&stranger.client(), &envelope).unwrap();
+            forged.borrow_mut().extend(inbox_round(&master.dir));
+        }
+        worker_round(&worker, &data, &ran);
+        inbox_round(&master.dir);
+    }, &crate::messages::now);
+    assert_eq!(ended, Ok("kebbie: build passed on studio".to_string()), "{printed}");
+    assert!(printed.ends_with("real\n") && !printed.contains("forged"), "{printed}");
+    assert!(forged.borrow().iter().any(|note| note.starts_with("jobs: refused a report on build from") && note.contains("the job went to studio")), "{:?}", forged.borrow());
+    for machine in [&master, &worker] {
+        let seq = commands::bridge(&machine.dir).inbox_seq;
+        let left: kebbie_hub_api::Inbox = machine.client().get(&format!("/v1/m/inbox?after={seq}&wait=0")).unwrap();
+        assert!(seq > 0 && left.messages.is_empty(), "the round moves past jobs and reports as past commands");
+        assert!(commands::ledger(&machine.dir).unsent.is_empty() && commands::ledger(&machine.dir).started.is_empty(), "a job or a report is never answered as a command");
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn only_machines_on_the_accounts_signed_list_send_or_take_jobs() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let (master, worker) = (Machine::connected(&hub, &mut browser, "devbox"), Machine::connected(&hub, &mut browser, "studio"));
+    worker.work();
+    let mut listed: AccountMachines = master.client().get("/v1/m/machines").unwrap();
+    let outsider = machine(7);
+    listed.machines.push(AccountMachine { machine: outsider.clone(), name: "outsider".into(), worker_os: Some("macos".into()), last_seen: Some(u64::MAX) });
+    let cluster = cluster::verify(&listed, &master.account).unwrap();
+    assert!(!cluster.rows.iter().any(|row| row.machine == outsider), "a row the hub lists beside the signed list is no machine of the account");
+    assert_eq!(cluster::pick(&cluster, &master.identity.machine, None).map(|row| row.name.as_str()), Some("studio"), "even when the hub says it was seen last");
+    let mut tampered = listed.clone();
+    tampered.list.as_mut().unwrap().list.machines.push(ListedMachine { machine: outsider.clone(), keys: SecretKeys::generate().public() });
+    assert!(cluster::verify(&tampered, &master.account).is_err(), "a list changed after the account signed it trusts no one");
+    assert!(cluster::sender(&worker.dir, &worker.client(), &worker.account, &outsider).unwrap_err().contains("is not on the account's signed list"));
+    assert!(cluster::sender(&worker.dir, &worker.client(), &worker.account, &master.identity.machine).is_ok());
+}
+
+#[test]
+fn a_hub_whose_plan_has_no_jobs_says_they_are_part_of_hub_pro() {
+    let hub = open_gated_hub(|_| {}, Some(Box::new(|_: &kebbie_hub::store::Store, _: &str, gated: Gated| match gated { Gated::Command(Kind::Job) => Err(Refusal { url: Some("https://hub.example.com/billing".to_string()), pro: true }), _ => Ok(()) })));
+    let mut browser = member(&hub);
+    let (master, worker) = (Machine::connected(&hub, &mut browser, "devbox"), Machine::connected(&hub, &mut browser, "studio"));
+    worker.work();
+    let root = crate::sh::test_dir("jobs-pro");
+    let top = repo(&root);
+    let def = Def { run: "true".to_string(), on: None };
+    let asked = Asked { top: &top, repo: "app".to_string(), name: "build".to_string(), def: &def };
+    let ended = master::go(&master.hub(), &asked, &mut |_| {}, &mut || panic!("nothing to wait for"), &crate::messages::now);
+    assert_eq!(ended, Err("Running a job on another machine is part of Hub Pro: https://hub.example.com/billing".to_string()));
+    assert!(git(&top, &["for-each-ref", REF]).is_empty(), "the snapshot's ref goes with the refusal too");
     let _ = std::fs::remove_dir_all(root);
 }
