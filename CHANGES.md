@@ -5,10 +5,10 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
-
 - kebbie keeps its backlog style in the vault, where every agent that files a backlog item there gets it; your own .vault/styles/backlog.override.md replaces it, and kebbie backlog template shows the one that applies.
 - A backlog item is written in the short backlog style and keeps the shape it was written in; it is to write only while it is a draft, and its questions are read under Open questions whatever its shape.
 - A task's edits no longer wait for its vault note, and kebbie done closes the note whatever it holds: the note is the task's own memory.
+- A ready task's card opens with what changes for you when you push it and what proves it, and a question to you opens with the question.
 - The board's ↑ ↓ move task to task, and → steps into a task: its subtasks and card light up beside the tasks, which fade so you see where you are, or open in a window on a narrow board.
 
 ### Fixed
