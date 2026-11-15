@@ -100,6 +100,10 @@ impl Client {
         parse::<serde::de::IgnoredAny>(&self.send(Method::Put, path, Some(body.to_vec()), "application/octet-stream")?).map(|_| ())
     }
 
+    pub fn get_bytes(&self, path: &str) -> Result<Vec<u8>, HubError> {
+        self.send(Method::Get, path, None, JSON)
+    }
+
     pub fn delete(&self, path: &str) -> Result<(), HubError> {
         self.send(Method::Delete, path, None, JSON).map(|_| ())
     }
@@ -109,7 +113,7 @@ impl Client {
     }
 
     // 307 and 308 keep the method, the body and the token; nothing else is followed.
-    fn send(&self, method: Method, path: &str, body: Option<Vec<u8>>, content_type: &str) -> Result<String, HubError> {
+    fn send(&self, method: Method, path: &str, body: Option<Vec<u8>>, content_type: &str) -> Result<Vec<u8>, HubError> {
         let base = self.moved().unwrap_or_else(|| self.base.clone());
         let mut url = format!("{base}{path}");
         for _ in 0..=MAX_HOPS {
@@ -124,11 +128,11 @@ impl Client {
                 url = next;
                 continue;
             }
-            let text = response.body_mut().read_to_string().map_err(|error| HubError::Transport(error.to_string()))?;
+            let bytes = response.body_mut().read_to_vec().map_err(|error| HubError::Transport(error.to_string()))?;
             if (200..300).contains(&status) {
-                return Ok(text);
+                return Ok(bytes);
             }
-            let body = serde_json::from_str::<serde_json::Value>(&text).unwrap_or_default();
+            let body = serde_json::from_slice::<serde_json::Value>(&bytes).unwrap_or_default();
             let code = body["error"].as_str().map(str::to_string).unwrap_or_else(|| response.status().canonical_reason().unwrap_or("error").to_string());
             if status == 402 && code == kebbie_hub_api::PLAN_INACTIVE {
                 return Err(HubError::NotEnabled { url: body["url"].as_str().map(str::to_string) });
@@ -163,8 +167,9 @@ fn json<B: Serialize>(body: &B) -> Vec<u8> {
     serde_json::to_vec(body).expect("a request body serializes")
 }
 
-fn parse<T: DeserializeOwned>(text: &str) -> Result<T, HubError> {
-    let text = if text.trim().is_empty() { "null" } else { text };
+fn parse<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, HubError> {
+    let text = String::from_utf8_lossy(bytes);
+    let text = if text.trim().is_empty() { "null" } else { &text };
     serde_json::from_str(text).map_err(|error| HubError::Transport(format!("the hub's answer did not parse: {error}")))
 }
 

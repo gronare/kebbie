@@ -506,6 +506,7 @@ pub fn run() -> Result<String> {
     log.line(&format!("started: pid {}, kebbie {}, {}", std::process::id(), env!("CARGO_PKG_VERSION"), exe.display()));
     crate::hub::commands::spawn(&dir);
     crate::vault_watch::spawn(&dir);
+    crate::jobs::spawn(&dir);
     let routines = routines();
     let mut tracks = vec![Track::default(); routines.len()];
     let mut ctx = Ctx::default();
@@ -545,8 +546,9 @@ pub fn run() -> Result<String> {
         pause(wait(&routines, &tracks, crate::messages::now()));
     };
     crate::vault_watch::stop(&dir);
-    log.line(&format!("exits: {reason}"));
     let replaced = reason.starts_with("a new kebbie");
+    crate::jobs::stop(replaced);
+    log.line(&format!("exits: {reason}"));
     drop(held);
     if replaced {
         match spawn(&exe, &dir) {
