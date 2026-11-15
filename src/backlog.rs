@@ -108,7 +108,7 @@ fn read_all() -> (Option<u64>, VaultRead, Bodied) {
     if let Ok(state) = crate::lead::state_dir() {
         if config::filing(&sources) == Some(Source::Vault) {
             let now = crate::messages::now();
-            items.extend(crate::backlog_kept::kept_in(&state).iter().map(|kept| (kept.entry(now), None)));
+            items.extend(crate::backlog_kept::shown_in(&state, now).iter().map(|kept| (kept.entry(now), None)));
         }
         shape_all(&mut items, &local, index.as_ref(), &state, &Templates::now());
     }
@@ -131,16 +131,20 @@ pub fn vault_body(index: Option<&crate::vault::Index>, state: &Path, key: &str) 
     (changed.is_none() || kept["mtime"].as_f64() == changed).then(|| kept["body"].as_str().map(str::to_string)).flatten()
 }
 
-// Fills kebbie's copy of the vault backlog notes the index has no body for; the board's refresher runs it, away from the screen, unless the keeper's watch keeps the copy.
+// Fills kebbie's copy of the vault backlog notes the index has no current body for; the board's refresher runs it, away from the screen, and while the keeper's watch keeps the copy it reads only a note whose copy is missing or older than the note.
 pub fn fetch_vault_bodies() {
     let (Ok(state), Some(cli)) = (crate::lead::state_dir(), crate::vault_cli::cli()) else { return };
     fetch_vault_bodies_in(&cli, &state, crate::vault::Index::open);
 }
 
-pub fn fetch_vault_bodies_in(cli: &crate::vault_cli::Cli, state: &Path, index: impl FnOnce() -> Result<crate::vault::Index>) {
-    if crate::vault_watch::watching(state) {
-        return;
+// The keeper's vault round fills the copy too, so the phone has each note's text while no board runs.
+pub fn fetch_vault_bodies_if_listed() {
+    if config::sources().is_ok_and(|sources| sources.contains(&Source::Vault)) {
+        fetch_vault_bodies();
     }
+}
+
+pub fn fetch_vault_bodies_in(cli: &crate::vault_cli::Cli, state: &Path, index: impl FnOnce() -> Result<crate::vault::Index>) {
     if let Ok(index) = index() {
         fill_vault_bodies(cli, state, &index);
     }
@@ -216,7 +220,7 @@ fn read_item(entry: &Entry, local: &std::collections::HashMap<String, crate::bac
 }
 
 // Each item's state, its questions waiting on the user and the answers of theirs still with the lead, settling the answers once for the whole backlog.
-fn shape_all(items: &mut [(Entry, Option<String>)], local: &std::collections::HashMap<String, crate::backlog_file::Item>, index: Option<&crate::vault::Index>, state: &Path, templates: &Templates) {
+pub(crate) fn shape_all(items: &mut [(Entry, Option<String>)], local: &std::collections::HashMap<String, crate::backlog_file::Item>, index: Option<&crate::vault::Index>, state: &Path, templates: &Templates) {
     let read: Vec<Option<ItemRead>> = items.iter().map(|(entry, _)| read_item(entry, local, index, state, templates.of(&entry.source))).collect();
     let bodies: Vec<(&str, &str, &crate::item_template::Template)> = items.iter().zip(&read).filter_map(|((entry, _), read)| Some((entry.reference.as_str(), read.as_ref()?.body.as_str(), templates.of(&entry.source)))).collect();
     let kept = crate::backlog_kept::settle_all(state, &bodies);
@@ -592,7 +596,7 @@ pub fn show() -> Result<String> {
     let mut lines = vec![if fetched(&sources).is_empty() { format!("from {}", local_dir()) } else { format!("updated {}", age(backlog.updated)) }];
     for entry in &backlog.entries {
         let item = (entry.source == "local").then(|| crate::backlog_file::find(&entry.reference)).flatten();
-        let state = item.as_ref().map(|(_, item)| item.state()).filter(|state| *state != crate::backlog_file::State::Ready).map_or(String::new(), |state| format!("  {}", state.word()));
+        let state = entry.shape.state.filter(|state| *state != crate::backlog_file::State::Ready).map_or(String::new(), |state| format!("  {}", state.word()));
         let file = item.as_ref().map_or(String::new(), |(path, _)| format!("  {}", path.display()));
         lines.push(format!("  [{}] {}  ({} · {}){state}{file}", entry.priority, entry.title, entry.reference, entry.area));
     }
@@ -695,6 +699,13 @@ mod tests {
         let row = [ "Projects/known.md", "New title", "Sum", "high", "[[kebbie]]", "2026-09-01"].map(str::to_string);
         let shown = as_indexed(saved, &[row], epoch_day("2026-11-14").unwrap());
         assert_eq!(shown.iter().map(|entry| (entry.title.as_str(), entry.age.as_str())).collect::<Vec<_>>(), [("New title", "74 d"), ("Fix it", "3 d"), ("Fix it", "3 d")]);
+    }
+
+    #[test]
+    fn the_lead_leaves_old_vault_notes_as_they_stand_unless_the_user_asks() {
+        let intake = role_texts(&[Source::Vault], true).intake;
+        assert!(intake.contains("A vault note written before the vault's task template, without its sections, also shows as `to write`. Leave those as they stand"), "{intake}");
+        assert!(!role_texts(&[Source::Local], false).intake.contains("Leave those as they stand"), "the local backlog has no old notes");
     }
 
     #[test]

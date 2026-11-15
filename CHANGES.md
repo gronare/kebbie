@@ -12,8 +12,13 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The board shows each task as a block, a line apart, with the selection running down the whole block.
 - The backlog has its own board page on 2, with every title whole; Areas and Routines move to 3 and 4.
 - The Work page shows the selected task's card beside the tasks, and it follows the cursor.
+- A vault backlog note missing a section of its template shows to write on the Backlog page.
+- w on any backlog item, or kebbie backlog write, has the lead write it out, even a complete one.
+- W on the Backlog page, or kebbie backlog write --all, writes out every item to write, five at a time.
+- An idea the lead merges into an older note stays on the Backlog page for a week, pointing at that note.
 
 ### Fixed
+- A rewritten or merged vault note shows its current text on the board and the phone, never an old copy.
 - A daily or weekly routine runs once on the night the clocks go back, and on time the day they go forward.
 - A cancelled CI run shows as CI cancelled under Needs you, with G to re-run and C to dismiss, instead of CI running.
 - A CI watch gh cannot read for 15 minutes ends as CI unknown instead of running forever.

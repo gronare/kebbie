@@ -783,6 +783,47 @@ mod tests {
         assert!(matches!(app.mode, Mode::Options(_)), "a kept row has no card: ⏎ is its options");
     }
 
+    #[test]
+    fn a_vault_note_short_of_its_template_shows_to_write_and_a_written_one_does_not() {
+        use crate::backlog_file::State;
+        let state = crate::sh::test_dir("board-vault-to-write");
+        let written = "## Background\n\nB.\n\n## Goal\n\nThe phone app runs native.\n\n## What we know\n\nK.\n\n## Open questions\n\n## Out of scope\n\nO.\n\n## Source\n\nS.\n";
+        let empty_goal = written.replace("The phone app runs native.", "");
+        let bodies = serde_json::json!({ "Projects/written.md": { "mtime": null, "body": written }, "Projects/old.md": { "mtime": null, "body": "One line from before the template." }, "Projects/empty.md": { "mtime": null, "body": empty_goal } });
+        std::fs::write(crate::backlog::bodies_file(&state), bodies.to_string()).unwrap();
+        let note = |title: &str, reference: &str| crate::backlog::Entry { source: "vault".to_string(), title: title.to_string(), priority: "high".to_string(), area: "ios".to_string(), reference: reference.to_string(), age: "25 d".to_string(), ..Default::default() };
+        let entries = vec![note("Native app", "Projects/written.md"), note("Old idea", "Projects/old.md"), note("Empty goal", "Projects/empty.md"), note("Not read yet", "Projects/unread.md")];
+        let mut items: Vec<(crate::backlog::Entry, Option<String>)> = entries.into_iter().map(|entry| (entry, None)).collect();
+        let builtin = crate::item_template::Template::builtin();
+        crate::backlog::shape_all(&mut items, &Default::default(), None, &state, &crate::backlog::Templates { local: builtin.clone(), vault: builtin });
+        let shaped: Vec<crate::backlog::Entry> = items.into_iter().map(|(entry, _)| entry).collect();
+        assert_eq!(shaped.iter().map(|entry| entry.shape.state).collect::<Vec<_>>(), [Some(State::Ready), Some(State::ToWrite), Some(State::ToWrite), None], "a note with no copy yet is read, never judged to write");
+        let mut app = test_app(Vec::new());
+        app.backlog.entries = shaped;
+        app.column = Column::Backlog;
+        let screen = render(&mut app, 124, 30).0.join("\n");
+        for (title, state) in [("Old idea", "to write · 25 d"), ("Empty goal", "to write · 25 d")] {
+            let line = screen.lines().find(|line| line.contains(title)).unwrap_or_default();
+            assert!(line.contains(state), "{title}: {screen}");
+        }
+        let line = screen.lines().find(|line| line.contains("Native app")).unwrap_or_default();
+        assert!(!line.contains("to write"), "{screen}");
+        let _ = std::fs::remove_dir_all(state);
+    }
+
+    #[test]
+    fn a_merged_row_points_at_the_note_it_went_into_and_opens_it() {
+        use crate::backlog_file::{Shape, State};
+        let mut app = test_app(Vec::new());
+        let note = crate::backlog::Entry { source: "vault".to_string(), title: "kebbie-ios: native iOS app".to_string(), priority: "high".to_string(), area: "ios".to_string(), reference: "Projects/kebbie-ios.md".to_string(), age: "25 d".to_string(), shape: Shape { state: Some(State::Ready), ..Shape::default() }, ..Default::default() };
+        let merged = crate::backlog::Entry { source: "kept".to_string(), title: "Native app for the Duo · merged into kebbie-ios: native iOS app".to_string(), priority: "high".to_string(), reference: "kept:abc123".to_string(), age: "0 d".to_string(), shape: Shape { state: Some(State::Ready), kept: true, into: "Projects/kebbie-ios.md".to_string(), ..Shape::default() }, ..Default::default() };
+        app.backlog.entries = vec![merged, note];
+        (app.column, app.backlog_selected) = (Column::Backlog, 0);
+        let screen = render(&mut app, 124, 30).0.join("\n");
+        assert!(screen.contains("Native app for the Duo · merged into kebbie-ios") && screen.contains("merged into the note Projects/kebbie-ios.md: ⏎ opens it"), "{screen}");
+        assert_eq!(app.merged_note(&app.backlog.entries[0].clone()).area, "ios", "the note as the backlog lists it");
+    }
+
     fn two_notes_and_two_entries(app: &mut crate::board::App) {
         app.ongoing = vec![
             Ongoing { key: "Projects/search-filters.md".to_string(), title: "search filters".to_string(), area: "web".to_string(), task: Some("search-filters@web".to_string()), claim: None, ..Ongoing::default() },

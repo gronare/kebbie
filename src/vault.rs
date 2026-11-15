@@ -258,8 +258,14 @@ impl Index {
             .collect()
     }
 
-    // A note's whole markdown from the local index; notes_fts.key is UNINDEXED, so a lookup by key scans every body, and one scan is kept for every Index on the file until it changes.
+    // A note's whole markdown from the local index, unless the snapshot has the note changed since the index read it (an index the vault no longer syncs keeps a note's old text); notes_fts.key is UNINDEXED, so a lookup by key scans every body, and one scan is kept for every Index on the file until it changes.
     pub fn body(&self, key: &str) -> Option<String> {
+        if let Some(entry) = self.entry(key) {
+            let local: Option<f64> = self.row("SELECT mtime FROM notes WHERE key = ?1", key);
+            if local.is_none_or(|local| local < entry.mtime) {
+                return None;
+            }
+        }
         self.bodies.get_or_init(|| self.all_bodies()).get(key).cloned()
     }
 
@@ -305,6 +311,12 @@ impl Index {
     pub fn title_of(&self, key: &str) -> Option<String> {
         let title = if self.snapshot.is_some() { self.entry(key).map(|entry| entry.note.title.clone()) } else { self.row::<String>("SELECT title FROM notes WHERE key = ?1", key) };
         title.filter(|title| !title.trim().is_empty())
+    }
+
+    // The day a note was first filed, from its frontmatter's date.
+    pub fn date_of(&self, key: &str) -> Option<String> {
+        let date = if self.snapshot.is_some() { self.entry(key).map(|entry| entry.date.clone()) } else { self.row::<String>("SELECT date FROM notes WHERE key = ?1", key) };
+        date.filter(|date| !date.trim().is_empty())
     }
 
     pub fn status_of(&self, key: &str) -> Option<String> {
@@ -530,6 +542,25 @@ The payload says amount.');
         Connection::open(&path).unwrap().execute_batch("DELETE FROM notes_fts;").unwrap();
         assert_eq!(index.body("Projects/kebbie-new.md").as_deref(), Some("## Problem\nThe payload says amount."), "one scan of notes_fts answers every body the index is asked for, since a lookup by its unindexed key scans them all");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_body_the_local_index_kept_from_before_the_note_changed_is_not_read() {
+        let dir = crate::sh::test_dir("vault-stale-body");
+        let path = dir.join("index.sqlite");
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch("
+            CREATE TABLE notes (key TEXT PRIMARY KEY, mtime REAL);
+            CREATE VIRTUAL TABLE notes_fts USING fts5(body, key UNINDEXED);
+            INSERT INTO notes VALUES ('Projects/merged.md', 100), ('Projects/same.md', 200);
+            INSERT INTO notes_fts (key, body) VALUES ('Projects/merged.md', 'One line from before the merge.'), ('Projects/same.md', '## Goal\n\nShip.');
+        ").unwrap();
+        let note = |key: &str, mtime: f64| format!(r#"{{"key":"{key}","role":"task","kind":"task","status":"backlog","title":"T","priority":"high","mtime":{mtime}}}"#);
+        let raw = format!(r#"{{"etag":"e","notes":[{},{},{}]}}"#, note("Projects/merged.md", 500.0), note("Projects/same.md", 200.0), note("Projects/new.md", 50.0));
+        let index = Index::of_snapshot(Arc::new(crate::vault_snapshot::parse(&raw, None).unwrap()), Some(db));
+        assert_eq!(index.body("Projects/merged.md"), None, "the note changed after the index read it, so its old text is not the note");
+        assert_eq!(index.body("Projects/same.md").as_deref(), Some("## Goal\n\nShip."), "the index read the note as the snapshot has it");
+        assert_eq!(index.body("Projects/new.md"), None, "a note the index never had");
     }
 
     #[test]

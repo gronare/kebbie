@@ -91,7 +91,7 @@ fn home(entry: &Entry, key: &ItemKey) -> Home {
             let label = entry.reference.strip_prefix(backlog_file::PREFIX).map(|stem| format!("backlog/{stem}.md")).filter(|label| kebbie_hub_protocol::is_relative_label(label));
             Home { kind: HomeKind::Local, label: label.unwrap_or_else(|| "backlog".to_string()) }
         }
-        HomeKind::Kept => Home { kind: HomeKind::Kept, label: KEPT_LABEL.to_string() },
+        HomeKind::Kept => Home { kind: HomeKind::Kept, label: Some(entry.shape.into.clone()).filter(|into| kebbie_hub_protocol::is_relative_label(into)).unwrap_or_else(|| KEPT_LABEL.to_string()) },
         HomeKind::Found => Home { kind: HomeKind::Found, label: FOUND_LABEL.to_string() },
     }
 }
@@ -586,6 +586,27 @@ mod tests {
         assert!(unicode.as_str().starts_with("local:") && unicode != key_of(&entry("local", "local:åtgärda-annat"), None).unwrap(), "{unicode}");
         assert!(started_as(&unicode, &["local:åtgärda-något".to_string()], None) && started_as(&here[0].item, &["Projects/retry.md".to_string()], None));
         assert!(key_of(&entry("linear", "ABC-1"), None).is_none(), "a Linear row has no key the phone could send back");
+    }
+
+    #[test]
+    fn a_merged_row_goes_to_the_phone_ready_naming_the_note_and_a_rewritten_body_goes_up_as_a_new_blob() {
+        let state = crate::sh::test_dir("backlog-merged-row");
+        let merged = Entry { source: "kept".to_string(), title: "Native app · merged into kebbie-ios".to_string(), reference: "kept:a1b2c3".to_string(), shape: Shape { state: Some(State::Ready), kept: true, into: "Projects/kebbie-ios.md".to_string(), ..Shape::default() }, ..entry("kept", "") };
+        let (rows, _) = rows(&[(merged, None)], &state, None, today(), &templates());
+        assert_eq!((rows[0].title.as_str(), rows[0].state, rows[0].home.kind, rows[0].home.label.as_str()), ("Native app · merged into kebbie-ios", BacklogState::Ready, HomeKind::Kept, "Projects/kebbie-ios.md"));
+        let old = (entry("vault", "Projects/kebbie-ios.md"), Some("One line from before the merge.".to_string()));
+        let new = (entry("vault", "Projects/kebbie-ios.md"), Some(BODY.to_string()));
+        let (first_rows, first) = super::rows(&[old], &state, None, today(), &templates());
+        let (second_rows, second) = super::rows(&[new], &state, None, today(), &templates());
+        let dir = crate::sh::test_dir("backlog-merged-blobs");
+        let put = RefCell::new(0);
+        let mut board = crate::hub::board::build(&[], &[], Vec::new(), None, &crate::hub::board::Seen::default());
+        board.backlog = Some(first_rows);
+        let before = super::super::blobs::attach(&dir, &board, &first, 1_000, |_, _| { *put.borrow_mut() += 1; Ok(()) });
+        board.backlog = Some(second_rows);
+        let after = super::super::blobs::attach(&dir, &board, &second, 1_060, |_, _| { *put.borrow_mut() += 1; Ok(()) });
+        assert_eq!(*put.borrow(), 2, "the rewritten body is put as it changed");
+        assert_ne!(before.backlog.unwrap()[0].body, after.backlog.unwrap()[0].body, "the row names the new body");
     }
 
     #[test]

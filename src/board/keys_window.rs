@@ -124,6 +124,7 @@ const WORK: Sheet = Sheet {
             bind(&[Act::Update], "update kebbie and its plugins", "update"),
             bind(&[Act::RestartLead], "restart the lead: fresh or resumed", "restart lead"),
             bind(&[Act::Hub], "the hub: this board on your phone", "phone · hub"),
+            bind(&[Act::WriteOut, Act::WriteAll], "backlog: write one out, or all to write", "write out"),
         ]),
         WINDOWS,
         group("THE SELECTED TASK", &[

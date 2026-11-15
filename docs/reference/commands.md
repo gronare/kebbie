@@ -574,6 +574,8 @@ The **push order** is the branch's commits not yet on origin's default branch, o
 | `kebbie backlog --search "<words>"` | The backlog items and Found by tasks holding every word, from the backlog as kebbie last read it. It changes nothing, and a task runs it before it files what it noticed. |
 | `kebbie backlog add [--priority <p>] [--repo <repo>] "<line>" [-]` | Add a backlog item where new items go. A line alone is a short item the lead writes out in full; with `-`, the written-out item's sections come on stdin. See [Fill the backlog](../how-to/fill-the-backlog.md#add-an-item). |
 | `kebbie backlog template [--local\|--vault] [--json]` | The sections a backlog item is written in where new items go, the required ones marked: the vault's task template, the file [`board.backlog.template`](configuration.md#backlog-sources) names, or kebbie's own. `--local` or `--vault` shows the other place's. |
+| `kebbie backlog write <ref>` | Send the lead the item to write out in place, even one that looks complete; it shows you the written item. `<ref>` is the reference `kebbie backlog` lists: a vault path (with or without `vault:`), `local:<name>`, or `kept:<id>`. The same as `w` on the [Backlog page](board.md#on-the-backlog-page). |
+| `kebbie backlog write --all` | Write out every item marked to write: the lead gets 5 at a time, the next 5 once it has written those, until none is left. Run again while it runs, it says how many wait. The same as `W` on the [Backlog page](board.md#on-the-backlog-page). |
 
 `kebbie profiles` shows each profile with what it is for, what it is about, and its agent, model, effort, permission mode and skills. Under a profile that runs Codex, a `codex:` line gives the Codex binary, its version and whether kebbie's plugin is installed. A file that does not load is listed as ignored, with the reason. `--json` gives one object per profile, and `{"error": …}` for an ignored file.
 
@@ -1134,7 +1136,7 @@ These run from hooks, the herdr plugin and kebbie's own processes. You do not ru
 | `kebbie hook codex <event>` | kebbie's Codex plugin, for `session-start`, `prompt` and `stop`. Reads the hook's JSON on stdin and prints nothing outside a kebbie task's worktree. |
 | `kebbie statusline` | Claude Code's `statusLine` command. Keeps the plan's usage for the board and prints nothing. |
 | `kebbie backlog save` | The lead, after refreshing the backlog. Reads a JSON array on stdin. |
-| `kebbie backlog filed <kept:id>` | The lead, once it has filed in the vault an item kebbie kept a row for: the row gives way to the note. |
+| `kebbie backlog filed <kept:id> [<note>]` | The lead, once it has filed in the vault an item kebbie kept a row for, naming the note: the row gives way to it. When the note was filed before the row (the lead merged the item into an older note), the row stays 7 days as `<your words> · merged into <note>`. |
 | `kebbie messages --unread` | The lead's prompt hook. |
 | `kebbie review --run` | The reviewer process `kebbie review` starts. |
 | `kebbie review --run --rules` | The read-only rules check the keeper starts after a task reports ready. |

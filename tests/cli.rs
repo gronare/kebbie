@@ -514,6 +514,23 @@ fn the_local_backlog_holds_one_file_per_item_next_to_the_machine_config() {
 }
 
 #[test]
+fn backlog_write_sends_one_item_and_write_all_queues_every_item_to_write() {
+    let lab = Lab::new("backlog-write");
+    for n in 0..7 {
+        assert!(lab.run(&["backlog", "add", &format!("Idea number {n}")]).status.success());
+    }
+    let one = lab.run(&["backlog", "write", "local:idea-number-0"]);
+    assert!(one.status.success() && stdout(&one).contains("Sent to the lead"), "{}{}", stdout(&one), stderr(&one));
+    let missing = lab.run(&["backlog", "write", "local:nothing-here"]);
+    assert!(!missing.status.success() && stderr(&missing).contains("no backlog item"), "{}", stderr(&missing));
+    let all = lab.run(&["backlog", "write", "--all"]);
+    assert!(all.status.success() && stdout(&all).contains("Writing out 7 items"), "{}{}", stdout(&all), stderr(&all));
+    assert!(lab.state.join("backlog-write-queue.json").exists(), "the queue is kept in the state folder, so it outlives a restart");
+    let again = lab.run(&["backlog", "write", "--all"]);
+    assert!(again.status.success() && stdout(&again).contains("Already writing them out: 7 wait"), "{}", stdout(&again));
+}
+
+#[test]
 fn the_statusline_keeps_the_plans_usage_and_prints_nothing() {
     let lab = Lab::new("statusline");
     let input = r#"{"model":{"id":"claude-opus-5-5"},"rate_limits":{"five_hour":{"used_percentage":23.4,"resets_at":9999999999},"seven_day":{"used_percentage":71.0,"resets_at":9999999999}}}"#;

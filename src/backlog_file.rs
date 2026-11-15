@@ -50,7 +50,7 @@ impl State {
     }
 }
 
-// Blocking questions waiting on the user, answers of theirs the lead has yet to fold in, and the state those leave; Linear has none.
+// Blocking questions waiting on the user, answers of theirs the lead has yet to fold in, and the state those leave; Linear has none. `into` is the older note a kept row was merged into.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Shape {
     pub state: Option<State>,
@@ -58,6 +58,7 @@ pub struct Shape {
     pub with_lead: usize,
     pub kept: bool,
     pub filed: String,
+    pub into: String,
 }
 
 // An item short of a heading or of a required section's text is to write; the lead marks one drafting while it writes it out; a blocking question keeps it drafting.
@@ -76,7 +77,7 @@ pub fn state_of(drafting: bool, short: bool, body: &str, template: &Template) ->
 pub fn shape_of(state: State, body: &str, answered: &[String], filed: &str, template: &Template) -> Shape {
     let blocking: Vec<Question> = template.questions_in(body).into_iter().filter(|question| question.blocks).collect();
     let with_lead = blocking.iter().filter(|question| answered.contains(&question.text)).count();
-    Shape { state: Some(state), waiting: blocking.len() - with_lead, with_lead, kept: false, filed: filed.to_string() }
+    Shape { state: Some(state), waiting: blocking.len() - with_lead, with_lead, filed: filed.to_string(), ..Shape::default() }
 }
 
 impl Item {
@@ -351,6 +352,137 @@ pub fn tell_new_drafts() {
     }
 }
 
+// At most this many items to write go to the lead at once when the user writes out all of them, so a vault of old notes does not bury it: the next go once it has written these, each needing the code and the notes read.
+pub const BATCH: usize = 5;
+const QUEUE: &str = "backlog-write-queue.json";
+
+// An item waiting to be written out, as the lead is told of it: its reference, its title and where it is.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Unwritten {
+    pub reference: String,
+    pub title: String,
+    pub place: String,
+}
+
+pub fn unwritten(entries: &[Entry], dir: &Path) -> Vec<Unwritten> {
+    entries.iter().filter(|entry| entry.shape.state == Some(State::ToWrite) && !entry.shape.kept).filter_map(|entry| {
+        let place = match entry.source.as_str() {
+            "local" => file(dir, entry.reference.strip_prefix(PREFIX)?).display().to_string(),
+            "vault" => format!("vault: {}", entry.reference),
+            _ => return None,
+        };
+        Some(Unwritten { reference: entry.reference.clone(), title: entry.title.clone(), place })
+    }).collect()
+}
+
+pub fn batch_text(new: &[Unwritten], later: usize) -> String {
+    let listed: Vec<String> = new.iter().map(|item| format!("\"{}\" ({})", item.title, item.place)).collect();
+    let rest = match later {
+        0 => String::new(),
+        1 => " One more waits; kebbie sends it once these are written.".to_string(),
+        more => format!(" {more} more wait; kebbie sends the next {BATCH} once these are written."),
+    };
+    format!("The user asks you to write out every backlog item marked to write. Here {}: {}. Write each out now with the skill `{SKILL}` where it is (its file, or its vault note), and show the user the written items.{rest}", if new.len() == 1 { "is the first".to_string() } else { format!("are {}", new.len()) }, listed.join("; "))
+}
+
+// What the user queued with "write out all": every item then to write, and those already sent to the lead; kept in kebbie's state so it outlives a restart.
+#[derive(Debug, Default, PartialEq)]
+struct Queue {
+    items: Vec<Unwritten>,
+    sent: Vec<String>,
+}
+
+fn queue_file(state: &Path) -> PathBuf {
+    state.join(QUEUE)
+}
+
+fn read_queue(state: &Path) -> Queue {
+    let value: serde_json::Value = std::fs::read_to_string(queue_file(state)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+    let text = |item: &serde_json::Value, key: &str| item[key].as_str().unwrap_or_default().to_string();
+    let items = value["items"].as_array().into_iter().flatten().map(|item| Unwritten { reference: text(item, "reference"), title: text(item, "title"), place: text(item, "place") }).filter(|item| !item.reference.is_empty()).collect();
+    let sent = value["sent"].as_array().into_iter().flatten().filter_map(|sent| sent.as_str().map(str::to_string)).collect();
+    Queue { items, sent }
+}
+
+fn write_queue(state: &Path, queue: &Queue) -> Result<()> {
+    if queue.items.is_empty() {
+        return match std::fs::remove_file(queue_file(state)) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.to_string()),
+            _ => Ok(()),
+        };
+    }
+    let items: Vec<serde_json::Value> = queue.items.iter().map(|item| serde_json::json!({ "reference": item.reference, "title": item.title, "place": item.place })).collect();
+    crate::state::write(&queue_file(state), serde_json::json!({ "items": items, "sent": queue.sent }).to_string())
+}
+
+// How many items the queue still holds, sent to the lead or waiting their turn; 0 when none runs.
+pub fn queued(state: &Path) -> usize {
+    read_queue(state).items.len()
+}
+
+// Queues every item to write and sends the lead the first batch; a queue already running is left as it is.
+pub fn write_all_in(state: &Path, dir: &Path, entries: &[Entry], tell: &dyn Fn(&str) -> Result<()>) -> Result<String> {
+    {
+        let _locked = crate::backlog_kept::Locked::take(&queue_file(state))?;
+        let running = read_queue(state).items.len();
+        if running > 0 {
+            return Notice::new(Tone::NotNow, format!("Already writing them out: {running} wait")).next(format!("The lead gets {BATCH} at a time, the next once it has written those.")).ok();
+        }
+        let items = unwritten(entries, dir);
+        if items.is_empty() {
+            return Notice::new(Tone::NotNow, "Nothing to write out").next("No item in the backlog is marked to write.").ok();
+        }
+        write_queue(state, &Queue { items, sent: Vec::new() })?;
+    }
+    let count = queued(state);
+    pump_in(state, entries, tell)?;
+    Notice::new(Tone::Moving, format!("Writing out {count} item{}", if count == 1 { "" } else { "s" })).next(format!("The lead gets {BATCH} at a time, the next once it has written those; the Backlog page shows how many wait.")).ok()
+}
+
+// One round of the queue: an item written out or gone leaves it, and the lead gets as many new ones as it has written of those it was sent.
+pub fn pump_in(state: &Path, entries: &[Entry], tell: &dyn Fn(&str) -> Result<()>) -> Result<()> {
+    if !queue_file(state).exists() {
+        return Ok(());
+    }
+    let _locked = crate::backlog_kept::Locked::take(&queue_file(state))?;
+    let mut queue = read_queue(state);
+    let before = queue.items.len();
+    queue.items.retain(|item| entries.iter().find(|entry| entry.reference == item.reference).is_some_and(|entry| matches!(entry.shape.state, Some(State::ToWrite) | None)));
+    queue.sent.retain(|sent| queue.items.iter().any(|item| &item.reference == sent));
+    let unsent: Vec<Unwritten> = queue.items.iter().filter(|item| !queue.sent.contains(&item.reference)).cloned().collect();
+    let room = BATCH.saturating_sub(queue.sent.len()).min(unsent.len());
+    let mut changed = queue.items.len() != before;
+    if room > 0 && tell(&batch_text(&unsent[..room], unsent.len() - room)).is_ok() {
+        queue.sent.extend(unsent[..room].iter().map(|item| item.reference.clone()));
+        changed = true;
+    }
+    if changed { write_queue(state, &queue) } else { Ok(()) }
+}
+
+// The board's round and the keeper's vault round each move the queue on.
+pub fn pump_queue(entries: &[Entry]) {
+    if let Ok(state) = crate::lead::state_location() {
+        let _ = pump_in(&state, entries, &|text| crate::messages::to_lead(crate::messages::ToLead::BacklogItem, text));
+    }
+}
+
+pub fn pump_queue_now() {
+    if crate::lead::state_location().is_ok_and(|state| queue_file(&state).exists()) {
+        pump_queue(&crate::backlog::load().entries);
+    }
+}
+
+pub fn write_all_cli() -> Result<String> {
+    let state = crate::lead::state_dir()?;
+    write_all_in(&state, &dir(), &crate::backlog::load().entries, &|text| crate::messages::to_lead(crate::messages::ToLead::BacklogItem, text))
+}
+
+// The user asked for the item to be written out, whatever its state; the lead hears it at once.
+pub fn write_out_text(who: &str, title: &str, place: &str, words: Option<&str>) -> String {
+    let words = words.map(str::trim).filter(|words| !words.is_empty()).map_or(String::new(), |words| format!(" In their words when they added it:\n\n{}\n\n", quoted_block(words)));
+    format!("{who} asks you to write out the backlog item \"{title}\" ({place}) with the skill `{SKILL}`, even where it looks complete:{words} read it, the code and the notes again, write it out in place, and show the user the written item.")
+}
+
 fn lead_text(filing: &Filing, priority: &str, place: &str) -> String {
     let (who, line) = (filing.by, filing.line);
     let priority = if priority == "none" { String::new() } else { format!(" [{priority}]") };
@@ -398,7 +530,7 @@ pub fn file_item_on(shelf: &Shelf, sources: &[Source], filing: &Filing, from_lea
                 return Notice::new(Tone::You, "Not added: new items go to the vault here").you(format!("Write it as a task note in the vault with the skill {SKILL}.")).err();
             }
             let id = crate::backlog_kept::keep(shelf.state, filing.line, filing.words.unwrap_or_default(), &item.priority, &item.repo, crate::messages::now())?;
-            let filed = format!("Then run `kebbie backlog filed {}{id}`, so the row kebbie keeps for it on the board gives way to your note.", crate::backlog_kept::PREFIX);
+            let filed = format!("Then run `kebbie backlog filed {}{id} <the note's path>`, so the row kebbie keeps for it on the board gives way to your note; when you filed it into an existing note, the row stays a week pointing at that note.", crate::backlog_kept::PREFIX);
             let text = if item.to_write() {
                 format!("{} {filed}", lead_text(filing, &item.priority, "as a task note in the vault's backlog"))
             } else {
@@ -414,10 +546,70 @@ pub fn file_item_on(shelf: &Shelf, sources: &[Source], filing: &Filing, from_lea
     }
 }
 
-pub fn filed(id: &str) -> Result<String> {
-    match crate::backlog_kept::release(&crate::lead::state_dir()?, id)? {
-        true => Notice::new(Tone::Done, "Its row gives way to the note").detail("kept", id).ok(),
-        false => Notice::new(Tone::NotNow, "kebbie keeps no row by that id").next("It was released already, or the id is mistyped.").detail("kept", id).ok(),
+// The lead filed a kept item: in a new note its row gives way to it; merged into a note filed before the row, the row stays MERGED_DAYS as "<words> · merged into <note>", since that note is not among the newest.
+pub fn filed(id: &str, note: Option<&str>) -> Result<String> {
+    let state = crate::lead::state_dir()?;
+    let index = crate::vault::Index::open().ok();
+    filed_in(&state, id, note, crate::messages::now(), |key| index.as_ref().and_then(|index| Some((index.title_of(key).unwrap_or_default(), index.date_of(key)?))))
+}
+
+pub fn filed_in(state: &Path, id: &str, note: Option<&str>, now: u64, note_of: impl Fn(&str) -> Option<(String, String)>) -> Result<String> {
+    let note = note.map(|note| note.trim().trim_start_matches("vault:").trim()).filter(|note| !note.is_empty());
+    let row = crate::backlog_kept::kept_in(state).into_iter().find(|kept| kept.id == id.strip_prefix(crate::backlog_kept::PREFIX).unwrap_or(id));
+    let older = |filed_on: &str| row.as_ref().zip(crate::backlog::epoch_day(filed_on)).is_some_and(|(row, day)| day < (row.at / 86_400) as i64);
+    let merged = note.and_then(|note| note_of(note).map(|found| (note, found))).filter(|(_, (_, date))| older(date));
+    let done = match &merged {
+        Some((note, (title, _))) => crate::backlog_kept::merge(state, id, note, title, now)?,
+        None => crate::backlog_kept::release(state, id)?,
+    };
+    match (done, merged) {
+        (true, Some((note, (title, _)))) => Notice::new(Tone::Done, "Its row stays a week, pointing at the note it was merged into").detail("kept", id).detail("note", format!("\"{title}\" ({note})")).ok(),
+        (true, None) => Notice::new(Tone::Done, "Its row gives way to the note").detail("kept", id).ok(),
+        (false, _) => Notice::new(Tone::NotNow, "kebbie keeps no row by that id").next("It was released already, or the id is mistyped.").detail("kept", id).ok(),
+    }
+}
+
+// Any item the user picks, sent to the lead to write out as it stands now: a merged row's note, a kept row with the user's words; a Linear issue is written in Linear.
+pub fn write_out(entry: &Entry, who: &str, dir: &Path, tell: &dyn Fn(&str) -> Result<()>) -> Result<String> {
+    let text = match entry.source.as_str() {
+        "local" => {
+            let stem = entry.reference.strip_prefix(PREFIX).unwrap_or(&entry.reference);
+            write_out_text(who, &entry.title, &file(dir, stem).display().to_string(), None)
+        }
+        "vault" => write_out_text(who, &entry.title, &format!("vault: {}", entry.reference), None),
+        "kept" if !entry.shape.into.is_empty() => write_out_text(who, &entry.title, &format!("vault: {}", entry.shape.into), None),
+        "kept" => format!("{} File it as a task note in the vault's backlog, then run `kebbie backlog filed {} <the note's path>`.", write_out_text(who, &entry.title, "a row kebbie keeps until it is filed", Some(&entry.summary)), entry.reference),
+        _ => return Notice::new(Tone::You, "Not sent: a Linear issue is written in Linear").you("Edit it there.").err(),
+    };
+    tell(&text)?;
+    Notice::new(Tone::Moving, "Sent to the lead").next("It writes the item out in place; the Backlog page shows it once it is saved.").detail("item", entry.title.clone()).ok()
+}
+
+// The backlog item by the reference `kebbie backlog` lists, a vault path with or without vault:, or a local item's file name.
+pub fn entry_named<'a>(entries: &'a [Entry], named: &str) -> Option<&'a Entry> {
+    let named = named.trim();
+    let bare = named.strip_prefix("vault:").unwrap_or(named);
+    entries.iter().find(|entry| entry.reference == named || entry.reference == bare)
+        .or_else(|| entries.iter().find(|entry| entry.source == "local" && entry.reference == reference(bare.trim_end_matches(".md"))))
+}
+
+pub fn write_out_cli(named: &str) -> Result<String> {
+    if named.trim().is_empty() {
+        return Notice::new(Tone::You, "Not sent: name the item").you("kebbie backlog write <ref>, with the reference kebbie backlog lists.").err();
+    }
+    let backlog = crate::backlog::load();
+    let Some(entry) = entry_named(&backlog.entries, named) else {
+        return Notice::new(Tone::You, format!("Not sent: no backlog item \"{named}\"")).you("kebbie backlog lists each item with its reference.").err();
+    };
+    write_out(entry, &caller_name(), &dir(), &|text| crate::messages::to_lead(crate::messages::ToLead::BacklogItem, text))
+}
+
+fn caller_name() -> String {
+    match crate::permit::caller() {
+        crate::permit::Caller::User => "The user".to_string(),
+        crate::permit::Caller::Lead | crate::permit::Caller::LeadSandboxed => "The lead".to_string(),
+        crate::permit::Caller::Task(task) => format!("The task {task}"),
+        _ => "An agent".to_string(),
     }
 }
 
@@ -425,12 +617,7 @@ pub fn add(priority: Option<&str>, repo: Option<&str>, words: &[String], from_st
     let line = words.join(" ");
     let body = from_stdin.then(|| crate::issues::read_body(&[], true));
     let caller = crate::permit::caller();
-    let by = match &caller {
-        crate::permit::Caller::User => "The user".to_string(),
-        crate::permit::Caller::Lead | crate::permit::Caller::LeadSandboxed => "The lead".to_string(),
-        crate::permit::Caller::Task(task) => format!("The task {task}"),
-        _ => "An agent".to_string(),
-    };
+    let by = caller_name();
     let from_lead = matches!(caller, crate::permit::Caller::Lead | crate::permit::Caller::LeadSandboxed);
     file_item(&crate::config::sources()?, &Filing { priority: priority.unwrap_or_default(), repo: repo.unwrap_or_default(), line: &line, words: None, body: body.as_deref(), by: &by }, from_lead)
 }
@@ -548,6 +735,111 @@ mod tests {
         mark_told(&state, &dir, &["kept".to_string()]);
         assert_eq!(told(&state), ["kept"], "a stem whose file is gone leaves the list, and none is listed twice");
         assert!(untold(&[draft, ready], &["by-hand".to_string()]).is_empty());
+    }
+
+    fn waiting(source: &str, reference: &str, state: State) -> Entry {
+        Entry { source: source.to_string(), title: format!("Item {reference}"), reference: reference.to_string(), shape: Shape { state: Some(state), ..Shape::default() }, ..Entry::default() }
+    }
+
+    #[test]
+    fn a_vault_note_to_write_reaches_the_lead_only_when_the_user_writes_out_all() {
+        let (state, dir) = (crate::sh::test_dir("backlog-queue-none-state"), crate::sh::test_dir("backlog-queue-none-dir"));
+        let notes = [waiting("vault", "Projects/old.md", State::ToWrite)];
+        let tell = |_: &str| -> Result<()> { panic!("nothing goes to the lead without the user's action") };
+        pump_in(&state, &notes, &tell).unwrap();
+        assert_eq!(queued(&state), 0);
+        let _ = (std::fs::remove_dir_all(state), std::fs::remove_dir_all(dir));
+    }
+
+    #[test]
+    fn writing_out_all_sends_the_lead_a_batch_at_a_time_until_the_queue_is_empty() {
+        let (state, dir) = (crate::sh::test_dir("backlog-queue-state"), crate::sh::test_dir("backlog-queue-dir"));
+        let mut notes: Vec<Entry> = (0..12).map(|n| waiting("vault", &format!("Projects/old-{n:02}.md"), State::ToWrite)).collect();
+        notes.push(waiting("vault", "Projects/written.md", State::Ready));
+        notes.push(Entry { shape: Shape { state: Some(State::ToWrite), kept: true, ..Shape::default() }, ..waiting("kept", "kept:abc123", State::ToWrite) });
+        let heard = std::cell::RefCell::new(Vec::new());
+        let tell = |text: &str| -> Result<()> { heard.borrow_mut().push(text.to_string()); Ok(()) };
+        assert!(write_all_in(&state, &dir, &notes, &tell).unwrap().contains("Writing out 12 items"));
+        assert!(heard.borrow()[0].starts_with("The user asks you to write out every backlog item marked to write. Here are 5: \"Item Projects/old-00.md\" (vault: Projects/old-00.md);") && heard.borrow()[0].ends_with(" 7 more wait; kebbie sends the next 5 once these are written."), "{:?}", heard.borrow());
+        assert!(write_all_in(&state, &dir, &notes, &tell).unwrap().contains("Already writing them out: 12 wait"), "a second press starts no second queue");
+        pump_in(&state, &notes, &tell).unwrap();
+        assert_eq!(heard.borrow().len(), 1, "nothing more while the five sent wait to be written");
+        notes[0].shape.state = Some(State::Ready);
+        notes[1].shape.state = Some(State::Ready);
+        pump_in(&state, &notes, &tell).unwrap();
+        assert!(heard.borrow()[1].contains("Here are 2: \"Item Projects/old-05.md\"") && heard.borrow()[1].contains("old-06.md") && heard.borrow()[1].ends_with(" 5 more wait; kebbie sends the next 5 once these are written."), "{:?}", heard.borrow()[1]);
+        assert_eq!(queued(&state), 10, "the page shows how many wait");
+        for note in notes.iter_mut().filter(|note| note.source == "vault") {
+            note.shape.state = Some(State::Ready);
+        }
+        pump_in(&state, &notes, &tell).unwrap();
+        assert_eq!((queued(&state), heard.borrow().len()), (0, 2), "every item written out empties the queue");
+        assert!(!queue_file(&state).exists());
+        let _ = (std::fs::remove_dir_all(state), std::fs::remove_dir_all(dir));
+    }
+
+    #[test]
+    fn the_queue_survives_a_restart_and_keeps_a_note_whose_text_is_not_read_yet() {
+        let (state, dir) = (crate::sh::test_dir("backlog-queue-restart-state"), crate::sh::test_dir("backlog-queue-restart-dir"));
+        let notes: Vec<Entry> = (0..7).map(|n| waiting("vault", &format!("Projects/n{n}.md"), State::ToWrite)).collect();
+        write_all_in(&state, &dir, &notes, &|_| Ok(())).unwrap();
+        assert_eq!(read_queue(&state).sent.len(), 5, "read back from the file, as after a restart");
+        let mut unread = notes.clone();
+        unread[5].shape.state = None;
+        unread.truncate(6);
+        pump_in(&state, &unread, &|_| Ok(())).unwrap();
+        assert_eq!(read_queue(&state).items.iter().map(|item| item.reference.as_str()).collect::<Vec<_>>(), ["Projects/n0.md", "Projects/n1.md", "Projects/n2.md", "Projects/n3.md", "Projects/n4.md", "Projects/n5.md"], "a note gone from the backlog leaves; one not read yet stays");
+        let _ = (std::fs::remove_dir_all(state), std::fs::remove_dir_all(dir));
+    }
+
+    #[test]
+    fn writing_out_any_item_sends_the_lead_that_item_even_a_written_one() {
+        let dir = crate::sh::test_dir("backlog-write-out");
+        let heard = std::cell::RefCell::new(Vec::new());
+        let tell = |text: &str| -> Result<()> { heard.borrow_mut().push(text.to_string()); Ok(()) };
+        let ready = waiting("vault", "Projects/retry.md", State::Ready);
+        let said = write_out(&ready, "The user", &dir, &tell).unwrap();
+        assert!(said.contains("Sent to the lead"), "{said}");
+        assert_eq!(heard.borrow()[0], write_out_text("The user", "Item Projects/retry.md", "vault: Projects/retry.md", None), "a ready note goes all the same");
+        write_out(&waiting("local", "local:fix-login", State::Ready), "The user", &dir, &tell).unwrap();
+        assert!(heard.borrow()[1].contains(&format!("({})", dir.join("fix-login.md").display())));
+        let merged = Entry { summary: "rerun once".to_string(), shape: Shape { state: Some(State::Ready), kept: true, into: "Projects/older.md".to_string(), ..Shape::default() }, ..waiting("kept", "kept:abc123", State::Ready) };
+        write_out(&merged, "The user", &dir, &tell).unwrap();
+        assert!(heard.borrow()[2].contains("(vault: Projects/older.md)"), "a merged row sends the note it went into");
+        let kept = Entry { summary: "rerun once".to_string(), shape: Shape { state: Some(State::ToWrite), kept: true, ..Shape::default() }, ..waiting("kept", "kept:abc123", State::ToWrite) };
+        write_out(&kept, "The user", &dir, &tell).unwrap();
+        assert!(heard.borrow()[3].contains("> rerun once") && heard.borrow()[3].ends_with("then run `kebbie backlog filed kept:abc123 <the note's path>`."), "{}", heard.borrow()[3]);
+        assert!(write_out(&waiting("linear", "ABC-1", State::Ready), "The user", &dir, &tell).unwrap_err().contains("written in Linear"));
+        assert_eq!(heard.borrow().len(), 4);
+        let entries = [ready, waiting("local", "local:fix-login", State::Ready)];
+        assert_eq!(entry_named(&entries, "vault:Projects/retry.md").map(|entry| entry.reference.as_str()), Some("Projects/retry.md"));
+        assert_eq!(entry_named(&entries, "fix-login.md").map(|entry| entry.reference.as_str()), Some("local:fix-login"));
+        assert!(entry_named(&entries, "Projects/none.md").is_none());
+    }
+
+    #[test]
+    fn a_kept_row_filed_into_an_older_note_stays_and_one_filed_into_a_new_note_gives_way() {
+        let state = crate::sh::test_dir("backlog-filed");
+        let at = 1_794_744_000;
+        let notes = |key: &str| match key {
+            "Projects/older.md" => Some(("kebbie-ios: native iOS app".to_string(), "2026-10-21".to_string())),
+            "Projects/new.md" => Some(("New note".to_string(), "2026-11-15".to_string())),
+            _ => None,
+        };
+        let merged = crate::backlog_kept::keep(&state, "Native app", "Native app for the Duo", "high", "", at).unwrap();
+        let fresh = crate::backlog_kept::keep(&state, "Other idea", "", "low", "", at).unwrap();
+        assert!(filed_in(&state, &format!("kept:{merged}"), Some("vault:Projects/older.md"), at + 60, notes).unwrap().contains("merged into"));
+        assert!(filed_in(&state, &format!("kept:{fresh}"), Some("Projects/new.md"), at + 60, notes).unwrap().contains("gives way"));
+        let rows = crate::backlog_kept::shown_in(&state, at + 60);
+        assert_eq!(rows.iter().map(|row| (row.id.as_str(), row.merged.as_ref().map(|merged| merged.into.as_str()))).collect::<Vec<_>>(), [(merged.as_str(), Some("Projects/older.md"))]);
+        assert!(filed_in(&state, &format!("kept:{merged}"), None, at + 120, notes).unwrap().contains("gives way"), "without a note the row gives way as before");
+        let _ = std::fs::remove_dir_all(state);
+    }
+
+    #[test]
+    fn a_write_out_the_user_asks_for_names_the_item_and_their_words() {
+        assert_eq!(write_out_text("The user", "Retry", "vault: Projects/retry.md", None), "The user asks you to write out the backlog item \"Retry\" (vault: Projects/retry.md) with the skill `kebbie:write-backlog-item`, even where it looks complete: read it, the code and the notes again, write it out in place, and show the user the written item.");
+        assert!(write_out_text("The user", "Retry…", "kept by kebbie", Some("rerun\nonce")).contains("In their words when they added it:\n\n> rerun\n> once\n\n read it"));
     }
 
     #[test]

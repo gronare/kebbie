@@ -373,7 +373,8 @@ impl App {
             }
             return;
         }
-        if !self.selected_entry().is_some_and(|entry| self.open_item_card(entry)) {
+        let entry = self.selected_entry().map(|entry| if entry.shape.into.is_empty() { entry } else { self.merged_note(&entry) });
+        if !entry.is_some_and(|entry| self.open_item_card(entry)) {
             self.mode = Mode::Options(0);
         }
     }
@@ -910,6 +911,16 @@ impl App {
                         self.mode = Mode::Input { purpose: Purpose::BacklogLaterName(entry), label: "Start later as task: name".to_string(), buffer };
                     }
                 }
+                Act::WriteOut => {
+                    if let Some(entry) = self.selected_entry() {
+                        self.write_out(&entry);
+                    }
+                }
+                Act::WriteAll => {
+                    let result = crate::lead::state_dir().and_then(|state| crate::backlog_file::write_all_in(&state, &crate::backlog_file::dir(), &self.backlog.entries, &|text| crate::messages::to_lead(crate::messages::ToLead::BacklogItem, text)));
+                    self.subject = Some(notices::Subject::plain("backlog"));
+                    self.show(result);
+                }
                 Act::Refresh => self.refresh_backlog(),
                 Act::New => {
                     let label = "Add to the backlog: a line, the lead writes it out".to_string();
@@ -1315,6 +1326,7 @@ pub fn run(overlay: bool) -> Result<String> {
                         if app.sources.contains(&Source::Local) {
                             crate::backlog_file::tell_new_drafts();
                         }
+                        crate::backlog_file::pump_queue(&app.backlog.entries);
                         let kept = app.selected_message().filter(|_| app.message_back > 0).map(|message| message.id.clone());
                         app.messages = snapshot.messages;
                         if let Some(index) = kept.and_then(|id| app.messages.iter().position(|message| message.id == id)) {
@@ -1470,7 +1482,7 @@ mod tests {
         }
         let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 2);
         item.server = true;
-        let menus = [task_choices(Some(&item), Some("bin/dev"), Some("bin/jobs")), backlog_choices(&[Source::Local]), ongoing_choices(&Ongoing { key: String::new(), title: String::new(), area: String::new(), task: None, claim: None, ..Ongoing::default() })];
+        let menus = [task_choices(Some(&item), Some("bin/dev"), Some("bin/jobs")), backlog_choices(&[Source::Local], None, 0, 0), ongoing_choices(&Ongoing { key: String::new(), title: String::new(), area: String::new(), task: None, claim: None, ..Ongoing::default() })];
         for choice in menus.iter().flatten() {
             let act = choice.act.expect("a built-in choice names its action");
             assert_eq!(choice.key, map.char(act), "{}'s letter is the table's", choice.label);

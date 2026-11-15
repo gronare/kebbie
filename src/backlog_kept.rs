@@ -9,6 +9,8 @@ use crate::item_template::Template;
 use crate::sh::Result;
 
 pub const PREFIX: &str = "kept:";
+pub const MERGED_DAYS: u64 = 7;
+const DAY: u64 = 86_400;
 
 // What kebbie keeps for the backlog until the lead has acted on it: a short item while the lead files it in the vault, and the user's answers to an item's open questions while the lead folds them in.
 #[derive(Clone, Debug, PartialEq)]
@@ -18,6 +20,15 @@ pub struct Kept {
     pub words: String,
     pub priority: String,
     pub repo: String,
+    pub at: u64,
+    pub merged: Option<Merged>,
+}
+
+// The older note the lead filed the item into: its row stays MERGED_DAYS beside the backlog's newest, pointing at that note, since the note itself is not new.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Merged {
+    pub into: String,
+    pub title: String,
     pub at: u64,
 }
 
@@ -38,10 +49,10 @@ fn answers_file(state: &Path) -> PathBuf {
 }
 
 // Held across each read, change and write of one of the two files, so the board, the keeper and the CLI never drop each other's change.
-struct Locked(std::fs::File);
+pub(crate) struct Locked(std::fs::File);
 
 impl Locked {
-    fn take(file: &Path) -> Result<Locked> {
+    pub(crate) fn take(file: &Path) -> Result<Locked> {
         let path = file.with_extension("lock");
         let lock = crate::state::append_to(&path).map_err(|error| format!("{}: {error}", path.display()))?;
         // SAFETY: flock on a descriptor this File owns.
@@ -67,13 +78,38 @@ fn text(value: &Value, key: &str) -> String {
     value[key].as_str().unwrap_or_default().to_string()
 }
 
+fn merged_of(value: &Value) -> Option<Merged> {
+    let into = text(value, "into");
+    (!into.is_empty()).then(|| Merged { into, title: text(value, "into_title"), at: value["merged_at"].as_u64().unwrap_or(0) })
+}
+
 pub fn kept_in(state: &Path) -> Vec<Kept> {
-    read(&kept_file(state)).iter().map(|value| Kept { id: text(value, "id"), line: text(value, "line"), words: text(value, "words"), priority: text(value, "priority"), repo: text(value, "repo"), at: value["at"].as_u64().unwrap_or(0) })
+    read(&kept_file(state)).iter().map(|value| Kept { id: text(value, "id"), line: text(value, "line"), words: text(value, "words"), priority: text(value, "priority"), repo: text(value, "repo"), at: value["at"].as_u64().unwrap_or(0), merged: merged_of(value) })
         .filter(|kept| !kept.id.is_empty()).collect()
 }
 
+impl Kept {
+    // A row waiting for the lead shows until it is released; a merged one for MERGED_DAYS from the merge.
+    pub fn shown_at(&self, now: u64) -> bool {
+        self.merged.as_ref().is_none_or(|merged| now.saturating_sub(merged.at) < MERGED_DAYS * DAY)
+    }
+}
+
+// The rows the backlog shows now; a merged row past its days is gone from it.
+pub fn shown_in(state: &Path, now: u64) -> Vec<Kept> {
+    kept_in(state).into_iter().filter(|kept| kept.shown_at(now)).collect()
+}
+
 fn write_kept(state: &Path, kept: &[Kept]) -> Result<()> {
-    let values: Vec<Value> = kept.iter().map(|kept| json!({ "id": kept.id, "line": kept.line, "words": kept.words, "priority": kept.priority, "repo": kept.repo, "at": kept.at })).collect();
+    let values: Vec<Value> = kept.iter().map(|kept| {
+        let mut value = json!({ "id": kept.id, "line": kept.line, "words": kept.words, "priority": kept.priority, "repo": kept.repo, "at": kept.at });
+        if let Some(merged) = &kept.merged {
+            value["into"] = json!(merged.into);
+            value["into_title"] = json!(merged.title);
+            value["merged_at"] = json!(merged.at);
+        }
+        value
+    }).collect();
     crate::state::write(&kept_file(state), Value::Array(values).to_string())
 }
 
@@ -83,7 +119,8 @@ pub fn keep(state: &Path, line: &str, words: &str, priority: &str, repo: &str, a
     let mut kept = kept_in(state);
     let id = (0u32..).map(|attempt| sha1_smol::Sha1::from(format!("{line}\n{at}\n{attempt}")).digest().to_string()[..6].to_string())
         .find(|id| !kept.iter().any(|other| &other.id == id)).unwrap_or_default();
-    kept.push(Kept { id: id.clone(), line: line.trim().to_string(), words: words.trim().to_string(), priority: priority.to_string(), repo: repo.to_string(), at });
+    kept.retain(|other| other.shown_at(at));
+    kept.push(Kept { id: id.clone(), line: line.trim().to_string(), words: words.trim().to_string(), priority: priority.to_string(), repo: repo.to_string(), at, merged: None });
     write_kept(state, &kept)?;
     Ok(id)
 }
@@ -101,18 +138,37 @@ pub fn release(state: &Path, id: &str) -> Result<bool> {
     Ok(true)
 }
 
+// The lead filed the kept item into an existing note: the row stays MERGED_DAYS pointing at it; Ok(false) when kebbie keeps no row by that id.
+pub fn merge(state: &Path, id: &str, into: &str, title: &str, now: u64) -> Result<bool> {
+    let id = id.strip_prefix(PREFIX).unwrap_or(id);
+    let _locked = Locked::take(&kept_file(state))?;
+    let mut kept: Vec<Kept> = kept_in(state).into_iter().filter(|other| other.shown_at(now)).collect();
+    let Some(row) = kept.iter_mut().find(|other| other.id == id) else { return Ok(false) };
+    row.merged = Some(Merged { into: into.to_string(), title: title.to_string(), at: now });
+    write_kept(state, &kept)?;
+    Ok(true)
+}
+
 impl Kept {
     pub fn entry(&self, now: u64) -> Entry {
         let (title, _, area) = crate::backlog_file::split_line(&self.line);
+        let title = if title.is_empty() { self.line.clone() } else { title };
+        let shape = match &self.merged {
+            Some(merged) => Shape { state: Some(State::Ready), kept: true, into: merged.into.clone(), ..Shape::default() },
+            None => Shape { state: Some(State::ToWrite), kept: true, ..Shape::default() },
+        };
         Entry {
             source: "kept".to_string(),
-            title: if title.is_empty() { self.line.clone() } else { title },
+            title: match &self.merged {
+                Some(merged) => format!("{title} · merged into {}", if merged.title.is_empty() { &merged.into } else { &merged.title }),
+                None => title,
+            },
             priority: self.priority.clone(),
             area: if self.repo.is_empty() { area } else { self.repo.clone() },
             reference: format!("{PREFIX}{}", self.id),
             summary: self.words.clone(),
-            age: format!("{} d", now.saturating_sub(self.at) / 86_400),
-            shape: Shape { state: Some(State::ToWrite), kept: true, ..Shape::default() },
+            age: format!("{} d", now.saturating_sub(self.at) / DAY),
+            shape,
         }
     }
 }
@@ -177,6 +233,24 @@ mod tests {
         assert!(entry.shape.kept && entry.shape.state == Some(State::ToWrite));
         assert!(release(&state, &format!("kept:{id}")).unwrap());
         assert!(kept_in(&state).is_empty() && !release(&state, &id).unwrap(), "released once");
+    }
+
+    #[test]
+    fn a_row_merged_into_an_older_note_stays_seven_days_pointing_at_it_then_goes() {
+        let state = crate::sh::test_dir("backlog-kept-merged");
+        let filed_at = 1_794_744_000;
+        let id = keep(&state, "Native app for the Duo", "Make the phone app native, starting from the Duo", "high", "ios", filed_at).unwrap();
+        let merged_at = filed_at + 3_600;
+        assert!(merge(&state, &format!("kept:{id}"), "Projects/kebbie-ios.md", "kebbie-ios: native iOS app", merged_at).unwrap());
+        let entry = shown_in(&state, merged_at)[0].entry(merged_at);
+        assert_eq!((entry.title.as_str(), entry.reference.clone(), entry.shape.into.as_str(), entry.shape.state, entry.age.as_str()), ("Native app for the Duo · merged into kebbie-ios: native iOS app", format!("kept:{id}"), "Projects/kebbie-ios.md", Some(State::Ready), "0 d"));
+        let last = merged_at + MERGED_DAYS * DAY - 1;
+        assert_eq!(shown_in(&state, last).len(), 1, "still there the last second of its seventh day");
+        assert!(shown_in(&state, last + 1).is_empty(), "gone after seven days");
+        keep(&state, "Next idea", "", "low", "", last + 1).unwrap();
+        assert_eq!(kept_in(&state).iter().map(|kept| kept.line.as_str()).collect::<Vec<_>>(), ["Next idea"], "the next write drops the merged row past its days");
+        assert!(!merge(&state, "kept:nope00", "Projects/x.md", "X", last).unwrap());
+        let _ = std::fs::remove_dir_all(state);
     }
 
     fn body(questions: &str) -> String {

@@ -295,7 +295,7 @@ fn full_snapshot(cli: &Cli, state: &Path) -> Result<()> {
     }
 }
 
-// One line of `watch --json`: a reset takes a full snapshot and fills the backlog bodies once, a batch is applied; the answer is the cursor to keep.
+// One line of `watch --json`: a reset takes a full snapshot and fills the backlog bodies once, a batch is applied; a full snapshot gives notes the vault's own mtimes, so the bodies kept under a batch's are read again; the answer is the cursor to keep.
 pub fn handle(cli: &Cli, state: &Path, line: &str) -> Result<String> {
     let value: Value = serde_json::from_str(line).map_err(|error| format!("vault watch: not JSON ({error})"))?;
     let cursor = value["cursor"].as_str().filter(|cursor| !cursor.is_empty()).ok_or("vault watch: no cursor in its line")?.to_string();
@@ -318,6 +318,11 @@ pub fn handle(cli: &Cli, state: &Path, line: &str) -> Result<String> {
         crate::state::write(&path, snapshot.to_string())?;
     }
     keep_bodies(state, &applied)?;
+    if applied.full
+        && let Ok(index) = crate::vault::Index::of_state(state)
+    {
+        crate::backlog::fill_vault_bodies(cli, state, &index);
+    }
     Ok(cursor)
 }
 
@@ -565,7 +570,7 @@ mod tests {
     }
 
     #[test]
-    fn while_the_keeper_watches_neither_the_routine_nor_the_board_asks_the_vault() {
+    fn while_the_keeper_watches_the_routine_asks_nothing_and_the_board_reads_only_a_body_it_has_no_copy_of() {
         let fake = Fake::new("watch-board");
         let state = fake.state();
         let cli = capable_cli(&fake);
@@ -575,13 +580,34 @@ mod tests {
         record(&state, &cli, Some("c1"), Some(sleeper.id()));
         assert!(watching(&state) && live(&state, &cli));
         crate::vault_snapshot::tick_with(&cli, &state, 2000).unwrap();
+        assert_eq!(fake.calls(), ["snapshot --json"], "the kept snapshot is current: no snapshot");
         crate::backlog::fetch_vault_bodies_in(&cli, &state, || crate::vault::Index::of_state(&state));
-        assert_eq!(fake.calls(), ["snapshot --json"], "the kept files are current: no snapshot, no body read");
+        assert_eq!(fake.calls().last().map(String::as_str), Some("read Projects/later.md --body"), "a backlog note with no copy is read, watch or not");
+        crate::backlog::fetch_vault_bodies_in(&cli, &state, || crate::vault::Index::of_state(&state));
+        assert_eq!(fake.calls().len(), 2, "a copy as current as the note is not read again");
         let _ = sleeper.kill();
         let _ = sleeper.wait();
         assert!(!watching(&state), "a child that is gone is no watch");
-        crate::backlog::fetch_vault_bodies_in(&cli, &state, || crate::vault::Index::of_state(&state));
-        assert_eq!(fake.calls().last().map(String::as_str), Some("read Projects/later.md --body"), "without the watch the board reads the body itself");
+    }
+
+    #[test]
+    fn a_body_a_batch_kept_is_read_again_once_a_full_snapshot_gives_its_note_the_vaults_mtime() {
+        let fake = Fake::new("watch-merged");
+        let state = fake.state();
+        let cli = capable_cli(&fake);
+        std::fs::create_dir_all(fake.dir.join("answers/read-Projects")).unwrap();
+        fake.answer("snapshot---json", SNAPSHOT);
+        handle(&cli, &state, r#"{"cursor":"c1","reset":true,"more":false,"changes":[]}"#).unwrap();
+        let rewritten = json!({ "cursor": "c2", "reset": false, "more": false, "changes": [written("Projects/later.md", json!({ "kind": "task", "status": "backlog", "priority": "high", "title": "Later" }), "## Goal\n\nMerged and rewritten.\n")] });
+        handle(&cli, &state, &rewritten.to_string()).unwrap();
+        fake.answer("snapshot---json", &SNAPSHOT.replace(r#""priority":"high","area":"[[app]]","paths":[],"date":"2026-11-01","updated":"2026-11-01","mtime":2.0"#, r#""priority":"high","area":"[[app]]","paths":[],"date":"2026-11-01","updated":"2026-11-15","mtime":60.0"#));
+        fake.answer("read-Projects/later.md", "## Goal\n\nMerged and rewritten.\n");
+        let other = json!({ "cursor": "c3", "reset": false, "more": false, "changes": [written("Projects/other.md", json!({ "kind": "trap" }), "x")] });
+        handle(&cli, &state, &other.to_string()).unwrap();
+        let index = crate::vault::Index::of_state(&state).unwrap();
+        assert_eq!(index.changed_at("Projects/later.md"), Some(60.0), "the full snapshot carries the vault's mtime, not the batch's");
+        assert_eq!(crate::backlog::vault_body(Some(&index), &state, "Projects/later.md").as_deref(), Some("## Goal\n\nMerged and rewritten.\n"), "the copy follows the note across the full snapshot, so its card is never empty");
+        assert_eq!(fake.calls().last().map(String::as_str), Some("read Projects/later.md --body"));
     }
 
     #[test]

@@ -10,7 +10,6 @@ use crate::backlog_file::{Question, State, shape_of, state_of};
 use crate::item_template::Template;
 use crate::backlog_kept::Answer;
 use crate::keys::{self, Act};
-use crate::notice::{Notice, Tone};
 use crate::sh::Result;
 use super::widgets::{FAINT, MAUVE, MUTED, PEACH, SUBTEXT, SURFACE, TEAL, TEXT, YELLOW, bold, modal, plural, style, text_width, wrap};
 use super::{App, Mode};
@@ -19,8 +18,8 @@ const WIDTH: u16 = 88;
 const LABEL: usize = 10;
 const PAGE: u16 = 10;
 const FRAME_ROWS: u16 = 8;
-const CARD_KEYS: &str = "a answer · g start · w write it out again · ↑↓ pick · pgdn pgup scroll · esc back";
-const LOCAL_KEYS: &str = "a answer · g start · w write it out again · e open in $EDITOR · ↑↓ pick · pgdn pgup scroll · esc back";
+const CARD_KEYS: &str = "a answer · g start · w write it out · ↑↓ pick · pgdn pgup scroll · esc back";
+const LOCAL_KEYS: &str = "a answer · g start · w write it out · e open in $EDITOR · ↑↓ pick · pgdn pgup scroll · esc back";
 const TYPING_KEYS: &str = "⏎ send to the lead · pgup pgdn scroll · esc back to the card";
 const UNREAD: &str = "The note's text has not reached this machine yet; the card shows it once the board has read it from the vault.";
 pub(super) const GO_AGAIN_FOR: std::time::Duration = std::time::Duration::from_secs(3);
@@ -53,6 +52,9 @@ fn waits(count: usize) -> String {
 }
 
 pub(super) fn about(entry: &Entry) -> String {
+    if !entry.shape.into.is_empty() {
+        return format!("merged into the note {}: ⏎ opens it", entry.shape.into);
+    }
     match entry.shape.state {
         Some(State::Drafting) if entry.shape.waiting > 0 => format!("drafting: {} on you before it can start", waits(entry.shape.waiting)),
         Some(State::Drafting) => "drafting: the lead writes it out".to_string(),
@@ -350,11 +352,7 @@ impl App {
             (KeyCode::PageUp, _) => (card.scroll, card.follow) = (card.scroll.saturating_sub(PAGE), false),
             (KeyCode::Char('a') | KeyCode::Enter, _) if count > 0 => (card.typing, card.follow) = (Some(String::new()), true),
             (_, Some(Act::Go)) => return self.start_entry(card.entry.clone()),
-            (KeyCode::Char('w'), _) => {
-                let result = crate::messages::to_lead(crate::messages::ToLead::BacklogItem, &rewrite_text(&card));
-                self.subject = Some(super::notices::Subject::plain("backlog"));
-                return self.show(result.and_then(|_| Notice::new(Tone::Moving, "Sent to the lead").next("It writes the item out again; the card shows it once it is saved.").ok()));
-            }
+            (_, Some(Act::WriteOut)) => return self.write_out(&card.entry),
             (KeyCode::Char('e'), _) if card.path.is_some() => {
                 if let (Some(terminal), Some(path)) = (terminal, card.path.clone()) {
                     let _ = super::terminal::outside(terminal, || std::process::Command::new("sh").args(["-c", "${VISUAL:-${EDITOR:-vi}} \"$1\"", "sh"]).arg(&path).status().map_err(|error| error.to_string()));
@@ -394,8 +392,32 @@ impl App {
         self.mode = Mode::ItemCard(card);
     }
 
-    // g on an item: its questions waiting on the user hold the start once, and g again within the notice's time starts it anyway.
+    // w on any item: the lead writes it out, whatever state it is in.
+    pub(super) fn write_out(&mut self, entry: &Entry) {
+        let result = crate::backlog_file::write_out(entry, "The user", &crate::backlog_file::dir(), &|text| crate::messages::to_lead(crate::messages::ToLead::BacklogItem, text));
+        self.subject = Some(super::notices::Subject::plain("backlog"));
+        self.show(result);
+    }
+
+    // How many items the user's write-out-all queue still holds.
+    pub(super) fn write_queue(&self) -> usize {
+        crate::lead::state_location().map_or(0, |state| crate::backlog_file::queued(&state))
+    }
+
+    // The note a merged row went into, as the backlog lists it, else by its path alone.
+    pub(super) fn merged_note(&self, entry: &Entry) -> Entry {
+        let into = &entry.shape.into;
+        self.backlog.entries.iter().find(|other| other.source == "vault" && &other.reference == into).cloned().unwrap_or_else(|| {
+            let title = entry.title.split_once(" · merged into ").map_or(into.as_str(), |(_, title)| title).to_string();
+            Entry { source: "vault".to_string(), title, reference: into.clone(), ..Entry::default() }
+        })
+    }
+
+    // g on an item: its questions waiting on the user hold the start once, and g again within the notice's time starts it anyway; a merged row starts the note it went into.
     pub(super) fn start_entry(&mut self, entry: Entry) {
+        if !entry.shape.into.is_empty() {
+            return self.start_entry(self.merged_note(&entry));
+        }
         if entry.shape.kept {
             return self.say("Not started: the lead has yet to write it out and file it in the vault".to_string());
         }
@@ -411,10 +433,6 @@ impl App {
             self.mode = Mode::Input { purpose: super::input::Purpose::BacklogName(entry), label: "Start as task: name".to_string(), buffer };
         }
     }
-}
-
-fn rewrite_text(card: &ItemCard) -> String {
-    format!("The user asks you to write out the backlog item \"{}\" ({}) again with the skill `{}`: read it, the code and the notes again, and rewrite it in place.", card.entry.title, card.wherein(), crate::backlog_file::SKILL)
 }
 
 // The answer is kept with the item until the lead folds it in, and the lead hears it at once; the pick moves on to the next question waiting.
@@ -480,7 +498,7 @@ mod tests {
         let mut shown = card("Projects/retry.md");
         let rows = screen(&mut shown);
         let all = rows.join("\n");
-        for wanted in [" backlog item ", "Retry a failed CI push", "priority  high", "repo      web", "state     drafting: 2 questions wait on you", "note      vault: Projects/retry.md", "Background", "- G reruns a red run.", "Open questions  2 wait on you before it starts", "▌? Which red runs count as flaky?", "  ? Should a rerun show on the row?", "  · How long to wait; the work settles it.", "Out of scope", "a answer · g start · w write it out again · ↑↓ pick · pgdn pgup scroll · esc back"] {
+        for wanted in [" backlog item ", "Retry a failed CI push", "priority  high", "repo      web", "state     drafting: 2 questions wait on you", "note      vault: Projects/retry.md", "Background", "- G reruns a red run.", "Open questions  2 wait on you before it starts", "▌? Which red runs count as flaky?", "  ? Should a rerun show on the row?", "  · How long to wait; the work settles it.", "Out of scope", "a answer · g start · w write it out · ↑↓ pick · pgdn pgup scroll · esc back"] {
             assert!(all.contains(wanted), "{wanted}:\n{all}");
         }
         assert!(!all.contains("$EDITOR"), "a vault note opens in no editor here");
@@ -555,7 +573,7 @@ mod tests {
         let state = crate::lead::state_dir().unwrap();
         let kept = crate::backlog_kept::kept_in(&state).into_iter().find(|kept| kept.line.ends_with("kept-row-test")).expect("kebbie keeps a row for it");
         assert_eq!(kept.priority, "high");
-        assert!(crate::backlog_file::filed(&format!("kept:{}", kept.id)).unwrap().contains("Its row gives way to the note"));
+        assert!(crate::backlog_file::filed(&format!("kept:{}", kept.id), None).unwrap().contains("Its row gives way to the note"));
         assert!(!crate::backlog_kept::kept_in(&state).iter().any(|other| other.id == kept.id), "the lead's word clears it");
     }
 

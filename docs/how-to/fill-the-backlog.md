@@ -52,7 +52,29 @@ Every item, whoever files it, has the sections of its place's template: the vaul
 
 Background, Goal and Source are required. An item that lacks a heading or leaves a required section empty is to write. What the lead could not find out goes under Open questions. While one of them blocks the start, the item is drafting, and its row says how many questions wait on you.
 
-A vault note written before the vault had its task template shows as to write too. The lead leaves it as it is until you start it, when its task writes the sections before it changes code, or until you open it and ask the lead to write it out. Format: [The local backlog](../reference/files.md#the-local-backlog).
+A vault note short of a section of the vault's task template, or with a required one empty, shows as to write too, a note written before the vault had its template among them. The lead leaves such a note as it is until you start it, when its task writes the sections before it changes code, or until you ask for it to be written out. Format: [The local backlog](../reference/files.md#the-local-backlog).
+
+## Have an item written out
+
+Select any item on the Backlog page and press `w`, or `w` on its card, or choose **Write it out** in its options (`o`). The lead writes it out in place by the skill, even when it looks complete, and shows you the written item. From a shell:
+
+```bash
+kebbie backlog write Projects/fix-login.md
+```
+
+The reference is the one `kebbie backlog` lists.
+
+To write out every item marked to write, press `W` on the Backlog page, or choose **Write out all N to write** in an item's options, or:
+
+```bash
+kebbie backlog write --all
+```
+
+The lead gets them 5 at a time, and the next 5 once it has written those, until none is left. The status line shows `writing out: N wait` meanwhile, and the queue goes on after a restart.
+
+## An idea merged into an older note
+
+When the lead files an item you added into a note that was already there, your row stays on the Backlog page for 7 days as `<your words> · merged into <note>`. `⏎` on it opens that note, and `g` starts it.
 
 ## Answer an item's questions
 

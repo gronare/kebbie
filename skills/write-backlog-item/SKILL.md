@@ -30,10 +30,10 @@ A template with other sections is filled the same way, each section from its hea
 
 ## Steps
 
-1. **Search first.** Look for the item already filed: with the vault, its `search` on the item's words; as the lead, `kebbie backlog` too. When it is there, add your source to its Source (`The task billing@web, seen again, 2026-11-14`) and what you saw that it lacks to What we know, save it, and stop: one item per problem, however many tasks meet it. Done when you found it and added to it, or searched where you can and it is not there.
+1. **Search first.** Look for the item already filed: with the vault, its `search` on the item's words; as the lead, `kebbie backlog` too. When it is there, add your source to its Source (`The task billing@web, seen again, 2026-11-14`) and what you saw that it lacks to What we know, save it, and stop: one item per problem, however many tasks meet it. When kebbie's message names a kept row (`kept:<id>`), run `kebbie backlog filed kept:<id> <that note's path>`, so the user's row points at the note it went into. Done when you found it and added to it, or searched where you can and it is not there.
 2. **Mark it drafting**, before you research, so the board shows you are on it:
    - a local item already filed (a short one, or a file the user wrote by hand): set `status = "drafting"` in its header;
-   - a short item for the vault: write its note in `Projects/` now with its title, `priority` and `area` and status `draft`, and when kebbie's message names a kept row (`kept:<id>`), run `kebbie backlog filed kept:<id>`, so the board shows your note in place of the row kebbie kept.
+   - a short item for the vault: write its note in `Projects/` now with its title, `priority` and `area` and status `draft`, and when kebbie's message names a kept row (`kept:<id>`), run `kebbie backlog filed kept:<id> <your note's path>`, so the board shows your note in place of the row kebbie kept.
 
    Done when `kebbie backlog` marks it `drafting`.
 3. **Research.** Read what bears on it: the code it touches, the notes on its area, the history (`git log` on those files, the tasks and decisions before it), and your conversation with the user. Done when every claim you are about to write in Background and What we know points at something you read in this step, not at memory.

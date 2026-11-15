@@ -164,12 +164,20 @@ pub(super) fn found_choices(item: &crate::found::Item, target: Option<&str>) -> 
     ]
 }
 
-pub(super) fn backlog_choices(sources: &[Source]) -> Vec<Choice> {
+pub(super) fn backlog_choices(sources: &[Source], entry: Option<&Entry>, to_write: usize, queued: usize) -> Vec<Choice> {
     let mut choices = vec![
         choice(Act::Go, "Start as task", "a worktree, a Space and Claude with this as its prompt"),
         choice(Act::StartAt, "Start at…", "the same, at a time you type: it waits under Queued until then"),
-        choice(Act::Refresh, "Refresh the backlog", &backlog::refresh_label(sources)),
     ];
+    if entry.is_some_and(|entry| entry.source != "linear") {
+        choices.push(choice(Act::WriteOut, "Write it out", "the lead writes it out in place by the skill, even when it looks complete, and shows it to you"));
+    }
+    if queued > 0 {
+        choices.push(choice(Act::WriteAll, &format!("Writing out: {queued} wait"), "the lead gets 5 at a time, the next once it has written those"));
+    } else if to_write > 0 {
+        choices.push(choice(Act::WriteAll, &format!("Write out all {to_write} to write"), "the lead gets 5 at a time, the next once it has written those, until none is left"));
+    }
+    choices.push(choice(Act::Refresh, "Refresh the backlog", &backlog::refresh_label(sources)));
     if crate::config::filing(sources).is_some() {
         choices.push(choice(Act::New, "Add an item", "a line and a priority; the lead writes it out"));
     }
@@ -203,7 +211,7 @@ impl App {
             Column::Backlog => match self.backlog_row(self.backlog_selected) {
                 Some(super::BacklogRow::Ongoing(note)) => ongoing_choices(&self.ongoing[note]),
                 Some(super::BacklogRow::Found(found)) => found_choices(&self.found[found], self.found_target(&self.found[found]).as_deref()),
-                _ => backlog_choices(&self.sources),
+                _ => backlog_choices(&self.sources, self.selected_entry().as_ref(), crate::backlog_file::unwritten(&self.backlog.entries, &crate::backlog_file::dir()).len(), self.write_queue()),
             },
         }
     }
@@ -312,10 +320,15 @@ mod tests {
 
     #[test]
     fn the_backlog_column_adds_an_item_where_new_items_are_filed() {
-        let keys = |sources: &[Source]| backlog_choices(sources).iter().map(|choice| choice.key).collect::<String>();
+        let keys = |sources: &[Source]| backlog_choices(sources, None, 0, 0).iter().map(|choice| choice.key).collect::<String>();
         assert_eq!(keys(&[Source::Local]), "glRn");
         assert_eq!(keys(&[Source::Vault, Source::Linear]), "glRn", "with the vault the lead files it there");
         assert_eq!(keys(&[Source::Linear]), "glR", "Linear is only read");
+        let item = |source: &str| Entry { source: source.to_string(), reference: "Projects/x.md".to_string(), ..Entry::default() };
+        let on = |entry: &Entry| backlog_choices(&[Source::Vault, Source::Linear], Some(entry), 0, 0).iter().map(|choice| choice.key).collect::<String>();
+        assert_eq!((on(&item("vault")), on(&item("kept")), on(&item("linear"))), ("glwRn".to_string(), "glwRn".to_string(), "glRn".to_string()), "any item but a Linear issue is written out on w");
+        let labels = |to_write: usize, queued: usize| backlog_choices(&[Source::Vault], None, to_write, queued).into_iter().filter(|choice| choice.act == Some(Act::WriteAll)).map(|choice| choice.label).collect::<Vec<_>>();
+        assert_eq!((labels(0, 0), labels(12, 0), labels(12, 7)), (Vec::<String>::new(), vec!["Write out all 12 to write".to_string()], vec!["Writing out: 7 wait".to_string()]));
     }
 
     #[test]
