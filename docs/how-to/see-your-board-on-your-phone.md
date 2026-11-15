@@ -127,7 +127,7 @@ What reaches a machine is its own choice, set by [`hub.commands`](../reference/c
 
 - If questions still wait on you, the start is refused and says how many; start it again to start it anyway.
 - The phone hears `Starting <task>` while the machine starts it. If the start fails, the device that asked gets a `Not started` notification that says why, and the item stays in the backlog.
-- If the question changed on the item since you read it, the answer is refused; read the item again.
+- An answer goes to its question by the question's words, so answers you send after the lead folded an earlier one in still arrive, and sending the same answer twice tells the lead once. If the question's words changed or the lead took it out, the answer is refused; read the item again.
 - If the item is already running as a task, or left the backlog, the machine says so.
 - A note in a vault two machines share is the same item on both; start it from one.
 - If the section changed on the machine since you opened it, the edit is refused; read it again and edit what it says now. A required section cannot be saved empty.

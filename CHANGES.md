@@ -7,6 +7,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### What's new
 
 ### Fixed
+- Answers to a backlog item's questions from your phone go through after the lead folds an earlier answer in, and a repeated press counts once.
 
 ## 0.39.1
 

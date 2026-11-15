@@ -272,13 +272,23 @@ pub fn idea_on(shelf: &Shelf, sources: &[Source], caller: &Caller, idea: &Idea) 
     }
 }
 
+// A question is known by its words, since the lead taking a folded one out moves the rest up; the place the phone saw only tells apart questions worded alike.
+fn asked<'q>(questions: &'q [OpenQuestion], answer: &ItemAnswer) -> Option<&'q OpenQuestion> {
+    let alike: Vec<(usize, &OpenQuestion)> = questions.iter().enumerate().filter(|(_, question)| question.text == answer.question).collect();
+    let place = usize::try_from(answer.index).unwrap_or(usize::MAX);
+    alike.iter().min_by_key(|(index, _)| index.abs_diff(place)).map(|(_, question)| *question)
+}
+
 // The answer waits with the item as one given on its card does, and the lead hears it at once.
 pub fn answer_on(desk: &Desk, caller: &Caller, answer: &ItemAnswer) -> Done {
     let Some(found) = desk.found.as_ref() else { return refused(Reason::UnknownItem, "That item is no longer in this machine's backlog") };
     let questions = found.questions(desk.state);
-    let Some(question) = usize::try_from(answer.index).ok().and_then(|index| questions.get(index)).filter(|question| question.text == answer.question) else {
-        return refused(Reason::QuestionChanged, "That question changed on the item since; read it again and answer what it asks now");
+    let Some(question) = asked(&questions, answer) else {
+        return refused(Reason::QuestionChanged, "That question is no longer on the item in those words; the lead may have folded an answer in. Read the item again and answer what it asks now");
     };
+    if question.pending_answer.as_deref() == Some(answer.answer.trim()) {
+        return (Outcome::Done, "Already with the lead: it folds your answer into the item".to_string());
+    }
     let given = crate::backlog_kept::Answer { item: found.entry.reference.clone(), question: question.text.clone(), answer: answer.answer.trim().to_string(), at: crate::messages::now() };
     if let Err(error) = crate::backlog_kept::answer(desk.state, given) {
         return (Outcome::Failed, format!("The answer was not kept: {error}"));
@@ -756,12 +766,12 @@ mod tests {
     }
 
     #[test]
-    fn an_answer_matches_the_question_by_place_and_words_and_waits_with_the_lead_as_one_given_on_the_card() {
+    fn an_answer_matches_the_question_by_its_words_and_waits_with_the_lead_as_one_given_on_the_card() {
         let state = crate::sh::test_dir("item-answer");
         let told = RefCell::new(Vec::new());
         let tell = |text: &str| { told.borrow_mut().push(text.to_string()); Ok(()) };
         assert_eq!(answer_on(&desk(&state, None, &tell), &hub(), &answering(0, "Which red runs count as flaky?")).0, Outcome::Refused { reason: Reason::UnknownItem });
-        for changed in [answering(1, "Which red runs count as flaky?"), answering(0, "Which runs are flaky?"), answering(7, "Which red runs count as flaky?")] {
+        for changed in [answering(0, "Which runs are flaky?"), answering(7, "Should a rerun page someone?")] {
             assert_eq!(answer_on(&desk(&state, Some(found("vault")), &tell), &hub(), &changed).0, Outcome::Refused { reason: Reason::QuestionChanged }, "{changed:?}");
         }
         assert!(told.borrow().is_empty() && crate::backlog_kept::answers_in(&state).is_empty(), "nothing kept, nothing told");
@@ -771,6 +781,25 @@ mod tests {
         assert_eq!((kept[0].item.as_str(), kept[0].question.as_str(), kept[0].answer.as_str()), ("Projects/retry.md", "Which red runs count as flaky?", "Only e2e"));
         assert_eq!(told.borrow()[0], crate::backlog_kept::answer_text("The user on iPhone 16", "Retry a flaky red run", "vault: Projects/retry.md", "Which red runs count as flaky?", "Only e2e"));
         assert_eq!(open_questions(BODY, "Projects/retry.md", &state, &Template::builtin())[0].pending_answer.as_deref(), Some("Only e2e"), "the board's card and the phone both show it with the lead");
+    }
+
+    #[test]
+    fn an_answer_sent_after_the_lead_folded_another_in_still_finds_its_question() {
+        let state = crate::sh::test_dir("item-answer-folded");
+        let told = RefCell::new(Vec::new());
+        let tell = |text: &str| { told.borrow_mut().push(text.to_string()); Ok(()) };
+        assert_eq!(answer_on(&desk(&state, Some(found("vault")), &tell), &hub(), &answering(0, "Which red runs count as flaky?")).0, Outcome::Done);
+        let folded = Found { body: BODY.replace("- [ ] Which red runs count as flaky?\n", ""), ..found("vault") };
+        crate::backlog_kept::settle(&state, "Projects/retry.md", &folded.body, &Template::builtin());
+        let (outcome, text) = answer_on(&desk(&state, Some(folded.clone()), &tell), &hub(), &answering(1, "Should a rerun show on the row?"));
+        assert_eq!((outcome, text.as_str()), (Outcome::Done, "With the lead: it folds your answer into the item"), "the phone still counts the folded question in its places");
+        assert_eq!(told.borrow().len(), 2);
+        assert_eq!(answer_on(&desk(&state, Some(folded.clone()), &tell), &hub(), &answering(1, "Should a rerun show on the row?")), (Outcome::Done, "Already with the lead: it folds your answer into the item".to_string()), "a second press of the same answer");
+        assert_eq!(told.borrow().len(), 2, "the lead hears an answer once");
+        assert_eq!(answer_on(&desk(&state, Some(folded), &tell), &hub(), &answering(0, "Which red runs count as flaky?")).0, Outcome::Refused { reason: Reason::QuestionChanged }, "a question the lead took out is gone");
+        let twice = Found { body: BODY.replace("- How long to wait; the work settles it.", "- [ ] Should a rerun show on the row?"), ..found("vault") };
+        answer_on(&desk(&state, Some(twice.clone()), &tell), &hub(), &ItemAnswer { answer: "No".to_string(), ..answering(2, "Should a rerun show on the row?") });
+        assert_eq!(answer_on(&desk(&state, Some(twice), &tell), &hub(), &answering(1, "Should a rerun show on the row?")).0, Outcome::Done, "two questions alike are told apart by place");
     }
 
     #[test]
