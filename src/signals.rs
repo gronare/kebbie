@@ -351,7 +351,7 @@ mod tests {
         let _ = std::panic::catch_unwind(|| panic!("with signals off"));
         assert!(PREVIOUS_RAN.with(|ran| ran.replace(false)) && log_lines(&state).is_empty(), "with signals off a panic records nothing");
         assert!(install_panic_hook_if(true, Ok(state.clone())));
-        let caught = std::panic::catch_unwind(|| panic!("push of billing@shop failed in /Users/ada/work/shop with token ghp_abcdefghijklmnop1234"));
+        let caught = std::panic::catch_unwind(|| panic!("push of billing@shop failed in /Users/greta/work/shop with token ghp_abcdefghijklmnop1234"));
         let _ = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| original(info)));
         assert!(caught.is_err());
@@ -361,7 +361,8 @@ mod tests {
         assert_eq!((line["component"].as_str(), line["kind"].as_str(), line["count"].as_u64()), (Some("signals"), Some("panic"), Some(1)));
         let keys: Vec<&str> = line.as_object().unwrap().keys().map(String::as_str).collect();
         assert!(keys.iter().all(|key| ["version", "commit", "component", "kind", "count"].contains(key)), "{keys:?}");
-        for private in ["billing", "shop", "/Users", "ada", "ghp_", "push of"] {
+        // Each marker holds a letter past f, so the short commit sha the line carries can never contain one.
+        for private in ["billing", "shop", "/Users", "greta", "ghp_", "push of"] {
             assert!(recorded.iter().all(|line| !line.contains(private)), "{private} in {recorded:?}");
         }
     }
