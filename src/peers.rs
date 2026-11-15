@@ -244,19 +244,37 @@ pub fn tests_line(full: Option<&str>) -> String {
     full.map_or(String::new(), |full| format!(" This repo pushes only on a green run of its full suite on HEAD (`tests.before_push = \"full\"`): once your last commit is made, run `{full}` as a command of its own, with nothing after it in the line, before you report ready. kebbie refuses the ready report, and every push, until that run passed on HEAD."))
 }
 
+pub struct PlanAt<'a> {
+    pub kebbie: &'a str,
+    pub task: &'a str,
+    pub plans: &'a Path,
+    pub brief: &'a str,
+}
+
 // The plan step of roles/task.md: the task's note when kebbie keeps one, else with the vault as a backlog source a note there, else a plan file outside the worktree (plan_file); never a file in the worktree, where it would land in the repo.
-pub fn plan_step(sources: &[crate::config::Source], note: Option<&str>, kebbie: &str, task: &str, plans: &Path) -> String {
+pub fn plan_step(sources: &[crate::config::Source], note: Option<&str>, at: &PlanAt) -> String {
+    let PlanAt { kebbie, task, plans, brief } = at;
+    let ask = |plan: &str, shown: &str| format!("Then write its decision brief by {brief}, and put it to the user with `{kebbie} ask --plan {plan} - <<'EOF'`, the brief on the lines after it and `EOF` alone on the last; kebbie refuses a plan question without a brief. The board shows them the brief above the answers, and {shown} when they open it.");
     if let Some(note) = note {
-        return format!("Write your plan into your note `{note}` with the vault tools, and put it to the user with `{kebbie} ask --plan vault:{note} \"<one line on what it builds and what it leaves out>\"`; the board shows them the note.");
+        return format!("Write your plan into your note `{note}` with the vault tools. {}", ask(&format!("vault:{note}"), "the note"));
     }
     if sources.contains(&crate::config::Source::Vault) {
         return format!(
-            "Write your plan into this task's note in the vault with the vault tools: the note you were started from, or else a new task note under `Projects/` with status `active`, tied to this task with `{kebbie} link {task} Projects/<note>.md`. \
-             Put it to the user with `{kebbie} ask --plan vault:Projects/<note>.md \"<one line on what it builds and what it leaves out>\"`; the board shows them the note.",
+            "Write your plan into this task's note in the vault with the vault tools: the note you were started from, or else a new task note under `Projects/` with status `active`, tied to this task with `{kebbie} link {task} Projects/<note>.md`. {}",
+            ask("vault:Projects/<note>.md", "the note"),
         );
     }
-    let plans = plans.display();
-    format!("Write your plan as markdown to `{plans}`, kebbie's place for it outside your worktree, and put it to the user with `{kebbie} ask --plan {plans} \"<one line on what it builds and what it leaves out>\"`; the board shows them the file.")
+    let plans = plans.display().to_string();
+    format!("Write your plan as markdown to `{plans}`, kebbie's place for it outside your worktree. {}", ask(&plans, "the file"))
+}
+
+// Claude runs the skill; Codex has no kebbie skill, so it reads the skill's steps from kebbie's install.
+pub fn brief_by(agent: crate::agent::Agent, root: &Path) -> String {
+    if agent == crate::agent::Agent::Claude {
+        format!("the skill `{}`", crate::plan_brief::SKILL)
+    } else {
+        format!("the steps in `{}`", root.join("skills/write-plan-brief/SKILL.md").display())
+    }
 }
 
 // With a vault that has note templates, the note is written to the task template, whose required sections the edits and done wait for.
@@ -346,12 +364,12 @@ pub fn role_file(task: &str, place: &Place) -> Result<(PathBuf, String)> {
 }
 
 // A Codex without the vault server in its config has no vault tools, so the lead keeps its note and its plan goes in the plan file.
-fn vault_parts(agent: crate::agent::Agent, codex_vault: bool, sources: &[crate::config::Source], note: Option<&str>, kebbie: &str, task: &str, plans: &Path) -> (String, String, bool) {
+fn vault_parts(agent: crate::agent::Agent, codex_vault: bool, sources: &[crate::config::Source], note: Option<&str>, at: &PlanAt) -> (String, String, bool) {
     if agent == crate::agent::Agent::Codex && !codex_vault {
         let sources: Vec<crate::config::Source> = sources.iter().copied().filter(|source| *source != crate::config::Source::Vault).collect();
-        return (plan_step(&sources, None, kebbie, task, plans), lead_keeps_note(note, kebbie), false);
+        return (plan_step(&sources, None, at), lead_keeps_note(note, at.kebbie), false);
     }
-    (plan_step(sources, note, kebbie, task, plans), vault_section(note, kebbie), true)
+    (plan_step(sources, note, at), vault_section(note, at.kebbie), true)
 }
 
 fn role_values(task: &str, place: &Place, peers: &str) -> Result<Vec<(&'static str, String)>> {
@@ -361,7 +379,8 @@ fn role_values(task: &str, place: &Place, peers: &str) -> Result<Vec<(&'static s
     let kebbie = kebbie_command()?;
     let plans = plan_file(place.sandboxed, &me, || crate::tasks::plan_dir(place.worktree), crate::lead::state_dir)?;
     let codex_vault = place.agent == crate::agent::Agent::Codex && crate::agent::codex_setup::found_server(&crate::agent::codex_setup::read_config(crate::agent::codex::home().as_deref())).is_some();
-    let (plan, vault, tools) = vault_parts(place.agent, codex_vault, &crate::config::sources().unwrap_or_default(), place.note, &kebbie, task, &plans);
+    let brief = brief_by(place.agent, &install_root()?);
+    let (plan, vault, tools) = vault_parts(place.agent, codex_vault, &crate::config::sources().unwrap_or_default(), place.note, &PlanAt { kebbie: &kebbie, task, plans: &plans, brief: &brief });
     let settings = crate::config::resolve(Some(place.repo))?.settings;
     let in_vault = crate::config::filing(&settings.sources.value) == Some(crate::config::Source::Vault);
     let noticed = noticed_section(settings.also_noticed.value, in_vault && tools && crate::vault_cli::detect().is_some(), &kebbie);
@@ -605,15 +624,27 @@ mod tests {
         let values = &source[source.find("\nfn role_values(").unwrap()..];
         assert!(values[..values.find("\n}\n").unwrap()].contains("plan_file(place.sandboxed, &me, || crate::tasks::plan_dir(place.worktree),"), "the role names the plan file plan_file picks");
         let plans = Path::new("/src/app/.git/worktrees/wt1.app/kebbie-plan/plan.md");
-        let vault = plan_step(&[Source::Linear, Source::Vault], None, "/bin/kebbie", "billing", plans);
+        let at = PlanAt { kebbie: "/bin/kebbie", task: "billing", plans, brief: "the skill `kebbie:write-plan-brief`" };
+        let vault = plan_step(&[Source::Linear, Source::Vault], None, &at);
         assert!(vault.contains("into this task's note in the vault") && vault.contains("/bin/kebbie link billing Projects/<note>.md") && vault.contains("/bin/kebbie ask --plan vault:Projects/<note>.md"), "{vault}");
-        let file = plan_step(&[Source::Local], None, "/bin/kebbie", "billing", plans);
-        let note = plan_step(&[Source::Local], Some("Projects/kebbie-billing.md"), "/bin/kebbie", "billing", plans);
+        let file = plan_step(&[Source::Local], None, &at);
+        let note = plan_step(&[Source::Local], Some("Projects/kebbie-billing.md"), &at);
         assert!(note.contains("into your note `Projects/kebbie-billing.md`") && note.contains("--plan vault:Projects/kebbie-billing.md"), "{note}");
         assert!(file.contains("to `/src/app/.git/worktrees/wt1.app/kebbie-plan/plan.md`, kebbie's place for it outside your worktree") && file.contains("/bin/kebbie ask --plan /src/app/.git/worktrees/wt1.app/kebbie-plan/plan.md"), "{file}");
         assert!(!file.contains("vault"), "{file}");
+        for step in [&vault, &file, &note] {
+            assert!(step.contains("write its decision brief by the skill `kebbie:write-plan-brief`") && step.contains(" - <<'EOF'`, the brief on the lines after it") && step.contains("kebbie refuses a plan question without a brief"), "{step}");
+        }
         let role = fill(include_str!("../roles/task.md"), &[("plan", &file)]);
         assert!(role.contains(&format!("2. A plan to approve: {file} The user approves it")) && !role.contains("{plan}"), "{role}");
+    }
+
+    #[test]
+    fn a_codex_task_reads_the_brief_skills_steps_from_kebbies_install() {
+        use crate::agent::Agent;
+        assert_eq!(brief_by(Agent::Claude, Path::new("/opt/kebbie")), "the skill `kebbie:write-plan-brief`");
+        assert_eq!(brief_by(Agent::Codex, Path::new("/opt/kebbie")), "the steps in `/opt/kebbie/skills/write-plan-brief/SKILL.md`");
+        assert!(Path::new(env!("CARGO_MANIFEST_DIR")).join("skills/write-plan-brief/SKILL.md").is_file(), "the skill the roles and the refusal name ships with kebbie");
     }
 
     #[test]
@@ -656,7 +687,8 @@ mod tests {
         use crate::agent::Agent;
         use crate::config::Source;
         let plans = Path::new("/src/app/.git/worktrees/wt1.app/kebbie-plan/plan.md");
-        let (plan, vault, tools) = vault_parts(Agent::Codex, false, &[Source::Vault], Some("Projects/kebbie-billing.md"), "/bin/kebbie", "billing", plans);
+        let at = PlanAt { kebbie: "/bin/kebbie", task: "billing", plans, brief: "the steps in `/opt/kebbie/skills/write-plan-brief/SKILL.md`" };
+        let (plan, vault, tools) = vault_parts(Agent::Codex, false, &[Source::Vault], Some("Projects/kebbie-billing.md"), &at);
         assert!(!tools, "a Codex session gets no vault MCP tools, so it files what it notices with kebbie backlog add");
         assert!(plan.contains("/bin/kebbie ask --plan /src/app/.git/worktrees/wt1.app/kebbie-plan/plan.md") && !plan.contains("vault"), "{plan}");
         let role = fill(include_str!("../roles/task.md"), &[("vault", &vault)]);
@@ -664,10 +696,10 @@ mod tests {
             assert!(role.contains(needed), "{needed}: {role}");
         }
         assert!(!role.contains("vault MCP tools") && !role.contains("with the vault tools"), "{role}");
-        assert_eq!(vault_parts(Agent::Codex, false, &[], None, "/bin/kebbie", "billing", plans).1, "", "no note, no vault section");
-        let (plan, vault, tools) = vault_parts(Agent::Claude, false, &[Source::Vault], Some("Projects/kebbie-billing.md"), "/bin/kebbie", "billing", plans);
+        assert_eq!(vault_parts(Agent::Codex, false, &[], None, &at).1, "", "no note, no vault section");
+        let (plan, vault, tools) = vault_parts(Agent::Claude, false, &[Source::Vault], Some("Projects/kebbie-billing.md"), &at);
         assert!(tools && plan.contains("--plan vault:Projects/kebbie-billing.md") && vault == vault_section(Some("Projects/kebbie-billing.md"), "/bin/kebbie"));
-        let (plan, vault, tools) = vault_parts(Agent::Codex, true, &[Source::Vault], Some("Projects/kebbie-billing.md"), "/bin/kebbie", "billing", plans);
+        let (plan, vault, tools) = vault_parts(Agent::Codex, true, &[Source::Vault], Some("Projects/kebbie-billing.md"), &at);
         assert!(tools && plan.contains("--plan vault:Projects/kebbie-billing.md") && vault == vault_section(Some("Projects/kebbie-billing.md"), "/bin/kebbie"), "a Codex with the vault server keeps its own note");
     }
 

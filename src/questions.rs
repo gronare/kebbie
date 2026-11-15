@@ -11,7 +11,7 @@ use crate::report;
 use crate::sh::Result;
 use crate::status::LEAD_LABEL;
 
-const USAGE: &str = "kebbie ask --option \"<label>: <what it means>\" --option \"<label>: <what it means>\" [--option …] --recommend <n> \"<question>\", where an option ending in \" +comment\" takes the user's written comment, or kebbie ask --plan <vault:<note path> | file> [\"<question>\"]";
+const USAGE: &str = "kebbie ask --option \"<label>: <what it means>\" --option \"<label>: <what it means>\" [--option …] --recommend <n> \"<question>\", where an option ending in \" +comment\" takes the user's written comment, or kebbie ask --plan <vault:<note path> | file> \"<decision brief>\" (or - with the brief on stdin)";
 
 pub const COMMENT_MARK: &str = "+comment";
 
@@ -34,19 +34,27 @@ pub struct Asked {
 
 pub const PLAN_COMMENT: [usize; 3] = [1, 2, 3];
 
+impl Asked {
+    // A plan's text is a brief under its first line; a question's is one line.
+    pub fn title(&self) -> &str {
+        crate::plan_brief::title(&self.text)
+    }
+}
+
 fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 pub fn parse(options: &[&str], recommend: Option<&str>, plan: bool, text: &str) -> Result<Asked> {
-    let text = one_line(text);
     if plan {
         if !options.is_empty() || recommend.is_some() {
             return Err("kebbie ask --plan takes the plan's own options (approve, approve with a comment, ask for changes, reject with a comment); leave out --option and --recommend".to_string());
         }
-        let text = if text.is_empty() { "Approve this plan?".to_string() } else { text };
+        let text = crate::plan_brief::tidy(text);
+        crate::plan_brief::check(&text)?;
         return Ok(Asked { text, options: PLAN_OPTIONS.iter().map(|(label, meaning)| (label.to_string(), meaning.to_string())).collect(), recommend: 1, comment: PLAN_COMMENT.to_vec() });
     }
+    let text = one_line(text);
     if text.is_empty() {
         return Err(format!("kebbie ask needs the question: {USAGE}"));
     }
@@ -243,10 +251,10 @@ pub fn answer_text(message: &Message, choice: Option<usize>, comment: &str) -> R
                 return Err(format!("{label} takes the user's comment; write it before sending"));
             }
             let comment = if comment.is_empty() { String::new() } else { format!(" Their comment: {comment}") };
-            Ok(format!("The user's answer to \"{}\": {label} ({meaning}).{comment}", message.text))
+            Ok(format!("The user's answer to \"{}\": {label} ({meaning}).{comment}", crate::plan_brief::title(&message.text)))
         }
         None if comment.is_empty() => Err("An answer needs an option or the user's own words".to_string()),
-        None => Ok(format!("The user's answer to \"{}\", in their own words: {comment}", message.text)),
+        None => Ok(format!("The user's answer to \"{}\", in their own words: {comment}", crate::plan_brief::title(&message.text))),
     }
 }
 
@@ -262,7 +270,7 @@ fn answer_copy(message: &Message, choice: Option<usize>, comment: &str, caller: 
         crate::permit::Caller::Hub { name, .. } => format!("from {name}"),
         _ => "on the board".to_string(),
     };
-    format!("{} asked \"{}\"; the user answered {place}: {answered}", message.from, message.text)
+    format!("{} asked \"{}\"; the user answered {place}: {answered}", message.from, crate::plan_brief::title(&message.text))
 }
 
 #[derive(Debug, PartialEq)]
@@ -439,9 +447,9 @@ pub fn ask(cwd: &Path, options: &[&str], recommend: Option<&str>, plan: Option<&
     }
     let at = messages::now();
     let plan = plan.map(|plan| plan_reference(plan, cwd, &state_dir()?, &me, &messages::new_id("plan"))).transpose()?;
-    let next = if plan.is_some() { format!("read and approve the plan: {}", asked.text) } else { format!("answer: {}", asked.text) };
+    let next = if plan.is_some() { format!("read and approve the plan: {}", asked.title()) } else { format!("answer: {}", asked.text) };
     let report = Report { state: "needs-you".to_string(), next, head: None, after: Vec::new() };
-    messages::log_report(&me, &report, &format!("asked the user: {}", asked.text))?;
+    messages::log_report(&me, &report, &format!("asked the user: {}", asked.title()))?;
     crate::phase::record(&state_dir()?, &me, "ask", &crate::phase::Event::Asked);
     report::show_in_sidebar(&report);
     let id = messages::new_id("question");
@@ -450,8 +458,8 @@ pub fn ask(cwd: &Path, options: &[&str], recommend: Option<&str>, plan: Option<&
     messages::append(&record)?;
     let message = messages::fold(&record.to_string()).remove(0);
     messages::copy_to_lead_locked(&question_copy(&message, crate::permit::away_since().is_some()), Some(&id), &sessions)?;
-    let (event, said) = if crate::routines::found(&me, &asked.text) { (crate::notify::Event::RoutineFindings, "found and asks") } else { (crate::notify::Event::Question, "asks") };
-    crate::notify::send(cwd, &crate::notify::Notice::from(event, &me, format!("{me} {said}: {}", asked.text)));
+    let (event, said) = if crate::routines::found(&me, asked.title()) { (crate::notify::Event::RoutineFindings, "found and asks") } else { (crate::notify::Event::Question, "asks") };
+    crate::notify::send(cwd, &crate::notify::Notice::from(event, &me, format!("{me} {said}: {}", asked.title())));
     crate::hub::notices::send(&question_notice(&me, &asked, plan.is_some()), None);
     Ok(format!(
         "Asked the user; the question waits for them on the board:\n{}\n{}\nStop your turn now, with this question in one line as your last words; the answer arrives as a message from the user, [from {USER_LABEL}].",
@@ -461,7 +469,7 @@ pub fn ask(cwd: &Path, options: &[&str], recommend: Option<&str>, plan: Option<&
 
 pub fn question_notice(address: &str, asked: &Asked, plan: bool) -> crate::hub::notices::About {
     let recommended = asked.options.get(asked.recommend.wrapping_sub(1)).filter(|_| !plan).map(|(label, meaning)| format!("{label}: {meaning}"));
-    crate::hub::notices::About::Question { address: address.to_string(), text: asked.text.clone(), recommended }
+    crate::hub::notices::About::Question { address: address.to_string(), text: asked.title().to_string(), recommended }
 }
 
 fn options_text(asked: &Asked) -> String {
@@ -626,15 +634,30 @@ mod tests {
         assert!(parse(&two, Some("1"), false, " ").is_err());
     }
 
+    const BRIEF: &str = "Approve retries for declined cards.\n\n**What you get**\n- A declined card is tried once more after a minute.";
+
     #[test]
     fn a_plan_question_offers_the_four_plan_answers_with_approve_recommended() {
-        let plan = parse(&[], None, true, "").unwrap();
-        assert_eq!(plan.text, "Approve this plan?");
+        let plan = parse(&[], None, true, BRIEF).unwrap();
+        assert_eq!((plan.text.as_str(), plan.title()), (BRIEF, "Approve retries for declined cards."), "the brief keeps its lines");
         let labels: Vec<&str> = plan.options.iter().map(|(label, _)| label.as_str()).collect();
         assert_eq!(labels, ["Approve", "Approve with a comment", "Ask for changes", "Reject with a comment"]);
         assert_eq!(plan.recommend, 1);
-        assert!(parse(&["A: one", "B: two"], Some("1"), true, "").is_err());
-        assert!(parse(&[], Some("2"), true, "").is_err());
+        assert!(parse(&["A: one", "B: two"], Some("1"), true, BRIEF).is_err());
+        assert!(parse(&[], Some("2"), true, BRIEF).is_err());
+    }
+
+    #[test]
+    fn a_plan_question_without_a_brief_is_refused_and_the_refusal_names_the_skill() {
+        for text in ["", "Approve this plan?", "Approve the plan: retries in src/pay.rs at f33621d, run `cargo test`.", "Approve retries.\n\n- built on f33621d"] {
+            let refusal = parse(&[], None, true, text).expect_err(text);
+            assert!(refusal.contains(crate::plan_brief::SKILL), "{refusal}");
+        }
+        let asked = parse(&[], None, true, BRIEF).unwrap();
+        let messages = log(&[record("q1", 10, "pay@web", &asked, Some("vault:Projects/retries.md"), None)]);
+        assert_eq!(answer_text(&messages[0], Some(0), "").unwrap(), "The user's answer to \"Approve retries for declined cards.\": Approve (build it as planned).", "the answer names the brief by its first line");
+        assert_eq!(question_notice("pay@web", &asked, true), crate::hub::notices::About::Question { address: "pay@web".to_string(), text: "Approve retries for declined cards.".to_string(), recommended: None });
+        assert_eq!(parse(&["A: one", "B: two"], Some("1"), false, "Which\nqueue?").unwrap().text, "Which queue?", "a question that is no plan stays one line");
     }
 
     #[test]
@@ -969,7 +992,7 @@ mod tests {
 
     #[test]
     fn a_plan_takes_a_comment_on_its_three_commented_answers_also_from_a_record_written_before_the_mark() {
-        let plan = parse(&[], None, true, "").unwrap();
+        let plan = parse(&[], None, true, BRIEF).unwrap();
         assert_eq!(plan.comment, PLAN_COMMENT);
         let old = log(&[json!({ "id": "q", "at": 1, "from": "a@x", "to": "you", "text": "Approve this plan?", "state": "asked", "question": { "options": PLAN_OPTIONS.iter().map(|(label, meaning)| json!({ "label": label, "meaning": meaning })).collect::<Vec<_>>(), "recommend": 1, "plan": "vault:Projects/a.md" } })]);
         assert_eq!(old[0].question.as_ref().unwrap().comment, PLAN_COMMENT);

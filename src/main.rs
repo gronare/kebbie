@@ -51,6 +51,7 @@ mod notify;
 mod obstacle;
 mod peers;
 mod phase;
+mod plan_brief;
 mod permit;
 #[cfg(test)]
 mod procedure_scenarios;
@@ -208,7 +209,10 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   'start at 18:00' when you queue a task; this task takes longer to reach you\" --option
                                   \"Not now: a queued task starts once the tasks it waits for are done\"
                                   An option ending in \" +comment\" opens a comment field and sends only with your text.
-                                  --plan vault:<note> or --plan <file> asks you to approve a plan instead. It waits on
+                                  --plan vault:<note> or --plan <file> asks you to approve a plan instead; its text, or
+                                  stdin after -, is a decision brief: one line on what you approve, a blank line, then
+                                  what you get, what it costs, what is left out and what is decided, with no commit
+                                  ids, file paths or backticks (the skill kebbie:write-plan-brief). It waits on
                                   the board, where you answer it, the lead gets a copy, and the answer reaches the task
                                   as a message from you. kebbie ask --verify \"<what to check, and where>\" asks you a
                                   check only you can make (Verified, Not yet, Something is wrong): kebbie's own
@@ -728,7 +732,15 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("obstacles") => obstacle::list(name, arguments.flag("--json")),
         Some("found") => found::command(arguments.rest(1), arguments.flag("--json")),
         Some("ask") if arguments.value("--verify").is_some() => arguments.only("ask", &["--verify"]).and_then(|_| kebbie_questions::ask_from_task(&cwd, arguments.value("--verify").unwrap_or_default())),
-        Some("ask") => questions::ask(&cwd, &arguments.values_of("--option"), arguments.value("--recommend"), arguments.value("--plan"), &arguments.rest(1).join(" ")),
+        Some("ask") => {
+            let mut text = String::new();
+            if arguments.flag("-") {
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut text).map_err(|error| format!("kebbie ask: stdin: {error}"))?;
+            } else {
+                text = arguments.rest(1).join(" ");
+            }
+            questions::ask(&cwd, &arguments.values_of("--option"), arguments.value("--recommend"), arguments.value("--plan"), &text)
+        }
         Some("notify") => {
             let text: Vec<String> = std::env::args().skip_while(|argument| argument != "notify").skip(1).collect();
             notify::notify(&cwd, &text.join(" "))

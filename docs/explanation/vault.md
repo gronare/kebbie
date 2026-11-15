@@ -55,7 +55,7 @@ The vault also makes Claude state the problem before it starts changing code. A 
 | Push | After each push, kebbie writes the repo's log line itself: the commit subjects with their shas. |
 | Done | Closes the note. |
 | Reset and drop | Put the note back in the backlog. |
-| Plans | `kebbie ask --plan vault:<note>` asks you to approve a plan written in the task's note. |
+| Plans | `kebbie ask --plan vault:<note>` asks you to approve a plan written in the task's note, with a short brief for you above the answers. |
 | Language | Tasks and the lead write their questions, plans and cards in the language the vault's task template gives, and in English when it gives none. kebbie's own interface stays English. |
 | The board | The Backlog page lists ONGOING, the project notes in progress, where [`board.backlog.ongoing`](../reference/configuration.md#keys) puts them. The Areas page lists the vault's system notes with their repos. |
 

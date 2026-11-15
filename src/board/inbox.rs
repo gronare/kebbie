@@ -481,13 +481,21 @@ fn question_list(questions: &[Message], selected: usize, area: Rect, hits: &mut 
     lines
 }
 
+// A plan's brief reads above the plan, in the plan's own scroll, its first line staying the question.
+fn brief_and_plan(text: &str, plan: &str) -> String {
+    match text.split_once('\n').map(|(_, brief)| brief.trim()).filter(|brief| !brief.is_empty()) {
+        Some(brief) => format!("{brief}\n\n---\n\n{plan}"),
+        None => plan.to_string(),
+    }
+}
+
 pub(super) fn draw_questions(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit)> {
     let mut hits = Vec::new();
     let selected = match &app.mode { Mode::Questions(window) => window.selected, _ => return hits };
     let plan = app.questions.get(selected).cloned().and_then(|message| {
         let question = message.question.clone()?;
         if !app.plans.contains_key(&message.id) {
-            app.plans.insert(message.id.clone(), markdown(&questions::plan_text(&question)?));
+            app.plans.insert(message.id.clone(), markdown(&brief_and_plan(&message.text, &questions::plan_text(&question)?)));
         }
         app.plans.get(&message.id).cloned()
     });
@@ -524,7 +532,8 @@ pub(super) fn draw_questions(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit
     let width = main.width as usize;
     let answers = answers(message);
     window.option = window.option.min(answers.len().saturating_sub(1));
-    let asked: Vec<Line> = rich_wrap(&message.text, width, 4, TEXT).into_iter().map(|line| line.style(Style::new().add_modifier(Modifier::BOLD))).collect();
+    let shown = if planned { crate::plan_brief::title(&message.text) } else { message.text.as_str() };
+    let asked: Vec<Line> = rich_wrap(shown, width, 4, TEXT).into_iter().map(|line| line.style(Style::new().add_modifier(Modifier::BOLD))).collect();
     let comment_rows = (window.comment.lines().len() as u16 + 2).clamp(3, 8);
     let answer_height = if window.typing { 2 + comment_rows } else { 3 };
     let [asked_area, plan_area, answer_area] = Layout::vertical([Constraint::Length(asked.len() as u16), Constraint::Min(0), Constraint::Length(answer_height)]).areas(main);
@@ -749,6 +758,29 @@ mod tests {
 
     fn row_of(rows: &[String], text: &str) -> usize {
         find(rows, text).first().unwrap_or_else(|| panic!("{text} is not on screen:\n{}", rows.join("\n"))).1
+    }
+
+    #[test]
+    fn a_plans_brief_reads_under_its_first_line_and_above_the_plan() {
+        let dir = std::env::temp_dir().join(format!("kebbie-plan-brief-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let plan = dir.join("plan.md");
+        std::fs::write(&plan, "## Steps\n\n- plan step 1\n").unwrap();
+        let asked = questions::parse(&[], None, true, "Approve retries for declined cards.\n\n**What you get**\n- A declined card is tried once more.").unwrap();
+        app_with(&asked, &plan, |rows| {
+            let screen = rows.join("\n");
+            let (title, brief, step) = (row_of(rows, "Approve retries for declined cards."), row_of(rows, "What you get"), row_of(rows, "plan step 1"));
+            assert!(title < brief && brief < step && screen.contains("A declined card is tried once more."), "{screen}");
+        });
+        assert_eq!(brief_and_plan("Which queue?", "the plan"), "the plan", "a question of one line has no brief");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn app_with(asked: &questions::Asked, plan: &std::path::Path, check: impl Fn(&[String])) {
+        let mut app = test_app(Vec::new());
+        app.questions = messages::fold(&questions::record("q7", 20, "pay@web", asked, Some(&plan.display().to_string()), None).to_string());
+        app.open_questions(Some(0));
+        check(&render(&mut app, 80, 30).0);
     }
 
     #[test]

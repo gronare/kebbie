@@ -103,7 +103,7 @@ fn question_summary(message: &messages::Message, width: usize) -> String {
     let plan = message.question.as_ref().is_some_and(|question| question.plan.is_some());
     let inbox = keys::key(Act::Card);
     let suffix = if plan { format!(" · plan to approve · {inbox}") } else { format!(" · {} · {inbox}", plural(count, "option")) };
-    let one_line = message.text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let one_line = crate::plan_brief::title(&message.text).split_whitespace().collect::<Vec<_>>().join(" ");
     format!("{}{suffix}", cut(&one_line, width.saturating_sub(suffix.chars().count()).max(8)))
 }
 

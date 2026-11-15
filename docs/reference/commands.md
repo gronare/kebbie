@@ -716,6 +716,7 @@ It is yours, or the lead's on your explicit choice. The lead's settings do not a
 | `kebbie subtasks done [<id>]` | The subtask is finished and ready for you. See [`kebbie subtasks done`](#kebbie-subtasks-name-done-id). |
 | `kebbie routine ok <summary>` | A routine's task, when all is well: records the run as ok with the summary and closes the task as `drop` does. |
 | `kebbie ask --option "<label>: <meaning>" … --recommend <n> <question>` | Ask you what you want: scope, behaviour, a trade-off that is yours. |
+| `kebbie ask --plan <plan> - <<'EOF'` | Ask you to approve a plan, a file or `vault:<note>`, with its brief for you on stdin. |
 | `kebbie ask --verify "<what to check, and where>"` | Ask you a check only you can make: Verified, Not yet or Something is wrong. kebbie's own question, beside the task's own: it holds neither the task nor its messages, and your answer reaches the task as a message. |
 | `kebbie stages "<title>:<requirement>" …` | The task's stages, for a change that reaches production in steps. See [`kebbie stages`](#kebbie-stages-name-titlerequirement-). |
 | `kebbie obstacle [--on <work>] <text>` | Raise an obstacle on the task's own path. See [below](#kebbie-obstacle---on-work-text). |
@@ -730,7 +731,8 @@ It is yours, or the lead's on your explicit choice. The lead's settings do not a
 - A question about how goes to the lead instead.
 - The question comes first, then at most three plain sentences on what the task is doing.
 - Each of the two to four options says what you get with it, one recommended, without flags, commit ids, file names or internal terms you did not use.
-- `--plan <file>` or `--plan vault:<note>` asks you to approve a plan instead.
+- `--plan <file>` or `--plan vault:<note>` asks you to approve a plan instead. Its text, or stdin after `-`, is the plan's brief for you, written by the skill `kebbie:write-plan-brief` in the vault's language: one sentence on what you approve, a blank line, then what you get, what it costs, what is left out and what is already decided.
+- kebbie refuses a plan's text without a blank line and a brief under its first line, with a first line over 300 characters or a brief over 4,000, or with commit ids, file paths or backticks, and names each thing to fix.
 
 `kebbie answered` marks the question `answered through the lead`, and a `kebbie tell` to that task is no longer held. The question stays on the board, and your answer there still reaches the task as yours, until the task reports anything but `needs-you` or a turn starts after its turn on that message.
 

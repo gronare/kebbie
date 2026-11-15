@@ -14,7 +14,7 @@ Answer the questions your tasks ask through the board, each with options and a r
 
 If no option fits, select "In my own words" and write the answer as the comment. The task follows words that tell it what to do. When your words ask it something, it answers with a new question on the board before it writes code.
 
-If it is a plan, the options are approve, approve with a comment, ask for changes, and reject with a comment. Approve then asks once more: press `y` to send it, or any other key to go back.
+If it is a plan, its text is the task's brief for you, in your vault's language: one sentence on what you approve, then what you get, what it costs, what is left out and what is already decided. The whole plan is below it on the board, and behind Read the whole plan on your phone. The options are approve, approve with a comment, ask for changes, and reject with a comment. Approve then asks once more: press `y` to send it, or any other key to go back.
 
 If a plan, or a question taller than its window, does not fit, `PageUp` and `PageDown` scroll it, in every question window.
 
