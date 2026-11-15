@@ -254,7 +254,7 @@ pub struct PlanAt<'a> {
 // The plan step of roles/task.md: the task's note when kebbie keeps one, else with the vault as a backlog source a note there, else a plan file outside the worktree (plan_file); never a file in the worktree, where it would land in the repo.
 pub fn plan_step(sources: &[crate::config::Source], note: Option<&str>, at: &PlanAt) -> String {
     let PlanAt { kebbie, task, plans, brief } = at;
-    let ask = |plan: &str, shown: &str| format!("Then write its decision brief by {brief}, and put it to the user with `{kebbie} ask --plan {plan} - <<'EOF'`, the brief on the lines after it and `EOF` alone on the last; kebbie refuses a plan question without a brief. The board shows them the brief above the answers, and {shown} when they open it.");
+    let ask = |plan: &str, shown: &str| format!("Then write the question by {brief}: one sentence on what the user approves, a blank line and a brief for them, and put it to the user with `{kebbie} ask --plan {plan} - <<'EOF'`, the question on the lines after it and `EOF` alone on the last; kebbie refuses a first line with a commit id, a file path or backticks. The board shows them the question above the answers, and {shown} when they open it.");
     if let Some(note) = note {
         return format!("Write your plan into your note `{note}` with the vault tools. {}", ask(&format!("vault:{note}"), "the note"));
     }
@@ -633,7 +633,7 @@ mod tests {
         assert!(file.contains("to `/src/app/.git/worktrees/wt1.app/kebbie-plan/plan.md`, kebbie's place for it outside your worktree") && file.contains("/bin/kebbie ask --plan /src/app/.git/worktrees/wt1.app/kebbie-plan/plan.md"), "{file}");
         assert!(!file.contains("vault"), "{file}");
         for step in [&vault, &file, &note] {
-            assert!(step.contains("write its decision brief by the skill `kebbie:write-plan-brief`") && step.contains(" - <<'EOF'`, the brief on the lines after it") && step.contains("kebbie refuses a plan question without a brief"), "{step}");
+            assert!(step.contains("write the question by the skill `kebbie:write-plan-brief`") && step.contains(" - <<'EOF'`, the question on the lines after it") && step.contains("kebbie refuses a first line with a commit id, a file path or backticks"), "{step}");
         }
         let role = fill(include_str!("../roles/task.md"), &[("plan", &file)]);
         assert!(role.contains(&format!("2. A plan to approve: {file} The user approves it")) && !role.contains("{plan}"), "{role}");

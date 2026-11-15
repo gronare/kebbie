@@ -24,14 +24,15 @@ pub fn check(text: &str) -> Result<()> {
         return Ok(());
     }
     Err(format!(
-        "kebbie ask --plan takes a decision brief for the user, written by the skill `{SKILL}`, and this text is not one yet:\n{}\nWrite one sentence on what the user approves, a blank line, then what they get, what it costs, what is left out and what is decided for them; the plan's details stay in the plan.",
+        "kebbie ask --plan takes a question for the user, written by the skill `{SKILL}`, and this text is not one yet:\n{}\nWrite one sentence on what the user approves; the plan's details stay in the plan, the paths, shas and commands under its technical context.",
         problems.iter().map(|problem| format!("- {problem}")).collect::<Vec<_>>().join("\n"),
     ))
 }
 
+// The first line is all the hub shows as the question, so it alone is held to the user's words; a brief under it is the task's to write.
 fn problems(text: &str) -> Vec<String> {
     if text.is_empty() {
-        return vec!["the text is empty: give the brief after the plan, or on stdin with -".to_string()];
+        return vec!["the text is empty: give the question after the plan, or on stdin with -".to_string()];
     }
     let mut problems = Vec::new();
     let first = title(text);
@@ -42,26 +43,23 @@ fn problems(text: &str) -> Vec<String> {
     if length > MAX_QUESTION_TITLE_CHARS {
         problems.push(format!("the first line has {length} characters and the board shows at most {MAX_QUESTION_TITLE_CHARS}: say what the user approves in one sentence of about 15 words"));
     }
-    match gap {
-        None => problems.push("there is no brief under the first line: add a blank line, then the brief".to_string()),
-        Some(line) if !line.trim().is_empty() => problems.push("line 2 is not blank: put a blank line between the first line and the brief".to_string()),
-        Some(_) if body.trim().is_empty() => problems.push("there is no brief under the blank line: write the brief there".to_string()),
-        Some(_) => {}
+    if gap.is_some_and(|line| !line.trim().is_empty()) {
+        problems.push("line 2 is not blank: put a blank line between the first line and the brief".to_string());
     }
     let body_length = body.trim().chars().count();
     if body_length > MAX_QUESTION_BODY_CHARS {
         problems.push(format!("the brief has {body_length} characters and the board shows at most {MAX_QUESTION_BODY_CHARS}: shorten it and leave the details to the plan"));
     }
-    if text.contains('`') {
-        problems.push(format!("it holds backticks ({}): say in plain words what the command or code does for the user", listed(&backticked(text))));
+    if first.contains('`') {
+        problems.push(format!("the first line holds backticks ({}): say in plain words what the user approves", listed(&backticked(first))));
     }
-    let ids = commit_ids(text);
+    let ids = commit_ids(first);
     if !ids.is_empty() {
-        problems.push(format!("it names commit ids ({}): say what the change does, or leave the commits to the plan", listed(&ids)));
+        problems.push(format!("the first line names commit ids ({}): say what the change does, and leave the commits to the plan", listed(&ids)));
     }
-    let paths = file_paths(text);
+    let paths = file_paths(first);
     if !paths.is_empty() {
-        problems.push(format!("it names file paths ({}): name what the user sees or uses instead, or leave the files to the plan", listed(&paths)));
+        problems.push(format!("the first line names file paths ({}): name what the user sees or uses instead, and leave the files to the plan", listed(&paths)));
     }
     problems
 }
@@ -127,15 +125,12 @@ mod tests {
     }
 
     #[test]
-    fn a_brief_is_a_title_line_a_blank_line_and_a_body() {
+    fn a_question_is_a_clean_first_line_with_or_without_a_brief_under_it() {
         assert!(check(BRIEF).is_ok(), "{:?}", check(BRIEF));
         assert!(check("  Approve the retry plan.  \n\n- You get retries.\n").is_ok(), "space around the text is not the brief");
-        for (text, says) in [
-            ("", "the text is empty"),
-            ("Approve the plan?", "there is no brief under the first line"),
-            ("Approve the plan.\nYou get retries.", "line 2 is not blank"),
-            ("Approve the plan.\n\n   \n", "there is no brief under the first line"),
-        ] {
+        assert!(check("Godkänn att frågor om planer läses som en arbetsplan.").is_ok(), "a plan in its note needs no brief under the first line");
+        assert!(check("Approve the plan.\n\n   \n").is_ok(), "blank lines under it are no brief, and none is needed");
+        for (text, says) in [("", "the text is empty"), ("Approve the plan.\nYou get retries.", "line 2 is not blank")] {
             let refusal = refused(text);
             assert!(refusal.contains(says) && refusal.contains("`kebbie:write-plan-brief`"), "{text:?}: {refusal}");
         }
@@ -151,19 +146,21 @@ mod tests {
     }
 
     #[test]
-    fn commit_ids_paths_and_backticked_commands_are_named_in_the_refusal() {
-        let refusal = refused("Approve the split of f33621d.\n\n- It moves src/hub/board.rs and runs `cargo test`.\n- See also 6a1225a9 and ~/notes and board.rs.");
-        for named in ["commit ids (f33621d, 6a1225a9)", "file paths (src/hub/board.rs, ~/notes, board.rs)", "backticks (`cargo test`)"] {
+    fn commit_ids_paths_and_backticks_in_the_first_line_are_named_in_the_refusal() {
+        let refusal = refused("Approve the split of f33621d in src/hub/board.rs with `cargo test`.");
+        for named in ["the first line names commit ids (f33621d)", "the first line names file paths (src/hub/board.rs)", "the first line holds backticks (`cargo test`)"] {
             assert!(refusal.contains(named), "{named}: {refusal}");
         }
-        assert!(refused("Approve it.\n\n- one ` alone").contains("backticks (`)"));
-        assert!(refused("Approve it.\n\n- /etc/caddy/kebbie.caddy").contains("/etc/caddy/kebbie.caddy"));
+        assert!(refused("Approve 6a1225a9 and ~/notes and board.rs.").contains("~/notes"));
+        assert!(refused("Approve one ` alone").contains("backticks (`)"));
+        assert!(refused("Approve /etc/caddy/kebbie.caddy").contains("/etc/caddy/kebbie.caddy"));
+        assert!(check("Approve the retry plan.\n\n- It moves src/hub/board.rs and runs `cargo test` at f33621d.").is_ok(), "the brief under the first line is the task's to write");
     }
 
     #[test]
     fn plain_words_numbers_links_and_dates_in_prose_pass() {
         for fine in ["2026", "1234567", "deadbeef", "facade", "och/eller", "24/7", "t.ex.", "Node.js", "https://example.com/mock/plan.md", "Read the whole plan", "bl.a.", "v0.39.1", "1/2"] {
-            assert!(check(&format!("Approve it.\n\n- {fine} here")).is_ok(), "{fine}: {:?}", check(&format!("Approve it.\n\n- {fine} here")));
+            assert!(check(&format!("Approve {fine} here.")).is_ok(), "{fine}: {:?}", check(&format!("Approve {fine} here.")));
         }
     }
 

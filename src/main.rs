@@ -210,9 +210,9 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   \"Not now: a queued task starts once the tasks it waits for are done\"
                                   An option ending in \" +comment\" opens a comment field and sends only with your text.
                                   --plan vault:<note> or --plan <file> asks you to approve a plan instead; its text, or
-                                  stdin after -, is a decision brief: one line on what you approve, a blank line, then
-                                  what you get, what it costs, what is left out and what is decided, with no commit
-                                  ids, file paths or backticks (the skill kebbie:write-plan-brief). It waits on
+                                  stdin after -, is one line on what you approve, with no commit ids, file paths or
+                                  backticks, and for a plan file a blank line and a brief under it (the skill
+                                  kebbie:write-plan-brief). It waits on
                                   the board, where you answer it, the lead gets a copy, and the answer reaches the task
                                   as a message from you. kebbie ask --verify \"<what to check, and where>\" asks you a
                                   check only you can make (Verified, Not yet, Something is wrong): kebbie's own

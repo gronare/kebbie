@@ -11,7 +11,7 @@ use crate::report;
 use crate::sh::Result;
 use crate::status::LEAD_LABEL;
 
-const USAGE: &str = "kebbie ask --option \"<label>: <what it means>\" --option \"<label>: <what it means>\" [--option …] --recommend <n> \"<question>\", where an option ending in \" +comment\" takes the user's written comment, or kebbie ask --plan <vault:<note path> | file> \"<decision brief>\" (or - with the brief on stdin)";
+const USAGE: &str = "kebbie ask --option \"<label>: <what it means>\" --option \"<label>: <what it means>\" [--option …] --recommend <n> \"<question>\", where an option ending in \" +comment\" takes the user's written comment, or kebbie ask --plan <vault:<note path> | file> \"<one line on what the user approves>\" (or - with it and a brief on stdin)";
 
 pub const COMMENT_MARK: &str = "+comment";
 
@@ -35,7 +35,7 @@ pub struct Asked {
 pub const PLAN_COMMENT: [usize; 3] = [1, 2, 3];
 
 impl Asked {
-    // A plan's text is a brief under its first line; a question's is one line.
+    // A plan's text is its first line, a brief under it at times; a question's is one line.
     pub fn title(&self) -> &str {
         crate::plan_brief::title(&self.text)
     }
@@ -648,11 +648,12 @@ mod tests {
     }
 
     #[test]
-    fn a_plan_question_without_a_brief_is_refused_and_the_refusal_names_the_skill() {
-        for text in ["", "Approve this plan?", "Approve the plan: retries in src/pay.rs at f33621d, run `cargo test`.", "Approve retries.\n\n- built on f33621d"] {
+    fn a_plan_question_is_a_clean_first_line_and_a_refusal_names_the_skill() {
+        for text in ["", "Approve the plan: retries in src/pay.rs at f33621d, run `cargo test`.", "Approve retries built on f33621d.\n\n- You get retries."] {
             let refusal = parse(&[], None, true, text).expect_err(text);
             assert!(refusal.contains(crate::plan_brief::SKILL), "{refusal}");
         }
+        assert_eq!(parse(&[], None, true, "Godkänn att kortbetalningar provas en gång till.").unwrap().text, "Godkänn att kortbetalningar provas en gång till.", "the note is the plan, so its first line is the whole question");
         let asked = parse(&[], None, true, BRIEF).unwrap();
         let messages = log(&[record("q1", 10, "pay@web", &asked, Some("vault:Projects/retries.md"), None)]);
         assert_eq!(answer_text(&messages[0], Some(0), "").unwrap(), "The user's answer to \"Approve retries for declined cards.\": Approve (build it as planned).", "the answer names the brief by its first line");
