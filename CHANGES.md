@@ -13,6 +13,8 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The questions window sends no answer you did not pick, and a plan's approve waits for `y`, so stray Enters or arrow keys can no longer approve a plan.
 - A task's note line and the Backlog's ongoing notes stay on the board when one refresh cannot read the vault.
 
+- The board takes ↑ ↓ at once, without stalling for seconds while it reads the backlog.
+
 ## 0.39.1
 
 ### What's new

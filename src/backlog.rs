@@ -122,12 +122,40 @@ pub(crate) fn bodies_file(state: &Path) -> PathBuf {
 
 // A vault note's markdown: the local index holds it, else kebbie's copy read through the vault command while the note has not changed since.
 pub fn vault_body(index: Option<&crate::vault::Index>, state: &Path, key: &str) -> Option<String> {
+    vault_body_from(index, &Copies::new(state), key)
+}
+
+// kebbie's copy of the vault notes' text holds every note, so one backlog read parses it once, on the first note that needs it.
+pub(crate) struct Copies<'a> {
+    state: &'a Path,
+    read: std::cell::OnceCell<Value>,
+}
+
+impl<'a> Copies<'a> {
+    pub(crate) fn new(state: &'a Path) -> Self {
+        Copies { state, read: std::cell::OnceCell::new() }
+    }
+
+    fn get(&self) -> &Value {
+        self.read.get_or_init(|| {
+            #[cfg(test)]
+            COPIES_PARSED.with(|parsed| parsed.set(parsed.get() + 1));
+            fs::read_to_string(bodies_file(self.state)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+        })
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static COPIES_PARSED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+pub(crate) fn vault_body_from(index: Option<&crate::vault::Index>, copies: &Copies, key: &str) -> Option<String> {
     if let Some(body) = index.and_then(|index| index.body(key)) {
         return Some(body);
     }
-    let cached: Value = fs::read_to_string(bodies_file(state)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
     let changed = index.and_then(|index| index.changed_at(key));
-    let kept = &cached[key];
+    let kept = &copies.get()[key];
     (changed.is_none() || kept["mtime"].as_f64() == changed).then(|| kept["body"].as_str().map(str::to_string)).flatten()
 }
 
@@ -199,7 +227,7 @@ struct ItemRead {
 }
 
 // An item's state and markdown: a local one from the file already read, a vault one from the index or kebbie's copy.
-fn read_item(entry: &Entry, local: &std::collections::HashMap<String, crate::backlog_file::Item>, index: Option<&crate::vault::Index>, state: &Path, template: &crate::item_template::Template) -> Option<ItemRead> {
+fn read_item(entry: &Entry, local: &std::collections::HashMap<String, crate::backlog_file::Item>, index: Option<&crate::vault::Index>, copies: &Copies, template: &crate::item_template::Template) -> Option<ItemRead> {
     let (state_now, marked, body, filed) = match entry.source.as_str() {
         "local" => {
             let item = local.get(&entry.reference).cloned().or_else(|| crate::backlog_file::find(&entry.reference).map(|(_, item)| item))?;
@@ -207,7 +235,7 @@ fn read_item(entry: &Entry, local: &std::collections::HashMap<String, crate::bac
         }
         "vault" => {
             let drafting = index.and_then(|index| index.status_of(&entry.reference)).as_deref() == Some("draft");
-            match vault_body(index, state, &entry.reference) {
+            match vault_body_from(index, copies, &entry.reference) {
                 Some(body) => (crate::backlog_file::state_of(drafting, false, &body, template), drafting, body, String::new()),
                 None if drafting => (crate::backlog_file::State::Drafting, true, String::new(), String::new()),
                 None => return None,
@@ -220,7 +248,8 @@ fn read_item(entry: &Entry, local: &std::collections::HashMap<String, crate::bac
 
 // Each item's state, its questions waiting on the user and the answers of theirs still with the lead, settling the answers and the asks to write out once for the whole backlog; an item asked for shows drafting, writing…, until the lead has written its text whole.
 pub(crate) fn shape_all(items: &mut [(Entry, Option<String>)], local: &std::collections::HashMap<String, crate::backlog_file::Item>, index: Option<&crate::vault::Index>, state: &Path, templates: &Templates) {
-    let read: Vec<Option<ItemRead>> = items.iter().map(|(entry, _)| read_item(entry, local, index, state, templates.of(&entry.source))).collect();
+    let copies = Copies::new(state);
+    let read: Vec<Option<ItemRead>> = items.iter().map(|(entry, _)| read_item(entry, local, index, &copies, templates.of(&entry.source))).collect();
     let bodies: Vec<(&str, &str, &crate::item_template::Template)> = items.iter().zip(&read).filter_map(|((entry, _), read)| Some((entry.reference.as_str(), read.as_ref()?.body.as_str(), templates.of(&entry.source)))).collect();
     let kept = crate::backlog_kept::settle_all(state, &bodies);
     let listed: Vec<&str> = items.iter().map(|(entry, _)| entry.reference.as_str()).collect();
@@ -657,6 +686,20 @@ mod tests {
 
     fn entry(source: &str) -> Entry {
         Entry { source: source.to_string(), title: "Fix it".to_string(), priority: "high".to_string(), area: "app".to_string(), reference: "ABC-1".to_string(), summary: "It broke.".to_string(), age: "3 d".to_string(), shape: Default::default() }
+    }
+
+    #[test]
+    fn the_vault_notes_copy_is_parsed_once_for_the_whole_backlog_not_once_per_note() {
+        let state = crate::sh::test_dir("backlog-copies-once");
+        let notes: Vec<String> = (0..5).map(|index| format!("Projects/note-{index}.md")).collect();
+        let copies: serde_json::Map<String, Value> = notes.iter().map(|key| (key.clone(), serde_json::json!({ "mtime": 1.0, "body": format!("## Goal\n\n{key}\n") }))).collect();
+        fs::write(bodies_file(&state), Value::Object(copies).to_string()).unwrap();
+        let mut items: Vec<(Entry, Option<String>)> = notes.iter().map(|key| (Entry { reference: key.clone(), ..entry("vault") }, None)).collect();
+        COPIES_PARSED.with(|parsed| parsed.set(0));
+        shape_all(&mut items, &Default::default(), None, &state, &Templates { local: crate::item_template::Template::builtin(), vault: crate::item_template::Template::builtin() });
+        assert_eq!(COPIES_PARSED.with(std::cell::Cell::get), 1, "one parse of the copy for five notes");
+        assert!(items.iter().zip(&notes).all(|((_, body), key)| body.as_deref() == Some(format!("## Goal\n\n{key}\n").as_str())), "{items:?}");
+        let _ = fs::remove_dir_all(state);
     }
 
     #[test]
