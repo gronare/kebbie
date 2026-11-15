@@ -34,6 +34,7 @@ mod install_signal;
 mod issue_recheck;
 mod issues;
 mod item_template;
+mod jobs;
 mod kebbie_questions;
 mod keeper;
 mod keys;
