@@ -22,6 +22,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A start prompt Claude has not taken shows under Needs you, and ⏎ on the row sends it.
 - The board draws at once after an update, without waiting for the vault's backlog texts.
 - kebbie update restarts a board that runs a kebbie from another folder.
+- A vault command pinned to an older mindin than the vault plugin follows the plugin after kebbie update.
 - A queued task whose start fails stays under Needs you with why it did not start.
 - A rewritten or merged vault note shows its current text on the board and the phone, never an old copy.
 - A daily or weekly routine runs once on the night the clocks go back, and on time the day they go forward.

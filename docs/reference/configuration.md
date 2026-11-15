@@ -201,6 +201,8 @@ profile = "deep-codex"
 
 `vault.command` is kebbie's own way to the vault, whatever agent runs the task: Claude Code, Codex or another.
 
+A `vault.command` that pins an older version of the package the enabled Claude vault plugin pins, as `uvx mindin==0.16.0` beside a plugin on 0.19.0, gives way to the plugin's command: `kebbie update` moves the plugin, and an older client than the vault's server expects loses what the server added. `kebbie doctor` shows which command runs.
+
 - [`kebbie setup`](commands.md#kebbie-setup) writes the vault command it runs the vault with, chosen from the ones on this machine. See [Setup picks the command](../explanation/vault.md#setup-picks-the-command).
 - The command and its leading words, split at spaces: `"uvx mindin"`, `"uvx mindin==0.14.0"`, or a checkout of your own, `"uv run --project ~/code/mindin mindin"`.
 - kebbie asks it what it is with `about --json` and uses only the capabilities it states. See [The vault contract](vault-contract.md).

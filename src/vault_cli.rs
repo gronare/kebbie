@@ -460,12 +460,24 @@ pub enum Origin {
     PluginHooks,
 }
 
+// A [vault] command pinned below the version the enabled plugin pins of the same package is a copy of an earlier plugin pin that kebbie update has moved past, and an older client than the vault's server expects.
+fn outdated_pin(configured: &str, bridge: &[String]) -> bool {
+    match (crate::update_check::pin(configured), crate::update_check::pin(&bridge.join(" "))) {
+        (Some((package, version)), Some((plugin_package, plugin_version))) => package == plugin_package && crate::update_check::newer(&plugin_version, &version),
+        _ => false,
+    }
+}
+
 pub fn command(env_bin: Option<String>, configured: Option<String>, plugin: &Plugin) -> Option<(Vec<String>, Origin)> {
     if let Some(bin) = env_bin.filter(|bin| !bin.is_empty()) {
         return Some((vec![bin], Origin::Env));
     }
     if let Some(configured) = configured.filter(|configured| !configured.trim().is_empty()) {
-        return Some((configured.split_whitespace().map(str::to_string).collect(), Origin::Config));
+        let bridge = match plugin {
+            Plugin::Enabled { root, .. } => hook_prefix(&hooks_of(root)).filter(|bridge| outdated_pin(&configured, bridge)),
+            _ => None,
+        };
+        return Some(bridge.map_or_else(|| (configured.split_whitespace().map(str::to_string).collect(), Origin::Config), |bridge| (bridge, Origin::PluginHooks)));
     }
     match plugin {
         Plugin::Enabled { root, .. } => hook_prefix(&hooks_of(root)).map(|command| (command, Origin::PluginHooks)),
@@ -489,9 +501,9 @@ pub fn cli() -> Option<Cli> {
     cli_from(env_bin, configured, || plugin(&claude_home()), crate::lead::state_dir().ok().as_deref())
 }
 
-// The Claude plugin is read only when neither KEBBIE_VAULT_BIN nor [vault] command names the command.
+// The Claude plugin is read when neither KEBBIE_VAULT_BIN nor [vault] command names the command, and when [vault] command pins a version the plugin may have moved past.
 fn cli_from(env_bin: Option<String>, configured: Option<String>, plugin: impl FnOnce() -> Plugin, state: Option<&Path>) -> Option<Cli> {
-    let plugin = if env_bin.is_some() || configured.is_some() { Plugin::Missing } else { plugin() };
+    let plugin = if env_bin.is_some() || configured.as_deref().is_some_and(|configured| !configured.contains("==")) { Plugin::Missing } else { plugin() };
     let (command, origin) = command(env_bin, configured, &plugin)?;
     let version = match (&plugin, origin) { (Plugin::Enabled { version, .. }, Origin::PluginHooks) => version.clone(), _ => String::new() };
     let cli = Cli { plugin: version, ..Cli::new(command) };
@@ -738,6 +750,26 @@ mod tests {
         assert_eq!(command(Some("/tmp/fake vault".to_string()), Some("uv run x".to_string()), &plugin), Some((vec!["/tmp/fake vault".to_string()], Origin::Env)));
         assert_eq!(command(None, None, &Plugin::Missing), None);
         assert_eq!(command(None, None, &Plugin::Disabled { id: "vault@gronare".to_string(), version: "0.3.0".to_string() }), None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_vault_command_pinned_below_the_plugins_version_gives_way_to_the_plugins_command() {
+        let dir = crate::sh::test_dir("vault-outdated-pin");
+        std::fs::create_dir_all(dir.join("hooks")).unwrap();
+        std::fs::write(dir.join("hooks/hooks.json"), r#"{"hooks":{"Stop":[{"hooks":[{"command":"uvx mindin==0.19.0 launch hook stop"}]}]}}"#).unwrap();
+        let plugin = Plugin::Enabled { id: "vault@gronare".to_string(), version: "0.19.0".to_string(), root: dir.clone() };
+        let words = |text: &str| text.split_whitespace().map(str::to_string).collect::<Vec<_>>();
+        let runs = |configured: &str, plugin: &Plugin| command(None, Some(configured.to_string()), plugin).unwrap();
+        assert_eq!(runs("uvx mindin==0.16.0", &plugin), (words("uvx mindin==0.19.0 launch"), Origin::PluginHooks), "a copy of an earlier plugin pin, as setup and doctor --fix write, follows the plugin kebbie update moved");
+        assert_eq!(runs("uvx mindin==0.16.0 launch", &plugin).1, Origin::PluginHooks);
+        for kept in ["uvx mindin==0.19.0", "uvx mindin==0.20.0", "uvx mindin", "uvx notes-vault-mcp==0.5.1", "/opt/vault/bin/mindin"] {
+            assert_eq!(runs(kept, &plugin), (words(kept), Origin::Config), "{kept}: not behind the plugin's pin of the same package, so it stays the user's");
+        }
+        assert_eq!(runs("uvx mindin==0.16.0", &Plugin::Disabled { id: "vault@gronare".to_string(), version: "0.19.0".to_string() }).1, Origin::Config, "a plugin that is off moves nothing");
+        let fake = Fake::new("outdated-pin-cli");
+        let cli = cli_from(None, Some("uvx mindin==0.16.0".to_string()), || plugin.clone(), Some(&fake.state())).unwrap();
+        assert_eq!((cli.command, cli.plugin.as_str()), (words("uvx mindin==0.19.0 launch"), "0.19.0"), "the board, the keeper and the tasks all run the plugin's command");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
