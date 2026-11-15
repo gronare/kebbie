@@ -5,6 +5,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- kebbie job run builds or tests a task's worktree on another machine, as an Xcode build on a Mac, through kebbie worker.
 
 ### Fixed
 

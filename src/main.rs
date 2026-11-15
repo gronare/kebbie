@@ -34,6 +34,7 @@ mod install_signal;
 mod issue_recheck;
 mod issues;
 mod item_template;
+mod jobs;
 mod kebbie_questions;
 mod keeper;
 mod keys;
@@ -135,6 +136,10 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   dev_url names, proxied to localhost:<port>, for the repos that turn on
                                   worktree.dev_route (opt-in per repo); --plain-http serves each as http://<host> for
                                   a proxy in front that ends TLS; writes nothing
+  kebbie job run <name>           run a connected worker's job of that name on this worktree as it stands, as a build
+                                  on a Mac for a task on Linux; prints its output and exits as the job did
+  kebbie worker <ssh name>        make this machine a worker for the kebbie on that machine: it connects out over ssh
+                                  and runs the jobs ~/.config/kebbie/worker.toml names (--local for this machine)
   kebbie status [--json]          every task and Claude session, grouped by what it needs from you
   kebbie next                     what needs you, in the order to do it: what is stopped on you, what to push in
                                   which order, what to read; the same list N shows on the board
@@ -840,6 +845,10 @@ fn run(arguments: &Arguments) -> Result<String> {
             tasks::link(&cwd, name, &arguments.rest(2).join(" "))
         }
         Some("docs") => docs::print(arguments.rest(1)),
+        Some("job") if name == Some("run") => jobs::run(&cwd, arguments.positional(2)),
+        Some("job") if name == Some("serve") => jobs::serve(),
+        Some("job") => Err("kebbie job run <name> runs a worker's job of that name on this worktree; kebbie worker <ssh name> makes this machine a worker".to_string()),
+        Some("worker") => jobs::worker(name, arguments.flag("--local"), arguments.flag("--once")),
         Some("profiles") => profiles::print(arguments.flag("--json")),
         Some("hub") => hub::cli(name, arguments.rest(2), arguments.value("--name")),
         Some("config") if name == Some("edit") => settings_page::edit(&cwd, arguments.value("--repo")),
