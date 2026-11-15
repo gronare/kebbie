@@ -90,7 +90,6 @@ The folder is `0700` and its files `0600`. Each file is replaced whole on write.
 | `push-tokens/` | Per push, the token the worktree's push block lets through only while kebbie runs that push. |
 | `ci/` | One file per CI watch, `<task>@<repo>.json`. A watch survives board restarts. |
 | `red-ci/` | Per task, `<task>@<repo>.json`: the reason its Claude gave with `kebbie ci outside` and the red runs you dismissed. |
-| `jobs/` | One file per job a worktree asked a worker for, `<id>.json`, with its log and result while it runs, removed when `kebbie job run` ends. `jobs/workers/` holds one file per connected worker, with the jobs it offers. |
 | `comments/` | One file per comment on a pushed commit, `<id>.json`, with the GitHub comment's id. It survives restarts, and one sent, done or dismissed is removed after 30 days. |
 | `comments/watch/` | One file per pushed commit kebbie checks for comments, `<sha>.json`, removed once `comments.watch_days` run out. |
 | `comments/repos/` | Per GitHub repo, `<owner>~<repo>.json`: the page of its commit comments kebbie reads on from, when it last asked, and gh's last error. |

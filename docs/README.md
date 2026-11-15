@@ -39,7 +39,6 @@ Repos and worktrees
 - [Set up a repo's worktrees](how-to/set-up-worktrees.md): `bin/setup-worktree` and the setup skill.
 - [Run a task's dev server](how-to/run-dev-servers.md): `w`, `b` and the link on the board.
 - [Open dev servers from a remote machine](how-to/open-dev-servers-from-a-remote-machine.md): one host per worktree through Caddy, opt-in per repo.
-- [Run a job on another machine](how-to/run-a-job-on-another-machine.md): build on a Mac for a task on a Linux machine.
 - [Use your own commit rules](how-to/use-your-own-commit-rules.md): replace the rules skill.
 - [Keep docs in step with changes](how-to/keep-docs-in-step.md): the reviewer fails a change to what users see that documents nothing.
 - [Decide what a task does with what it notices](how-to/decide-what-a-task-does-with-what-it-notices.md): file it, fix it or ask you.

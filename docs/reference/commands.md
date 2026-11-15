@@ -940,21 +940,6 @@ With open [kebbie issues](#kebbie-issues), it looks them up on GitHub through `g
 - On the main channel kebbie shows as `main installed`, and what is newer as the commits on origin's default branch the build lacks, such as `3 new on main`.
 - On the release channel, the latest is the highest tag whose release is published with a binary for this machine. A newer tag that is not yet says `kebbie <version> is not published yet; try again in a while`.
 
-## Jobs on another machine
-
-A job is a named command another machine runs on a worktree as it stands, such as an Xcode build on a Mac for a task on a Linux machine. See [Run a job on another machine](../how-to/run-a-job-on-another-machine.md).
-
-| Command | What it does |
-|---|---|
-| `kebbie job run <name>` | Run a connected worker's job of that name on this worktree, uncommitted and untracked files included. It prints the job's output as it comes and exits as the job did: 0 when it passed, 1 when it failed or no worker offers it. |
-| `kebbie worker <ssh name>` | Make this machine a worker for the kebbie on that machine. It connects out over ssh and runs the jobs its own `~/.config/kebbie/worker.toml` names, one at a time, until you stop it; it connects again when the connection drops. |
-| `kebbie worker --local` | The same for a kebbie on this machine. `--once` ends with the first connection. |
-| `kebbie job serve` | The master's end of a worker's connection. `kebbie worker` starts it; you never run it. |
-
-- The worker fetches the commit from the worktree over the same ssh connection and checks it out in a folder of the task's own under `~/.local/share/kebbie/worker/<repo>/`, which the next job of that task reuses.
-- A job runs with `KEBBIE_JOB`, `KEBBIE_JOB_TASK`, `KEBBIE_JOB_SHA` and `KEBBIE_JOB_MASTER` set.
-- The worker runs only what its own file names. A job's name is all the master sends; the command never crosses.
-
 ## The hub
 
 Show the board on your phone through a kebbie hub. See [See your board on your phone](../how-to/see-your-board-on-your-phone.md). `connect`, `join`, `move`, `leave` and approving or denying a device are yours only.
