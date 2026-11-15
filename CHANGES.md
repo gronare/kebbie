@@ -8,6 +8,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 
 ### Fixed
 - A task across repos keeps its note and its @repo steady on the board, and both halves' cards show the note.
+- A push whose rebase cannot be aborted says why git stopped the rebase, not only that the abort failed.
 - kebbie update on the main channel moves to the kebbie herdr just installed, without a herdr restart.
 
 ## 0.39.0

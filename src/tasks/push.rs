@@ -100,7 +100,9 @@ fn update_in(path: &Path, upstream: &str, options: &[&str], from: Option<&str>) 
         Ok(_) => Ok(Updated::Overlap(touched)),
         Err(error) if rebase_in_progress(path) => {
             let unmerged = git(path, &["diff", "--name-only", "--diff-filter=U"]).unwrap_or_default();
-            git_writing(path, &[options, &["rebase", "--abort"]].concat())?;
+            if let Err(abort) = git_writing(path, &[options, &["rebase", "--abort"]].concat()) {
+                return Err(refused(path, upstream, &format!("{error}; git rebase --abort then failed: {abort}")));
+            }
             if unmerged.is_empty() { Err(refused(path, upstream, &error)) } else { Ok(Updated::Conflict(unmerged.lines().map(str::to_string).collect())) }
         }
         Err(error) => Err(refused(path, upstream, &error)),
@@ -1593,6 +1595,14 @@ mod tests {
         assert!(refused.contains("skip-worktree") && refused.contains("hidden: a ("), "{refused}");
         assert!(!refused.contains("no rebase in progress") && !rebase_in_progress(&slot.path), "{refused}");
         cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_rebase_whose_abort_fails_too_still_reports_gits_first_error() {
+        let source = include_str!("push.rs");
+        let update = &source[source.find("fn update_in(").unwrap()..];
+        let update = &update[..update.find("\n}\n").unwrap()];
+        assert!(update.contains("if let Err(abort) = git_writing(path, &[options, &[\"rebase\", \"--abort\"]].concat())") && update.contains("refused(path, upstream, &format!(\"{error}; git rebase --abort then failed: {abort}\"))"), "\"no rebase in progress\" from the abort never stands in for why the rebase stopped");
     }
 
     #[test]
