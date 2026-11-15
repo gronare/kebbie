@@ -599,7 +599,7 @@ mod tests {
             "A device on your account sent its first command to MacBook:".to_string(),
             format!("an answer to billing, \"Per invoice\", at {}.", at(0)),
             String::new(),
-            "device  iPhone 16 · web app · added today ".to_string() + &at(0),
+            "device  iPhone 16 · web app · added ".to_string() + &crate::hub::devices::added(phone.first_seen, phone.first_seen + 7 * 60, &|_| 0),
             format!("key     {}, the same as Account on that device shows", phone.fingerprint),
             format!("waits   approved automatically in 23 h · its answer expires {}", at(3600)),
             String::new(),
