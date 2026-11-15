@@ -158,14 +158,32 @@ pub enum Event<'a> {
 
 // A delivered message opens a line with its sender's header and indents every line under it, so no sender's text can open one; a prompt with no header is one the user typed.
 pub fn by_user(prompt: &str) -> bool {
+    !by_harness(prompt) && senders(prompt).is_none_or(|senders| senders.iter().any(|sender| sender == messages::USER_LABEL))
+}
+
+// The senders of a delivered prompt, none when the user typed it.
+fn senders(prompt: &str) -> Option<Vec<String>> {
     let prompt = prompt.trim_start();
     let prompt = match prompt.strip_prefix("<cross-session-message") {
         Some(wrapped) => wrapped.split_once('>').map_or("", |(_, rest)| rest.trim_start()),
         None => prompt,
     };
     let sender = |line: &str| line.strip_prefix("[from ")?.split_once(']').map(|(sender, _)| sender.to_string());
-    prompt.lines().next().and_then(sender).is_none() || prompt.lines().filter_map(sender).any(|sender| sender == messages::USER_LABEL)
+    prompt.lines().next().and_then(sender)?;
+    Some(prompt.lines().filter_map(sender).collect())
 }
+
+// Claude Code starts a turn with a <task-notification> when a background command, agent or monitor it launched reports back.
+fn by_harness(prompt: &str) -> bool {
+    prompt.trim_start().starts_with("<task-notification>")
+}
+
+// A turn that brings only notices, the harness's or kebbie's own, answers no question the task asked.
+pub fn notices_only(prompt: &str) -> bool {
+    by_harness(prompt) || senders(prompt).is_some_and(|senders| senders.iter().all(|sender| sender == NOTICE_SENDER))
+}
+
+const NOTICE_SENDER: &str = "kebbie";
 
 // None leaves the phase as it is: a turn reading a notice, or a report while CI runs, is no move.
 pub fn next(current: Option<&Phase>, event: &Event) -> Option<Phase> {
@@ -392,6 +410,10 @@ mod tests {
         assert!(!by_user(&format!("<cross-session-message from=\"kebbie\">{kebbie}</cross-session-message>")), "a wrapper some version may put around the inbox's content");
         assert!(!by_user(&format!("<cross-session-message from=\"kebbie\">\n{kebbie}\n</cross-session-message>")));
         assert!(by_user("Why did this come in?\n[from kebbie] kebbie was updated"), "the user quoting kebbie's line is still the user");
+        assert!(!by_user("<task-notification>\n<task-id>b3t20c2o0</task-id>\n<status>failed</status>\n</task-notification>"), "a background command's end");
+        assert!(!by_harness("Why did <task-notification> come in?"), "the user naming one is still the user");
+        assert!(notices_only(&kebbie) && notices_only(&format!("{kebbie}\n\n{kebbie}")) && notices_only("<task-notification>\n</task-notification>"), "kebbie's notices and the harness's");
+        assert!(!notices_only(&lead) && !notices_only(&format!("{kebbie}\n\n{lead}")) && !notices_only("go on") && !notices_only(&messages::delivered("you", "go on")), "the lead, the user, or a batch either is in");
     }
 
     #[test]

@@ -453,9 +453,30 @@ fn turn_file(me: &str) -> Result<PathBuf> {
     Ok(dir.join(me))
 }
 
-// When the task's latest turn began: a prompt typed into it, by the user or as a message.
+// When the task's latest turn began: a prompt typed into it, by the user or as a message, or a notice of the harness's own.
 pub fn turn_started(me: &str) -> Option<u64> {
     fs::read_to_string(turn_file(me).ok()?).ok()?.trim().parse().ok()
+}
+
+// When the task's latest prompt began a turn, leaving out turns of only notices, which answer no question of the task's.
+pub fn prompted(me: &str) -> Option<u64> {
+    prompted_in(&state_dir().ok()?, me)
+}
+
+// A task that began before kebbie kept prompts apart has only its turn file, which then stands for its last prompt.
+pub fn prompted_in(state: &Path, me: &str) -> Option<u64> {
+    let read = |dir: &str| fs::read_to_string(state.join(dir).join(me)).ok();
+    read("prompts").or_else(|| read("turns"))?.trim().parse().ok()
+}
+
+// Every prompt starts a turn the stop hook asks a report of; one of only notices, a background command's end or kebbie's own, leaves the task's question open.
+pub fn record_turn(state: &Path, me: &str, prompt: Option<&str>, at: u64) {
+    let _ = crate::state::write(&state.join("turns").join(me), at.to_string());
+    if !prompt.is_some_and(crate::phase::notices_only) {
+        let _ = crate::state::write(&state.join("prompts").join(me), at.to_string());
+    }
+    let by_user = prompt.is_none_or(crate::phase::by_user);
+    crate::phase::record(state, me, "turn", &crate::phase::Event::TurnBegan { by_user });
 }
 
 // Claude Code sets stop_hook_active on the stop that follows a block, so a session is asked once per turn.
@@ -483,10 +504,8 @@ pub fn answer(input: &Payload) -> Answer {
     let Ok(turn) = turn_file(&me) else { return Answer::Silent };
     match input.event() {
         Some("UserPromptSubmit") => {
-            let _ = crate::state::write(&turn, messages::now().to_string());
             if let Ok(state) = state_dir() {
-                let by_user = input.prompt().is_none_or(crate::phase::by_user);
-                crate::phase::record(&state, &me, "turn", &crate::phase::Event::TurnBegan { by_user });
+                record_turn(&state, &me, input.prompt(), messages::now());
             }
             crate::known::stale_for(&me).map_or(Answer::Silent, Answer::Text)
         }

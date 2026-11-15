@@ -148,8 +148,8 @@ fn read_plan(cli: Option<&crate::vault_cli::Cli>, key: &str, now: Instant) -> Op
     body
 }
 
-// Questions waiting on the user, oldest first: a task's later question, its end, its answer, or a new turn of it settles one.
-pub fn open(messages: &[Message], turn_started: impl Fn(&str) -> Option<u64>) -> Vec<&Message> {
+// Questions waiting on the user, oldest first: a task's later question, its end, its answer, a report of it other than needs-you, or a turn a prompt began in it settles one.
+pub fn open(messages: &[Message], prompted: impl Fn(&str) -> Option<u64>) -> Vec<&Message> {
     let mut open: Vec<&Message> = Vec::new();
     for message in messages {
         if message.ended {
@@ -162,17 +162,25 @@ pub fn open(messages: &[Message], turn_started: impl Fn(&str) -> Option<u64>) ->
         }
     }
     open.retain(|question| match question.question.as_ref().and_then(|asked| asked.relayed) {
-        Some(relayed) => relay_open(messages, question, relayed, &turn_started),
-        None => turn_started(&question.from).is_none_or(|at| at <= question.at),
+        Some(relayed) => relay_open(messages, question, relayed, &prompted),
+        None => still_asking(messages, question) && prompted(&question.from).is_none_or(|at| at <= question.at),
     });
     open
 }
 
+// The ask's own needs-you report comes before the question in the log, so any report after it is a later one.
+fn still_asking(messages: &[Message], question: &Message) -> bool {
+    messages.iter().skip_while(|message| message.id != question.id).skip(1)
+        .filter(|message| message.from == question.from)
+        .filter_map(|message| message.report.as_ref())
+        .all(|report| report.state == "needs-you")
+}
+
 // A question the lead marked answered stays tappable through the turn its relay starts: a report other than needs-you, or a turn begun after that turn's report, closes it; a report in the mark's own second is the asking turn's, not the relay's.
-fn relay_open(messages: &[Message], question: &Message, relayed: u64, turn_started: &impl Fn(&str) -> Option<u64>) -> bool {
+fn relay_open(messages: &[Message], question: &Message, relayed: u64, prompted: &impl Fn(&str) -> Option<u64>) -> bool {
     let mut reports = messages.iter().filter(|message| message.from == question.from && message.at > relayed).filter_map(|message| Some((message.at, message.report.as_ref()?)));
     let Some((ended, first)) = reports.next() else { return true };
-    first.state == "needs-you" && reports.all(|(_, report)| report.state == "needs-you") && turn_started(&question.from).is_none_or(|at| at <= ended)
+    first.state == "needs-you" && reports.all(|(_, report)| report.state == "needs-you") && prompted(&question.from).is_none_or(|at| at <= ended)
 }
 
 // The open question that holds a task's messages; one the lead marked answered lets its relay through.
@@ -185,7 +193,7 @@ pub fn relayed(message: &Message) -> bool {
 }
 
 pub fn open_now(messages: &[Message]) -> Vec<&Message> {
-    open(messages, report::turn_started)
+    open(messages, report::prompted)
 }
 
 pub fn text(message: &Message) -> String {
@@ -367,14 +375,14 @@ enum Closed {
     Turn,
 }
 
-fn closed_by(messages: &[Message], question: &Message, turn_started: impl Fn(&str) -> Option<u64>) -> Closed {
+fn closed_by(messages: &[Message], question: &Message, prompted: impl Fn(&str) -> Option<u64>) -> Closed {
     let after = messages.iter().skip_while(|message| message.id != question.id).skip(1);
     for message in after {
         if message.ended && message.to == question.from {
             return Closed::Ended;
         }
         if message.question.is_some() && message.from == question.from && message.about == question.about {
-            return Closed::Newer { open: open(messages, &turn_started).iter().any(|open| open.id == message.id) };
+            return Closed::Newer { open: open(messages, &prompted).iter().any(|open| open.id == message.id) };
         }
     }
     Closed::Turn
@@ -396,7 +404,7 @@ fn closed_unanswered<'a>(messages: &'a [Message], id: &str) -> Option<&'a Messag
 // The caller holds the lock. A turn that starts in the task's pane, or a newer question, closes a question, so an answer given on the board a moment later is delivered as the user's word rather than lost; a task that ended gets nothing.
 fn answer_late(messages: &[Message], id: &str, choice: Option<usize>, comment: &str, sessions: &[peers::Session], caller: &crate::permit::Caller) -> std::result::Result<String, Unanswered> {
     let message = closed_unanswered(messages, id).ok_or_else(|| Unanswered::Settled("That question no longer waits for an answer".to_string()))?;
-    let closed = closed_by(messages, message, report::turn_started);
+    let closed = closed_by(messages, message, report::prompted);
     if closed == Closed::Ended {
         messages::append(&json!({ "id": id, "at": messages::now(), "state": "answered" }))?;
         return Err(Unanswered::Settled(crate::notice::Notice::new(crate::notice::Tone::NotNow, "Not sent: its task ended before you answered").detail("task", &message.from).to_string()));
@@ -768,6 +776,34 @@ mod tests {
         assert!(open(&log(&[asked_q.clone(), relayed.clone(), report(25, "ready")]), |_| Some(21)).is_empty(), "a report other than needs-you closes it");
         assert_eq!(open(&log(&[asked_q.clone(), report(20, "needs-you"), relayed.clone()]), |_| Some(21)).len(), 1, "the asking turn's own report in the second of the mark, and a turn begun just after, leave the question tappable");
         assert!(open(&log(&[asked_q, relayed, report(25, "needs-you"), json!({ "id": "q1", "at": 26, "state": "answered" })]), |_| Some(21)).is_empty(), "the user's answer on the board closes it");
+    }
+
+    #[test]
+    fn a_turn_of_only_notices_leaves_the_question_open_while_a_prompt_or_a_later_report_closes_it() {
+        let task = "kebbie-ios@kebbie-ios";
+        let asked_at = 1_794_705_861;
+        let report = |id: &str, at: u64, said: &str| json!({ "id": id, "at": at, "from": task, "to": LEAD_LABEL, "text": "mockup put to you", "state": "logged", "report": { "state": said, "next": "answer the mockup question on the board" } });
+        let question = record("q1", asked_at, task, &asked(), None, None);
+        let waiting = log(&[report("r1", asked_at, "needs-you"), question.clone(), report("r2", asked_at + 1811, "needs-you")]);
+        let moved_on = log(&[report("r1", asked_at, "needs-you"), question, report("r2", asked_at + 1811, "working")]);
+        let state = crate::sh::test_dir("question-turn");
+        let prompted = |address: &str| report::prompted_in(&state, address);
+        std::fs::create_dir_all(state.join("turns")).unwrap();
+        std::fs::write(state.join("turns").join(task), (asked_at + 60).to_string()).unwrap();
+        assert!(open(&waiting, prompted).is_empty(), "a task from before prompts were kept apart: its turn file stands for its last prompt");
+        report::record_turn(&state, task, Some("go on"), asked_at - 60);
+        report::record_turn(&state, task, Some("<task-notification>\n<task-id>b3t20c2o0</task-id>\n<status>failed</status>\n<summary>Background command \"Fix the board\" failed with exit code 144</summary>\n</task-notification>"), asked_at + 1805);
+        assert_eq!(std::fs::read_to_string(state.join("turns").join(task)).unwrap(), (asked_at + 1805).to_string(), "the stop hook still asks the notified turn for a report");
+        assert_eq!(open(&waiting, prompted).iter().map(|question| question.id.as_str()).collect::<Vec<_>>(), ["q1"], "the background command's end answered nothing, and the task still asks");
+        assert!(open(&moved_on, prompted).is_empty(), "a report other than needs-you after the question closes it");
+        report::record_turn(&state, task, Some(&messages::delivered("kebbie", "kebbie was updated\nrestart when you can")), asked_at + 1850);
+        assert_eq!(open(&waiting, prompted).len(), 1, "kebbie's own notice answered nothing either");
+        report::record_turn(&state, task, Some(&messages::delivered(LEAD_LABEL, "the user approved it")), asked_at + 1860);
+        assert!(open(&waiting, prompted).is_empty(), "the lead's prompt closes it");
+        report::record_turn(&state, task, Some("go on"), asked_at - 60);
+        report::record_turn(&state, task, Some(&messages::delivered(USER_LABEL, "build it")), asked_at + 1900);
+        assert!(open(&waiting, prompted).is_empty(), "the user's prompt closes it");
+        std::fs::remove_dir_all(state).unwrap();
     }
 
     fn relayed_mark_shown(message: &Message) -> bool {
