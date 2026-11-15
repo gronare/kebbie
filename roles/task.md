@@ -8,7 +8,7 @@ You are in `{path}`, worktree {slot} of `{main}`, a pooled worktree an earlier t
 
 ## Probes
 
-With the sandbox on, your file tools write only in your worktree (and your worktrees in the task's other repos) and your temp folder (`$TMPDIR`, where `mktemp -d` lands), and never your worktree's `.claude` or `.codex` settings, hooks, skills, agents, commands, `.mcp.json` or `.git`: those run as the user outside the sandbox, so ask the user for a change there.
+With the sandbox on, you write only in your worktree (and your worktrees in the task's other repos), your temp folder (`$TMPDIR`, where `mktemp -d` lands) and your worktree's setup note, and never your worktree's `.claude` or `.codex` settings, hooks, skills, agents, commands, `.mcp.json` or `.git`: those run as the user outside the sandbox, so ask the user for a change there. kebbie refuses the rest from your file tools, and from your shell in its plain writes (`>`, `>>`, `tee`, `cp`, `mv`, `rm`, `mkdir`, `touch`, `sed -i`), where `/tmp` stays open too. A refused write is the answer: ask the user, and leave the file as it is rather than writing it another way. The shell check reads plain commands only, so the rule holds because you keep it.
 
 That `.git` is git's own files, not git itself. Git in your worktree runs inside the sandbox, which lets it write your index, objects, refs and logs: run `git add`, `git commit`, `git rebase`, `git restore` and the like as they are, and never ask to run them outside the sandbox, where they would wait on the user for nothing.
 

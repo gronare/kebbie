@@ -86,6 +86,11 @@ impl TaskDirs {
         self.git_dir().join("kebbie-plan")
     }
 
+    // The note kebbie:set-up-worktree writes, where `git rev-parse --git-dir` puts it inside the worktree.
+    pub fn setup_note(&self) -> PathBuf {
+        self.git_dir().join(crate::repo::SETUP_NOTE)
+    }
+
     // A linked worktree's git dir is <common>/worktrees/<name>; the main checkout's is the common dir itself.
     pub fn common_dir(&self) -> PathBuf {
         let git_dir = self.git_dir();
@@ -242,17 +247,17 @@ impl Protected {
     }
 }
 
-// The file tools write only in the task's worktrees, their temp folders and Claude Code's notes for those worktrees and their repos, never what a worktree loads as Claude Code's configuration or git's.
+// A task writes only in its worktrees, their temp folders, plan folders and setup notes, and Claude Code's notes for those worktrees and their repos, never what a worktree loads as Claude Code's configuration or git's.
 pub fn file_refusal(target: &Path, dirs: &TaskDirs, claude_home: &Path) -> Option<String> {
     let target = resolved(target);
     let halves = dirs.all();
     let projects = halves.iter().flat_map(|half| [Some(half.worktree.clone()), half.main_checkout()]).flatten().map(|folder| crate::agent::claude::transcripts_dir(claude_home, &folder));
     let notes: Vec<PathBuf> = projects.chain([claude_home.join("plans")]).map(|dir| resolved(&dir)).collect();
-    if halves.iter().any(|half| target.starts_with(resolved(&half.tmp)) || target.starts_with(resolved(&half.plan_dir()))) || notes.iter().any(|dir| target.starts_with(dir)) {
+    if halves.iter().any(|half| target.starts_with(resolved(&half.tmp)) || target.starts_with(resolved(&half.plan_dir())) || target == resolved(&half.setup_note())) || notes.iter().any(|dir| target.starts_with(dir)) {
         return None;
     }
     let Some(inside) = halves.iter().find_map(|half| target.strip_prefix(resolved(&half.worktree)).ok().map(Path::to_path_buf)) else {
-        return Some(format!("{} is outside this task's worktree {}: a task's file tools write only there and in its temp folder {}. Ask the user to make a change elsewhere", target.display(), dirs.worktree.display(), dirs.tmp.display()));
+        return Some(format!("{} is outside this task's worktree {}: a task writes only there and in its temp folder {}, with its file tools and its shell alike. Ask the user to make a change elsewhere", target.display(), dirs.worktree.display(), dirs.tmp.display()));
     };
     let loaded = WORKTREE_LOADED.iter().chain(&[".git"]).find(|path| inside.starts_with(path));
     loaded.map(|path| format!("{path} in the worktree is configuration Claude Code or git runs as the user outside the sandbox; a task leaves it alone. Ask the user to make this change"))
@@ -286,16 +291,58 @@ fn resolved(path: &Path) -> PathBuf {
     }
 }
 
+const DEVICES: [&str; 4] = ["/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"];
+
+// The machine's shared temp folders, which a task's shell may write beside its own.
+pub fn system_temps() -> Vec<PathBuf> {
+    ["/tmp", "/var/tmp"].map(PathBuf::from).into_iter().chain(user_temp()).map(|root| resolved(&root)).collect()
+}
+
+// A device, or a file in one of temps outside other Claude sessions' folders in /tmp.
+fn shared_temp(target: &Path, temps: &[PathBuf]) -> bool {
+    if DEVICES.iter().any(|device| target == Path::new(device)) || target.starts_with("/dev/fd") {
+        return true;
+    }
+    let target = resolved(target);
+    temps.iter().any(|root| target.starts_with(root)) && !other_sessions_temp().iter().any(|dir| target.starts_with(dir) || target.starts_with(resolved(Path::new(dir))))
+}
+
+// macOS's per-user temp folder under /var/folders, which TMPDIR names outside a task.
+#[cfg(target_os = "macos")]
+fn user_temp() -> Option<PathBuf> {
+    let mut buffer = vec![0u8; 1024];
+    // SAFETY: confstr writes at most buffer.len() bytes, NUL included, into a buffer it is given the length of.
+    let length = unsafe { libc::confstr(libc::_CS_DARWIN_USER_TEMP_DIR, buffer.as_mut_ptr().cast(), buffer.len()) };
+    (length > 1 && length <= buffer.len()).then(|| PathBuf::from(String::from_utf8_lossy(&buffer[..length - 1]).to_string()))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn user_temp() -> Option<PathBuf> {
+    None
+}
+
+// A shell command's clear writes, held to the file tools' places plus the machine's temp folders; a shell can always write in ways this does not read.
+pub fn shell_refusal(command: &str, cwd: &Path, dirs: &TaskDirs, claude_home: &Path, temps: &[PathBuf]) -> Option<String> {
+    let written = crate::shell_write::written(command, cwd, crate::shell_write::Writes::Any);
+    written.iter().filter(|target| !shared_temp(target, temps)).find_map(|target| file_refusal(target, dirs, claude_home))
+}
+
 pub fn file_hook(task: Option<&str>, worktree: Option<&str>, tmp: Option<&str>, input: &str) -> String {
     let input = crate::hooks::Payload::parse(input);
-    let target = ["file_path", "notebook_path", "path"].iter().find_map(|key| input.tool_input()[key].as_str()).filter(|path| path.starts_with('/'));
     let claude_home = crate::agent::claude::home().unwrap_or_default();
+    let dirs = |task: &str, worktree: &str, tmp: &str| {
+        let mut dirs = TaskDirs::new(Path::new(worktree), &git_dir_of(Path::new(worktree)), Path::new(tmp));
+        dirs.halves = crate::lead::state_dir().map(|state| halves(&state, task, &dirs.worktree)).unwrap_or_default();
+        dirs
+    };
+    if input.tool_name() == Some("Bash") {
+        let (Some(command), Some(task), Some(worktree), Some(tmp)) = (input.command(), task, worktree, tmp) else { return String::new() };
+        let cwd = input.cwd().filter(|cwd| cwd.is_absolute()).unwrap_or(Path::new(worktree));
+        return crate::hooks::Answer::deny_if(shell_refusal(command, cwd, &dirs(task, worktree, tmp), &claude_home, &system_temps())).render();
+    }
+    let target = ["file_path", "notebook_path", "path"].iter().find_map(|key| input.tool_input()[key].as_str()).filter(|path| path.starts_with('/'));
     let reason = match (target, task, worktree, tmp) {
-        (Some(target), Some(task), Some(worktree), Some(tmp)) => {
-            let mut dirs = TaskDirs::new(Path::new(worktree), &git_dir_of(Path::new(worktree)), Path::new(tmp));
-            dirs.halves = crate::lead::state_dir().map(|state| halves(&state, task, &dirs.worktree)).unwrap_or_default();
-            file_refusal(Path::new(target), &dirs, &claude_home)
-        }
+        (Some(target), Some(task), Some(worktree), Some(tmp)) => file_refusal(Path::new(target), &dirs(task, worktree, tmp), &claude_home),
         _ => Some("kebbie could not tell which file this tool writes, so a task's file tool does not run; give it an absolute path".to_string()),
     };
     crate::hooks::Answer::deny_if(reason).render()
@@ -711,6 +758,8 @@ mod tests {
             std::fs::create_dir_all(dir).unwrap();
         }
         assert_eq!(file_refusal(&plan, &dirs, &claude), None, "the task writes its plan with its file tools");
+        assert_eq!(file_refusal(&git_dir.join("kebbie-setup.md"), &dirs, &claude), None, "and the setup note kebbie:set-up-worktree names, at $(git rev-parse --git-dir)/kebbie-setup.md");
+        assert_eq!(dirs.setup_note(), git_dir.join("kebbie-setup.md"));
         for kept_out in [git_dir.join("config.worktree"), git_dir.join("kebbie-hooks/pre-push"), git_dir.join("kebbie-setup-elsewhere.md")] {
             assert!(file_refusal(&kept_out, &dirs, &claude).is_some(), "{}", kept_out.display());
         }
@@ -750,6 +799,45 @@ mod tests {
         assert_eq!(file_refusal(&other.join("src/lib.rs"), &dirs, &claude), None, "the task's half in another repo is its own");
         assert_eq!(file_refusal(&other_tmp.join("plan.md"), &dirs, &claude), None);
         assert!(file_refusal(&other.join(".claude/settings.json"), &dirs, &claude).is_some_and(|said| said.contains("Ask the user")), "a half's own configuration stays out of reach");
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn a_tasks_shell_writes_where_its_file_tools_do_and_in_the_machines_temp_folders() {
+        let base = crate::sh::test_dir("shell-refusal").canonicalize().unwrap();
+        let (worktree, git_dir, tmp, claude) = (base.join("wt1.app"), base.join("app/.git/worktrees/wt1.app"), base.join("tmp/wt1.app-a1b2c3"), base.join("home/.claude"));
+        for dir in [&worktree.join("src"), &git_dir, &tmp] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let (dirs, shared) = (TaskDirs::new(&worktree, &git_dir, &tmp), base.join("shared-tmp"));
+        let refused = |line: &str| shell_refusal(line, &worktree.join("src"), &dirs, &claude, std::slice::from_ref(&shared));
+        let (main, note) = (base.join("app"), git_dir.join("kebbie-setup.md"));
+        for kept in [
+            "echo x > a.rs".to_string(), "cargo test 2>&1 | tail".to_string(), "ls > /dev/null 2>&1".to_string(), format!("echo x > {}/scratch.txt", shared.display()), format!("mkdir -p {}/build", shared.display()),
+            format!("printf '# wt1.app set up\\n' > {}", note.display()), format!("cat > {} <<'EOF'\n- branch b at abc\nEOF", note.display()), format!("touch {}/x", tmp.display()),
+            "rm -rf -- ../tmp/cache".to_string(), "cp /etc/hosts ../hosts.txt".to_string(), "cat /etc/hosts".to_string(), "grep -rn x /usr/include".to_string(), "echo x > $OUT".to_string(),
+        ] {
+            assert_eq!(refused(&kept), None, "{kept}");
+        }
+        for outside in [
+            format!("echo x > {}/README.md", main.display()), format!("printf x >> {}/a", base.display()), format!("echo x | tee {}/b", main.display()), format!("cp a.rs {}/", main.display()),
+            format!("mv {}/a.rs .", main.display()), format!("rm -rf {}/src", main.display()), format!("mkdir {}/new", main.display()), format!("touch {}/c", main.display()),
+            format!("sed -i '' s/a/b/ {}/d", main.display()), "echo x > ../../a.txt".to_string(), "cd .. && cd .. && echo x > a.txt".to_string(), "echo x > ~/.zshrc".to_string(),
+            format!("echo x > {}", git_dir.join("config.worktree").display()), format!("dd if=/dev/zero of={}/e", main.display()),
+        ] {
+            assert!(refused(&outside).is_some_and(|said| said.contains("outside this task's worktree") || said.contains("Ask the user")), "{outside}");
+        }
+        assert!(refused("echo x > ../.mcp.json").is_some_and(|said| said.contains("Ask the user")), "the worktree's own configuration stays the user's");
+        assert!(system_temps().contains(&resolved(Path::new("/tmp"))) && system_temps().contains(&resolved(Path::new("/var/tmp"))));
+        assert!(!shared_temp(&Path::new(&other_sessions_temp()[0]).join("x/y"), &system_temps()), "another Claude session's temp folder is not shared");
+        let hook = |line: &str| file_hook(Some("billing"), Some(&worktree.to_string_lossy()), Some(&tmp.to_string_lossy()), &json!({ "tool_name": "Bash", "tool_input": { "command": line }, "cwd": worktree }).to_string());
+        let refusal: Value = serde_json::from_str(&hook("echo x > /etc/kebbie-outside")).unwrap();
+        let written: Value = serde_json::from_str(&file_hook(Some("billing"), Some(&worktree.to_string_lossy()), Some(&tmp.to_string_lossy()), &json!({ "tool_name": "Write", "tool_input": { "file_path": "/etc/kebbie-outside", "content": "x" } }).to_string())).unwrap();
+        assert_eq!(refusal["hookSpecificOutput"]["permissionDecision"], "deny");
+        assert_eq!(refusal, written, "the shell's refusal is the file tools' word for word");
+        assert_eq!(hook("echo x > src/a.rs && cat /etc/hosts"), "");
+        assert_eq!(file_hook(None, None, None, &json!({ "tool_name": "Bash", "tool_input": { "command": "ls" } }).to_string()), "", "a shell command it cannot place runs");
+        assert!(include_str!("../roles/task.md").contains("A refused write is the answer: ask the user, and leave the file as it is rather than writing it another way."), "the role says a refusal is not retried");
         std::fs::remove_dir_all(base).unwrap();
     }
 

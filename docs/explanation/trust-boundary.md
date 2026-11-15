@@ -82,12 +82,14 @@ The lead's settings do not allow `kebbie choose`, so Claude Code asks you before
 
 **A task's shell cannot pass as you.** In [the sandbox](#the-sandbox), a task's shell commands cannot start a terminal multiplexer, reach herdr's socket or write kebbie's state, and kebbie refuses its user-only commands to any sandboxed process.
 
-## A task's file tools write only its own work
+## A task writes only its own work
 
 With the sandbox on, Claude's Edit, Write, MultiEdit and NotebookEdit still run outside it. So in every permission mode, `bypassPermissions` included, a hook kebbie installs refuses:
 
-- a file outside the task's worktrees and temp folders (one per repo for a task across repos), except Claude Code's own notes under `~/.claude/projects` and `~/.claude/plans`,
+- a file outside the task's worktrees and temp folders (one per repo for a task across repos), except the worktree's setup note in its own git dir and Claude Code's own notes under `~/.claude/projects` and `~/.claude/plans`,
 - inside the worktree, the files Claude Code or git load and run as you: `.claude/settings.json`, `.claude/settings.local.json`, `.claude/hooks`, `skills`, `agents`, `commands` and `workflows`, `.mcp.json` and the `.git` link.
+
+The same hook reads each shell command the task runs and refuses, with the same words, a plain write to those files: a redirect (`>`, `>>`), `tee`, `cp`, `mv`, `ln`, `rm`, `mkdir`, `touch`, `truncate`, `sed -i` or `dd of=`, with an absolute, `~` or `../` path. The shell may also write `/tmp`, `/var/tmp` and the system temp folder. Reads and everything inside the worktree run as before. This check reads plain commands only: a script or a program that writes files itself gets past it, and the sandbox is what holds the shell. The task's role tells it a refused write is the answer, never to be written another way.
 
 A task that needs one of them changed asks you. With the sandbox on, a task's plan file moves to the task's temp folder, which its file tools reach.
 

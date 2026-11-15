@@ -177,29 +177,62 @@ fn options_end(words: &[String]) -> impl Iterator<Item = &String> {
     words.iter().filter(|word| !word.starts_with('-'))
 }
 
-// The programs that clearly write a file: cp and mv into it, tee, sed -i, git apply and patch.
-fn command_writes(words: &[String], cwd: &Path, inside: &dyn Fn(&str, &Path) -> bool) -> bool {
+// Which writes count: Content is what puts text in a file, Any adds what removes, moves, creates or links one.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Writes {
+    Content,
+    Any,
+}
+
+// The operands of a command whose options in valued take the next word as their value.
+fn operands<'a>(args: &'a [String], valued: &[&str]) -> Vec<&'a String> {
+    let mut found = Vec::new();
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        if word == "--" {
+            found.extend(words.by_ref());
+        } else if valued.contains(&word.as_str()) {
+            words.next();
+        } else if !word.starts_with('-') {
+            found.push(word);
+        }
+    }
+    found
+}
+
+// The files a program clearly writes: cp and mv into it, tee, sed -i, git apply and patch, and with Any also what rm, mkdir, touch, ln, mv and dd change.
+fn command_writes(words: &[String], cwd: &Path, writes: Writes, found: &mut Vec<PathBuf>) {
     let start = words.iter().position(|word| (!word.contains('=') || word.starts_with('-')) && !matches!(word.as_str(), "sudo" | "env" | "command" | "nohup" | "time" | "exec"));
-    let Some(start) = start else { return false };
+    let Some(start) = start else { return };
     let program = Path::new(&words[start]).file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_default();
     let args = &words[start + 1..];
+    let mut add = |word: &str, base: &Path| found.extend(resolve(word, base));
     match program.as_str() {
-        "tee" => options_end(args).any(|file| inside(file, cwd)),
-        "cp" | "mv" | "install" => {
+        "tee" => options_end(args).for_each(|file| add(file, cwd)),
+        "cp" | "mv" | "install" | "ln" => {
             let target = args.iter().position(|word| word == "-t").and_then(|at| args.get(at + 1)).cloned()
                 .or_else(|| args.iter().find_map(|word| word.strip_prefix("--target-directory=").map(str::to_string)));
+            let operands = operands(args, &["-t", "-S", "-m", "-o", "-g", "--suffix"]);
+            if program == "ln" && writes == Writes::Content {
+                return;
+            }
+            if program == "mv" && writes == Writes::Any {
+                operands.iter().for_each(|file| add(file, cwd));
+            }
             match target {
-                Some(target) => inside(&target, cwd),
-                None => {
-                    let operands: Vec<&String> = options_end(args).collect();
-                    operands.len() >= 2 && operands.last().is_some_and(|target| inside(target, cwd))
-                }
+                Some(target) => add(&target, cwd),
+                None if operands.len() >= 2 => add(operands[operands.len() - 1], cwd),
+                None => {}
             }
         }
+        "rm" | "rmdir" | "unlink" | "mkdir" | "touch" | "truncate" if writes == Writes::Any => {
+            operands(args, &["-m", "-r", "-t", "-d", "-s", "-A"]).iter().for_each(|file| add(file, cwd));
+        }
+        "dd" if writes == Writes::Any => args.iter().filter_map(|word| word.strip_prefix("of=")).for_each(|file| add(file, cwd)),
         "sed" => {
             let in_place = args.iter().any(|word| word.starts_with("--in-place") || (word.starts_with('-') && !word.starts_with("--") && word.contains('i')));
             if !in_place {
-                return false;
+                return;
             }
             let scripted = args.iter().any(|word| matches!(word.as_str(), "-e" | "-f" | "--expression" | "--file") || word.starts_with("--expression=") || word.starts_with("--file="));
             let mut operands: Vec<&String> = Vec::new();
@@ -213,7 +246,7 @@ fn command_writes(words: &[String], cwd: &Path, inside: &dyn Fn(&str, &Path) -> 
                     operands.push(word);
                 }
             }
-            operands.iter().skip(usize::from(!scripted)).any(|file| inside(file, cwd))
+            operands.iter().skip(usize::from(!scripted)).for_each(|file| add(file, cwd));
         }
         "git" => {
             let mut dir = cwd.to_path_buf();
@@ -221,38 +254,37 @@ fn command_writes(words: &[String], cwd: &Path, inside: &dyn Fn(&str, &Path) -> 
             while let Some(word) = rest.next() {
                 match word.as_str() {
                     "-C" => {
-                        let Some(next) = rest.next().and_then(|next| resolve(next, &dir)) else { return false };
+                        let Some(next) = rest.next().and_then(|next| resolve(next, &dir)) else { return };
                         dir = next;
                     }
                     "-c" => {
                         rest.next();
                     }
                     "apply" => {
-                        let reads = rest.any(|word| matches!(word.as_str(), "--check" | "--stat" | "--numstat" | "--summary"));
-                        return !reads && inside(".", &dir);
+                        if !rest.any(|word| matches!(word.as_str(), "--check" | "--stat" | "--numstat" | "--summary")) {
+                            add(".", &dir);
+                        }
+                        return;
                     }
                     flag if flag.starts_with('-') => {}
-                    _ => return false,
+                    _ => return,
                 }
             }
-            false
         }
         "patch" => {
             if args.iter().any(|word| word == "--dry-run") {
-                return false;
+                return;
             }
             let dir = args.iter().position(|word| word == "-d").and_then(|at| args.get(at + 1)).and_then(|dir| resolve(dir, cwd)).unwrap_or_else(|| cwd.to_path_buf());
-            inside(".", &dir)
+            add(".", &dir);
         }
-        _ => false,
+        _ => {}
     }
 }
 
-// Whether a Bash command clearly writes a file inside the worktree it runs in; anything unclear reads as no write, since the gate is a guard rail.
-pub fn writes_into(command: &str, cwd: &Path) -> bool {
-    let Some(worktree) = worktree_of(cwd) else { return false };
-    let worktree = normalized(&worktree);
-    let inside = |word: &str, base: &Path| resolve(word, base).is_some_and(|path| path.starts_with(&worktree));
+// Every file a Bash command clearly writes, resolved against the folder each part runs in; anything unclear ($VAR, a glob, a cd this cannot follow) reads as no write, since both guards are guard rails.
+pub fn written(command: &str, cwd: &Path, writes: Writes) -> Vec<PathBuf> {
+    let mut found = Vec::new();
     let mut cwd = cwd.to_path_buf();
     let mut words: Vec<String> = Vec::new();
     let mut tokens = tokens(command).into_iter().peekable();
@@ -263,9 +295,8 @@ pub fn writes_into(command: &str, cwd: &Path) -> bool {
             Some(Token::Output) => {
                 if words.first().is_none_or(|first| first != "[[")
                     && let Some(Token::Word(target)) = tokens.peek()
-                    && inside(target, &cwd)
                 {
-                    return true;
+                    found.extend(resolve(target, &cwd));
                 }
                 tokens.next();
             }
@@ -276,18 +307,25 @@ pub fn writes_into(command: &str, cwd: &Path) -> bool {
                 if words.first().map(String::as_str) == Some("cd") {
                     match words.get(1).and_then(|dir| resolve(dir, &cwd)) {
                         Some(dir) => cwd = dir,
-                        None => return false,
+                        None => return found,
                     }
-                } else if command_writes(&words, &cwd, &inside) {
-                    return true;
+                } else {
+                    command_writes(&words, &cwd, writes, &mut found);
                 }
                 words.clear();
                 if token.is_none() {
-                    return false;
+                    return found;
                 }
             }
         }
     }
+}
+
+// Whether a Bash command clearly writes a file inside the worktree it runs in.
+pub fn writes_into(command: &str, cwd: &Path) -> bool {
+    let Some(worktree) = worktree_of(cwd) else { return false };
+    let worktree = normalized(&worktree);
+    written(command, cwd, Writes::Content).iter().any(|path| path.starts_with(&worktree))
 }
 
 #[cfg(test)]

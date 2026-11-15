@@ -310,8 +310,10 @@ pub fn slot_path(repo: &Path, number: usize) -> PathBuf {
     repo.with_file_name(format!("wt{number}.{}", name_of(repo)))
 }
 
+pub const SETUP_NOTE: &str = "kebbie-setup.md";
+
 pub fn setup_note(worktree: &Path) -> Result<PathBuf> {
-    Ok(PathBuf::from(git(worktree, &["rev-parse", "--absolute-git-dir"])?).join("kebbie-setup.md"))
+    Ok(PathBuf::from(git(worktree, &["rev-parse", "--absolute-git-dir"])?).join(SETUP_NOTE))
 }
 
 pub fn setup_line(worktree: &Path) -> Option<String> {

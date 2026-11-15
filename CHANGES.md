@@ -39,6 +39,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - With the bugs-to-send row, the "Done in kebbie" line or a comment selected, no task on the board looks selected.
 - The board's header dates the vault backlog by its last vault sync, or says live while kebbie watches the vault.
 - Backlog rows from the vault show their current title, priority and age, not those of the lead's last save.
+- A sandboxed task writes its worktree's setup note, and kebbie refuses its shell's plain writes outside the worktree as it refuses its file tools'.
 
 ## 0.38.0
 

@@ -261,7 +261,7 @@ pub(crate) fn settings(kebbie: &str, address: &str, gate: Option<&str>, dirs: Op
     }
     if let Some(dirs) = dirs.filter(|_| sandbox.is_some()) {
         let task = address.rsplit_once('@').map_or(address, |(task, _)| task);
-        let files = json!({ "matcher": "Edit|Write|MultiEdit|NotebookEdit", "hooks": [{ "type": "command", "command": format!("{} hook files {} {} {}", crate::sh::quote(kebbie), crate::sh::quote(task), crate::sh::quote(&dirs.worktree.to_string_lossy()), crate::sh::quote(&dirs.tmp.to_string_lossy())) }] });
+        let files = json!({ "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash", "hooks": [{ "type": "command", "command": format!("{} hook files {} {} {}", crate::sh::quote(kebbie), crate::sh::quote(task), crate::sh::quote(&dirs.worktree.to_string_lossy()), crate::sh::quote(&dirs.tmp.to_string_lossy())) }] });
         match hooks["PreToolUse"].as_array_mut() {
             Some(entries) => entries.push(files),
             None => hooks["PreToolUse"] = json!([files]),
@@ -839,11 +839,11 @@ mod tests {
     fn a_sandboxed_task_runs_the_file_hook_on_its_own_worktree_and_temp_folder() {
         let written = task_settings(Some(&Policy::default()));
         let entries = written["hooks"]["PreToolUse"].as_array().unwrap();
-        let files = entries.iter().find(|entry| entry["matcher"] == "Edit|Write|MultiEdit|NotebookEdit").unwrap();
+        let files = entries.iter().find(|entry| entry["matcher"] == "Edit|Write|MultiEdit|NotebookEdit|Bash").unwrap();
         assert_eq!(files["hooks"][0]["command"], "'/opt/kebbie/kebbie' hook files 'billing' '/src/wt1.app' '/tmp/kebbie-501/wt1.app-a1b2c3'", "the task's name finds its halves in other repos");
         let gated: Value = serde_json::from_str(&settings("/opt/kebbie/kebbie", "billing@app", Some("billing@app"), Some(&dirs()), Some(&Policy::default()))).unwrap();
         let matchers: Vec<&str> = gated["hooks"]["PreToolUse"].as_array().unwrap().iter().filter_map(|entry| entry["matcher"].as_str()).collect();
-        assert_eq!(matchers, ["Bash", "Edit|Write|MultiEdit|NotebookEdit|Bash", "Edit|Write|MultiEdit|NotebookEdit"], "the push guard, the vault's gate and the file hook all run");
+        assert_eq!(matchers, ["Bash", "Edit|Write|MultiEdit|NotebookEdit|Bash", "Edit|Write|MultiEdit|NotebookEdit|Bash"], "the push guard, the vault's gate and the write guard all run");
         let off: Value = serde_json::from_str(&settings("/opt/kebbie/kebbie", "billing@app", Some("billing@app"), Some(&dirs()), None)).unwrap();
         assert_eq!(off["hooks"]["PreToolUse"].as_array().unwrap().len(), 2, "the push guard and the vault's gate without the sandbox");
     }
