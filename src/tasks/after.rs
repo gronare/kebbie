@@ -409,6 +409,7 @@ fn sweep_claims(state: &Path, tell: &mut dyn FnMut(Told)) -> Vec<String> {
     notes
 }
 
+// A wait whose own start failed half way leaves its worktree behind, and stays the user's under Needs you rather than read as started.
 pub(crate) fn tick_in(state: &Path, log: &[Message], now: u64, begin: Begin, tell: &mut dyn FnMut(Told)) -> Vec<String> {
     if !dir(state).is_dir() {
         return Vec::new();
@@ -419,7 +420,7 @@ pub(crate) fn tick_in(state: &Path, log: &[Message], now: u64, begin: Begin, tel
     let facts = Facts::read(state, log, &waits);
     for wait in waits {
         let address = wait.address();
-        if facts.open.contains(&address) {
+        if facts.open.contains(&address) && wait.blocked.is_none() {
             forget(state, &address);
             let text = format!("{address} was started while it was queued, so kebbie dropped its wait; it runs as it was started.");
             tell(Told::Dropped { text: text.clone() });
@@ -1424,6 +1425,31 @@ mod tests {
         let address = peers::address("billing", &name_of(&dir));
         assert!(load(&state, &address).is_none(), "its wait is dropped");
         assert!(told.iter().any(|said| matches!(said, Told::Dropped { text } if text.starts_with(&format!("{address} was started while it was queued")))));
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_queued_task_whose_start_fails_after_its_worktree_is_claimed_stays_blocked_under_needs_you_and_is_never_read_as_started() {
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        save(&state, &Wait { task: "search".to_string(), repo: dir.clone(), ..wait_for("search", "web", &["other@web"]) }).unwrap();
+        let address = peers::address("search", &name_of(&dir));
+        let shell_asks = "The shell in pane w4:p1 asks \"[oh-my-zsh] Would you like to update? [Y/n]\" as it starts; answer it there, then start again";
+        let mut told = Vec::new();
+        let log = [end("other@web", 200, "done", None)];
+        let mut claims_then_fails = |_: &Path, _: &str, _: &Start| -> Result<Begun> {
+            crate::repo::git(&slot.path, &["switch", "--quiet", "-c", "search"])?;
+            Err(shell_asks.to_string())
+        };
+        tick_in(&state, &log, 210, &mut claims_then_fails, &mut |said| told.push(said));
+        assert!(open_in(&dir).contains(&address), "the failed start left its worktree on the task's branch");
+        assert!(load(&state, &address).and_then(|wait| wait.blocked).is_some_and(|blocked| blocked.contains("[oh-my-zsh] Would you like to update?")), "the failed start says why");
+        for at in [300, 400] {
+            tick_in(&state, &log, at, &mut |_, _, _| panic!("a blocked wait waits for the user"), &mut |said| told.push(said));
+        }
+        assert!(load(&state, &address).is_some_and(|wait| wait.blocked.is_some()), "its worktree is left from the failed start, and the wait stays the user's");
+        assert!(told.iter().all(|said| !matches!(said, Told::Dropped { .. })), "never \"started while it was queued\"");
+        assert_eq!(told.iter().filter(|said| matches!(said, Told::Blocked { .. })).count(), 1);
         cleanup(dir, origin, &slot);
     }
 

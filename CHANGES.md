@@ -19,6 +19,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - An idea the lead merges into an older note stays on the Backlog page for a week, pointing at that note.
 
 ### Fixed
+- A queued task whose start fails stays under Needs you with why it did not start.
 - A rewritten or merged vault note shows its current text on the board and the phone, never an old copy.
 - A daily or weekly routine runs once on the night the clocks go back, and on time the day they go forward.
 - A cancelled CI run shows as CI cancelled under Needs you, with G to re-run and C to dismiss, instead of CI running.

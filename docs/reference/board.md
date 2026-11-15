@@ -212,6 +212,7 @@ kebbie keeps one phase per task, and only what changes it writes it: its start, 
 - An open question from `kebbie ask`.
 - A review whose findings only ask for your confirmation, marked `confirm what its review asks · <the finding>`: Confirm passes the review, Change it sends your comment to the task.
 - Messages held behind a draft in its input box.
+- A queued task whose start failed, with why it did not start, as when its shell asked a question while it started.
 - A task whose commits are on the default branch that kebbie does not close by itself, marked `landed on main · d closes it` beside a question (kebbie asks you whether to close it), or `landed on main, but its worktree has uncommitted changes or a stash` (see [`kebbie done`](commands.md#kebbie-done-name)).
 - A task that reported needs-you, or ready with nothing committed.
 - A task that reported ready with commits while tracked files are uncommitted, marked `2 uncommitted files hold it: a.md and b.md · p then p pushes the commits and keeps them`. The push window opens on its last commit, so `p` pushes every commit and keeps the task open with the files as they are; its approval is of the commits and stays.
