@@ -5,6 +5,12 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+
+### Fixed
+
+## 0.39.0
+
+### What's new
 - On your phone a task's question shows its title, text, links and current plan, and the task card lists the task's links.
 - lead.profile runs the lead on its own model and effort, picked on the Settings page.
 - L preselects resuming the lead's conversation while work is going on, and a new one when nothing is.
