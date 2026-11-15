@@ -412,7 +412,7 @@ fn laid(pane: Size, parts: &Parts, code: &[String], place: Place) -> Option<(Vec
 
 fn running(pane: Size, flow: &Flow, opener: bool, glyphs: qr::Glyphs) -> (Vec<Line<'static>>, u16) {
     let Some(waiting) = &flow.card else { return (vec![muted(flow.waiting.clone()), Line::default(), keys(&[("esc", "stop")])], WIDTH) };
-    let left = waiting.expires.saturating_duration_since(Instant::now());
+    let left = waiting.expires.saturating_duration_since(super::clock::instant());
     let browser = match (waiting.opened, opener) {
         (true, _) => card::Browser::Opened,
         (false, true) => card::Browser::Offered,
@@ -489,7 +489,7 @@ fn status(sent: Sent) -> Style {
 
 fn overview(window: &Window, leaving: bool) -> Vec<Line<'static>> {
     let Ok(Some(joined)) = identity::load(&window.paths.state) else { return vec![muted("This machine is not connected."), keys(&[("any key", "close")])] };
-    let now = crate::messages::now();
+    let now = super::clock::now();
     let relay = relay::load(&window.paths.state);
     let (sent, said) = board_line(&relay, joined.account.is_some(), now);
     let said = match (sent, relay.posted_at) {
@@ -730,8 +730,10 @@ mod tests {
     }
 
     fn waiting_with(app: &mut App, left: Duration, paths: Paths) {
+        let shown_at = Instant::now();
+        crate::board::clock::pin_instant(shown_at);
         let flow = spawn("kebbie hub · connect", String::new(), move |events, stop| {
-            let _ = events.send(Event::Shown(Waiting { link: LINK.to_string(), code: "Z78K-XF53".to_string(), name: "mac".to_string(), url: DEFAULT_HUB_URL.to_string(), opened: false, expires: Instant::now() + left }));
+            let _ = events.send(Event::Shown(Waiting { link: LINK.to_string(), code: "Z78K-XF53".to_string(), name: "mac".to_string(), url: DEFAULT_HUB_URL.to_string(), opened: false, expires: shown_at + left }));
             while !stop() {
                 std::thread::sleep(Duration::from_millis(20));
             }
@@ -830,10 +832,10 @@ mod tests {
     #[test]
     fn connected_the_window_names_the_machine_on_its_hub_when_the_board_went_out_and_where_to_sign_in() {
         let now = crate::messages::now();
+        crate::board::clock::pin(now, 0);
         let mut app = opened(joined(relay::Relay { posted_at: Some(now - 12), rev: 3, ..Default::default() }));
         let shown = screen(&mut app, 110, 40);
-        let ago = crate::messages::now() - (now - 12);
-        assert!((12..=ago).any(|seconds| shown.contains(&format!("● mac on kebbie.example.com   board sent {seconds} s ago"))), "{shown}");
+        assert!(shown.contains("● mac on kebbie.example.com   board sent 12 s ago"), "{shown}");
         for line in ["╭ kebbie hub ─", "Sign in with your passkey on any phone or browser", "to see this board:  kebbie.example.com", "n rename · l leave the hub · esc close"] {
             assert!(shown.contains(line), "{line}: {shown}");
         }

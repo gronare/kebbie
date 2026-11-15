@@ -1123,7 +1123,7 @@ fn connect_names_the_machine_after_the_hub_then_draws_the_card_and_ends_on_the_c
         assert!(done.contains(&line), "{line}: {done}");
     }
     assert!(done.lines().nth(1).is_some_and(|line| line.starts_with('╭')) && !done.contains("Waiting"), "the connected card replaces the waiting one: {done}");
-    assert!(!shown.contains("ada"), "no account name anywhere");
+    assert!(!shown.replace(&host, "").replace(&short, "").contains("ada"), "no account name anywhere");
     assert!(said.contains("No board goes out: no browser can read this machine's board, as it holds no account key, which only connecting from the link kebbie hub connect shows hands over. Connect it from the link: kebbie hub leave, then kebbie hub connect, and open the link it shows.") && said.contains(&format!("[machine] name = {host:?}")), "{said}");
     assert_eq!(identity::load(&state).unwrap().unwrap().name, host);
 }

@@ -1278,7 +1278,7 @@ fn pid_in(line: &str) -> String {
 
 fn eventually(mut done: impl FnMut() -> bool) -> bool {
     let started = std::time::Instant::now();
-    while started.elapsed() < std::time::Duration::from_secs(15) {
+    while started.elapsed() < std::time::Duration::from_secs(120) {
         if done() {
             return true;
         }

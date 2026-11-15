@@ -14,6 +14,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The Work page shows the selected task's card beside the tasks, and it follows the cursor.
 
 ### Fixed
+- A daily or weekly routine runs once on the night the clocks go back, and on time the day they go forward.
 - A cancelled CI run shows as CI cancelled under Needs you, with G to re-run and C to dismiss, instead of CI running.
 - A CI watch gh cannot read for 15 minutes ends as CI unknown instead of running forever.
 - When one bug or wish waits to be sent, the board's row names it by its title instead of counting it.

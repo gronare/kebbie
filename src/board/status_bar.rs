@@ -43,25 +43,24 @@ pub(super) fn hint_hits(line: &Line, area: Rect, ctx: Ctx, opens: Option<&'stati
     hits
 }
 
-fn local(at: u64) -> Option<libc::tm> {
-    let time = at as libc::time_t;
-    // SAFETY: localtime_r only writes the tm it is given.
-    unsafe {
-        let mut tm: libc::tm = std::mem::zeroed();
-        (!libc::localtime_r(&time, &mut tm).is_null()).then_some(tm)
-    }
+const DAY: i64 = 86_400;
+
+fn local(at: u64) -> (i64, i64) {
+    let local = at as i64 + super::clock::offset(at as i64);
+    (local.div_euclid(DAY), local.rem_euclid(DAY))
 }
 
 pub(super) fn clock(at: u64) -> String {
-    local(at).map_or_else(String::new, |tm| format!("{:02}:{:02}", tm.tm_hour, tm.tm_min))
+    let (_, seconds) = local(at);
+    format!("{:02}:{:02}", seconds / 3600, seconds % 3600 / 60)
 }
 
 fn resets(at: u64, now: u64) -> String {
-    match (local(at), local(now)) {
-        (Some(then), Some(today)) if (then.tm_year, then.tm_yday) == (today.tm_year, today.tm_yday) => format!("{:02}:{:02}", then.tm_hour, then.tm_min),
-        (Some(then), _) => ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][then.tm_wday.clamp(0, 6) as usize].to_string(),
-        _ => String::new(),
+    let ((day, seconds), (today, _)) = (local(at), local(now));
+    if day == today {
+        return format!("{:02}:{:02}", seconds / 3600, seconds % 3600 / 60);
     }
+    ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][crate::recover::weekday(day) as usize].to_string()
 }
 
 fn usage_color(used: f64) -> Color {
@@ -147,28 +146,25 @@ mod tests {
 
     use super::*;
     use crate::board::test_support::*;
-    use crate::messages;
     use crate::usage::Usage;
     use crate::usage;
     use crate::board::{Hit, Page};
     use crate::board::widgets::{FAINT, GREEN, MUTED, RED, SUBTEXT, YELLOW};
 
-    // Ten minutes ahead crosses midnight in the day's last ten minutes, and a reset on another day is drawn as a weekday.
-    fn later_today(now: u64) -> u64 {
-        if resets(now + 600, now).contains(':') { now + 600 } else { now + 1 }
-    }
+    // Thursday 22 Oct 2026, 12:00 UTC.
+    const NOON: u64 = 1_792_670_400;
 
     #[test]
     fn the_status_bar_shows_plan_usage_as_the_mockup_draws_it_wide_and_short() {
+        crate::board::clock::pin(NOON, 0);
         let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
-        let now = messages::now();
         app.usage = Some(Usage {
-            session: Some(usage::Window { used: 23.0, resets_at: later_today(now) }), week: Some(usage::Window { used: 71.4, resets_at: now + 3 * 86_400 }), seen_at: now,
+            session: Some(usage::Window { used: 23.0, resets_at: NOON + 600 }), week: Some(usage::Window { used: 71.4, resets_at: NOON + 3 * 86_400 }), seen_at: NOON,
         });
         let (rows, buffer) = render(&mut app, 170, 30);
         let bar = &rows[28];
         assert!(bar.trim_start().starts_with("⏎ options · tab lead · i inbox · m messages · ? keys"), "{bar}");
-        assert!(bar.contains(&format!("session ━━━━━━━━ 23% resets {}   week ━━━━━━━━ 71% resets ", clock(later_today(now)))), "{bar}");
+        assert!(bar.contains("session ━━━━━━━━ 23% resets 12:10   week ━━━━━━━━ 71% resets sun"), "{bar}");
         let (x, _) = find(&rows[28..29], "session ━")[0];
         let fills: Vec<Color> = (0..8).map(|cell| buffer[(x as u16 + 8 + cell, 28)].fg).collect();
         assert_eq!(fills, [GREEN, GREEN, FAINT, FAINT, FAINT, FAINT, FAINT, FAINT], "23% fills two of eight on a surface1 track");
@@ -191,10 +187,10 @@ mod tests {
 
     #[test]
     fn a_newer_version_shows_muted_beside_the_hints_without_pushing_out_the_usage_bars() {
+        crate::board::clock::pin(NOON, 0);
         let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
-        let now = messages::now();
         app.usage = Some(Usage {
-            session: Some(usage::Window { used: 23.0, resets_at: later_today(now) }), week: Some(usage::Window { used: 71.4, resets_at: now + 3 * 86_400 }), seen_at: now,
+            session: Some(usage::Window { used: 23.0, resets_at: NOON + 600 }), week: Some(usage::Window { used: 71.4, resets_at: NOON + 3 * 86_400 }), seen_at: NOON,
         });
         let (rows, _) = render(&mut app, 170, 30);
         assert!(!rows[28].contains('↑'), "nothing newer, no notice: {}", rows[28]);
@@ -237,5 +233,19 @@ mod tests {
         app.page = Page::Areas;
         let (rows, _) = render(&mut app, 170, 30);
         assert!(!rows[28].contains("updates") && !rows[28].contains("↑ update"), "the Work page only: {}", rows[28]);
+    }
+
+    #[test]
+    fn a_reset_reads_as_a_clock_today_and_a_weekday_from_the_users_midnight_on() {
+        let day = crate::recover::days_from_civil(2026, 10, 31) as u64 * 86_400;
+        let late = day + 23 * 3600 + 59 * 60 + 30;
+        crate::board::clock::pin(late, 0);
+        assert_eq!((resets(late + 20, late), resets(late + 60, late)), ("23:59".to_string(), "sun".to_string()), "23:59:30 on Saturday 31 Oct: half a minute on is today, a minute on is Sunday 1 Nov");
+        crate::board::clock::pin(late, 3600);
+        assert_eq!((resets(late - 3600 + 20, late - 3600), resets(late - 3600 + 60, late - 3600)), ("23:59".to_string(), "sun".to_string()), "the same local instant at UTC+1, an hour earlier in UTC");
+        assert_eq!(clock(late - 3600), "23:59");
+        let year_end = crate::recover::days_from_civil(2026, 12, 31) as u64 * 86_400 + 23 * 3600 + 59 * 60 + 30;
+        crate::board::clock::pin(year_end, 0);
+        assert_eq!((resets(year_end + 20, year_end), resets(year_end + 60, year_end)), ("23:59".to_string(), "fri".to_string()), "31 Dec is followed by Friday 1 Jan 2027");
     }
 }

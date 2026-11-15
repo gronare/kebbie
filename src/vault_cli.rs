@@ -1015,8 +1015,10 @@ mod tests {
         assert_eq!(kept_log_note(&state, "web", now), KeptLog::Unasked);
         fake.fail("log-path", "no repo named web");
         ask_log_notes(&fake.cli, &state, &["web".to_string()]);
-        assert_eq!(kept_log_note(&state, "web", now), KeptLog::Refused);
-        assert_eq!(kept_log_note(&state, "web", std::time::SystemTime::now() + LOG_RETRY), KeptLog::Unasked, "a refusal is asked again after an hour");
+        let refused = std::fs::metadata(log_file(&state, "web")).unwrap().modified().unwrap();
+        assert_eq!(kept_log_note(&state, "web", refused), KeptLog::Refused);
+        assert_eq!(kept_log_note(&state, "web", refused + LOG_RETRY - std::time::Duration::from_secs(1)), KeptLog::Refused);
+        assert_eq!(kept_log_note(&state, "web", refused + LOG_RETRY), KeptLog::Unasked, "a refusal is asked again after an hour");
     }
 
     #[test]

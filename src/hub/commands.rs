@@ -714,6 +714,9 @@ mod tests {
         crate::messages::now()
     }
 
+    // 2026-10-22 12:00 UTC: the Machine tests' one instant, so no second ticks between a command's send and its check.
+    const AT: u64 = 1_792_670_400;
+
     fn word(word: &str) -> HubCommands {
         HubCommands::from_word(word).unwrap()
     }
@@ -1189,7 +1192,7 @@ mod tests {
     impl Machine {
         fn new() -> Machine {
             let dir = crate::sh::test_dir("hub-devices");
-            let identity = Identity::new("https://hub.example.com", Id::new(Prefix::Machine).unwrap(), "mac", "khm_token".to_string(), &SecretKeys::generate(), now());
+            let identity = Identity::new("https://hub.example.com", Id::new(Prefix::Machine).unwrap(), "mac", "khm_token".to_string(), &SecretKeys::generate(), AT);
             identity::save_at(&dir, &identity).unwrap();
             let keys = SecretKeys::generate();
             let account = AccountKey::new(Id::account([3; 16]), 1, keys.public()).unwrap();
@@ -1205,7 +1208,7 @@ mod tests {
         }
 
         fn handle_taking(&self, seen: &Seen, accepts: &[Kind], envelope: &Envelope) -> Handled {
-            with_hands(seen, |hands| handle(&self.dir, &self.identity, &self.account, accepts, DEVICE, envelope, hands, now())).unwrap()
+            with_hands(seen, |hands| handle(&self.dir, &self.identity, &self.account, accepts, DEVICE, envelope, hands, AT)).unwrap()
         }
 
         fn release(&self, seen: &Seen, policy: Policy, at: u64) -> Vec<Handled> {
@@ -1223,20 +1226,20 @@ mod tests {
         let other_keys = SecretKeys::generate();
         let other = AccountKey::new(Id::account([4; 16]), 1, other_keys.public()).unwrap();
         let phone = machine.phone("iPhone 16");
-        let genuine = phone.send(&machine.account, &machine.identity, &answer(), now());
+        let genuine = phone.send(&machine.account, &machine.identity, &answer(), AT);
         let mut forged = genuine.clone();
         forged.sig = format!("{}{}", if forged.sig.starts_with('A') { 'B' } else { 'A' }, &forged.sig[1..]);
         let posing = AccountKey::new(machine.account.account.clone(), 1, other_keys.public()).unwrap();
-        let impostor = Phone::new(&other_keys, &posing, "iPhone 16").send(&posing, &machine.identity, &answer(), now());
-        let elsewhere = Phone::new(&other_keys, &other, "iPhone 16").send(&other, &machine.identity, &answer(), now());
+        let impostor = Phone::new(&other_keys, &posing, "iPhone 16").send(&posing, &machine.identity, &answer(), AT);
+        let elsewhere = Phone::new(&other_keys, &other, "iPhone 16").send(&other, &machine.identity, &answer(), AT);
         let seen = Seen::new();
-        assert_eq!(machine.handle(&seen, ACCOUNT, &forged, now()), Handled::Dropped(Dropped::BadSignature));
-        assert_eq!(machine.handle(&seen, ACCOUNT, &impostor, now()), Handled::Dropped(Dropped::BadCertificate), "a device the pinned account's id names, certified by another key");
-        assert_eq!(machine.handle(&seen, ACCOUNT, &elsewhere, now()), Handled::Dropped(Dropped::WrongAccount), "a command another account signed");
+        assert_eq!(machine.handle(&seen, ACCOUNT, &forged, AT), Handled::Dropped(Dropped::BadSignature));
+        assert_eq!(machine.handle(&seen, ACCOUNT, &impostor, AT), Handled::Dropped(Dropped::BadCertificate), "a device the pinned account's id names, certified by another key");
+        assert_eq!(machine.handle(&seen, ACCOUNT, &elsewhere, AT), Handled::Dropped(Dropped::WrongAccount), "a command another account signed");
         assert_eq!(seen.applied(), 0, "nothing was applied");
         assert!(ledger(&machine.dir).applied.is_empty(), "a dropped command leaves no result");
         assert!(devices::load(&machine.dir).devices.is_empty(), "a device that did not verify is never recorded");
-        assert!(matches!(machine.handle(&seen, ACCOUNT, &genuine, now()), Handled::Applied(_)), "the genuine command from the pinned account goes through");
+        assert!(matches!(machine.handle(&seen, ACCOUNT, &genuine, AT), Handled::Applied(_)), "the genuine command from the pinned account goes through");
         assert_eq!(seen.answers.borrow().len(), 1);
     }
 
@@ -1245,28 +1248,28 @@ mod tests {
         let machine = Machine::new();
         let seen = Seen::new();
         let phone = machine.phone("iPhone 16");
-        let sent = phone.send(&machine.account, &machine.identity, &answer(), now());
-        assert_eq!(machine.handle(&seen, DEVICE, &sent, now()), Handled::Held(phone.id().clone()));
+        let sent = phone.send(&machine.account, &machine.identity, &answer(), AT);
+        assert_eq!(machine.handle(&seen, DEVICE, &sent, AT), Handled::Held(phone.id().clone()));
         assert_eq!(seen.applied(), 0, "nothing is applied while it waits");
         assert_eq!(seen.told.borrow().as_slice(), ["iPhone 16 wants to make changes on mac: approve or deny it under N on the board, or with kebbie hub devices"]);
         assert_eq!(machine.state(&phone), Some(State::Waiting));
         let held = &ledger(&machine.dir).held[&held_key(phone.id(), &sent.header.id)];
         assert_eq!((held.device.clone(), held.asked.described()), (phone.id().clone(), "an answer to refunds".to_string()));
-        assert_eq!(machine.handle(&seen, DEVICE, &sent, now()), Handled::Held(phone.id().clone()), "the same command again waits once");
+        assert_eq!(machine.handle(&seen, DEVICE, &sent, AT), Handled::Held(phone.id().clone()), "the same command again waits once");
         assert_eq!((ledger(&machine.dir).held.len(), seen.told.borrow().len()), (1, 1), "and is neither kept twice nor told twice");
-        assert!(machine.release(&seen, DEVICE, now()).is_empty(), "still waiting, nothing is answered");
+        assert!(machine.release(&seen, DEVICE, AT).is_empty(), "still waiting, nothing is answered");
 
-        let approved = devices::answer(&machine.dir, "iPhone 16", Decision::Approve, now()).unwrap();
+        let approved = devices::answer(&machine.dir, "iPhone 16", Decision::Approve, AT).unwrap();
         assert!(approved.starts_with("✓ iPhone 16 makes changes on mac from now on\n  next: Its answer to refunds goes in"), "{approved}");
         assert!(approved.ends_with(&format!("  key: {}", phone.cert.fingerprint())), "{approved}");
-        let released = machine.release(&seen, DEVICE, now());
+        let released = machine.release(&seen, DEVICE, AT);
         let [Handled::Applied(result)] = released.as_slice() else { panic!("{released:?}") };
         assert_eq!((result.outcome, result.device.clone()), (Outcome::Done, phone.id().clone()));
         assert_eq!(seen.answers.borrow()[0].0, Caller::Hub { account: machine.account.account.as_str().to_string(), name: "iPhone 16".to_string() }, "the answer names the device");
         assert_eq!(crate::permit::describe(&seen.answers.borrow()[0].0), "the user, from iPhone 16");
         assert!(ledger(&machine.dir).held.is_empty());
-        let later = phone.send(&machine.account, &machine.identity, &push(), now());
-        assert!(matches!(machine.handle(&seen, DEVICE, &later, now()), Handled::Applied(_)), "an approved device's next command goes in at once");
+        let later = phone.send(&machine.account, &machine.identity, &push(), AT);
+        assert!(matches!(machine.handle(&seen, DEVICE, &later, AT), Handled::Applied(_)), "an approved device's next command goes in at once");
     }
 
     #[test]
@@ -1274,20 +1277,20 @@ mod tests {
         let machine = Machine::new();
         let seen = Seen::new();
         let phone = machine.phone("iPhone 16");
-        let sent = phone.send(&machine.account, &machine.identity, &answer(), now());
-        assert_eq!(machine.handle(&seen, DEVICE, &sent, now()), Handled::Held(phone.id().clone()));
+        let sent = phone.send(&machine.account, &machine.identity, &answer(), AT);
+        assert_eq!(machine.handle(&seen, DEVICE, &sent, AT), Handled::Held(phone.id().clone()));
         let stamp = |file: &str| std::fs::metadata(machine.dir.join(file)).and_then(|metadata| metadata.modified()).unwrap();
         let (devices_at, ledger_at, decided) = (stamp(devices::FILE), stamp(LEDGER), devices::load(&machine.dir).decisions());
-        for later in [now() + 1, now() + 30, now() + 600] {
+        for later in [AT + 1, AT + 30, AT + 600] {
             assert!(machine.release(&seen, DEVICE, later).is_empty(), "still waiting");
         }
-        assert_eq!(machine.handle(&seen, DEVICE, &sent, now() + 900), Handled::Held(phone.id().clone()), "the inbox bringing it again");
+        assert_eq!(machine.handle(&seen, DEVICE, &sent, AT + 900), Handled::Held(phone.id().clone()), "the inbox bringing it again");
         assert_eq!((stamp(devices::FILE), stamp(LEDGER)), (devices_at, ledger_at), "each write would wake the keeper's watch into another round");
         assert_eq!(devices::load(&machine.dir).decisions(), decided);
-        let later = phone.send(&machine.account, &machine.identity, &push(), now() + 60);
-        machine.handle(&seen, DEVICE, &later, now() + 60);
+        let later = phone.send(&machine.account, &machine.identity, &push(), AT + 60);
+        machine.handle(&seen, DEVICE, &later, AT + 60);
         assert_eq!(devices::load(&machine.dir).decisions(), decided, "a new command from the waiting device is no decision, so the watch releases nothing");
-        devices::answer(&machine.dir, "iPhone 16", Decision::Approve, now() + 61).unwrap();
+        devices::answer(&machine.dir, "iPhone 16", Decision::Approve, AT + 61).unwrap();
         assert_ne!(devices::load(&machine.dir).decisions(), decided, "an approval is");
     }
 
@@ -1296,15 +1299,15 @@ mod tests {
         let machine = Machine::new();
         let seen = Seen::new();
         let phone = machine.phone("iPhone 16");
-        let sent = phone.send(&machine.account, &machine.identity, &answer(), now());
-        machine.handle(&seen, DEVICE, &sent, now());
-        let denied = devices::answer(&machine.dir, phone.id().as_str(), Decision::Deny, now()).unwrap();
+        let sent = phone.send(&machine.account, &machine.identity, &answer(), AT);
+        machine.handle(&seen, DEVICE, &sent, AT);
+        let denied = devices::answer(&machine.dir, phone.id().as_str(), Decision::Deny, AT).unwrap();
         assert!(denied.starts_with("✓ iPhone 16 stays view only on mac\n  next: Its answer to refunds is dropped; kebbie hub devices approve \"iPhone 16\" lets it in later."), "{denied}");
-        let released = machine.release(&seen, DEVICE, now());
+        let released = machine.release(&seen, DEVICE, AT);
         let [Handled::Refused(result)] = released.as_slice() else { panic!("{released:?}") };
         assert_eq!((result.outcome, result.text.as_str()), (Outcome::Refused { reason: Reason::Denied }, "Not delivered: mac denied this device; it stays view only there."));
-        let later = phone.send(&machine.account, &machine.identity, &answer(), now() + 10 * devices::DAY);
-        assert!(matches!(machine.handle(&seen, DEVICE, &later, now() + 10 * devices::DAY), Handled::Refused(CommandResult { outcome: Outcome::Refused { reason: Reason::Denied }, .. })), "a denial never lapses into an approval");
+        let later = phone.send(&machine.account, &machine.identity, &answer(), AT + 10 * devices::DAY);
+        assert!(matches!(machine.handle(&seen, DEVICE, &later, AT + 10 * devices::DAY), Handled::Refused(CommandResult { outcome: Outcome::Refused { reason: Reason::Denied }, .. })), "a denial never lapses into an approval");
         assert_eq!(seen.applied(), 0);
     }
 
@@ -1313,15 +1316,15 @@ mod tests {
         let machine = Machine::new();
         let seen = Seen::new();
         let phone = machine.phone("iPhone 16");
-        machine.handle(&seen, DEVICE, &phone.send(&machine.account, &machine.identity, &answer(), now()), now());
-        devices::answer(&machine.dir, phone.id().as_str(), Decision::Deny, now()).unwrap();
+        machine.handle(&seen, DEVICE, &phone.send(&machine.account, &machine.identity, &answer(), AT), AT);
+        devices::answer(&machine.dir, phone.id().as_str(), Decision::Deny, AT).unwrap();
         let file = machine.dir.join(devices::FILE);
         let unreadable = std::fs::read_to_string(&file).unwrap().replacen("\"denied\"", "\"barred\"", 1);
         std::fs::write(&file, &unreadable).unwrap();
-        let later = phone.send(&machine.account, &machine.identity, &answer(), now() + 10 * devices::DAY);
-        let refused = with_hands(&seen, |hands| handle(&machine.dir, &machine.identity, &machine.account, &accepts(word("answer-and-push")), DEVICE, &later, hands, now() + 10 * devices::DAY));
+        let later = phone.send(&machine.account, &machine.identity, &answer(), AT + 10 * devices::DAY);
+        let refused = with_hands(&seen, |hands| handle(&machine.dir, &machine.identity, &machine.account, &accepts(word("answer-and-push")), DEVICE, &later, hands, AT + 10 * devices::DAY));
         assert!(matches!(&refused, Err(error) if error.contains("does not read")), "{refused:?}");
-        assert!(devices::answer(&machine.dir, "iPhone 16", Decision::Approve, now()).is_err());
+        assert!(devices::answer(&machine.dir, "iPhone 16", Decision::Approve, AT).is_err());
         assert_eq!(std::fs::read_to_string(&file).unwrap(), unreadable, "the denial stays in the file for whoever fixes it");
         assert_eq!(seen.applied(), 0);
     }
@@ -1331,8 +1334,8 @@ mod tests {
         let machine = Machine::new();
         let seen = Seen::new();
         let phone = machine.phone("iPhone 16");
-        let sent = phone.send(&machine.account, &machine.identity, &answer(), now());
-        machine.handle(&seen, DEVICE, &sent, now());
+        let sent = phone.send(&machine.account, &machine.identity, &answer(), AT);
+        machine.handle(&seen, DEVICE, &sent, AT);
         assert!(machine.release(&seen, DEVICE, sent.header.exp - 1).is_empty());
         let released = machine.release(&seen, DEVICE, sent.header.exp);
         let [Handled::Refused(result)] = released.as_slice() else { panic!("{released:?}") };
@@ -1347,7 +1350,7 @@ mod tests {
         let machine = Machine::new();
         let seen = Seen::new();
         let phone = machine.phone("iPhone 16");
-        let start = now();
+        let start = AT;
         let first = phone.send(&machine.account, &machine.identity, &answer(), start);
         machine.handle(&seen, DEVICE, &first, start);
         let standing = devices::load(&machine.dir).standings(DEVICE, start);
@@ -1370,26 +1373,26 @@ mod tests {
         let machine = Machine::new();
         let seen = Seen::new();
         let phone = machine.phone("iPhone 16");
-        let first = phone.send(&machine.account, &machine.identity, &answer(), now());
-        machine.handle(&seen, DEVICE, &first, now());
-        devices::answer(&machine.dir, "iPhone 16", Decision::Approve, now()).unwrap();
-        machine.release(&seen, DEVICE, now());
+        let first = phone.send(&machine.account, &machine.identity, &answer(), AT);
+        machine.handle(&seen, DEVICE, &first, AT);
+        devices::answer(&machine.dir, "iPhone 16", Decision::Approve, AT).unwrap();
+        machine.release(&seen, DEVICE, AT);
         let rekeyed = Phone::with_id(&machine.keys, &machine.account, "iPhone 16", phone.id().clone());
-        let sent = rekeyed.send(&machine.account, &machine.identity, &answer(), now() + 60);
-        assert_eq!(machine.handle(&seen, DEVICE, &sent, now() + 60), Handled::Held(phone.id().clone()), "approval holds for the key it was given");
+        let sent = rekeyed.send(&machine.account, &machine.identity, &answer(), AT + 60);
+        assert_eq!(machine.handle(&seen, DEVICE, &sent, AT + 60), Handled::Held(phone.id().clone()), "approval holds for the key it was given");
         let known = devices::load(&machine.dir);
         let device = known.record(phone.id(), &rekeyed.key.public().signing).expect("the new key is a request of its own");
-        assert_eq!((device.state, device.first_seen), (State::Waiting, now() + 60));
+        assert_eq!((device.state, device.first_seen), (State::Waiting, AT + 60));
         assert_eq!(known.record(phone.id(), &phone.key.public().signing).map(|device| device.state), Some(State::Approved), "the first key's record is left as it was decided");
         assert_eq!(seen.told.borrow().len(), 2, "the user is asked again");
-        assert!(matches!(machine.handle(&seen, DEVICE, &phone.send(&machine.account, &machine.identity, &push(), now() + 90), now() + 90), Handled::Applied(_)), "the approved device still makes changes");
+        assert!(matches!(machine.handle(&seen, DEVICE, &phone.send(&machine.account, &machine.identity, &push(), AT + 90), AT + 90), Handled::Applied(_)), "the approved device still makes changes");
     }
 
     #[test]
     fn another_key_under_a_known_id_never_takes_over_its_record_and_approving_by_name_asks_which() {
         let machine = Machine::new();
         let seen = Seen::new();
-        let at = now();
+        let at = AT;
         let phone = machine.phone("iPhone 16");
         machine.handle(&seen, DEVICE, &phone.send(&machine.account, &machine.identity, &answer(), at), at);
         let posing = Phone::with_id(&machine.keys, &machine.account, "iPhone 16", phone.id().clone());
@@ -1415,14 +1418,14 @@ mod tests {
         let machine = Machine::new();
         let seen = Seen::new();
         let phone = machine.phone("iPad");
-        let sent = phone.send(&machine.account, &machine.identity, &answer(), now());
-        assert!(matches!(machine.handle(&seen, ACCOUNT, &sent, now()), Handled::Applied(_)));
+        let sent = phone.send(&machine.account, &machine.identity, &answer(), AT);
+        assert!(matches!(machine.handle(&seen, ACCOUNT, &sent, AT), Handled::Applied(_)));
         assert!(seen.told.borrow().is_empty(), "nothing to approve, nothing to tell");
         assert_eq!(machine.state(&phone), Some(State::Waiting), "recorded for kebbie hub devices, and never as approved by you");
-        assert!(matches!(devices::load(&machine.dir).standings(ACCOUNT, now())[phone.id()], kebbie_hub_protocol::DeviceStanding::Approved { .. }));
-        let later = phone.send(&machine.account, &machine.identity, &answer(), now() + 60);
-        assert_eq!(machine.handle(&seen, NEVER, &later, now() + 60), Handled::Held(phone.id().clone()), "turned to device trust, the device waits for your approval");
-        assert!(matches!(devices::load(&machine.dir).standings(NEVER, now() + 60)[phone.id()], kebbie_hub_protocol::DeviceStanding::Waiting { .. }));
+        assert!(matches!(devices::load(&machine.dir).standings(ACCOUNT, AT)[phone.id()], kebbie_hub_protocol::DeviceStanding::Approved { .. }));
+        let later = phone.send(&machine.account, &machine.identity, &answer(), AT + 60);
+        assert_eq!(machine.handle(&seen, NEVER, &later, AT + 60), Handled::Held(phone.id().clone()), "turned to device trust, the device waits for your approval");
+        assert!(matches!(devices::load(&machine.dir).standings(NEVER, AT + 60)[phone.id()], kebbie_hub_protocol::DeviceStanding::Waiting { .. }));
     }
 
     #[test]
@@ -1431,13 +1434,13 @@ mod tests {
         let seen = Seen::new();
         let (one, two) = (machine.phone("iPhone"), machine.phone("iPhone"));
         for phone in [&one, &two] {
-            machine.handle(&seen, DEVICE, &phone.send(&machine.account, &machine.identity, &answer(), now()), now());
+            machine.handle(&seen, DEVICE, &phone.send(&machine.account, &machine.identity, &answer(), AT), AT);
         }
-        let refused = devices::answer(&machine.dir, "iPhone", Decision::Approve, now()).unwrap_err();
+        let refused = devices::answer(&machine.dir, "iPhone", Decision::Approve, AT).unwrap_err();
         assert!(refused.starts_with("2 devices answer to \"iPhone\"; name one by its id and key") && refused.contains(one.id().as_str()) && refused.contains(two.id().as_str()) && refused.contains(&one.cert.fingerprint()), "{refused}");
         assert_eq!((machine.state(&one), machine.state(&two)), (Some(State::Waiting), Some(State::Waiting)), "neither was decided");
-        assert!(devices::answer(&machine.dir, one.id().as_str(), Decision::Approve, now()).is_ok());
-        assert!(devices::answer(&machine.dir, "iPad", Decision::Approve, now()).unwrap_err().starts_with("No device \"iPad\" has sent this machine a command"));
+        assert!(devices::answer(&machine.dir, one.id().as_str(), Decision::Approve, AT).is_ok());
+        assert!(devices::answer(&machine.dir, "iPad", Decision::Approve, AT).unwrap_err().starts_with("No device \"iPad\" has sent this machine a command"));
     }
 
     #[test]
@@ -1482,13 +1485,13 @@ mod tests {
         let machine = Machine::new();
         let seen = Seen::new();
         let (one, two) = (machine.phone("iPhone"), machine.phone("iPad"));
-        let first = one.send(&machine.account, &machine.identity, &answer(), now());
-        let second = two.send_as(&machine.account, &machine.identity, &push(), first.header.id.clone(), now());
-        assert_eq!(machine.handle(&seen, DEVICE, &first, now()), Handled::Held(one.id().clone()));
-        assert_eq!(machine.handle(&seen, DEVICE, &second, now()), Handled::Held(two.id().clone()));
+        let first = one.send(&machine.account, &machine.identity, &answer(), AT);
+        let second = two.send_as(&machine.account, &machine.identity, &push(), first.header.id.clone(), AT);
+        assert_eq!(machine.handle(&seen, DEVICE, &first, AT), Handled::Held(one.id().clone()));
+        assert_eq!(machine.handle(&seen, DEVICE, &second, AT), Handled::Held(two.id().clone()));
         assert_eq!(ledger(&machine.dir).held.len(), 2, "neither overwrites the other");
-        devices::answer(&machine.dir, "iPad", Decision::Approve, now()).unwrap();
-        let released = machine.release(&seen, DEVICE, now());
+        devices::answer(&machine.dir, "iPad", Decision::Approve, AT).unwrap();
+        let released = machine.release(&seen, DEVICE, AT);
         assert!(matches!(released.as_slice(), [Handled::Applied(result)] if result.device == *two.id()), "{released:?}");
         assert_eq!(seen.pushes.borrow().len(), 1);
         assert_eq!(ledger(&machine.dir).held.keys().cloned().collect::<Vec<_>>(), [held_key(one.id(), &first.header.id)], "the other device's command still waits");
@@ -1525,28 +1528,28 @@ mod tests {
         let seen = Seen::new();
         let devices_too = accepted(word("answer-and-push"), ApproveFrom::Devices);
         let phone = machine.phone("iPhone 16");
-        machine.handle(&seen, DEVICE, &phone.send(&machine.account, &machine.identity, &answer(), now()), now());
-        devices::answer(&machine.dir, "iPhone 16", Decision::Approve, now()).unwrap();
-        machine.release(&seen, DEVICE, now());
+        machine.handle(&seen, DEVICE, &phone.send(&machine.account, &machine.identity, &answer(), AT), AT);
+        devices::answer(&machine.dir, "iPhone 16", Decision::Approve, AT).unwrap();
+        machine.release(&seen, DEVICE, AT);
         crate::hub::notices::SENT.with(|sent| sent.borrow_mut().clear());
         let tablet = machine.phone("iPad");
-        let held = tablet.send(&machine.account, &machine.identity, &answer(), now());
+        let held = tablet.send(&machine.account, &machine.identity, &answer(), AT);
         assert_eq!(machine.handle_taking(&seen, &devices_too, &held), Handled::Held(tablet.id().clone()));
         let told = crate::hub::notices::SENT.with(|sent| sent.borrow().clone());
         assert!(matches!(told.as_slice(), [(crate::hub::notices::About::NewDevice { device, name, from_devices: true, .. }, None)] if device == tablet.id() && name == "iPad"), "the new device is told to the approved ones, with the tap to approve: {told:?}");
 
-        let wrong = phone.send(&machine.account, &machine.identity, &decision(&tablet, "0000-0000", true), now());
+        let wrong = phone.send(&machine.account, &machine.identity, &decision(&tablet, "0000-0000", true), AT);
         let Handled::Applied(refused) = machine.handle_taking(&seen, &devices_too, &wrong) else { panic!("applied as a refusal") };
         assert_eq!(refused.outcome, Outcome::Refused { reason: Reason::UnknownDevice });
         assert_eq!(machine.state(&tablet), Some(State::Waiting), "a key that does not match decides nothing");
 
-        let right = phone.send(&machine.account, &machine.identity, &decision(&tablet, &tablet.cert.fingerprint(), true), now());
+        let right = phone.send(&machine.account, &machine.identity, &decision(&tablet, &tablet.cert.fingerprint(), true), AT);
         let Handled::Applied(done) = machine.handle_taking(&seen, &devices_too, &right) else { panic!("applied") };
         assert_eq!(done.outcome, Outcome::Done);
         assert!(done.text.starts_with("iPad makes changes on mac from now on. Its answer to refunds goes in now."), "{}", done.text);
         assert_eq!(machine.state(&tablet), Some(State::Approved));
-        assert!(matches!(machine.release(&seen, DEVICE, now()).as_slice(), [Handled::Applied(_)]), "what the approved device held goes in");
-        let again = phone.send(&machine.account, &machine.identity, &decision(&tablet, &tablet.cert.fingerprint(), false), now());
+        assert!(matches!(machine.release(&seen, DEVICE, AT).as_slice(), [Handled::Applied(_)]), "what the approved device held goes in");
+        let again = phone.send(&machine.account, &machine.identity, &decision(&tablet, &tablet.cert.fingerprint(), false), AT);
         assert!(matches!(machine.handle_taking(&seen, &devices_too, &again), Handled::Applied(CommandResult { outcome: Outcome::Refused { reason: Reason::UnknownDevice }, .. })), "a device decided already is no longer waiting");
     }
 
@@ -1555,20 +1558,20 @@ mod tests {
         let machine = Machine::new();
         let seen = Seen::new();
         let phone = machine.phone("iPhone 16");
-        machine.handle(&seen, DEVICE, &phone.send(&machine.account, &machine.identity, &answer(), now()), now());
-        devices::answer(&machine.dir, "iPhone 16", Decision::Approve, now()).unwrap();
+        machine.handle(&seen, DEVICE, &phone.send(&machine.account, &machine.identity, &answer(), AT), AT);
+        devices::answer(&machine.dir, "iPhone 16", Decision::Approve, AT).unwrap();
         let (tablet, laptop) = (machine.phone("iPad"), machine.phone("Chrome on Mac"));
-        machine.handle(&seen, DEVICE, &laptop.send(&machine.account, &machine.identity, &answer(), now()), now());
+        machine.handle(&seen, DEVICE, &laptop.send(&machine.account, &machine.identity, &answer(), AT), AT);
         let devices_too = accepted(word("answer-and-push"), ApproveFrom::Devices);
-        let from_waiting = tablet.send(&machine.account, &machine.identity, &decision(&laptop, &laptop.cert.fingerprint(), true), now());
+        let from_waiting = tablet.send(&machine.account, &machine.identity, &decision(&laptop, &laptop.cert.fingerprint(), true), AT);
         assert!(matches!(machine.handle_taking(&seen, &devices_too, &from_waiting), Handled::Refused(CommandResult { outcome: Outcome::Refused { reason: Reason::NotApproved }, .. })));
         let machine_only = accepted(word("answer-and-push"), ApproveFrom::Machine);
-        let refused = phone.send(&machine.account, &machine.identity, &decision(&laptop, &laptop.cert.fingerprint(), true), now());
+        let refused = phone.send(&machine.account, &machine.identity, &decision(&laptop, &laptop.cert.fingerprint(), true), AT);
         let Handled::Refused(result) = machine.handle_taking(&seen, &machine_only, &refused) else { panic!("refused") };
         assert_eq!((result.outcome, result.text.as_str()), (Outcome::Refused { reason: Reason::NotAllowed }, "Not decided: mac takes device approvals only at the machine. Approve or deny it there: N on the board, or kebbie hub devices."));
         assert_eq!(machine.state(&laptop), Some(State::Waiting));
         assert!(accepted(HubCommands::OFF, ApproveFrom::Devices).is_empty(), "hub.commands = [] takes nothing, device decisions included");
-        let off = phone.send(&machine.account, &machine.identity, &decision(&laptop, &laptop.cert.fingerprint(), true), now());
+        let off = phone.send(&machine.account, &machine.identity, &decision(&laptop, &laptop.cert.fingerprint(), true), AT);
         let Handled::Refused(result) = machine.handle_taking(&seen, &accepted(HubCommands::OFF, ApproveFrom::Devices), &off) else { panic!("refused") };
         assert_eq!((result.outcome, result.text.as_str()), (Outcome::Refused { reason: Reason::NotAllowed }, "Not decided: mac takes nothing from the hub. Approve or deny it at the machine: N on the board, or kebbie hub devices."));
         assert_eq!(machine.state(&laptop), Some(State::Waiting), "an approved device decides nothing while the machine takes nothing");
@@ -1616,11 +1619,11 @@ mod tests {
 
         let machine = Machine::new();
         let phone = machine.phone("iPhone 16");
-        let held = phone.send(&machine.account, &machine.identity, &item_answer(), now());
-        assert_eq!(machine.handle(&seen, DEVICE, &held, now()), Handled::Held(phone.id().clone()));
+        let held = phone.send(&machine.account, &machine.identity, &item_answer(), AT);
+        assert_eq!(machine.handle(&seen, DEVICE, &held, AT), Handled::Held(phone.id().clone()));
         assert_eq!(ledger(&machine.dir).held[&held_key(&held.header.from, &held.header.id)].asked.described(), "an answer on the backlog item Projects/retry.md, \"Only e2e\"");
-        devices::answer(&machine.dir, "iPhone 16", Decision::Approve, now()).unwrap();
-        assert!(matches!(machine.release(&seen, DEVICE, now()).as_slice(), [Handled::Applied(_)]));
+        devices::answer(&machine.dir, "iPhone 16", Decision::Approve, AT).unwrap();
+        assert!(matches!(machine.release(&seen, DEVICE, AT).as_slice(), [Handled::Applied(_)]));
         assert_eq!(seen.backlog.borrow().len(), 2, "approved, it goes in");
     }
 

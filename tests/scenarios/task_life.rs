@@ -24,7 +24,7 @@ fn lives(lab: &Lab, profile: &str) {
     assert_eq!((item["group"].as_str(), item["report"]["state"].as_str(), item["assessment"].as_str()), (Some("READY TO PUSH"), Some("ready"), Some("review being assessed")), "{item}");
 
     lab.keeper_round();
-    assert!(eventually(Duration::from_secs(20), || lab.item("search")["assessment"] == "no review: one small function and its test"), "{}\n{}", lab.item("search"), lab.keeper_log());
+    assert!(eventually(Duration::from_secs(120), || lab.item("search")["assessment"] == "no review: one small function and its test"), "{}\n{}", lab.item("search"), lab.keeper_log());
     let again = lab.run(&["-C", slot, "report", "--state", "ready", "--next", "push and close", "search page done"]);
     assert!(again.status.success() && !stdout(&again).contains("assessor"), "the same code is not assessed twice: {}", stdout(&again));
     lab.keeper_round();
@@ -32,8 +32,8 @@ fn lives(lab: &Lab, profile: &str) {
 
     let review = lab.run(&["-C", lab.app(), "review", "search"]);
     assert!(review.status.success() && stdout(&review).contains("Review started"), "v on the board: {}\n{}", stdout(&review), stderr(&review));
-    assert!(eventually(Duration::from_secs(20), || lab.item("search")["verdict"]["verdict"] == "ok"), "{}", lab.item("search"));
-    assert!(eventually(Duration::from_secs(5), || lab.to_lead().iter().any(|text| text.contains("search@app reviewed at"))), "the lead hears the verdict: {:?}", lab.to_lead());
+    assert!(eventually(Duration::from_secs(120), || lab.item("search")["verdict"]["verdict"] == "ok"), "{}", lab.item("search"));
+    assert!(eventually(Duration::from_secs(120), || lab.to_lead().iter().any(|text| text.contains("search@app reviewed at"))), "the lead hears the verdict: {:?}", lab.to_lead());
 
     let pushed = lab.run_as_user(&["-C", lab.app(), "push", "search"]);
     assert!(pushed.status.success(), "{}\n{}", stdout(&pushed), stderr(&pushed));

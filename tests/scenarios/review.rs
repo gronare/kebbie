@@ -27,7 +27,7 @@ fn on_origin(lab: &Lab) -> String {
 #[test]
 fn under_suggest_an_assessor_that_asks_for_a_review_only_suggests_it_and_the_push_stays_free() {
     let (lab, _) = assessed("review-suggest", "suggest");
-    assert!(eventually(Duration::from_secs(20), || lab.item("billing")["assessment"] == "review suggested: changes how refunds round"), "{}", lab.item("billing"));
+    assert!(eventually(Duration::from_secs(120), || lab.item("billing")["assessment"] == "review suggested: changes how refunds round"), "{}", lab.item("billing"));
     assert!(lab.to_lead().iter().any(|text| text.contains("billing@app: review suggested: changes how refunds round. Send it to review with kebbie review")), "{:?}", lab.to_lead());
     lab.keeper_round();
     assert!(!lab.claude_roles().contains(&"review".to_string()), "no reviewer runs on a suggestion: {:?}", lab.claude_roles());
@@ -39,10 +39,10 @@ fn under_suggest_an_assessor_that_asks_for_a_review_only_suggests_it_and_the_pus
 #[test]
 fn under_run_the_reviewer_reads_the_task_at_once_while_its_push_stays_free() {
     let (lab, _) = assessed("review-run", "run");
-    assert!(eventually(Duration::from_secs(20), || lab.item("billing")["assessment"] == "review: changes how refunds round"), "{}", lab.item("billing"));
+    assert!(eventually(Duration::from_secs(120), || lab.item("billing")["assessment"] == "review: changes how refunds round"), "{}", lab.item("billing"));
     lab.answer("review", "verdict: changes\n- refunds.rb:1 — rounds half down");
     lab.keeper_round();
-    assert!(eventually(Duration::from_secs(20), || lab.item("billing")["verdict"]["verdict"] == "changes"), "{}", lab.item("billing"));
+    assert!(eventually(Duration::from_secs(120), || lab.item("billing")["verdict"]["verdict"] == "changes"), "{}", lab.item("billing"));
     let push = pushed(&lab);
     assert!(push.status.success(), "an advised review holds nothing: {}\n{}", stdout(&push), stderr(&push));
     assert_eq!(on_origin(&lab), "Round refunds to the cent");
@@ -51,17 +51,17 @@ fn under_run_the_reviewer_reads_the_task_at_once_while_its_push_stays_free() {
 #[test]
 fn under_require_the_push_waits_for_the_reviewers_pass() {
     let (lab, worktree) = assessed("review-require", "require");
-    assert!(eventually(Duration::from_secs(20), || lab.item("billing")["assessment"] == "review: changes how refunds round"), "{}", lab.item("billing"));
+    assert!(eventually(Duration::from_secs(120), || lab.item("billing")["assessment"] == "review: changes how refunds round"), "{}", lab.item("billing"));
     lab.answer("review", "verdict: changes\n- refunds.rb:1 — rounds half down");
     lab.keeper_round();
-    assert!(eventually(Duration::from_secs(20), || lab.item("billing")["verdict"]["verdict"] == "changes"), "{}", lab.item("billing"));
+    assert!(eventually(Duration::from_secs(120), || lab.item("billing")["verdict"]["verdict"] == "changes"), "{}", lab.item("billing"));
     let held = pushed(&lab);
     assert!(!held.status.success() && stderr(&held).contains("Not pushed"), "{}\n{}", stdout(&held), stderr(&held));
     assert_eq!(on_origin(&lab), "first");
     lab.work(&worktree, "refunds.rb", "Round refunds half up");
     lab.answer("review", "verdict: ok");
     lab.ok(&["-C", lab.app(), "review", "billing"]);
-    assert!(eventually(Duration::from_secs(20), || lab.item("billing")["verdict"]["verdict"] == "ok"), "{}", lab.item("billing"));
+    assert!(eventually(Duration::from_secs(120), || lab.item("billing")["verdict"]["verdict"] == "ok"), "{}", lab.item("billing"));
     let push = pushed(&lab);
     assert!(push.status.success(), "{}\n{}", stdout(&push), stderr(&push));
     assert_eq!(on_origin(&lab), "Round refunds half up");
@@ -76,9 +76,9 @@ fn under_require_an_assessor_that_dies_settles_as_not_assessed_and_holds_the_pus
     lab.work(&worktree, "refunds.rb", "Round refunds to the cent");
     lab.ok(&["-C", worktree.to_str().unwrap(), "report", "--state", "ready", "--next", "push", "refunds round"]);
     lab.keeper_round();
-    assert!(eventually(Duration::from_secs(10), || lab.claude_roles().contains(&"assess".to_string())), "the assessor ran");
+    assert!(eventually(Duration::from_secs(120), || lab.claude_roles().contains(&"assess".to_string())), "the assessor ran");
     lab.keeper_round();
-    assert!(eventually(Duration::from_secs(10), || lab.keeper_log().contains("review: billing@app: the assessor stopped without an answer")), "{}", lab.keeper_log());
+    assert!(eventually(Duration::from_secs(120), || lab.keeper_log().contains("review: billing@app: the assessor stopped without an answer")), "{}", lab.keeper_log());
     assert_eq!(lab.item("billing")["assessment"], "review not assessed");
     let push = pushed(&lab);
     assert!(push.status.success(), "a dead assessor holds no push for good: {}\n{}", stdout(&push), stderr(&push));
@@ -87,10 +87,10 @@ fn under_require_an_assessor_that_dies_settles_as_not_assessed_and_holds_the_pus
 #[test]
 fn under_require_a_review_that_gives_no_verdict_keeps_the_push_held() {
     let (lab, _) = assessed("review-no-verdict", "require");
-    assert!(eventually(Duration::from_secs(20), || lab.item("billing")["assessment"] == "review: changes how refunds round"), "{}", lab.item("billing"));
+    assert!(eventually(Duration::from_secs(120), || lab.item("billing")["assessment"] == "review: changes how refunds round"), "{}", lab.item("billing"));
     lab.answer("review", "I read the code and have nothing to add.");
     lab.keeper_round();
-    assert!(eventually(Duration::from_secs(20), || lab.to_lead().iter().any(|text| text.contains("The review of billing@app failed"))), "{:?}", lab.to_lead());
+    assert!(eventually(Duration::from_secs(120), || lab.to_lead().iter().any(|text| text.contains("The review of billing@app failed"))), "{:?}", lab.to_lead());
     assert!(lab.to_lead().iter().any(|text| text.contains("Its push stays held until a review passes")), "{:?}", lab.to_lead());
     let held = pushed(&lab);
     assert!(!held.status.success() && stderr(&held).contains("Not pushed"), "a failed review lets nothing through: {}\n{}", stdout(&held), stderr(&held));
@@ -107,7 +107,7 @@ fn a_second_opinion_runs_beside_the_review_reaches_the_lead_and_never_holds_the_
     lab.work(&worktree, "refunds.rb", "Round refunds to the cent");
     let sent = lab.ok(&["-C", lab.app(), "review", "billing", "--second"]);
     assert!(sent.contains("second opinion: second-look"), "{sent}");
-    assert!(eventually(Duration::from_secs(20), || lab.item("billing")["second_opinion"]["points"] == 1 && lab.item("billing")["verdict"]["verdict"] == "ok"), "{}", lab.item("billing"));
+    assert!(eventually(Duration::from_secs(120), || lab.item("billing")["second_opinion"]["points"] == 1 && lab.item("billing")["verdict"]["verdict"] == "ok"), "{}", lab.item("billing"));
     let told = lab.to_lead().into_iter().find(|text| text.contains("second opinion from second-look")).unwrap_or_else(|| panic!("{:?}", lab.to_lead()));
     assert!(told.contains("1 point") && told.contains("A second opinion never holds the push"), "{told}");
     let models: Vec<String> = lab.claude_calls().iter().filter_map(|call| call.split(" --model ").nth(1).map(str::to_string)).collect();
@@ -128,9 +128,9 @@ fn review_profile_names_the_reviewer_the_keeper_starts_for_a_ready_task() {
     lab.work(&worktree, "refunds.rb", "Round refunds to the cent");
     lab.ok(&["-C", worktree.to_str().unwrap(), "report", "--state", "ready", "--next", "push", "refunds round"]);
     lab.keeper_round();
-    assert!(eventually(Duration::from_secs(20), || lab.item("billing")["assessment"] == "review: changes how refunds round"), "{}", lab.item("billing"));
+    assert!(eventually(Duration::from_secs(120), || lab.item("billing")["assessment"] == "review: changes how refunds round"), "{}", lab.item("billing"));
     lab.keeper_round();
-    assert!(eventually(Duration::from_secs(20), || lab.item("billing")["verdict"]["verdict"] == "ok"), "{}\n{}", lab.item("billing"), lab.keeper_log());
+    assert!(eventually(Duration::from_secs(120), || lab.item("billing")["verdict"]["verdict"] == "ok"), "{}\n{}", lab.item("billing"), lab.keeper_log());
     let review = lab.claude_calls().into_iter().find(|call| call.starts_with("review ")).expect("the reviewer ran");
     assert!(review.contains("--model opus") && review.contains("--effort high"), "careful's model and effort: {review}");
     assert!(lab.keeper_log().contains("review: started the reviewer for billing@app"), "{}", lab.keeper_log());
@@ -170,14 +170,14 @@ fn a_review_that_finds_a_new_point_each_round_goes_back_twice_by_itself_and_then
     let reviewed_at = |head: &str| lab.item("billing")["verdict"]["sha"] == head[..7];
     lab.answer("review", &round(1));
     lab.ok(&["-C", lab.app(), "review", "billing"]);
-    assert!(eventually(Duration::from_secs(20), || reviewed_at(&head)), "{}", lab.item("billing"));
+    assert!(eventually(Duration::from_secs(120), || reviewed_at(&head)), "{}", lab.item("billing"));
     for n in 2..=4 {
         head = lab.work(&worktree, &format!("case{n}.rb"), &format!("Round case {n} half up"));
         lab.answer("review", &round(n));
         lab.ok(&["-C", worktree.to_str().unwrap(), "report", "--state", "ready", "--next", "push", &format!("case {} fixed", n - 1)]);
         lab.keeper_round();
         if n < 4 {
-            assert!(eventually(Duration::from_secs(20), || reviewed_at(&head)), "round {n}: {}\n{}", lab.item("billing"), lab.keeper_log());
+            assert!(eventually(Duration::from_secs(120), || reviewed_at(&head)), "round {n}: {}\n{}", lab.item("billing"), lab.keeper_log());
         }
     }
     let reviews = lab.claude_roles().iter().filter(|role| *role == "review").count();

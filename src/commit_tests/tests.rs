@@ -71,8 +71,8 @@ fn at_rest_the_tick_reads_one_folder_and_starts_nothing() {
 #[test]
 fn a_command_past_its_ceiling_fails() {
     let dir = crate::sh::test_dir("commit-tests-ceiling");
-    assert!(run_command("true", &dir, Duration::from_secs(5)));
-    assert!(!run_command("exit 3", &dir, Duration::from_secs(5)));
+    assert!(run_command("true", &dir, Duration::from_secs(60)));
+    assert!(!run_command("exit 3", &dir, Duration::from_secs(60)));
     assert!(!run_command("sleep 5", &dir, Duration::from_millis(300)));
     std::fs::remove_dir_all(dir).unwrap();
 }

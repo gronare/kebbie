@@ -167,7 +167,7 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
     let Some(run) = &app.update else { return };
     let width = WIDTH.min(frame.area().width.saturating_sub(4)).saturating_sub(4) as usize;
     let progress = progress::load(&run.file);
-    let now = crate::messages::now();
+    let now = super::clock::now();
     let bugs = run.fixed.as_ref().map(|fixed| fixed.bugs.clone()).unwrap_or_default();
     let restart = progress.as_ref().and_then(|progress| progress.summary.as_ref()).map(|summary| app.restart_lines(summary)).unwrap_or_default();
     let (title, lines, d) = match &run.outcome {
@@ -311,10 +311,12 @@ mod tests {
         app.progress_file = Some(file.clone());
         let (release, gate) = mpsc::channel::<()>();
         let gate = std::sync::Mutex::new(gate);
+        let began = crate::messages::now();
+        crate::board::clock::pin(began, 0);
         app.updater = std::sync::Arc::new(move || {
-            let mut tracker = Tracker::start(&file, "Fetching main", "Build kebbie", crate::messages::now());
+            let mut tracker = Tracker::start(&file, "Fetching main", "Build kebbie", began);
             tracker.done(progress::FETCH, "Fetched main (3 new commits)");
-            tracker.begin(progress::BUILD, "Building kebbie", crate::messages::now());
+            tracker.begin(progress::BUILD, "Building kebbie", began);
             tracker.meter(Meter::Build { done: 212, total: Some(348), compiling: None });
             gate.lock().unwrap().recv().map_err(|error| error.to_string())?;
             tracker.done(progress::BUILD, "Built kebbie");
@@ -336,7 +338,7 @@ mod tests {
         waits_for(&mut app, "the build step", |app| progress::load(&app.progress_file()).is_some_and(|progress| progress.meter.is_some()));
         let shown = screen(&mut app, 100);
         assert!(shown.lines().any(|line| line.contains('█') && line.contains('%') && !line.contains("crates")), "one bar for the whole update above the steps: {shown}");
-        for line in ["Updating kebbie", "✓ Fetched main (3 new commits)", "▸ Building kebbie  ████████████░░░░░░░░  212/348 crates 0:0", "  Claude Code and vault plugins", "  Restart sessions", "esc hides this; the update keeps going"] {
+        for line in ["Updating kebbie", "✓ Fetched main (3 new commits)", "▸ Building kebbie  ████████████░░░░░░░░  212/348 crates 0:00", "  Claude Code and vault plugins", "  Restart sessions", "esc hides this; the update keeps going"] {
             assert!(shown.contains(line), "{line}: {shown}");
         }
         press(&mut app, key(KeyCode::Char('x')));

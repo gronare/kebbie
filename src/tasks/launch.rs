@@ -1299,12 +1299,15 @@ mod tests {
         std::fs::create_dir_all(&sessions).unwrap();
         assert_eq!(latest_mode_in(&state, "web"), None, "no task yet: Claude's own default");
         let record = |mode: Option<&str>| record_text(&Record { session: Some("s".to_string()), mode: mode.map(str::to_string), ..Record::default() });
-        std::fs::write(sessions.join("old@web"), record(Some("plan"))).unwrap();
-        std::thread::sleep(Duration::from_millis(20));
-        std::fs::write(sessions.join("billing@web"), record(Some("auto"))).unwrap();
-        std::thread::sleep(Duration::from_millis(20));
-        std::fs::write(sessions.join("billing@web.prompt"), "Bill the refunds").unwrap();
-        std::fs::write(sessions.join("deploy@ops"), record(Some(BYPASS))).unwrap();
+        let noon = std::time::UNIX_EPOCH + Duration::from_secs(1_792_670_400);
+        let write = |name: &str, text: &str, at: std::time::SystemTime| {
+            std::fs::write(sessions.join(name), text).unwrap();
+            std::fs::File::options().append(true).open(sessions.join(name)).unwrap().set_modified(at).unwrap();
+        };
+        write("old@web", &record(Some("plan")), noon);
+        write("billing@web", &record(Some("auto")), noon + Duration::from_secs(60));
+        write("billing@web.prompt", "Bill the refunds", noon + Duration::from_secs(120));
+        write("deploy@ops", &record(Some(BYPASS)), noon + Duration::from_secs(180));
         assert_eq!(latest_mode_in(&state, "web").as_deref(), Some("auto"), "the newest record of its own repo, never its prompt file nor another repo's");
         assert_eq!(latest_mode_in(&state, "ops"), None, "bypassPermissions is never taken over unasked");
         assert_eq!(latest_mode_in(&state, "api"), None, "a repo with no task of its own gets Claude's default");

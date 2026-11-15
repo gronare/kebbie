@@ -595,7 +595,8 @@ fn a_question_record_without_options_or_recommend_still_folds_as_a_question() {
 
 #[test]
 fn ages_turn_over_at_a_minute_an_hour_and_a_day() {
-    let at = |seconds_ago: u64| age(now() - seconds_ago);
+    const NOW: u64 = 1_792_670_400;
+    let at = |seconds_ago: u64| age_at(NOW - seconds_ago, NOW);
     assert_eq!(at(0), "now");
     assert_eq!(at(59), "now");
     assert_eq!(at(60), "1m");
@@ -603,7 +604,7 @@ fn ages_turn_over_at_a_minute_an_hour_and_a_day() {
     assert_eq!(at(3600), "1h");
     assert_eq!(at(86_399), "23h");
     assert_eq!(at(86_400), "1d");
-    assert_eq!(age(now() + 1000), "now", "a clock ahead of ours is not negative");
+    assert_eq!(age_at(NOW + 1000, NOW), "now", "a clock ahead of ours is not negative");
 }
 
 #[test]

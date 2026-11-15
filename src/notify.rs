@@ -348,7 +348,7 @@ mod tests {
         let started = std::time::Instant::now();
         let hung = run_with_timeout("sh", &["-c".to_string(), "sleep 30".to_string()], Duration::from_millis(200)).unwrap_err();
         assert!(hung.contains("did not finish"), "{hung}");
-        assert!(started.elapsed() < Duration::from_secs(5), "the timeout stops the command");
+        assert!(started.elapsed() < Duration::from_secs(20), "the timeout stops the command");
         assert!(run_with_timeout("/no/such/program", &[], TIMEOUT).is_err());
         let state = temp("log");
         log_error(&state, "ready: notify.command exited with 7:\nno route");

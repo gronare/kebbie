@@ -9,6 +9,7 @@ use crate::peers;
 use crate::status::Item;
 use crate::tasks;
 use super::widgets::{FAINT, MAUVE, MUTED, PEACH, RED, SURFACE, TEXT, bold, modal, plural, style, text_width};
+use super::clock::{now, offset};
 use super::{App, Column, Hit, Mode};
 use ratatui::style::Style;
 
@@ -18,12 +19,8 @@ const KEY_GAP: usize = 3;
 const AFTER_KEY: usize = 2;
 const MIN_WIDTH: usize = 39;
 
-fn now() -> u64 {
-    crate::messages::now()
-}
-
-fn offset(at: i64) -> i64 {
-    crate::recover::local_offset(at)
+pub(super) fn back(parked: tasks::Parked) -> String {
+    parked.back(now(), &offset)
 }
 
 fn monday(now: u64, offset: &dyn Fn(i64) -> i64) -> crate::sh::Result<u64> {
@@ -252,6 +249,9 @@ mod tests {
     use crate::board::test_support::*;
     use crate::status::Group;
 
+    // Thursday 22 Oct 2026, 12:00 UTC.
+    const NOON: u64 = 1_792_670_400;
+
     fn red_ci(item: &mut Item) {
         item.ci = Some(crate::ci::Watch {
             address: format!("{}@{}", item.name, item.place), repo: std::path::PathBuf::new(), slug: "acme/web".to_string(), sha: "abc".to_string(), started_at: 1, checked_at: None, close: true, runs: Vec::new(),
@@ -260,6 +260,7 @@ mod tests {
     }
 
     fn board_with_two_parked() -> crate::board::App {
+        crate::board::clock::pin(NOON, 0);
         let mut asking = served("refund-mails");
         asking.question = crate::messages::fold(QUESTION).into_iter().next();
         asking.parked = Some(tasks::Parked { until: None });
@@ -273,7 +274,6 @@ mod tests {
 
     #[test]
     fn parked_tasks_leave_their_groups_for_one_line_that_counts_what_waits() {
-        let parked_from = now();
         let mut app = board_with_two_parked();
         assert_eq!(app.tasks.iter().map(|item| (item.name.as_str(), item.group())).collect::<Vec<_>>(), [("search-filters", Group::ReadyToPush), ("nightly-import", Group::Parked), ("refund-mails", Group::Parked)], "a question or red CI keeps a parked task parked, last");
         let (rows, _) = render(&mut app, 110, 30);
@@ -301,7 +301,7 @@ mod tests {
         assert!(screen.contains("PARKED  2 · 1 question · 1 red CI  esc hides them"), "{screen}");
         let left = |text: &str| find(&rows, text).into_iter().find(|(x, _)| *x < 55).unwrap().1;
         let row = &rows[left("nightly-import")];
-        assert!((parked_from..=now()).any(|at| row.contains(&format!("back {}", crate::when::shown(at + 3600, now(), &offset)))) && rows[left("refund-mails")].contains("back when you unpark it"), "{screen}");
+        assert!(row.contains(&format!("back {}", crate::when::shown(NOON + 3600, NOON, &offset))) && row.contains("back 13:00 today") && rows[left("refund-mails")].contains("back when you unpark it"), "{screen}");
         assert!(!screen.contains("answer a question"), "outside Needs you it asks nothing of you: {screen}");
         press(&mut app, key(KeyCode::Down));
         press(&mut app, key(KeyCode::Esc));
@@ -322,6 +322,7 @@ mod tests {
 
     #[test]
     fn the_park_window_offers_tomorrow_first_with_the_time_each_choice_means_and_parks_with_enter() {
+        crate::board::clock::pin(NOON, 0);
         let mut app = test_app(vec![served("search-filters"), served("parkwin-next")]);
         press(&mut app, key(KeyCode::Char('Z')));
         assert!(matches!(&app.mode, Mode::Park { address, index: 0, date: None, .. } if address == "search-filters@web"));
@@ -337,7 +338,7 @@ mod tests {
             "│ ⏎ park · esc cancel                 │".to_string(),
             "╰─────────────────────────────────────╯".to_string(),
         ], "{}", rows.join("\n"));
-        assert_eq!(tomorrow, Some(crate::when::brief(tasks::park_morning_in(1, now(), &offset).unwrap(), now(), &offset, false)), "the weekday of tomorrow at 09:00");
+        assert_eq!((tomorrow.as_deref(), monday.as_deref()), (Some("fri 09:00"), Some("mon 09:00")), "the weekday of tomorrow at 09:00, and Monday's");
         press(&mut app, key(KeyCode::Enter));
         let state = crate::lead::state_dir().unwrap();
         assert_eq!(tasks::park_of(&state, "search-filters@web", now()), tasks::park_morning_in(1, now(), &offset).ok().map(|until| tasks::Parked { until: Some(until) }), "Z then ⏎ parks it until tomorrow at 09:00");
@@ -353,6 +354,7 @@ mod tests {
 
     #[test]
     fn a_date_turns_the_window_into_a_field_that_reads_the_date_as_you_type() {
+        crate::board::clock::pin(NOON, 0);
         let mut app = test_app(vec![served("parkwin-date")]);
         press(&mut app, key(KeyCode::Char('Z')));
         press(&mut app, key(KeyCode::Char('3')));
@@ -369,7 +371,7 @@ mod tests {
             "│ ⏎ park · esc back                   │".to_string(),
             "╰─────────────────────────────────────╯".to_string(),
         ], "{}", rows.join("\n"));
-        assert!(thursday.starts_with("thu ") && thursday.ends_with(" 09:00"), "{thursday}");
+        assert_eq!(thursday, "thu 29 oct 09:00", "on a Thursday afternoon thu is next week's");
         for _ in 0..3 {
             press(&mut app, key(KeyCode::Backspace));
         }
@@ -388,6 +390,7 @@ mod tests {
 
     #[test]
     fn monday_a_date_or_until_brought_back() {
+        crate::board::clock::pin(NOON, 0);
         let state = crate::lead::state_dir().unwrap();
         let park = |choice: char, typed: Option<&str>| {
             let mut app = test_app(vec![served("parkwin-pick")]);
@@ -411,6 +414,7 @@ mod tests {
 
     #[test]
     fn a_parked_task_comes_back_by_itself_when_its_time_comes() {
+        crate::board::clock::pin(NOON, 0);
         let state = crate::lead::state_dir().unwrap();
         tasks::park_address(&state, "parkwin-time@web", Some(now() + 60), now(), &offset).unwrap();
         assert!(tasks::park_of(&state, "parkwin-time@web", now()).is_some());
@@ -419,5 +423,21 @@ mod tests {
         item.parked = tasks::park_of(&state, "parkwin-time@web", now() + 60);
         assert_eq!(item.group(), Group::ReadyToPush);
         tasks::unpark_address(&state, "parkwin-time@web", now()).ok();
+    }
+
+    #[test]
+    fn tomorrow_and_monday_are_the_users_local_days_across_midnight_month_and_year() {
+        let morning = |day: i64, offset: i64| (day * 86_400 + 9 * 3600 - offset) as u64;
+        let new_years_eve = crate::recover::days_from_civil(2026, 12, 31) as u64 * 86_400 + 23 * 3600 + 59 * 60 + 30;
+        let times = park_times(new_years_eve, &|_| 0);
+        assert_eq!((times[0].as_deref(), times[1].as_deref()), (Some("fri 09:00"), Some("mon 09:00")), "23:59:30 on Thursday 31 Dec");
+        assert_eq!(tasks::park_morning_in(1, new_years_eve, &|_| 0).unwrap(), morning(crate::recover::days_from_civil(2027, 1, 1), 0), "tomorrow is 1 Jan 2027");
+        assert_eq!(monday(new_years_eve, &|_| 0).unwrap(), morning(crate::recover::days_from_civil(2027, 1, 4), 0));
+        let after_midnight_local = crate::recover::days_from_civil(2026, 10, 31) as u64 * 86_400 + 23 * 3600 + 30 * 60;
+        let cet = |_: i64| 3600;
+        assert_eq!(park_times(after_midnight_local, &cet)[0].as_deref(), Some("mon 09:00"), "23:30 UTC on Saturday 31 Oct is 00:30 on Sunday 1 Nov at UTC+1, so tomorrow is Monday");
+        assert_eq!(tasks::park_morning_in(1, after_midnight_local, &cet).unwrap(), morning(crate::recover::days_from_civil(2026, 11, 2), 3600));
+        let leap = crate::recover::days_from_civil(2028, 2, 28) as u64 * 86_400 + 12 * 3600;
+        assert_eq!(tasks::park_morning_in(1, leap, &|_| 0).unwrap(), morning(crate::recover::days_from_civil(2028, 2, 29), 0), "28 Feb in a leap year is followed by the 29th");
     }
 }

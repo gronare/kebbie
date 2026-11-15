@@ -41,7 +41,7 @@ mod tests {
     fn an_executable_runs_at_once_and_replacing_it_leaves_a_running_copy_alone() {
         let dir = scratch("runs");
         let (file, started) = (dir.join("fake"), dir.join("started"));
-        write(&file, format!("#!/bin/sh\ntouch '{}'\nsleep 5\n", started.display())).unwrap();
+        write(&file, format!("#!/bin/sh\ntouch '{}'\nsleep 60\n", started.display())).unwrap();
         assert_eq!(fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o755);
         let mut running = Command::new(&file).spawn().unwrap();
         let until = std::time::Instant::now() + std::time::Duration::from_secs(10);

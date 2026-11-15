@@ -233,7 +233,7 @@ impl Wizard {
     }
 
     // The second value is each clickable spot with the line it is drawn on.
-    pub fn view(&self, now: u64, offset: i64, width: usize) -> (Vec<Line<'static>>, Vec<(usize, Spot)>) {
+    pub fn view(&self, now: u64, offset: &dyn Fn(i64) -> i64, width: usize) -> (Vec<Line<'static>>, Vec<(usize, Spot)>) {
         let mut spots = Vec::new();
         let heading = |text: &str| Line::from(Span::styled(text.to_string(), bold(MAUVE)));
         let muted = |text: String| Line::from(Span::styled(text, style(MUTED)));
@@ -324,7 +324,7 @@ impl Wizard {
         (lines, spots)
     }
 
-    fn when_said(&self, schedule: Schedule, now: u64, offset: i64) -> String {
+    fn when_said(&self, schedule: Schedule, now: u64, offset: &dyn Fn(i64) -> i64) -> String {
         let first = if self.editing.is_some() { "next run" } else { "first run" };
         match schedule {
             Schedule::Every(_) => format!("{}, {first} within a minute", schedule.text()),
@@ -369,7 +369,7 @@ mod tests {
     }
 
     fn screen(wizard: &Wizard) -> String {
-        wizard.view(1_792_391_400, 0, 60).0.iter().map(|line| line.to_string()).collect::<Vec<_>>().join("\n")
+        wizard.view(1_792_391_400, &|_| 0, 60).0.iter().map(|line| line.to_string()).collect::<Vec<_>>().join("\n")
     }
 
     #[test]

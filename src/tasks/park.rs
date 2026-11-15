@@ -170,6 +170,14 @@ mod tests {
     }
 
     #[test]
+    fn the_next_morning_is_the_next_days_across_the_month_the_year_a_leap_day_and_the_clocks_going_back() {
+        assert_eq!(morning_in(1, 1_793_491_170, &UTC).unwrap(), 1_793_523_600, "31 Oct 23:59:30 to 1 Nov 09:00");
+        assert_eq!(morning_in(1, 1_798_761_570, &UTC).unwrap(), 1_798_794_000, "31 Dec to 1 Jan");
+        assert_eq!(morning_in(1, 1_835_395_170, &UTC).unwrap(), 1_835_427_600, "28 Feb to 29 Feb");
+        assert_eq!(morning_in(1, 1_792_864_800, &crate::routines::tests::stockholm).unwrap(), 1_792_915_200, "09:00 winter time, the morning after summer time ends");
+    }
+
+    #[test]
     fn a_park_is_kept_per_task_until_its_time_and_then_is_gone() {
         let state = crate::sh::test_dir("park-kept");
         let at = NOON + 3600;

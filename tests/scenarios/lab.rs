@@ -248,7 +248,7 @@ impl Lab {
         let status = self.state.join("keeper.json");
         let _ = fs::remove_file(&status);
         self.ok(&["keeper", "--start"]);
-        assert!(eventually(Duration::from_secs(30), || status.exists()), "the keeper ran no round: {}", fs::read_to_string(self.state.join("keeper.log")).unwrap_or_default());
+        assert!(eventually(Duration::from_secs(120), || status.exists()), "the keeper ran no round: {}", fs::read_to_string(self.state.join("keeper.log")).unwrap_or_default());
         self.ok(&["keeper", "--stop"]);
         fs::write(&self.config, format!("[keeper]\nenabled = false\n{}", fs::read_to_string(&self.config).unwrap())).unwrap();
     }

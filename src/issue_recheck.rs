@@ -403,7 +403,7 @@ mod tests {
         assert_eq!(shown(&state, NOW + 60), Some(Fixed { version: "0.26.3".to_string(), titles: vec!["push hid git's error (aaaaaa)".to_string()], bugs: vec!["push hid git's error (aaaaaa)".to_string()], wishes: 0, last: NOW }));
         issues::reopen_in(&state, &Caller::Lead, "aaaaaa", "3333333").unwrap();
         assert_eq!(shown(&state, NOW + 60), None, "a reopened issue is no longer shown as fixed");
-        assert!(crate::messages::load().iter().all(|message| !message.text.contains("aaaaaa")), "nobody is told");
+        assert!(crate::messages::load().iter().all(|message| !message.text.split(|character: char| !character.is_ascii_alphanumeric()).any(|word| word == "aaaaaa")), "nobody is told");
     }
 
     #[test]

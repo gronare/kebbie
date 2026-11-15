@@ -85,7 +85,10 @@ impl Drop for FetchLock {
 
 // One fetch per repo at a time across kebbie's processes; one that landed while this one waited for the lock (FETCH_HEAD changed meanwhile, never FETCH_HEAD against a clock a time sync can step back) is shared, and a ref lock taken by a git outside kebbie is waited out.
 pub fn shared_in(state: &Path, repo: &Path, attempt: impl FnMut() -> Result<(), String>, pause: impl FnMut(Duration)) -> Result<(), String> {
-    let before = fetched_at(repo);
+    shared_since(fetched_at(repo), state, repo, attempt, pause)
+}
+
+fn shared_since(before: Option<SystemTime>, state: &Path, repo: &Path, attempt: impl FnMut() -> Result<(), String>, pause: impl FnMut(Duration)) -> Result<(), String> {
     let _lock = FetchLock::take(lock_file(state, repo), Duration::from_secs(120));
     if fetched_at(repo).is_some_and(|at| before.is_none_or(|before| at > before)) {
         return Ok(());
@@ -213,9 +216,9 @@ mod tests {
         shared_in(&state, &repo, || { called = true; Ok(()) }, |_| {}).unwrap();
         assert!(called, "a fetch from before this one was asked for is not new enough to share");
         let held = FetchLock::take(lock_file(&state, &repo), Duration::from_secs(1)).unwrap();
-        let waiting = { let (state, repo) = (state.clone(), repo.clone()); thread::spawn(move || { let mut called = false; shared_in(&state, &repo, || { called = true; Ok(()) }, |_| {}).unwrap(); called }) };
-        thread::sleep(Duration::from_millis(300));
-        std::fs::write(repo.join(".git/FETCH_HEAD"), "").unwrap();
+        let before = fetched_at(&repo).unwrap();
+        let waiting = { let (state, repo) = (state.clone(), repo.clone()); thread::spawn(move || { let mut called = false; shared_since(Some(before), &state, &repo, || { called = true; Ok(()) }, |_| {}).unwrap(); called }) };
+        std::fs::File::options().write(true).open(repo.join(".git/FETCH_HEAD")).unwrap().set_modified(before + Duration::from_secs(1)).unwrap();
         drop(held);
         assert!(!waiting.join().unwrap(), "a fetch that landed while it waited for the lock is shared, not repeated");
         std::fs::File::options().write(true).open(repo.join(".git/FETCH_HEAD")).unwrap().set_modified(SystemTime::now() + Duration::from_secs(1)).unwrap();
@@ -243,7 +246,7 @@ mod tests {
         git(&clone, &["remote", "set-url", "origin", dir.join("missing").to_str().unwrap()]);
         let mut fetcher = Fetcher::new();
         let wait = |fetcher: &mut Fetcher| {
-            for _ in 0..200 {
+            for _ in 0..1200 {
                 if fetcher.running.is_empty() {
                     break;
                 }

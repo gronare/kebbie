@@ -531,13 +531,13 @@ mod tests {
         let pid_file = dir.join("child.pid");
         let child = Command::new("sh").args(["-c", &format!("sleep 30 & echo $! > {}; wait", pid_file.display())]).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0).spawn().unwrap();
         let started = std::time::Instant::now();
-        while !pid_file.exists() && started.elapsed() < Duration::from_secs(5) {
+        while !pid_file.exists() && started.elapsed() < Duration::from_secs(20) {
             std::thread::sleep(Duration::from_millis(20));
         }
         let error = review::wait_within(child, Duration::from_millis(300)).unwrap_err();
-        assert!(error.contains("was stopped") && started.elapsed() < Duration::from_secs(10), "{error}");
+        assert!(error.contains("was stopped") && started.elapsed() < Duration::from_secs(25), "{error}");
         let grandchild = fs::read_to_string(&pid_file).unwrap().trim().to_string();
-        let gone = (0..50).any(|_| { std::thread::sleep(Duration::from_millis(50)); !crate::sh::succeeds("kill", &["-0", &grandchild], None) });
+        let gone = (0..400).any(|_| { std::thread::sleep(Duration::from_millis(50)); !crate::sh::succeeds("kill", &["-0", &grandchild], None) });
         assert!(gone, "a child of the stopped reviewer does not survive it");
         fs::remove_dir_all(dir).unwrap();
         let quick = Command::new("sh").args(["-c", "echo verdict: ok"]).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();

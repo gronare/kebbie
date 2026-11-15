@@ -7,7 +7,6 @@ use ratatui::Frame;
 
 use crate::area_page;
 use crate::keys::{self, Ctx};
-use crate::messages;
 use super::card::{draw_card, draw_fullscreen};
 use super::columns::{backlog_lines, work_lines};
 use super::confirm::{draw_claimed, draw_dismiss, draw_done, draw_drop, draw_queued, draw_restart_lead, draw_reset};
@@ -53,7 +52,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     let updates: &[(String, String)] = if app.page == Page::Work { &app.updates } else { &[] };
     let status = match app.notice.as_ref().filter(|(_, at)| at.elapsed() < Duration::from_secs(3)) {
         Some((text, _)) => Line::from(Span::styled(text.clone(), style(PEACH))),
-        None => app.subtask_keys().filter(|_| app.page == Page::Work).unwrap_or_else(|| status_line(full_hints, short_hints, updates, app.usage.as_ref(), bottom.width as usize, messages::now())),
+        None => app.subtask_keys().filter(|_| app.page == Page::Work).unwrap_or_else(|| status_line(full_hints, short_hints, updates, app.usage.as_ref(), bottom.width as usize, super::clock::now())),
     };
     if app.page == Page::Areas {
         frame.render_widget(Paragraph::new(status), bottom);
@@ -150,11 +149,11 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Mode::Hub(window) => super::hub_window::draw(frame, window),
         Mode::Next(window) => {
             let mut window = *window;
-            modal_hits = super::next_window::draw(frame, &app.next(), &mut window, messages::now());
+            modal_hits = super::next_window::draw(frame, &app.next(), &mut window, super::clock::now());
             app.mode = Mode::Next(window);
         }
         Mode::PushAll { order, choice, .. } => modal_hits = super::next_window::draw_push_all(frame, order, *choice),
-        Mode::Device { id, .. } => modal_hits = super::next_window::draw_device(frame, app.devices.iter().find(|request| request.key() == *id), messages::now()),
+        Mode::Device { id, .. } => modal_hits = super::next_window::draw_device(frame, app.devices.iter().find(|request| request.key() == *id), super::clock::now()),
         Mode::Update => super::update_window::draw(frame, app),
         Mode::AgentUpdates => super::agent_updates::draw(frame, app),
         Mode::Report { id, shown, scroll, read, nudged } => {

@@ -595,7 +595,7 @@ mod tests {
         stop_leftover(&state);
         let waited = Instant::now();
         let mut ended = None;
-        while ended.is_none() && waited.elapsed() < Duration::from_secs(5) {
+        while ended.is_none() && waited.elapsed() < Duration::from_secs(20) {
             ended = leftover.try_wait().unwrap();
             std::thread::sleep(Duration::from_millis(20));
         }

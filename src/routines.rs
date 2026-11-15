@@ -259,45 +259,41 @@ pub fn local_offset(at: u64) -> i64 {
     if unsafe { libc::localtime_r(&time, &mut tm) }.is_null() { 0 } else { tm.tm_gmtoff }
 }
 
-fn period(schedule: Schedule) -> u64 {
-    match schedule {
-        Schedule::Every(seconds) => seconds,
-        Schedule::Daily(_) => DAY,
-        Schedule::Weekly(..) => 7 * DAY,
-    }
+// The at schedule's slots either side of now, each placed with the UTC offset of its own day, so a DST change between them moves neither.
+fn slots(schedule: Schedule, now: u64, offset: &dyn Fn(i64) -> i64) -> Option<(u64, u64)> {
+    let day = (now as i64 + offset(now as i64)).div_euclid(DAY as i64);
+    let (start, minute, step) = match schedule {
+        Schedule::Every(_) => return None,
+        Schedule::Daily(minute) => (day, minute, 1),
+        Schedule::Weekly(weekday, minute) => (day - (day + 3 - i64::from(weekday)).rem_euclid(7), minute, 7),
+    };
+    let at = |day: i64| {
+        let local = day * DAY as i64 + i64::from(minute) * 60;
+        local - offset(local - offset(local))
+    };
+    let (latest, next) = if at(start) > now as i64 { (at(start - step), at(start)) } else { (at(start), at(start + step)) };
+    Some((u64::try_from(latest).ok()?, u64::try_from(next).ok()?))
 }
 
-// The latest time at or before now that an at schedule names, in local time at the given offset from UTC.
-pub fn latest_slot(schedule: Schedule, now: u64, offset: i64) -> Option<u64> {
-    let local = now as i64 + offset;
-    let day = local.div_euclid(DAY as i64);
-    let (start, minute) = match schedule {
-        Schedule::Every(_) => return None,
-        Schedule::Daily(minute) => (day, minute),
-        Schedule::Weekly(weekday, minute) => (day - (day + 3 - i64::from(weekday)).rem_euclid(7), minute),
-    };
-    let mut slot = start * DAY as i64 + i64::from(minute) * 60;
-    if slot > local {
-        slot -= period(schedule) as i64;
-    }
-    u64::try_from(slot - offset).ok()
+pub fn latest_slot(schedule: Schedule, now: u64, offset: &dyn Fn(i64) -> i64) -> Option<u64> {
+    slots(schedule, now, offset).map(|(latest, _)| latest)
 }
 
 // A run is due once its interval has passed since the last start, or its time has come since then: after a sleep that is once, however many slots it missed.
-pub fn due(schedule: Schedule, state: &State, now: u64, offset: i64) -> bool {
+pub fn due(schedule: Schedule, state: &State, now: u64, offset: &dyn Fn(i64) -> i64) -> bool {
     match schedule {
         Schedule::Every(every) => state.last_start.is_none_or(|last| now >= last + every),
         _ => state.last_start.or(state.seen).is_some_and(|since| latest_slot(schedule, now, offset).is_some_and(|slot| slot > since)),
     }
 }
 
-pub fn next_run(schedule: Schedule, state: &State, now: u64, offset: i64) -> u64 {
+pub fn next_run(schedule: Schedule, state: &State, now: u64, offset: &dyn Fn(i64) -> i64) -> u64 {
     if due(schedule, state, now, offset) {
         return now;
     }
     match schedule {
         Schedule::Every(every) => state.last_start.map_or(now, |last| last + every),
-        _ => latest_slot(schedule, now, offset).map_or(now, |slot| slot + period(schedule)),
+        _ => slots(schedule, now, offset).map_or(now, |(_, next)| next),
     }
 }
 
@@ -309,7 +305,7 @@ pub enum Decision {
 }
 
 // Never a second run while the last one's task is still open, whatever the clock says.
-pub fn decide(routine: &Routine, state: &State, open: bool, now: u64, offset: i64) -> Decision {
+pub fn decide(routine: &Routine, state: &State, open: bool, now: u64, offset: &dyn Fn(i64) -> i64) -> Decision {
     if open {
         Decision::Open
     } else if routine.enabled && due(routine.schedule, state, now, offset) {
@@ -324,8 +320,8 @@ pub fn grants_push(routine: &Routine) -> bool {
 }
 
 // herdr names an agent with at most 32 characters, so the id is cut to leave room for the date.
-pub fn task_name(id: &str, now: u64, offset: i64) -> String {
-    let stamp = crate::keeper::stamp(u64::try_from(now as i64 + offset).unwrap_or(now));
+pub fn task_name(id: &str, now: u64, offset: &dyn Fn(i64) -> i64) -> String {
+    let stamp = crate::keeper::stamp(u64::try_from(now as i64 + offset(now as i64)).unwrap_or(now));
     let date = format!("{}{}{}-{}{}", &stamp[0..4], &stamp[5..7], &stamp[8..10], &stamp[11..13], &stamp[14..16]);
     let head: String = id.chars().take(NAME_LIMIT - 1 - date.len()).collect();
     format!("{}-{date}", head.trim_end_matches('-'))
@@ -445,7 +441,7 @@ fn notify(cwd: &Path, event: crate::notify::Event, address: &str, text: String) 
 }
 
 // One routine's run: its state names the task before the task starts, so the task's first report already finds its routine.
-fn start_run(routine: &Routine, dir: &Path, now: u64, offset: i64) -> Result<String> {
+fn start_run(routine: &Routine, dir: &Path, now: u64, offset: &dyn Fn(i64) -> i64) -> Result<String> {
     let mut state = load_state(dir, &routine.id);
     let task = task_name(&routine.id, now, offset);
     keep_last(&mut state);
@@ -520,7 +516,7 @@ pub fn tick(dir: &Path) -> Vec<String> {
     let Some(_lock) = Lock::take(dir) else { return Vec::new() };
     let (routines, _) = load();
     let now = crate::messages::now();
-    let offset = local_offset(now);
+    let offset = &crate::recover::local_offset;
     let mut notes = Vec::new();
     for routine in &routines {
         let mut state = load_state(dir, &routine.id);
@@ -560,7 +556,7 @@ pub fn run_now(id: &str) -> Result<String> {
         return Err(format!("{task}, the last run of {id}, is still open; a routine runs again once its task is closed"));
     }
     let now = crate::messages::now();
-    start_run(routine, &dir, now, local_offset(now))
+    start_run(routine, &dir, now, &crate::recover::local_offset)
 }
 
 pub fn ok_allowed(caller: &Caller, me: &str) -> Result<()> {
@@ -597,7 +593,7 @@ fn ago(seconds: u64) -> String {
     format!("{} ago", crate::keeper::span(seconds))
 }
 
-pub fn row_json(routine: &Routine, state: &State, open: bool, now: u64, offset: i64) -> Value {
+pub fn row_json(routine: &Routine, state: &State, open: bool, now: u64, offset: &dyn Fn(i64) -> i64) -> Value {
     json!({
         "id": routine.id, "title": routine.title, "repo": routine.repo, "schedule": routine.schedule.text(), "mode": routine.mode.key(), "push": routine.push,
         "enabled": routine.enabled, "profile": routine.profile, "source": routine.source, "open": open,
@@ -606,7 +602,7 @@ pub fn row_json(routine: &Routine, state: &State, open: bool, now: u64, offset: 
     })
 }
 
-pub fn render(rows: &[(Routine, State, bool)], errors: &[String], now: u64, offset: i64) -> String {
+pub fn render(rows: &[(Routine, State, bool)], errors: &[String], now: u64, offset: &dyn Fn(i64) -> i64) -> String {
     let mut lines = Vec::new();
     if rows.is_empty() {
         lines.push("No routines yet: press n on the board's Routines page (3), or run kebbie routine add (kebbie help shows its flags).".to_string());
@@ -637,7 +633,7 @@ pub fn list(json: bool) -> Result<String> {
     let dir = crate::lead::state_dir()?;
     let (routines, errors) = load();
     let now = crate::messages::now();
-    let offset = local_offset(now);
+    let offset = &crate::recover::local_offset;
     let rows: Vec<(Routine, State, bool)> = routines.into_iter().map(|routine| {
         let state = load_state(&dir, &routine.id);
         let open = state.last_task.as_deref().is_some_and(|address| open(&routine, address));
@@ -651,8 +647,15 @@ pub fn list(json: bool) -> Result<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    const UTC: fn(i64) -> i64 = |_| 0;
+
+    // Europe/Stockholm from 2026 through 2027: summer time from the last Sunday of March to the last Sunday of October, at 01:00 UTC.
+    pub(crate) fn stockholm(at: i64) -> i64 {
+        if (1_774_746_000..1_792_890_000).contains(&at) || (1_806_195_600..1_824_944_400).contains(&at) { 7200 } else { 3600 }
+    }
 
     fn parsed(text: &str, default_repo: Option<&str>) -> Result<Vec<Routine>> {
         parse_list(&text.parse::<Table>().unwrap(), default_repo, "config.toml")
@@ -680,7 +683,7 @@ mod tests {
     fn a_routine_may_name_the_profile_its_task_starts_with() {
         let routine = one(&format!("{CLUSTER}profile = \"ops\"\n"));
         assert_eq!(routine.profile.as_deref(), Some("ops"));
-        assert_eq!(row_json(&routine, &State::default(), false, 0, 0)["profile"], "ops");
+        assert_eq!(row_json(&routine, &State::default(), false, 0, &UTC)["profile"], "ops");
         assert!(parsed(&format!("{CLUSTER}profile = \"Ops Team\"\n"), Some("infra")).unwrap_err().contains("routines[0].profile: \"Ops Team\" is not a profile name"));
         let source = include_str!("routines.rs");
         let start = &source[source.find("\nfn start_run(").unwrap()..];
@@ -772,12 +775,12 @@ mod tests {
     fn an_every_schedule_runs_once_the_interval_has_passed_since_the_last_start() {
         let every = Schedule::Every(6 * 3600);
         let never = State::default();
-        assert!(due(every, &never, 1000, 0), "a new routine runs at the first round");
+        assert!(due(every, &never, 1000, &UTC), "a new routine runs at the first round");
         let ran = State { last_start: Some(1000), ..State::default() };
-        assert!(!due(every, &ran, 1000 + 6 * 3600 - 1, 0));
-        assert!(due(every, &ran, 1000 + 6 * 3600, 0));
-        assert!(due(every, &ran, 1000 + 30 * 86_400, 0), "a month asleep is one run on wake");
-        assert_eq!(next_run(every, &ran, 2000, 0), 1000 + 6 * 3600);
+        assert!(!due(every, &ran, 1000 + 6 * 3600 - 1, &UTC));
+        assert!(due(every, &ran, 1000 + 6 * 3600, &UTC));
+        assert!(due(every, &ran, 1000 + 30 * 86_400, &UTC), "a month asleep is one run on wake");
+        assert_eq!(next_run(every, &ran, 2000, &UTC), 1000 + 6 * 3600);
         assert_eq!(Schedule::Every(1800).text(), "every 30m");
         assert_eq!(Schedule::Every(DAY).text(), "every 1d");
     }
@@ -786,24 +789,24 @@ mod tests {
     fn an_at_schedule_runs_once_its_time_has_come_since_the_last_start_in_local_time() {
         assert_eq!(crate::keeper::stamp(MONDAY_0630_UTC), "2026-10-19 06:30:00Z");
         let daily = Schedule::Daily(7 * 60);
-        assert_eq!(latest_slot(daily, MONDAY_0630_UTC, 0), Some(MONDAY_0630_UTC - 23 * 3600 - 1800), "07:00 has not come today, so yesterday's");
-        assert_eq!(latest_slot(daily, MONDAY_0630_UTC, 3600), Some(MONDAY_0630_UTC - 1800), "at UTC+1 it is 07:30 already");
+        assert_eq!(latest_slot(daily, MONDAY_0630_UTC, &UTC), Some(MONDAY_0630_UTC - 23 * 3600 - 1800), "07:00 has not come today, so yesterday's");
+        assert_eq!(latest_slot(daily, MONDAY_0630_UTC, &|_| 3600), Some(MONDAY_0630_UTC - 1800), "at UTC+1 it is 07:30 already");
         let fresh = State { seen: Some(MONDAY_0630_UTC), ..State::default() };
-        assert!(!due(daily, &State::default(), MONDAY_0630_UTC, 0), "an at routine not seen before waits for its time");
-        assert!(!due(daily, &fresh, MONDAY_0630_UTC + 1799, 0));
-        assert!(due(daily, &fresh, MONDAY_0630_UTC + 1800, 0), "07:00 came");
+        assert!(!due(daily, &State::default(), MONDAY_0630_UTC, &UTC), "an at routine not seen before waits for its time");
+        assert!(!due(daily, &fresh, MONDAY_0630_UTC + 1799, &UTC));
+        assert!(due(daily, &fresh, MONDAY_0630_UTC + 1800, &UTC), "07:00 came");
         let ran = State { last_start: Some(MONDAY_0630_UTC + 1800), ..fresh.clone() };
-        assert!(!due(daily, &ran, MONDAY_0630_UTC + 1860, 0), "and it ran");
-        assert_eq!(next_run(daily, &ran, MONDAY_0630_UTC + 1860, 0), MONDAY_0630_UTC + 1800 + DAY);
-        assert!(due(daily, &ran, MONDAY_0630_UTC + 1800 + 3 * DAY + 5, 0), "three missed days asleep");
+        assert!(!due(daily, &ran, MONDAY_0630_UTC + 1860, &UTC), "and it ran");
+        assert_eq!(next_run(daily, &ran, MONDAY_0630_UTC + 1860, &UTC), MONDAY_0630_UTC + 1800 + DAY);
+        assert!(due(daily, &ran, MONDAY_0630_UTC + 1800 + 3 * DAY + 5, &UTC), "three missed days asleep");
         let caught_up = State { last_start: Some(MONDAY_0630_UTC + 1800 + 3 * DAY + 5), ..ran };
-        assert!(!due(daily, &caught_up, MONDAY_0630_UTC + 1800 + 3 * DAY + 65, 0), "run once on wake, not once per missed day");
+        assert!(!due(daily, &caught_up, MONDAY_0630_UTC + 1800 + 3 * DAY + 65, &UTC), "run once on wake, not once per missed day");
         let monday = Schedule::Weekly(0, 7 * 60);
-        assert_eq!(latest_slot(monday, MONDAY_0630_UTC, 0), Some(MONDAY_0630_UTC + 1800 - 7 * DAY), "last Monday's");
-        assert_eq!(latest_slot(monday, MONDAY_0630_UTC + 1800, 0), Some(MONDAY_0630_UTC + 1800));
-        assert_eq!(latest_slot(Schedule::Weekly(6, 7 * 60), MONDAY_0630_UTC, 0), Some(MONDAY_0630_UTC + 1800 - DAY), "yesterday was Sunday");
-        assert!(!due(monday, &fresh, MONDAY_0630_UTC + 1799, 0) && due(monday, &fresh, MONDAY_0630_UTC + 1800, 0));
-        assert_eq!(next_run(monday, &fresh, MONDAY_0630_UTC, 0), MONDAY_0630_UTC + 1800);
+        assert_eq!(latest_slot(monday, MONDAY_0630_UTC, &UTC), Some(MONDAY_0630_UTC + 1800 - 7 * DAY), "last Monday's");
+        assert_eq!(latest_slot(monday, MONDAY_0630_UTC + 1800, &UTC), Some(MONDAY_0630_UTC + 1800));
+        assert_eq!(latest_slot(Schedule::Weekly(6, 7 * 60), MONDAY_0630_UTC, &UTC), Some(MONDAY_0630_UTC + 1800 - DAY), "yesterday was Sunday");
+        assert!(!due(monday, &fresh, MONDAY_0630_UTC + 1799, &UTC) && due(monday, &fresh, MONDAY_0630_UTC + 1800, &UTC));
+        assert_eq!(next_run(monday, &fresh, MONDAY_0630_UTC, &UTC), MONDAY_0630_UTC + 1800);
         assert_eq!(monday.text(), "mon at 07:00");
         assert_eq!(daily.text(), "daily at 07:00");
     }
@@ -812,22 +815,46 @@ mod tests {
     fn a_routine_never_starts_twice_while_its_last_task_is_open() {
         let mut routine = one(CLUSTER);
         let old = State { last_start: Some(0), ..State::default() };
-        assert_eq!(decide(&routine, &old, false, DAY, 0), Decision::Start);
-        assert_eq!(decide(&routine, &old, true, DAY, 0), Decision::Open, "due, but its last run is still open");
-        assert_eq!(decide(&routine, &State { last_start: Some(DAY - 60), ..State::default() }, false, DAY, 0), Decision::Wait);
+        assert_eq!(decide(&routine, &old, false, DAY, &UTC), Decision::Start);
+        assert_eq!(decide(&routine, &old, true, DAY, &UTC), Decision::Open, "due, but its last run is still open");
+        assert_eq!(decide(&routine, &State { last_start: Some(DAY - 60), ..State::default() }, false, DAY, &UTC), Decision::Wait);
         routine.enabled = false;
-        assert_eq!(decide(&routine, &old, false, DAY, 0), Decision::Wait);
+        assert_eq!(decide(&routine, &old, false, DAY, &UTC), Decision::Wait);
     }
 
     #[test]
     fn a_runs_task_is_named_by_its_id_and_local_start_within_herdrs_32_characters() {
-        assert_eq!(task_name("cluster-health", MONDAY_0630_UTC, 0), "cluster-health-20261019-0630");
-        assert_eq!(task_name("cluster-health", MONDAY_0630_UTC, 7200), "cluster-health-20261019-0830");
-        let long = task_name("dependency-updates-for-the-app", MONDAY_0630_UTC, 0);
+        assert_eq!(task_name("cluster-health", MONDAY_0630_UTC, &UTC), "cluster-health-20261019-0630");
+        assert_eq!(task_name("cluster-health", MONDAY_0630_UTC, &|_| 7200), "cluster-health-20261019-0830");
+        let long = task_name("dependency-updates-for-the-app", MONDAY_0630_UTC, &UTC);
         assert_eq!(long, "dependency-updates-20261019-0630");
         assert!(long.len() <= 32);
-        assert_eq!(task_name("aaaaaaaaaaaaaaaaa-b", MONDAY_0630_UTC, 0), "aaaaaaaaaaaaaaaaa-20261019-0630", "a cut never leaves two dashes");
+        assert_eq!(task_name("aaaaaaaaaaaaaaaaa-b", MONDAY_0630_UTC, &UTC), "aaaaaaaaaaaaaaaaa-20261019-0630", "a cut never leaves two dashes");
         assert_eq!(crate::tasks::slug(&long).unwrap(), long);
+    }
+
+    #[test]
+    fn an_at_schedule_keeps_its_local_time_across_midnight_the_year_a_leap_day_and_both_dst_changes() {
+        let midnight = Schedule::Daily(0);
+        assert_eq!(latest_slot(midnight, 1_793_491_170, &UTC), Some(1_793_404_800), "23:59:30 on 31 Oct is still that day's");
+        assert_eq!(latest_slot(midnight, 1_793_491_230, &UTC), Some(1_793_491_200), "00:00:30 on 1 Nov is the new day's");
+        assert_eq!(latest_slot(midnight, 1_798_761_630, &UTC), Some(1_798_761_600), "1 Jan");
+        assert_eq!(latest_slot(midnight, 1_835_395_230, &UTC), Some(1_835_395_200), "29 Feb");
+        assert_eq!(next_run(midnight, &State { seen: Some(1_835_395_230), ..State::default() }, 1_835_395_230, &UTC), 1_835_481_600, "1 Mar follows 29 Feb");
+        assert_eq!(task_name("backups", 1_798_761_570, &UTC), "backups-20261231-2359");
+        assert_eq!(task_name("backups", 1_798_761_570, &stockholm), "backups-20270101-0059");
+        assert_eq!(task_name("backups", 1_835_395_230, &stockholm), "backups-20280229-0100");
+        let seven = Schedule::Daily(7 * 60);
+        let saturday = State { last_start: Some(1_792_818_000), ..State::default() };
+        assert_eq!(latest_slot(seven, 1_792_891_800, &stockholm), Some(1_792_818_000), "02:30 the night the clocks go back: Saturday's 07:00 was summer time");
+        assert!(!due(seven, &saturday, 1_792_891_800, &stockholm), "no second run the night the clocks go back");
+        assert_eq!(next_run(seven, &saturday, 1_792_891_800, &stockholm), 1_792_908_000, "Sunday 07:00 winter time");
+        assert!(!due(seven, &saturday, 1_792_907_999, &stockholm) && due(seven, &saturday, 1_792_908_000, &stockholm));
+        let spring = State { last_start: Some(1_806_127_200), ..State::default() };
+        assert_eq!(next_run(seven, &spring, 1_806_127_260, &stockholm), 1_806_210_000, "Sunday 07:00 summer time, an hour sooner in UTC");
+        assert!(!due(seven, &spring, 1_806_209_999, &stockholm) && due(seven, &spring, 1_806_210_000, &stockholm));
+        let monday = Schedule::Weekly(0, 7 * 60);
+        assert_eq!(next_run(monday, &State { seen: Some(1_792_818_000), ..State::default() }, 1_792_818_000, &stockholm), 1_792_994_400, "Monday 07:00 after the change is 06:00 UTC");
     }
 
     #[test]
@@ -934,7 +961,7 @@ mod tests {
         off.enabled = false;
         let ran = State { last_start: Some(1000), last_task: Some("cluster-health-x@infra".to_string()), last_outcome: Some(Outcome::Ok), last_summary: Some("all nodes Ready".to_string()), seen: Some(1), earlier: Vec::new() };
         let rows = [(one(CLUSTER), ran.clone(), false), (one(CLUSTER), State { last_outcome: Some(Outcome::Running), ..ran }, true), (off, State::default(), false)];
-        assert_eq!(render(&rows, &["repos/web.toml: bad".to_string()], 1000 + 3600, 0), [
+        assert_eq!(render(&rows, &["repos/web.toml: bad".to_string()], 1000 + 3600, &UTC), [
             "cluster-health  Cluster health",
             "  every 6h in infra, report; next run in 5h",
             "  last: ok, 1h ago: all nodes Ready",
@@ -946,8 +973,8 @@ mod tests {
             "  last: not run yet",
             "ignored: repos/web.toml: bad",
         ].join("\n"));
-        assert!(render(&[], &[], 0, 0).starts_with("No routines yet"));
-        let shown = row_json(&rows[0].0, &rows[0].1, false, 1000 + 3600, 0);
+        assert!(render(&[], &[], 0, &UTC).starts_with("No routines yet"));
+        let shown = row_json(&rows[0].0, &rows[0].1, false, 1000 + 3600, &UTC);
         assert_eq!((shown["next_run"].as_u64(), shown["last_outcome"].as_str(), shown["schedule"].as_str()), (Some(1000 + 6 * 3600), Some("ok"), Some("every 6h")));
     }
 }

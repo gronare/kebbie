@@ -98,7 +98,7 @@ pub(super) fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_wo
     }
     if item.is_some_and(Item::is_task) {
         choices.push(match item.and_then(|item| item.parked) {
-            Some(parked) => choice(Act::Park, "Bring it back now", &format!("parked, {}: it goes back to its group", parked.back_now())),
+            Some(parked) => choice(Act::Park, "Bring it back now", &format!("parked, {}: it goes back to its group", super::park::back(parked))),
             None => choice(Act::Park, "Park until later", "tomorrow, Monday, a date or until you bring it back: it leaves its group, the lead's summaries and your notifications, and keeps working"),
         });
     }
@@ -618,7 +618,8 @@ mod tests {
         app.mode = Mode::Options(0);
         press(&mut app, key(KeyCode::Char('7')));
         assert!(matches!(app.mode, Mode::Normal));
-        let read = (0..100).find_map(|_| std::fs::read_to_string(&opened).ok().filter(|text| !text.is_empty()).or_else(|| { std::thread::sleep(std::time::Duration::from_millis(20)); None }));
+        let started = std::time::Instant::now();
+        let read = std::iter::repeat_with(|| std::fs::read_to_string(&opened).ok().filter(|text| !text.is_empty())).find(|read| read.is_some() || { std::thread::sleep(std::time::Duration::from_millis(20)); started.elapsed() > std::time::Duration::from_secs(30) }).flatten();
         assert_eq!(read.as_deref(), Some("obsidian://open?file=Projects%2Fsearch%20filters.md"));
         app.viewer = None;
         app.mode = Mode::Options(0);

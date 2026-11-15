@@ -126,6 +126,27 @@ mod tests {
     }
 
     #[test]
+    fn a_start_time_turns_over_at_midnight_the_month_the_year_a_leap_day_and_both_dst_changes() {
+        let october_end = 1_793_491_170;
+        assert_eq!(shown(october_end, october_end, &UTC), "23:59 today");
+        assert_eq!(shown(october_end + 60, october_end, &UTC), "00:00 tomorrow", "1 Nov");
+        assert_eq!(parse("00:30", october_end, &UTC).unwrap(), 1_793_493_000);
+        let new_year = 1_798_761_570;
+        assert_eq!(shown(new_year + 3 * 86_400, new_year, &UTC), "Sun 3 Jan 2027 23:59", "seen in 2026, a date in 2027 names its year");
+        assert_eq!(shown(new_year + 60 + 2 * 86_400, new_year + 60, &UTC), "Sun 3 Jan 00:00", "seen in 2027, it does not");
+        assert_eq!(brief(new_year, new_year + 60, &UTC, true), "thu 31 dec 2026 23:59");
+        let leap = 1_835_395_170;
+        assert_eq!(shown(leap + 60, leap, &UTC), "00:00 tomorrow", "29 Feb follows 28 Feb");
+        assert_eq!(shown(leap + 60 + 86_400, leap, &UTC), "Wed 1 Mar 00:00");
+        assert_eq!(parse("2028-02-29 12:00", leap, &UTC).unwrap(), 1_835_438_400);
+        let stockholm = crate::routines::tests::stockholm;
+        assert_eq!(parse("tomorrow 09:00", 1_792_864_800, &stockholm).unwrap(), 1_792_915_200, "the clocks go back overnight: 09:00 is 08:00 UTC");
+        assert_eq!(shown(1_792_915_200, 1_792_864_800, &stockholm), "09:00 tomorrow");
+        assert_eq!(parse("tomorrow 09:00", 1_806_170_400, &stockholm).unwrap(), 1_806_217_200, "the clocks go forward overnight: 09:00 is 07:00 UTC");
+        assert_eq!(shown(1_806_217_200, 1_806_170_400, &stockholm), "09:00 tomorrow");
+    }
+
+    #[test]
     fn a_start_time_is_local_time() {
         let at = parse("15:00", NOON, &STOCKHOLM).unwrap();
         assert_eq!(at, NOON + 3600, "15:00 in UTC+2 is 13:00 UTC");

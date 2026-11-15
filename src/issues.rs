@@ -849,7 +849,7 @@ mod tests {
         for id in ["bbbbbb", "cccccc", "dddddd", "c00001"] {
             assert_eq!(wanted(&state, id), None, "{id}");
         }
-        assert!(crate::messages::load().iter().all(|message| !message.text.contains("aaaaaa")), "the lead is told nothing");
+        assert!(crate::messages::load().iter().all(|message| !message.text.split(|character: char| !character.is_ascii_alphanumeric()).any(|word| word == "aaaaaa")), "the lead is told nothing");
     }
 
     #[test]

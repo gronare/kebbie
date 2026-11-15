@@ -709,6 +709,17 @@ mod tests {
     }
 
     #[test]
+    fn a_reset_time_turns_over_at_midnight_the_month_the_year_and_a_leap_day() {
+        let utc = |_: i64| 0;
+        let midnight = Clock { hour: 0, ..Clock::default() };
+        assert_eq!(resolve(&midnight, 1_793_491_170, &utc), Some(1_793_491_200), "at 23:59:30 on 31 Oct, midnight is 1 Nov's");
+        assert_eq!(resolve(&Clock { month: Some(11), day: Some(1), ..Clock::default() }, 1_793_491_170, &utc), Some(1_793_491_200));
+        assert_eq!(resolve(&Clock { month: Some(1), day: Some(1), ..Clock::default() }, 1_798_761_570, &utc), Some(1_798_761_600), "on 31 Dec, 1 Jan is next year's");
+        assert_eq!(resolve(&Clock { month: Some(2), day: Some(29), hour: 9, ..Clock::default() }, 1_835_395_170, &utc), Some(1_835_427_600), "29 Feb in a leap year");
+        assert_eq!(resolve(&Clock { hour: 9, ..Clock::default() }, 1_806_170_400, &crate::routines::tests::stockholm), Some(1_806_217_200), "09:00 the morning after the clocks go forward is 07:00 UTC");
+    }
+
+    #[test]
     fn without_a_readable_reset_the_status_lines_window_stands_in() {
         let usage = Usage { session: Some(Used { used: 100.0, resets_at: AT_S + 3000 }), week: Some(Used { used: 40.0, resets_at: AT_S + 90_000 }), seen_at: AT_S };
         let here = |_: i64| 0;

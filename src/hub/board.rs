@@ -367,10 +367,9 @@ fn later(item: &status::Item) -> Option<Later> {
 }
 
 pub fn routines(state: &Path, now: u64) -> Vec<RoutineSummary> {
-    let offset = crate::routines::local_offset(now);
     crate::routines::load().0.into_iter().map(|routine| {
         let kept = crate::routines::load_state(state, &routine.id);
-        let next_run = Some(crate::routines::next_run(routine.schedule, &kept, now, offset)).filter(|at| routine.enabled && *at > now);
+        let next_run = Some(crate::routines::next_run(routine.schedule, &kept, now, &crate::recover::local_offset)).filter(|at| routine.enabled && *at > now);
         RoutineSummary { id: routine.id, title: routine.title, repo: routine.repo, mode: routine.mode.key().to_string(), next_run, last_outcome: kept.last_outcome.map(|outcome| outcome.key().to_string()) }
     }).collect()
 }

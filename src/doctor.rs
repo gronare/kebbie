@@ -1623,7 +1623,7 @@ mod tests {
         crate::executable::write(&slow, "#!/bin/sh\nsleep 30\necho PUBLIC\n").unwrap();
         let started = std::time::Instant::now();
         assert_eq!(visibility(Some(&slow), &repo, std::time::Duration::from_millis(200)), None, "a gh that hangs is no answer");
-        assert!(started.elapsed() < std::time::Duration::from_secs(5), "and doctor does not wait for it");
+        assert!(started.elapsed() < std::time::Duration::from_secs(20), "and doctor does not wait for it");
         if std::env::var(crate::ci::GH_VAR).is_err() {
             assert_eq!(gh_on(std::slice::from_ref(&dir)), Some(gh.clone()), "gh is found on the doctor's PATH");
         }

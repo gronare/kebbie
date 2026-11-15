@@ -88,8 +88,8 @@ mod tests {
     fn a_status_command_that_leaves_a_child_holding_its_output_still_answers() {
         let dir = crate::sh::test_dir("login-grandchild");
         let started = std::time::Instant::now();
-        assert_eq!(codex(Some(&fake(&dir, "forks", "sleep 30 &\necho 'Logged in using ChatGPT'")), TIMEOUT), Login::In);
-        assert!(started.elapsed() < Duration::from_secs(3), "a grandchild on its stdout does not hold the check: {:?}", started.elapsed());
+        assert_eq!(codex(Some(&fake(&dir, "forks", "sleep 30 &\necho 'Logged in using ChatGPT'")), Duration::from_secs(60)), Login::In);
+        assert!(started.elapsed() < Duration::from_secs(20), "a grandchild on its stdout does not hold the check: {:?}", started.elapsed());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

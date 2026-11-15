@@ -162,41 +162,47 @@ fn mark(look: Look) -> (&'static str, Color) {
     }
 }
 
-fn local_day(at: u64, offset: i64) -> i64 {
-    (at as i64 + offset).div_euclid(DAY)
+type Offset = fn(i64) -> i64;
+
+fn local(at: u64, offset: &dyn Fn(i64) -> i64) -> i64 {
+    at as i64 + offset(at as i64)
 }
 
-fn clock(at: u64, offset: i64) -> String {
-    let minute = (at as i64 + offset).rem_euclid(DAY) / 60;
+fn local_day(at: u64, offset: &dyn Fn(i64) -> i64) -> i64 {
+    local(at, offset).div_euclid(DAY)
+}
+
+fn clock(at: u64, offset: &dyn Fn(i64) -> i64) -> String {
+    let minute = local(at, offset).rem_euclid(DAY) / 60;
     format!("{:02}:{:02}", minute / 60, minute % 60)
 }
 
-fn day_word(at: u64, now: u64, offset: i64) -> String {
+fn day_word(at: u64, now: u64, offset: &dyn Fn(i64) -> i64) -> String {
     let day = local_day(at, offset);
     match day - local_day(now, offset) {
         0 => "today".to_string(),
         -1 => "yesterday".to_string(),
         1 => "tomorrow".to_string(),
         -6..=6 => WEEKDAYS[(day + 3).rem_euclid(7) as usize].to_string(),
-        _ => crate::keeper::stamp(u64::try_from(at as i64 + offset).unwrap_or(at))[..10].to_string(),
+        _ => crate::keeper::stamp(u64::try_from(local(at, offset)).unwrap_or(at))[..10].to_string(),
     }
 }
 
-pub fn past_when(at: u64, now: u64, offset: i64) -> String {
+pub fn past_when(at: u64, now: u64, offset: &dyn Fn(i64) -> i64) -> String {
     match day_word(at, now, offset).as_str() {
         "yesterday" => "yesterday".to_string(),
         word => format!("{word} {}", clock(at, offset)),
     }
 }
 
-pub fn next_when(at: u64, now: u64, offset: i64) -> String {
+pub fn next_when(at: u64, now: u64, offset: &dyn Fn(i64) -> i64) -> String {
     match day_word(at, now, offset).as_str() {
         "today" => clock(at, offset),
         word => word.to_string(),
     }
 }
 
-pub fn first_when(at: u64, now: u64, offset: i64) -> String {
+pub fn first_when(at: u64, now: u64, offset: &dyn Fn(i64) -> i64) -> String {
     format!("{} {}", day_word(at, now, offset), clock(at, offset))
 }
 
@@ -246,7 +252,7 @@ pub struct Page {
     pub hits: Vec<(Rect, Hit)>,
     machine: PathBuf,
     repos_dir: PathBuf,
-    clock: Option<(u64, i64)>,
+    clock: Option<(u64, Offset)>,
     width: u16,
 }
 
@@ -272,11 +278,8 @@ impl Page {
         matches!(self.mode, Mode::Normal | Mode::Message(_) | Mode::Help(_))
     }
 
-    fn now(&self) -> (u64, i64) {
-        self.clock.unwrap_or_else(|| {
-            let now = crate::messages::now();
-            (now, routines::local_offset(now))
-        })
+    fn now(&self) -> (u64, Offset) {
+        self.clock.unwrap_or_else(|| (crate::messages::now(), crate::recover::local_offset as Offset))
     }
 
     #[cfg(test)]
@@ -619,9 +622,9 @@ impl Page {
         }
     }
 
-    fn next_up(&self, now: u64, offset: i64) -> Option<(String, u64)> {
+    fn next_up(&self, now: u64, offset: Offset) -> Option<(String, u64)> {
         self.rows.iter().filter(|(routine, state)| routine.enabled && self.open_task(state).is_none())
-            .map(|(routine, state)| (routine.id.clone(), routines::next_run(routine.schedule, state, now, offset))).min_by_key(|(_, at)| *at)
+            .map(|(routine, state)| (routine.id.clone(), routines::next_run(routine.schedule, state, now, &offset))).min_by_key(|(_, at)| *at)
     }
 
     fn row_line(&self, routine: &Routine, state: &State, selected: bool, columns: &Columns) -> Line<'static> {
@@ -635,9 +638,9 @@ impl Page {
             Look::Running if narrow => ("running".to_string(), BLUE),
             Look::Running => (format!("running {}", crate::keeper::span(now.saturating_sub(state.last_start.unwrap_or(now)))), BLUE),
             Look::Failed => ("failed".to_string(), RED),
-            _ => match routines::next_run(routine.schedule, state, now, offset) {
+            _ => match routines::next_run(routine.schedule, state, now, &offset) {
                 at if at <= now => ("due now".to_string(), MUTED),
-                at => (format!("next {}", next_when(at, now, offset)), MUTED),
+                at => (format!("next {}", next_when(at, now, &offset)), MUTED),
             },
         };
         let paused = look == Look::Paused;
@@ -662,7 +665,7 @@ impl Page {
     fn list_lines(&self, width: usize, narrow: bool) -> (Vec<Line<'static>>, usize, Vec<(usize, usize, Hit)>) {
         let now = self.now();
         let right = match self.next_up(now.0, now.1) {
-            Some((id, at)) if at > now.0 => format!("{} · next: {id} {}", self.rows.len(), next_when(at, now.0, now.1)),
+            Some((id, at)) if at > now.0 => format!("{} · next: {id} {}", self.rows.len(), next_when(at, now.0, &now.1)),
             _ => self.rows.len().to_string(),
         };
         let mut lines = column_title("ROUTINES", right, !self.narrow_detail(), width);
@@ -787,7 +790,7 @@ impl Page {
             Mode::Wizard(wizard) => {
                 let (now, offset) = self.now();
                 let width = 64.min(frame.area().width.saturating_sub(8) as usize);
-                let (lines, spots) = wizard.view(now, offset, width);
+                let (lines, spots) = wizard.view(now, &offset, width);
                 let (_, spots) = modal_spots(frame, wizard.title(), lines, spots, width);
                 modal_hits.extend(spots.into_iter().map(|(area, spot)| (area, match spot { Spot::Choice(index) => Hit::Choice(index), Spot::Key { key, .. } => Hit::Key(key) })));
             }
@@ -844,33 +847,33 @@ fn word(outcome: Outcome, start: u64, now: u64) -> (String, Color) {
     }
 }
 
-fn runs_lines(routine: &Routine, state: &State, (now, offset): (u64, i64), width: usize) -> Vec<Line<'static>> {
+fn runs_lines(routine: &Routine, state: &State, (now, offset): (u64, Offset), width: usize) -> Vec<Line<'static>> {
     let mut runs: Vec<(u64, Outcome, Option<String>)> = Vec::new();
     if let (Some(start), Some(outcome)) = (state.last_start, state.last_outcome) {
         runs.push((start, outcome, state.last_summary.clone()));
     }
     runs.extend(state.earlier.iter().map(|past| (past.start, past.outcome, past.summary.clone())));
     if runs.is_empty() {
-        let next = if routine.enabled { format!(" · next {}", first_when(routines::next_run(routine.schedule, state, now, offset), now, offset)) } else { String::new() };
+        let next = if routine.enabled { format!(" · next {}", first_when(routines::next_run(routine.schedule, state, now, &offset), now, &offset)) } else { String::new() };
         return vec![Line::from(Span::styled(format!("  not run yet{next}"), style(MUTED)))];
     }
     runs.into_iter().map(|(start, outcome, summary)| {
         let (symbol, color) = outcome_mark(outcome);
         let (said, said_color) = word(outcome, start, now);
-        let head = format!("  {symbol} {:<14}{said:<12}", past_when(start, now, offset));
+        let head = format!("  {symbol} {:<14}{said:<12}", past_when(start, now, &offset));
         let room = width.saturating_sub(head.chars().count());
         Line::from(vec![
-            Span::raw("  "), Span::styled(symbol, style(color)), Span::raw(" "), Span::styled(format!("{:<14}", past_when(start, now, offset)), style(TEXT)),
+            Span::raw("  "), Span::styled(symbol, style(color)), Span::raw(" "), Span::styled(format!("{:<14}", past_when(start, now, &offset)), style(TEXT)),
             Span::styled(format!("{said:<12}"), style(said_color)), Span::styled(cut(summary.as_deref().unwrap_or_default(), room), style(TEXT)),
         ])
     }).collect()
 }
 
-fn report_text(routine: &Routine, state: &State, (now, offset): (u64, i64)) -> String {
+fn report_text(routine: &Routine, state: &State, (now, offset): (u64, Offset)) -> String {
     match (state.last_start, state.last_outcome) {
         (Some(start), Some(outcome)) => {
             let summary = state.last_summary.as_deref().map(|summary| format!("\n{summary}")).unwrap_or_default();
-            format!("{}, {}: {}{summary}", routine.title, past_when(start, now, offset), word(outcome, start, now).0)
+            format!("{}, {}: {}{summary}", routine.title, past_when(start, now, &offset), word(outcome, start, now).0)
         }
         _ => format!("{} has not run yet.", routine.title),
     }
@@ -887,6 +890,7 @@ mod tests {
     use crate::routines::Past;
 
     const MONDAY_0630_UTC: u64 = 1_792_391_400;
+    const UTC: Offset = |_| 0;
 
     fn routine(id: &str, title: &str, schedule: Schedule, mode: routines::Mode) -> Routine {
         Routine {
@@ -908,7 +912,7 @@ mod tests {
 
     fn page_with_rows() -> Page {
         let mut page = Page::new(PathBuf::from("/c/config.toml"), PathBuf::from("/c/repos"));
-        page.clock = Some((MONDAY_0630_UTC, 0));
+        page.clock = Some((MONDAY_0630_UTC, UTC));
         let mut health = ran(Outcome::Findings, MONDAY_0630_UTC - 1800, "cluster-health-20261019-0600@infra", "storage volume degraded, cert in 5 d");
         health.earlier = vec![
             Past { start: MONDAY_0630_UTC - 86_400 - 1800, outcome: Outcome::Ok, summary: Some("all well".to_string()) },
@@ -1040,7 +1044,7 @@ mod tests {
         let (machine, repos) = (dir.join("config.toml"), dir.join("repos"));
         std::fs::write(&machine, "[keys]\ninbox = \"I\"\n").unwrap();
         let mut page = Page::new(machine.clone(), repos.clone());
-        page.clock = Some((MONDAY_0630_UTC, 0));
+        page.clock = Some((MONDAY_0630_UTC, UTC));
         page.reload();
         assert!(page.rows.is_empty());
         press(&mut page, KeyCode::Char('n'));
@@ -1110,7 +1114,7 @@ mod tests {
         let dir = crate::sh::test_dir("routine-page-mouse");
         let machine = dir.join("config.toml");
         let mut page = Page::new(machine.clone(), dir.join("repos"));
-        page.clock = Some((MONDAY_0630_UTC, 0));
+        page.clock = Some((MONDAY_0630_UTC, UTC));
         page.loaded = true;
         press(&mut page, KeyCode::Char('n'));
         click_on(&mut page, "esc cancel");
@@ -1153,16 +1157,31 @@ mod tests {
     }
 
     #[test]
+    fn times_turn_over_at_midnight_the_month_the_year_a_leap_day_and_keep_their_hour_across_dst() {
+        let utc: &dyn Fn(i64) -> i64 = &|_| 0;
+        assert_eq!(past_when(1_793_491_170, 1_793_491_230, utc), "yesterday", "23:59:30 on 31 Oct seen at 00:00:30 on 1 Nov");
+        assert_eq!(next_when(1_793_491_230, 1_793_491_170, utc), "tomorrow");
+        assert_eq!(past_when(1_798_761_570, 1_798_761_630, utc), "yesterday", "31 Dec seen on 1 Jan");
+        assert_eq!(past_when(1_798_761_570 - 7 * 86_400, 1_798_761_630, utc), "2026-12-24 23:59");
+        assert_eq!(past_when(1_835_395_170, 1_835_395_230, utc), "yesterday", "28 Feb seen on 29 Feb");
+        assert_eq!(next_when(1_835_481_630, 1_835_395_230, utc), "tomorrow", "1 Mar follows 29 Feb");
+        let stockholm: &dyn Fn(i64) -> i64 = &crate::routines::tests::stockholm;
+        assert_eq!(past_when(1_792_818_000, 1_792_994_400, stockholm), "sat 07:00", "Saturday's summer-time run read on Monday in winter time");
+        assert_eq!(past_when(1_806_127_200, 1_806_296_400, stockholm), "sat 07:00", "Saturday's winter-time run read on Monday in summer time");
+        assert_eq!(first_when(1_792_908_000, 1_792_864_800, stockholm), "tomorrow 07:00", "Sunday's run seen the evening before the clocks go back");
+    }
+
+    #[test]
     fn times_read_as_today_yesterday_a_weekday_or_a_date() {
         let now = MONDAY_0630_UTC;
-        assert_eq!(past_when(now - 1800, now, 0), "today 06:00");
-        assert_eq!(past_when(now - 86_400, now, 0), "yesterday");
-        assert_eq!(past_when(now - 2 * 86_400, now, 0), "sat 06:30");
-        assert_eq!(past_when(now - 30 * 86_400, now, 0), "2026-09-19 06:30");
-        assert_eq!(next_when(now + 3600, now, 0), "07:30");
-        assert_eq!(next_when(now + 86_400, now, 0), "tomorrow");
-        assert_eq!(next_when(now + 3 * 86_400, now, 0), "thu");
-        assert_eq!(first_when(now + 86_400, now, 7200), "tomorrow 08:30");
+        assert_eq!(past_when(now - 1800, now, &|_| 0), "today 06:00");
+        assert_eq!(past_when(now - 86_400, now, &|_| 0), "yesterday");
+        assert_eq!(past_when(now - 2 * 86_400, now, &|_| 0), "sat 06:30");
+        assert_eq!(past_when(now - 30 * 86_400, now, &|_| 0), "2026-09-19 06:30");
+        assert_eq!(next_when(now + 3600, now, &|_| 0), "07:30");
+        assert_eq!(next_when(now + 86_400, now, &|_| 0), "tomorrow");
+        assert_eq!(next_when(now + 3 * 86_400, now, &|_| 0), "thu");
+        assert_eq!(first_when(now + 86_400, now, &|_| 7200), "tomorrow 08:30");
         assert_eq!(schedule_words(Schedule::Weekly(0, 480)), "every monday at 08:00");
         assert_eq!(schedule_words(Schedule::Daily(420)), "every day at 07:00");
         let (full, short) = Page::hint_lines();

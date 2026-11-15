@@ -31,7 +31,11 @@ pub fn addressee(message: &Message) -> String {
 }
 
 pub fn age(at: u64) -> String {
-    let seconds = now().saturating_sub(at);
+    age_at(at, now())
+}
+
+pub fn age_at(at: u64, now: u64) -> String {
+    let seconds = now.saturating_sub(at);
     match seconds {
         0..60 => "now".to_string(),
         60..3600 => format!("{}m", seconds / 60),

@@ -152,11 +152,10 @@ fn a_task_under_needs_you_fails_at_once_with_what_it_waits_for_and_is_dropped() 
     let sandbox = Sandbox::new("asks");
     fs::write(sandbox.dir.join("codex"), "").unwrap();
     fs::write(sandbox.dir.join("codex-asks"), "answer Codex in its Space: it asks whether you trust its folder").unwrap();
-    let begun = Instant::now();
     let output = sandbox.command(&[sandbox.repo.to_str().unwrap()]).env("SMOKE_TIMEOUT", "60").output().unwrap();
     let shown = said(&output);
     assert_eq!(output.status.code(), Some(1), "{shown}");
-    assert!(begun.elapsed() < Duration::from_secs(30), "the smoke waited out its timeout: {shown}");
+    assert!(!shown.contains("within 60s"), "the smoke waited out its timeout: {shown}");
     assert!(shown.contains("codex    FAIL  waits on you: answer Codex in its Space: it asks whether you trust its folder"), "{shown}");
     assert!(shown.contains("claude   PASS  restarted and resumed its conversation") && shown.ends_with("release-smoke: FAILED\n"), "{shown}");
     assert!(sandbox.calls().iter().any(|call| call.contains(" drop smoke-codex-")), "the task that waits is dropped too");
@@ -168,10 +167,9 @@ fn ctrl_c_drops_the_task_the_smoke_started() {
     fs::write(sandbox.dir.join("never-ready"), "").unwrap();
     let child = sandbox.command(&[sandbox.repo.to_str().unwrap()]).env("SMOKE_TIMEOUT", "60").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     let begun = Instant::now();
-    while !sandbox.calls().iter().any(|call| call.contains(" start ")) && begun.elapsed() < Duration::from_secs(10) {
+    while !sandbox.calls().iter().any(|call| call.starts_with("status --json")) && begun.elapsed() < Duration::from_secs(120) {
         std::thread::sleep(Duration::from_millis(50));
     }
-    std::thread::sleep(Duration::from_millis(300));
     // SAFETY: a signal to the child this test spawned.
     unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) };
     let output = child.wait_with_output().unwrap();

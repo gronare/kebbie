@@ -396,12 +396,13 @@ pub(crate) mod tests {
         set_status(&state, 12, Status::Dismissed).unwrap();
         assert!(open(&state).is_empty(), "sent and dismissed leave the board");
         assert_eq!(load(&state, 11).unwrap().status, Status::Sent, "and stay on record, surviving a restart");
-        prune(&state, crate::messages::now());
+        let (sent, changed) = (load(&state, 11).unwrap().changed_at, load(&state, 12).unwrap().changed_at);
+        prune(&state, sent + PRUNE_AFTER);
         assert!(load(&state, 11).is_some(), "a fresh one is kept");
-        prune(&state, crate::messages::now() + PRUNE_AFTER + 1);
+        prune(&state, changed + PRUNE_AFTER + 1);
         assert!(all(&state).is_empty(), "an old sent or dismissed one is pruned");
         save(&state, &comment(14, Some(Kind::Holds), Status::Reply)).unwrap();
-        prune(&state, crate::messages::now() + PRUNE_AFTER * 10);
+        prune(&state, changed + PRUNE_AFTER * 10);
         assert_eq!(open(&state).len(), 1, "a card still open never goes on its own");
         fs::remove_dir_all(state).unwrap();
     }

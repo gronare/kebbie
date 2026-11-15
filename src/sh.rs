@@ -241,6 +241,17 @@ mod tests {
         unsafe { libc::kill(pid as libc::pid_t, 0) != 0 }
     }
 
+    fn exited(pid: u32) -> bool {
+        let waited = std::time::Instant::now();
+        while waited.elapsed() < std::time::Duration::from_secs(30) {
+            if run("ps", &["-o", "stat=", "-p", &pid.to_string()], None).is_ok_and(|stat| stat.trim_start().starts_with('Z')) {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        false
+    }
+
     #[test]
     fn a_detached_child_is_reaped_once_it_exits() {
         let pid = reap(Command::new("true").spawn().unwrap());
@@ -252,8 +263,7 @@ mod tests {
         let dropped = Command::new("true").spawn().unwrap();
         let pid = dropped.id();
         drop(dropped);
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        assert!(!gone(pid), "a dropped Child stays a zombie, which is what reap is for");
+        assert!(exited(pid) && !gone(pid), "a dropped Child stays a zombie, which is what reap is for");
         // SAFETY: waits on our own child so the test leaves no zombie behind.
         unsafe { libc::waitpid(pid as libc::pid_t, std::ptr::null_mut(), 0) };
     }
@@ -263,8 +273,7 @@ mod tests {
         let orphan = Command::new("true").spawn().unwrap();
         let pid = orphan.id();
         drop(orphan);
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        assert!(!gone(pid), "without a handle the exited child stays a zombie");
+        assert!(exited(pid) && !gone(pid), "without a handle the exited child stays a zombie");
         adopt(vec![pid as libc::pid_t]);
         let waited = std::time::Instant::now();
         while !gone(pid) && waited.elapsed() < std::time::Duration::from_secs(5) {
@@ -278,7 +287,7 @@ mod tests {
         let orphan = Command::new("true").spawn().unwrap();
         let pid = orphan.id();
         drop(orphan);
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(exited(pid), "the child never exited");
         let listed = children_of(std::process::id());
         // SAFETY: waits on our own child so the test leaves no zombie behind.
         unsafe { libc::waitpid(pid as libc::pid_t, std::ptr::null_mut(), 0) };

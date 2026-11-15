@@ -1,6 +1,7 @@
 mod beside;
 mod bug_report;
 mod card;
+mod clock;
 mod columns;
 mod comments;
 mod confirm;
@@ -1716,12 +1717,12 @@ mod tests {
     }
 
     fn settle(app: &mut App) {
-        for _ in 0..200 {
-            app.take_working_result();
-            if !matches!(app.mode, Mode::Working { .. }) {
-                break;
-            }
+        let started = Instant::now();
+        app.take_working_result();
+        while matches!(app.mode, Mode::Working { .. }) {
+            assert!(started.elapsed() < Duration::from_secs(30), "the background work never finished");
             thread::sleep(Duration::from_millis(10));
+            app.take_working_result();
         }
     }
 

@@ -624,6 +624,28 @@ auto_approve = \"24h\"
     }
 
     #[test]
+    fn added_and_seen_turn_over_at_local_midnight_across_months_years_leap_days_and_both_dst_changes() {
+        let utc = |_: i64| 0;
+        let shown = |first: u64, now: u64, offset: &dyn Fn(i64) -> i64| (added(first, now, offset), seen_at(first, now, offset));
+        let (just_before, just_after) = (at(11, 11, 23, 59) + 30, at(11, 12, 0, 0) + 30);
+        assert_eq!(shown(just_before, just_before + 20, &utc), ("today 23:59".to_string(), "23:59".to_string()));
+        assert_eq!(shown(just_before, just_after, &utc), ("11 Nov".to_string(), "Wed 23:59".to_string()), "a minute later it is yesterday's");
+        assert_eq!(shown(at(10, 31, 23, 59), at(11, 1, 0, 1), &utc), ("31 Oct".to_string(), "Sat 23:59".to_string()));
+        assert_eq!(shown(at(12, 31, 23, 59) + 30, at(12, 31, 23, 59) + 90, &utc), ("31 Dec".to_string(), "Thu 23:59".to_string()), "into 2027");
+        let leap = crate::recover::days_from_civil(2028, 2, 29) as u64 * DAY + 23 * 3600 + 59 * 60;
+        assert_eq!(shown(leap, leap + 120, &utc), ("29 Feb".to_string(), "Tue 23:59".to_string()));
+        assert_eq!(shown(leap - DAY, leap - DAY + 120, &utc).0, "28 Feb", "2028-02-28 turns into the 29th, not March");
+        let winter = |_: i64| 3600;
+        assert_eq!(shown(at(11, 11, 23, 30), at(11, 12, 8, 0), &winter), ("today 00:30".to_string(), "00:30".to_string()), "the local day, not the UTC one");
+        let autumn = |instant: i64| if instant < at(10, 25, 1, 0) as i64 { 7200 } else { 3600 };
+        assert_eq!(shown(at(10, 24, 22, 30), at(10, 25, 22, 30), &autumn), ("today 00:30".to_string(), "00:30".to_string()), "the 25-hour day of 25 Oct");
+        assert_eq!(shown(at(10, 24, 22, 30), at(10, 25, 23, 0), &autumn), ("25 Oct".to_string(), "Sun 00:30".to_string()));
+        let spring = |instant: i64| if instant < at(3, 29, 1, 0) as i64 { 3600 } else { 7200 };
+        assert_eq!(shown(at(3, 28, 23, 30), at(3, 29, 21, 59), &spring), ("today 00:30".to_string(), "00:30".to_string()), "the 23-hour day of 29 Mar");
+        assert_eq!(shown(at(3, 28, 23, 30), at(3, 29, 22, 0), &spring), ("29 Mar".to_string(), "Sun 00:30".to_string()));
+    }
+
+    #[test]
     fn the_board_carries_each_devices_standing_with_its_fingerprint_and_when_it_is_let_in() {
         let devices = three();
         let standings = devices.standings(DEVICE, at(11, 11, 14, 10));
