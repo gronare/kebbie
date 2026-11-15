@@ -940,6 +940,20 @@ With open [kebbie issues](#kebbie-issues), it looks them up on GitHub through `g
 - On the main channel kebbie shows as `main installed`, and what is newer as the commits on origin's default branch the build lacks, such as `3 new on main`.
 - On the release channel, the latest is the highest tag whose release is published with a binary for this machine. A newer tag that is not yet says `kebbie <version> is not published yet; try again in a while`.
 
+## Jobs on another machine
+
+A job is a command another machine of your hub account runs on a worktree as it stands, such as an Xcode build on a Mac for a task on a Linux machine. See [Run a job on another machine](../how-to/run-a-job-on-another-machine.md).
+
+| Command | What it does |
+|---|---|
+| `kebbie job run <name>` | Run the repo's job of that name, from [`[jobs]`](configuration.md#jobs) in its repo config, on a machine of your hub account with [`worker.enabled`](configuration.md#ci-updates-and-the-keeper), on this worktree with its uncommitted and untracked files. It prints the job's output as it comes and exits as the job did: 0 when it exited 0, 1 when it failed, was refused, no worker fits or the worker sent nothing for 10 minutes. Without a name it lists the repo's jobs. |
+
+- It needs this machine connected to the hub with its account pinned, and its keeper running: the keeper takes the job's output from the hub.
+- The worker is a machine on your account's signed list whose operating system or name matches the job's `on`, the one the hub heard from last. A report from any other machine is refused.
+- The worktree goes along as a git bundle in the hub's blobs, sealed: the whole history the first time, then what came after the last commit that worker took. The blobs, the snapshot's ref and the job's files go when the command ends.
+- On the worker, the job runs with `sh -c` in a folder of the task's own under `~/.local/share/kebbie/worker/<repo>/`, with `KEBBIE_JOB`, `KEBBIE_JOB_TASK`, `KEBBIE_JOB_SHA` and `KEBBIE_JOB_MASTER` set, one job at a time.
+- On hub.kebbie.dev, jobs are part of Hub Pro.
+
 ## The hub
 
 Show the board on your phone through a kebbie hub. See [See your board on your phone](../how-to/see-your-board-on-your-phone.md). `connect`, `join`, `move`, `leave` and approving or denying a device are yours only.

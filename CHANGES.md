@@ -5,6 +5,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- kebbie job run builds or tests a task's worktree on another machine of your hub account, as an Xcode build on a Mac, once worker.enabled is on there.
 
 - The board's ↑ ↓ move task to task, and → steps into a task: its subtasks and card light up beside the tasks, which fade so you see where you are, or open in a window on a narrow board.
 
