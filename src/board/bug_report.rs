@@ -185,7 +185,7 @@ fn fixed_block(fixed: &Fixed, questions: bool, width: usize, focused: bool) -> V
 }
 
 fn fixed_choices() -> Vec<Choice> {
-    let row = |key: char, label: &str, about: &str| Choice { key, act: None, label: label.to_string(), about: about.to_string(), link: None };
+    let row = |key: char, label: &str, about: &str| Choice { key, act: None, label: label.to_string(), about: about.to_string(), link: None, run: None };
     vec![
         row('1', "Show the list", "every title in a window; the block goes once it is shown"),
         row('2', "Hide this", "the block goes without the list and does not come back"),

@@ -44,7 +44,7 @@ fn named(name: &str, loaded: crate::sh::Result<Profile>) -> Named {
 }
 
 fn row(key: char, label: &str, about: String) -> Choice {
-    Choice { key, act: None, label: label.to_string(), about, link: None }
+    Choice { key, act: None, label: label.to_string(), about, link: None, run: None }
 }
 
 fn facts(item: &Item) -> String {

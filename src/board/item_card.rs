@@ -18,8 +18,8 @@ const WIDTH: u16 = 88;
 const LABEL: usize = 10;
 const PAGE: u16 = 10;
 const FRAME_ROWS: u16 = 8;
-const CARD_KEYS: &str = "a answer · g start · w write it out · ↑↓ pick · pgdn pgup scroll · esc back";
-const LOCAL_KEYS: &str = "a answer · g start · w write it out · e open in $EDITOR · ↑↓ pick · pgdn pgup scroll · esc back";
+const CARD_KEYS: &str = "a answer · g start · ↑↓ pick · pgdn pgup scroll · esc back";
+const LOCAL_KEYS: &str = "a answer · g start · e open in $EDITOR · ↑↓ pick · pgdn pgup scroll · esc back";
 const TYPING_KEYS: &str = "⏎ send to the lead · pgup pgdn scroll · esc back to the card";
 const UNREAD: &str = "The note's text has not reached this machine yet; the card shows it once the board has read it from the vault.";
 pub(super) const GO_AGAIN_FOR: std::time::Duration = std::time::Duration::from_secs(3);
@@ -27,6 +27,9 @@ pub(super) const GO_AGAIN_FOR: std::time::Duration = std::time::Duration::from_s
 // The selected backlog row's right field, the word in it that is tinted, its line under the row while the lead works on it, and its about line when selected.
 pub(super) fn row_facts(entry: &Entry) -> (String, Option<(String, Color)>) {
     let with_age = |word: String| if entry.age.is_empty() { word } else { format!("{word} · {}", entry.age) };
+    if let Some(at) = entry.shape.writing {
+        return (with_age(crate::backlog_file::writing_word(at, crate::messages::now())), None);
+    }
     match entry.shape.state {
         Some(State::Drafting) if entry.shape.waiting > 0 => {
             let questions = plural(entry.shape.waiting, "question");
@@ -54,6 +57,9 @@ fn waits(count: usize) -> String {
 pub(super) fn about(entry: &Entry) -> String {
     if !entry.shape.into.is_empty() {
         return format!("merged into the note {}: ⏎ opens it", entry.shape.into);
+    }
+    if let Some(at) = entry.shape.writing {
+        return format!("{}: the lead writes it out, as you asked", crate::backlog_file::writing_word(at, crate::messages::now()));
     }
     match entry.shape.state {
         Some(State::Drafting) if entry.shape.waiting > 0 => format!("drafting: {} on you before it can start", waits(entry.shape.waiting)),
@@ -153,6 +159,9 @@ impl ItemCard {
         let answered: Vec<String> = self.answers.iter().map(|answer| answer.question.clone()).collect();
         let shape = shape_of(self.state(), &self.body, &answered, &self.filed, &self.template);
         let with_lead = (shape.with_lead > 0).then(|| plural(shape.with_lead, "answer") + " with the lead");
+        if let Some(at) = self.entry.shape.writing.filter(|_| shape.waiting == 0 && self.state() != State::Ready) {
+            return format!("{}: the lead writes it out, as you asked", crate::backlog_file::writing_word(at, crate::messages::now()));
+        }
         match self.state() {
             State::Drafting if shape.waiting > 0 => format!("drafting: {} on you{}", waits(shape.waiting), with_lead.map_or(String::new(), |text| format!(" · {text}"))),
             State::Drafting => with_lead.map_or("drafting: the lead writes it out".to_string(), |text| format!("drafting: {text}")),
@@ -352,7 +361,6 @@ impl App {
             (KeyCode::PageUp, _) => (card.scroll, card.follow) = (card.scroll.saturating_sub(PAGE), false),
             (KeyCode::Char('a') | KeyCode::Enter, _) if count > 0 => (card.typing, card.follow) = (Some(String::new()), true),
             (_, Some(Act::Go)) => return self.start_entry(card.entry.clone()),
-            (_, Some(Act::WriteOut)) => return self.write_out(&card.entry),
             (KeyCode::Char('e'), _) if card.path.is_some() => {
                 if let (Some(terminal), Some(path)) = (terminal, card.path.clone()) {
                     let _ = super::terminal::outside(terminal, || std::process::Command::new("sh").args(["-c", "${VISUAL:-${EDITOR:-vi}} \"$1\"", "sh"]).arg(&path).status().map_err(|error| error.to_string()));
@@ -392,16 +400,15 @@ impl App {
         self.mode = Mode::ItemCard(card);
     }
 
-    // w on any item: the lead writes it out, whatever state it is in.
+    // Write it out, in the item's options: the lead hears it, and the row shows writing… from now, without waiting for the next read of the backlog.
     pub(super) fn write_out(&mut self, entry: &Entry) {
-        let result = crate::backlog_file::write_out(entry, "The user", &crate::backlog_file::dir(), &|text| crate::messages::to_lead(crate::messages::ToLead::BacklogItem, text));
+        let now = crate::messages::now();
+        let result = crate::lead::state_dir().and_then(|state| crate::backlog_file::write_out(&state, entry, "The user", &crate::backlog_file::dir(), now, &|text| crate::messages::to_lead(crate::messages::ToLead::BacklogItem, text)));
+        if result.is_ok() && let Some(shown) = self.backlog.entries.iter_mut().find(|shown| shown.source == entry.source && shown.reference == entry.reference) {
+            (shown.shape.state, shown.shape.writing) = (Some(State::Drafting), Some(now));
+        }
         self.subject = Some(super::notices::Subject::plain("backlog"));
         self.show(result);
-    }
-
-    // How many items the user's write-out-all queue still holds.
-    pub(super) fn write_queue(&self) -> usize {
-        crate::lead::state_location().map_or(0, |state| crate::backlog_file::queued(&state))
     }
 
     // The note a merged row went into, as the backlog lists it, else by its path alone.
@@ -489,6 +496,8 @@ mod tests {
         let kept = Entry { source: "kept".to_string(), shape: Shape { state: Some(State::ToWrite), kept: true, ..Shape::default() }, ..entry("kept:abc123", Shape::default()) };
         assert_eq!((row_facts(&kept).0.as_str(), lead_line(&kept), about(&kept).as_str()), ("to write · 0 d", Some("the lead files it in the vault"), "to write: the lead writes it out and files it in the vault"));
         assert!(!has_card(&kept) && has_card(&writing));
+        let asked = entry("Projects/c.md", Shape { state: Some(State::Drafting), writing: Some(crate::messages::now() - 2 * 3600 - 30), ..Shape::default() });
+        assert_eq!((row_facts(&asked).0.as_str(), about(&asked).as_str()), ("writing… 2 h · 0 d", "writing… 2 h: the lead writes it out, as you asked"), "how long ago the user asked shows, so a request the lead never takes up does not hide");
         let ready = Entry { summary: "You stay signed in.".to_string(), age: "6 d".to_string(), shape: Shape { state: Some(State::Ready), ..Shape::default() }, ..entry("local:x", Shape::default()) };
         assert_eq!((row_facts(&ready).0.as_str(), about(&ready).as_str(), lead_line(&ready)), ("6 d", "You stay signed in.", None));
     }
@@ -498,7 +507,7 @@ mod tests {
         let mut shown = card("Projects/retry.md");
         let rows = screen(&mut shown);
         let all = rows.join("\n");
-        for wanted in [" backlog item ", "Retry a failed CI push", "priority  high", "repo      web", "state     drafting: 2 questions wait on you", "note      vault: Projects/retry.md", "Background", "- G reruns a red run.", "Open questions  2 wait on you before it starts", "▌? Which red runs count as flaky?", "  ? Should a rerun show on the row?", "  · How long to wait; the work settles it.", "Out of scope", "a answer · g start · w write it out · ↑↓ pick · pgdn pgup scroll · esc back"] {
+        for wanted in [" backlog item ", "Retry a failed CI push", "priority  high", "repo      web", "state     drafting: 2 questions wait on you", "note      vault: Projects/retry.md", "Background", "- G reruns a red run.", "Open questions  2 wait on you before it starts", "▌? Which red runs count as flaky?", "  ? Should a rerun show on the row?", "  · How long to wait; the work settles it.", "Out of scope", "a answer · g start · ↑↓ pick · pgdn pgup scroll · esc back"] {
             assert!(all.contains(wanted), "{wanted}:\n{all}");
         }
         assert!(!all.contains("$EDITOR"), "a vault note opens in no editor here");

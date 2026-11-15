@@ -13,8 +13,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The backlog has its own board page on 2, with every title whole; Areas and Routines move to 3 and 4.
 - The Work page shows the selected task's card beside the tasks, and it follows the cursor.
 - A vault backlog note missing a section of its template shows to write on the Backlog page.
-- w on any backlog item, or kebbie backlog write, has the lead write it out, even a complete one.
-- W on the Backlog page, or kebbie backlog write --all, writes out every item to write, five at a time.
+- Write it out, in a backlog item's options on ⏎, has the lead write out an item not filled in, and the item shows writing… until it is done; after 24 hours it can be asked again.
 - An idea the lead merges into an older note stays on the Backlog page for a week, pointing at that note.
 
 ### Fixed

@@ -68,10 +68,7 @@ pub(super) fn header(app: &App, width: u16) -> (Line<'static>, Vec<(u16, u16, Pa
     let shown = app.shown_page();
     let fresh = match shown {
         Page::Work => String::new(),
-        Page::Backlog => match app.write_queue() {
-            0 => format!("backlog: {}   ", backlog::freshness(&app.sources, &app.backlog)),
-            waiting => format!("backlog: {}   writing out: {waiting} wait   ", backlog::freshness(&app.sources, &app.backlog)),
-        },
+        Page::Backlog => format!("backlog: {}   ", backlog::freshness(&app.sources, &app.backlog)),
         Page::Areas => format!("vault index: {}   ", backlog::age(app.areas.synced)),
         Page::Routines | Page::Settings => String::new(),
     };

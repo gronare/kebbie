@@ -126,7 +126,7 @@ pub(super) fn draw_claimed(frame: &mut Frame, title: &str, about: &str, machine:
 }
 
 pub(super) fn restart_choices() -> Vec<Choice> {
-    let row = |key: char, label: &str, about: &str| Choice { key, act: None, label: label.to_string(), about: about.to_string(), link: None };
+    let row = |key: char, label: &str, about: &str| Choice { key, act: None, label: label.to_string(), about: about.to_string(), link: None, run: None };
     vec![
         row('1', "New conversation", "from its role and the vault; the old one stays on disk"),
         row('2', "Resume this conversation", "as to pick up a new Claude Code"),

@@ -56,7 +56,7 @@ A vault note short of a section of the vault's task template, or with a required
 
 ## Have an item written out
 
-Select any item on the Backlog page and press `w`, or `w` on its card, or choose **Write it out** in its options (`o`). The lead writes it out in place by the skill, even when it looks complete, and shows you the written item. From a shell:
+Select an item marked to write on the Backlog page and press `⏎`: its options open with **Write it out** first and **Open the card** second. The lead writes it out in place by the skill and shows you the written item. From a shell:
 
 ```bash
 kebbie backlog write Projects/fix-login.md
@@ -64,13 +64,7 @@ kebbie backlog write Projects/fix-login.md
 
 The reference is the one `kebbie backlog` lists.
 
-To write out every item marked to write, press `W` on the Backlog page, or choose **Write out all N to write** in an item's options, or:
-
-```bash
-kebbie backlog write --all
-```
-
-The lead gets them 5 at a time, and the next 5 once it has written those, until none is left. The status line shows `writing out: N wait` meanwhile, and the queue goes on after a restart.
+From the moment you ask, the item's row and card show `writing…` with how long ago you asked (`writing… 2 h`), also after a restart, until its text is complete. On the phone it shows as drafting. **Write it out** is offered only for an item to write that no one is writing yet; `kebbie backlog write` refuses one written out or being written. A request the lead has not completed in 24 hours may be sent again: the options show **Write it out again (asked 26 h ago)**, and `kebbie backlog write` accepts it.
 
 ## An idea merged into an older note
 

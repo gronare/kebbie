@@ -32,10 +32,18 @@ pub struct Choice {
     pub label: String,
     pub about: String,
     pub link: Option<String>,
+    pub run: Option<Run>,
+}
+
+// A choice with no key of its own on the board, run from its menu alone.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Run {
+    WriteOut,
+    OpenCard,
 }
 
 pub fn choice(act: Act, label: &str, about: &str) -> Choice {
-    Choice { key: keys::key(act), act: Some(act), label: label.to_string(), about: about.to_string(), link: None }
+    Choice { key: keys::key(act), act: Some(act), label: label.to_string(), about: about.to_string(), link: None, run: None }
 }
 
 pub fn style(color: Color) -> Style {

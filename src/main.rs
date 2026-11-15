@@ -262,9 +262,7 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
   kebbie backlog filed <kept:id> [<note>]
                                   the lead filed the item kebbie kept a row for in the note: the row gives way to it, or
                                   stays a week pointing at it when the note is older than the row (merged into it)
-  kebbie backlog write <ref>      send the lead a backlog item to write out, even one that looks complete
-  kebbie backlog write --all      write out every item marked to write: the lead gets 5 at a time, the next once it has
-                                  written those
+  kebbie backlog write <ref>      send the lead a backlog item marked to write, to write out; it shows writing… until done
   kebbie backlog template [--local|--vault] [--json]
                                   the sections a backlog item is written in, where new items go: the vault's task
                                   template, the file [board.backlog] template names, or kebbie's own
@@ -779,7 +777,6 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("messages") => messages::run(),
         Some("backlog") if arguments.positional(1) == Some("save") => backlog::save(),
         Some("backlog") if arguments.positional(1) == Some("filed") => backlog_file::filed(arguments.positional(2).unwrap_or_default(), arguments.positional(3)),
-        Some("backlog") if arguments.positional(1) == Some("write") && arguments.flag("--all") => backlog_file::write_all_cli(),
         Some("backlog") if arguments.positional(1) == Some("write") => backlog_file::write_out_cli(arguments.positional(2).unwrap_or_default()),
         Some("backlog") if arguments.positional(1) == Some("template") => item_template::shown(arguments.flag("--local"), arguments.flag("--vault"), arguments.flag("--json")),
         Some("backlog") if arguments.positional(1) == Some("add") => backlog_file::add(arguments.value("--priority"), arguments.value("--repo"), arguments.rest(2), arguments.flag("-")),

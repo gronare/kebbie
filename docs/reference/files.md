@@ -134,6 +134,7 @@ A `comments/` file holds the comment as GitHub gave it (author, text, file and l
 | `backlog-told` | The local items to write out that the lead has been told of, one file name per line. |
 | `backlog-kept.json` | The rows kebbie keeps for short items while the lead files them in the vault. |
 | `backlog-answers.json` | Your answers to items' open questions, kept until the lead folds each one in. |
+| `backlog-writing.json` | The items you asked to have written out, with when you asked, kept until each one's text is complete; they show `writing…` until then. |
 | `backlog-bodies.json` | kebbie's copy of the vault backlog notes' text, when the vault index on this machine holds none. |
 | `board-messages` | The board's memory of whether the messages panel is folded. |
 | `board-reports` | Whether the bugs and wishes to send show as a list or folded into their row. |

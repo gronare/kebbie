@@ -52,8 +52,6 @@ pub enum Act {
     Reset,
     Drop,
     StartAt,
-    WriteOut,
-    WriteAll,
     Refresh,
     Away,
     Update,
@@ -100,9 +98,9 @@ const ALL: &[Ctx] = &[Work, Backlog, Areas, Routines];
 const PAGES: &[Ctx] = &[Work, Backlog, Areas, Routines, Settings];
 
 impl Act {
-    pub const EVERY: [Act; 54] = [
+    pub const EVERY: [Act; 52] = [
         Act::Options, Act::ItemOptions, Act::Move, Act::Switch, Act::WorkPage, Act::BacklogPage, Act::AreasPage, Act::RoutinesPage, Act::SettingsPage, Act::Lead, Act::HideChat, Act::Messages, Act::Hub, Act::Help, Act::Inbox, Act::Next, Act::New, Act::Go, Act::Chat,
-        Act::Review, Act::Card, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Rebase, Act::Follow, Act::Tidy, Act::Push, Act::Stage, Act::Done, Act::DismissCi, Act::RerunCi, Act::Park, Act::Reset, Act::Drop, Act::StartAt, Act::WriteOut, Act::WriteAll, Act::Refresh, Act::Away,
+        Act::Review, Act::Card, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Rebase, Act::Follow, Act::Tidy, Act::Push, Act::Stage, Act::Done, Act::DismissCi, Act::RerunCi, Act::Park, Act::Reset, Act::Drop, Act::StartAt, Act::Refresh, Act::Away,
         Act::Update, Act::RestartLead, Act::Filter, Act::AreaRefresh, Act::Log, Act::Edit, Act::Pause, Act::Delete, Act::Fullscreen, Act::OpenImage, Act::Back, Act::Close, Act::Quit,
     ];
 
@@ -145,8 +143,6 @@ impl Act {
             Act::Reset => "reset",
             Act::Drop => "drop",
             Act::StartAt => "start_at",
-            Act::WriteOut => "write_out",
-            Act::WriteAll => "write_all",
             Act::Refresh => "refresh",
             Act::Away => "away",
             Act::Update => "update",
@@ -207,8 +203,6 @@ impl Act {
             Act::Reset => Default::Char('z'),
             Act::Drop => Default::Char('x'),
             Act::StartAt => Default::Char('l'),
-            Act::WriteOut => Default::Char('w'),
-            Act::WriteAll => Default::Char('W'),
             Act::Refresh => Default::Char('R'),
             Act::Away => Default::Char('A'),
             Act::Update => Default::Char('U'),
@@ -274,8 +268,6 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::Reset, on: &[Work], help: "reset the task: its work goes, its backlog item returns (asks first)", hint: Hint::No },
     Binding { act: Act::Drop, on: &[Work], help: "drop the task (asks first)", hint: Hint::No },
     Binding { act: Act::StartAt, on: BOARD, help: "start later: a queued task or a backlog item starts at the time you type (15:00, tomorrow 09:00, fri 09:00, 24 oct 09:00, in 2h)", hint: Hint::No },
-    Binding { act: Act::WriteOut, on: &[Backlog], help: "send the selected backlog item to the lead to write out, even one that looks complete; the lead writes it in place and shows it to you", hint: Hint::No },
-    Binding { act: Act::WriteAll, on: &[Backlog], help: "write out every item marked to write: the lead gets 5 at a time, the next once it has written those, and the status line shows how many wait", hint: Hint::No },
     Binding { act: Act::Refresh, on: BOARD, help: "ask the lead to refresh the backlog", hint: Hint::No },
     Binding { act: Act::Away, on: BOARD, help: "away mode on or off: the lead settles how-questions and keeps what-questions for you", hint: Hint::No },
     Binding { act: Act::Update, on: BOARD, help: "update everything to the latest (kebbie update); ↑ at the bottom shows when there is a newer version", hint: Hint::No },
@@ -465,6 +457,17 @@ mod tests {
 
     fn entries(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         pairs.iter().map(|(name, value)| (name.to_string(), value.to_string())).collect()
+    }
+
+    #[test]
+    fn writing_a_backlog_item_out_has_no_key() {
+        let keys = Keys::defaults();
+        for ctx in [Backlog, Card] {
+            for letter in ['w', 'W'] {
+                assert_eq!(keys.act(ctx, &KeyEvent::new(KeyCode::Char(letter), KeyModifiers::NONE)), None, "{letter} on {ctx:?}");
+            }
+        }
+        assert!(Act::EVERY.iter().all(|act| !act.id().starts_with("write")), "no write action to bind in config");
     }
 
     #[test]

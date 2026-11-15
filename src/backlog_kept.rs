@@ -12,7 +12,7 @@ pub const PREFIX: &str = "kept:";
 pub const MERGED_DAYS: u64 = 7;
 const DAY: u64 = 86_400;
 
-// What kebbie keeps for the backlog until the lead has acted on it: a short item while the lead files it in the vault, and the user's answers to an item's open questions while the lead folds them in.
+// What kebbie keeps for the backlog until the lead has acted on it: a short item while the lead files it in the vault, the user's answers to an item's open questions while the lead folds them in, and the items the user asked to have written out while the lead writes them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Kept {
     pub id: String,
@@ -48,7 +48,11 @@ fn answers_file(state: &Path) -> PathBuf {
     state.join("backlog-answers.json")
 }
 
-// Held across each read, change and write of one of the two files, so the board, the keeper and the CLI never drop each other's change.
+fn writing_file(state: &Path) -> PathBuf {
+    state.join("backlog-writing.json")
+}
+
+// Held across each read, change and write of one of the files, so the board, the keeper and the CLI never drop each other's change.
 pub(crate) struct Locked(std::fs::File);
 
 impl Locked {
@@ -212,6 +216,45 @@ pub fn settle_all(state: &Path, bodies: &[(&str, &str, &Template)]) -> Vec<Answe
     let (kept, folded): (Vec<Answer>, Vec<Answer>) = answers_in(state).into_iter().partition(still_open);
     if !folded.is_empty() {
         let _ = write_answers(state, &kept);
+    }
+    kept
+}
+
+// An item the user asked the lead to write out, and when: it shows writing… from the ask until its text is complete.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Writing {
+    pub item: String,
+    pub at: u64,
+}
+
+pub fn writing_in(state: &Path) -> Vec<Writing> {
+    read(&writing_file(state)).iter().map(|value| Writing { item: text(value, "item"), at: value["at"].as_u64().unwrap_or(0) }).filter(|writing| !writing.item.is_empty()).collect()
+}
+
+fn write_writing(state: &Path, writing: &[Writing]) -> Result<()> {
+    let values: Vec<Value> = writing.iter().map(|writing| json!({ "item": writing.item, "at": writing.at })).collect();
+    crate::state::write(&writing_file(state), Value::Array(values).to_string())
+}
+
+pub fn ask_writing(state: &Path, item: &str, at: u64) -> Result<()> {
+    let _locked = Locked::take(&writing_file(state))?;
+    let mut writing = writing_in(state);
+    writing.retain(|other| other.item != item);
+    writing.push(Writing { item: item.to_string(), at });
+    write_writing(state, &writing)
+}
+
+// An ask leaves once its item is written (`done`) or gone from a backlog read whole (`listed`, empty when the read found nothing); every ask still open comes back.
+pub fn settle_writing(state: &Path, listed: &[&str], done: &[&str]) -> Vec<Writing> {
+    let open = |writing: &Writing| !done.contains(&writing.item.as_str()) && (listed.is_empty() || listed.contains(&writing.item.as_str()));
+    let (kept, settled): (Vec<Writing>, Vec<Writing>) = writing_in(state).into_iter().partition(open);
+    if settled.is_empty() {
+        return kept;
+    }
+    let Ok(_locked) = Locked::take(&writing_file(state)) else { return kept };
+    let (kept, settled): (Vec<Writing>, Vec<Writing>) = writing_in(state).into_iter().partition(open);
+    if !settled.is_empty() {
+        let _ = write_writing(state, &kept);
     }
     kept
 }

@@ -514,20 +514,23 @@ fn the_local_backlog_holds_one_file_per_item_next_to_the_machine_config() {
 }
 
 #[test]
-fn backlog_write_sends_one_item_and_write_all_queues_every_item_to_write() {
+fn backlog_write_sends_an_item_to_write_once_and_refuses_one_written_or_being_written() {
     let lab = Lab::new("backlog-write");
-    for n in 0..7 {
-        assert!(lab.run(&["backlog", "add", &format!("Idea number {n}")]).status.success());
-    }
-    let one = lab.run(&["backlog", "write", "local:idea-number-0"]);
+    assert!(lab.run(&["backlog", "add", "Idea number one"]).status.success());
+    let body = "## Background\n\nIt drops.\n\n## Goal\n\nStay signed in.\n\n## What we know\n\nsrc/session.rs\n\n## Open questions\n\n## Out of scope\n\nSSO.\n\n## Source\n\nThe user, today.\n";
+    assert!(lab.run_with_stdin(&["backlog", "add", "Keep sessions", "-"], body).status.success());
+    let one = lab.run(&["backlog", "write", "local:idea-number-one"]);
     assert!(one.status.success() && stdout(&one).contains("Sent to the lead"), "{}{}", stdout(&one), stderr(&one));
+    assert!(lab.state.join("backlog-writing.json").exists(), "the ask is kept in the state folder, so it outlives a restart");
+    let shown = stdout(&lab.run(&["backlog"]));
+    assert!(shown.lines().any(|line| line.contains("(local:idea-number-one") && line.contains(")  writing…")), "kebbie backlog marks it writing… at once: {shown}");
+    let again = lab.run(&["backlog", "write", "local:idea-number-one"]);
+    assert!(!again.status.success() && stderr(&again).trim().lines().count() == 1 && stderr(&again).contains("being written out already"), "{}", stderr(&again));
+    let written = lab.run(&["backlog", "write", "local:keep-sessions"]);
+    assert!(!written.status.success() && stderr(&written).trim().lines().count() == 1 && stderr(&written).contains("written out already"), "{}", stderr(&written));
     let missing = lab.run(&["backlog", "write", "local:nothing-here"]);
     assert!(!missing.status.success() && stderr(&missing).contains("no backlog item"), "{}", stderr(&missing));
-    let all = lab.run(&["backlog", "write", "--all"]);
-    assert!(all.status.success() && stdout(&all).contains("Writing out 7 items"), "{}{}", stdout(&all), stderr(&all));
-    assert!(lab.state.join("backlog-write-queue.json").exists(), "the queue is kept in the state folder, so it outlives a restart");
-    let again = lab.run(&["backlog", "write", "--all"]);
-    assert!(again.status.success() && stdout(&again).contains("Already writing them out: 7 wait"), "{}", stdout(&again));
+    assert!(!lab.run(&["backlog", "write", "--all"]).status.success(), "there is no write-out-all");
 }
 
 #[test]

@@ -589,6 +589,20 @@ mod tests {
     }
 
     #[test]
+    fn an_item_the_user_asked_to_write_out_goes_to_the_phone_drafting_until_it_is_written() {
+        let state = crate::sh::test_dir("backlog-writing-phone");
+        let mut items = vec![(Entry { shape: Shape::default(), ..entry("vault", "Projects/old.md") }, None)];
+        let bodies = serde_json::json!({ "Projects/old.md": { "mtime": null, "body": "One line from before the template." } });
+        std::fs::write(crate::backlog::bodies_file(&state), bodies.to_string()).unwrap();
+        crate::backlog::shape_all(&mut items, &Default::default(), None, &state, &templates());
+        assert_eq!(rows(&items, &state, None, today(), &templates()).0[0].state, BacklogState::ToWrite);
+        crate::backlog_kept::ask_writing(&state, "Projects/old.md", 1_000).unwrap();
+        crate::backlog::shape_all(&mut items, &Default::default(), None, &state, &templates());
+        assert_eq!(rows(&items, &state, None, today(), &templates()).0[0].state, BacklogState::Drafting, "from the ask, before the lead starts");
+        let _ = std::fs::remove_dir_all(state);
+    }
+
+    #[test]
     fn a_merged_row_goes_to_the_phone_ready_naming_the_note_and_a_rewritten_body_goes_up_as_a_new_blob() {
         let state = crate::sh::test_dir("backlog-merged-row");
         let merged = Entry { source: "kept".to_string(), title: "Native app · merged into kebbie-ios".to_string(), reference: "kept:a1b2c3".to_string(), shape: Shape { state: Some(State::Ready), kept: true, into: "Projects/kebbie-ios.md".to_string(), ..Shape::default() }, ..entry("kept", "") };

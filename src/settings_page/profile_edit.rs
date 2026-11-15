@@ -149,7 +149,7 @@ impl Page {
     }
 
     pub(super) fn menu_choices(&self, name: &str) -> Vec<widgets::Choice> {
-        let row = |key: char, label: String, about: String| widgets::Choice { key, act: None, label, about, link: None };
+        let row = |key: char, label: String, about: String| widgets::Choice { key, act: None, label, about, link: None, run: None };
         let review = self.agents.profiles.iter().find(|profile| profile.name == name).is_some_and(|profile| profile.review);
         let file = profiles::kebbie_role(name).1;
         let every = if review { "every review" } else { "every task" };

@@ -195,40 +195,53 @@ impl Templates {
 
 struct ItemRead {
     state: crate::backlog_file::State,
+    marked: bool,
     body: String,
     filed: String,
 }
 
 // An item's state and markdown: a local one from the file already read, a vault one from the index or kebbie's copy.
 fn read_item(entry: &Entry, local: &std::collections::HashMap<String, crate::backlog_file::Item>, index: Option<&crate::vault::Index>, state: &Path, template: &crate::item_template::Template) -> Option<ItemRead> {
-    let (state_now, body, filed) = match entry.source.as_str() {
+    let (state_now, marked, body, filed) = match entry.source.as_str() {
         "local" => {
             let item = local.get(&entry.reference).cloned().or_else(|| crate::backlog_file::find(&entry.reference).map(|(_, item)| item))?;
-            (item.state(), item.body, item.filed)
+            (item.state(), item.status == "drafting", item.body, item.filed)
         }
         "vault" => {
             let drafting = index.and_then(|index| index.status_of(&entry.reference)).as_deref() == Some("draft");
             match vault_body(index, state, &entry.reference) {
-                Some(body) => (crate::backlog_file::state_of(drafting, false, &body, template), body, String::new()),
-                None if drafting => (crate::backlog_file::State::Drafting, String::new(), String::new()),
+                Some(body) => (crate::backlog_file::state_of(drafting, false, &body, template), drafting, body, String::new()),
+                None if drafting => (crate::backlog_file::State::Drafting, true, String::new(), String::new()),
                 None => return None,
             }
         }
         _ => return None,
     };
-    Some(ItemRead { state: state_now, body, filed })
+    Some(ItemRead { state: state_now, marked, body, filed })
 }
 
-// Each item's state, its questions waiting on the user and the answers of theirs still with the lead, settling the answers once for the whole backlog.
+// Each item's state, its questions waiting on the user and the answers of theirs still with the lead, settling the answers and the asks to write out once for the whole backlog; an item asked for shows drafting, writing…, until the lead has written its text whole.
 pub(crate) fn shape_all(items: &mut [(Entry, Option<String>)], local: &std::collections::HashMap<String, crate::backlog_file::Item>, index: Option<&crate::vault::Index>, state: &Path, templates: &Templates) {
     let read: Vec<Option<ItemRead>> = items.iter().map(|(entry, _)| read_item(entry, local, index, state, templates.of(&entry.source))).collect();
     let bodies: Vec<(&str, &str, &crate::item_template::Template)> = items.iter().zip(&read).filter_map(|((entry, _), read)| Some((entry.reference.as_str(), read.as_ref()?.body.as_str(), templates.of(&entry.source)))).collect();
     let kept = crate::backlog_kept::settle_all(state, &bodies);
+    let listed: Vec<&str> = items.iter().map(|(entry, _)| entry.reference.as_str()).collect();
+    let written: Vec<&str> = items.iter().zip(&read).filter(|(_, read)| read.as_ref().is_some_and(|read| read.state != crate::backlog_file::State::ToWrite && !read.marked)).map(|((entry, _), _)| entry.reference.as_str()).collect();
+    let writing = crate::backlog_kept::settle_writing(state, &listed, &written);
     for ((entry, body), read) in items.iter_mut().zip(read) {
-        let Some(read) = read else { continue };
+        let asked = writing.iter().find(|writing| writing.item == entry.reference).map(|writing| writing.at);
+        let Some(read) = read else {
+            if asked.is_some() {
+                (entry.shape.state, entry.shape.writing) = (Some(crate::backlog_file::State::Drafting), asked);
+            }
+            continue;
+        };
         let template = templates.of(&entry.source);
         let answered: Vec<String> = kept.iter().filter(|answer| answer.item == entry.reference).map(|answer| answer.question.clone()).collect();
         entry.shape = crate::backlog_file::shape_of(read.state, &read.body, &answered, &read.filed, template);
+        if asked.is_some() {
+            (entry.shape.state, entry.shape.writing) = (Some(crate::backlog_file::State::Drafting), asked);
+        }
         if entry.summary.is_empty() && read.state == crate::backlog_file::State::Ready {
             entry.summary = template.first_line(&read.body);
         }
@@ -596,7 +609,10 @@ pub fn show() -> Result<String> {
     let mut lines = vec![if fetched(&sources).is_empty() { format!("from {}", local_dir()) } else { format!("updated {}", age(backlog.updated)) }];
     for entry in &backlog.entries {
         let item = (entry.source == "local").then(|| crate::backlog_file::find(&entry.reference)).flatten();
-        let state = entry.shape.state.filter(|state| *state != crate::backlog_file::State::Ready).map_or(String::new(), |state| format!("  {}", state.word()));
+        let state = match (entry.shape.writing, entry.shape.state) {
+            (Some(at), _) => format!("  {}", crate::backlog_file::writing_word(at, now())),
+            (None, state) => state.filter(|state| *state != crate::backlog_file::State::Ready).map_or(String::new(), |state| format!("  {}", state.word())),
+        };
         let file = item.as_ref().map_or(String::new(), |(path, _)| format!("  {}", path.display()));
         lines.push(format!("  [{}] {}  ({} · {}){state}{file}", entry.priority, entry.title, entry.reference, entry.area));
     }
@@ -662,6 +678,34 @@ mod tests {
         assert_eq!((items[1].0.shape.waiting, items[1].0.shape.with_lead), (1, 0), "{:?}", items[1].0.shape);
         let left: Vec<String> = crate::backlog_kept::answers_in(&state).into_iter().map(|answer| answer.question).collect();
         assert_eq!(left, ["Which job?", "Kept?"], "the folded answer leaves; one not in the backlog stays");
+        let _ = std::fs::remove_dir_all(state);
+    }
+
+    #[test]
+    fn an_item_asked_for_shows_writing_across_a_restart_until_its_text_is_complete() {
+        use crate::backlog_file::State;
+        let state = crate::sh::test_dir("backlog-writing");
+        let item = |status: &str, body: &str| crate::backlog_file::parse("old-idea", &format!("+++\ntitle = \"Old idea\"\npriority = \"high\"\nrepo = \"app\"\nstatus = \"{status}\"\nfiled = \"2026-11-01\"\n+++\n\n{body}\n")).unwrap();
+        let written = "## Background\n\nB.\n\n## Goal\n\nG.\n\n## What we know\n\nK.\n\n## Open questions\n\n## Out of scope\n\nO.\n\n## Source\n\nS.";
+        let templates = || Templates { local: crate::item_template::Template::builtin(), vault: crate::item_template::Template::builtin() };
+        let shaped = |item: &crate::backlog_file::Item| {
+            let local: std::collections::HashMap<String, crate::backlog_file::Item> = [(item.reference(), item.clone())].into_iter().collect();
+            let mut items = vec![(item.entry(today()), None)];
+            shape_all(&mut items, &local, None, &state, &templates());
+            items.remove(0).0.shape
+        };
+        let short = item("backlog", "One line.");
+        assert_eq!((shaped(&short).state, shaped(&short).writing), (Some(State::ToWrite), None));
+        crate::backlog_kept::ask_writing(&state, &short.reference(), 1_000).unwrap();
+        assert_eq!((shaped(&short).state, shaped(&short).writing), (Some(State::Drafting), Some(1_000)), "writing… from the ask, read back from the state folder as after a restart");
+        let started = item("drafting", "One line, and the lead on it.");
+        assert_eq!(shaped(&started).writing, Some(1_000), "the lead marking it drafting keeps it writing…");
+        assert_eq!(shaped(&item("backlog", written)).state, Some(State::Ready), "written whole, it is ready");
+        assert!(crate::backlog_kept::writing_in(&state).is_empty(), "and the ask is settled");
+        assert_eq!(shaped(&short).state, Some(State::ToWrite));
+        crate::backlog_kept::ask_writing(&state, "local:gone", 1_000).unwrap();
+        shaped(&short);
+        assert!(crate::backlog_kept::writing_in(&state).is_empty(), "an ask for an item gone from the backlog leaves");
         let _ = std::fs::remove_dir_all(state);
     }
 

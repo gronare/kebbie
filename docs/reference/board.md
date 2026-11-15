@@ -87,11 +87,12 @@ A backlog item's row shows its state in the right field:
 | --- | --- |
 | `to write · 0 d` | An item the lead has yet to write out: a short one you added, or a vault note short of a section of the vault's task template or with a required one empty. A row marked `kept by kebbie` is one you added while the vault takes new items: kebbie keeps it until the lead's note replaces it. A vault note shows its state once kebbie has its text, never before. |
 | `drafting · 0 d` | The lead is writing it out. A muted line under the row says so. |
+| `writing… 2 h · 0 d` | You asked for it to be written out 2 hours ago, and the lead has yet to finish it. It shows from the moment you ask until its text is complete, also after a restart. |
 | `2 questions · 3 d` | Questions on the item wait on you before it can start, in yellow. Answer them on its card. |
 | `6 d` | Ready: written out, and no question holds it. Its age alone. |
 | `<your words> · merged into <note>` | An item you added that the lead filed into an older note. The row stays 7 days, its age counted from when you added it; `⏎` opens the note's card and `g` starts the note. |
 
-kebbie sends the lead a vault note to write only when you ask: `w` for one item, `W` for all of them. While `W`'s queue runs, the status line shows `writing out: N wait`.
+kebbie sends the lead a vault note to write only when you ask: **Write it out** in the item's options, offered while the item is to write and no one is writing it. As [`kebbie backlog write`](commands.md#seeing-what-is-going-on).
 
 ### A task row
 
@@ -456,14 +457,12 @@ For an older Claude Code, or when the inbox refuses a message, kebbie types it i
 | Key | Action | Offered when |
 | --- | --- | --- |
 | `g` | Start the item as a task, with the whole item as its prompt. Asks for a name, suggested from the title. While questions on it wait on you, the status line says so for 3 seconds, and `g` again within them starts it anyway. | On an item. |
-| `⏎` | The item's card. A row kept by kebbie or a Linear issue has no card: `⏎` is its options. | On an item. |
-| `o` | The item's options, each one explained. | On an item. |
+| `⏎` | The item's card. On an item to write that no one is writing yet, its options, with **Write it out** first and **Open the card** second. A row kept by kebbie or a Linear issue has no card: `⏎` is its options. | On an item. |
+| `o` | The item's options, each one explained. **Write it out** among them on an item to write that no one is writing yet, or **Write it out again (asked 26 h ago)** on one the lead left for 24 hours: `⏎` on it. | On an item. |
 | `g` | Go to the task working on this note, or resume the note as a new task. | On an ONGOING note. |
 | `o` | Start a task (a name, suggested from the line), Add to the running task that found it (a task name, filled in), Keep in backlog, or Dismiss. A kept item stays, marked `kept`, and its card shows the choice. | On a FOUND BY TASKS item. |
 | `⏎` | The note's card. | On an ONGOING note. |
 | `l` | Start the item as a task later: a name, then a time. It waits under Queued until then, as with [`kebbie start --at`](commands.md#kebbie-start-name-prompt). | On an item. |
-| `w` | Write it out: the lead writes the item out in place by the skill, even when it looks complete, and shows it to you. On a merged row, the note it went into. As [`kebbie backlog write`](commands.md#seeing-what-is-going-on). | On an item, not a Linear issue. |
-| `W` | Write out all: every item marked to write goes to the lead 5 at a time, the next 5 once it has written those, until none is left. The queue outlives a restart. Pressed again while it runs, it says how many wait. As `kebbie backlog write --all`. | An item is to write. |
 | `R` | Ask the lead to refresh the backlog. | On an item. |
 | `n` | Add an item: a line, then a priority. The lead writes it out. | `"local"` or `"vault"` is a source. |
 
@@ -481,7 +480,6 @@ The item's card shows its title, priority, repo, state, the day it was filed and
 | `↑` `↓` | Pick a question. |
 | `a`, `⏎` | Answer the picked question. `⏎` sends the answer to the lead, which folds it into the item. Until it does, the question shows `with the lead: "<your answer>"`. |
 | `g` | Start the item, as `g` on its row. |
-| `w` | Ask the lead to write the item out, as `w` on its row. |
 | `e` | Open the item's file in your `$EDITOR`. Local items only. |
 | `pgdn` `pgup` | Scroll. |
 | `esc` | Close the card, or the answer box back to the card. |
@@ -997,7 +995,7 @@ inbox = "I"
 new = "N"
 ```
 
-The actions are `work_page`, `backlog_page`, `areas_page`, `routines_page`, `settings_page`, `hide_chat`, `messages`, `hub`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `rebase`, `follow`, `tidy`, `push`, `try` (the older name `stage` still reads), `done`, `dismiss_ci`, `rerun_ci`, `park`, `reset`, `drop`, `start_at`, `refresh`, `away`, `update`, `restart_lead`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, `item_options` (`o` on the Backlog page), `write_out` (`w` on the Backlog page), `write_all` (`W` on the Backlog page), and `close` (`q`).
+The actions are `work_page`, `backlog_page`, `areas_page`, `routines_page`, `settings_page`, `hide_chat`, `messages`, `hub`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `rebase`, `follow`, `tidy`, `push`, `try` (the older name `stage` still reads), `done`, `dismiss_ci`, `rerun_ci`, `park`, `reset`, `drop`, `start_at`, `refresh`, `away`, `update`, `restart_lead`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, `item_options` (`o` on the Backlog page), and `close` (`q`).
 
 - The key is one plain character.
 - `esc`, `ctrl+c`, `⏎`, the arrows, `j` `k` and `tab` stay where they are, and so do the keys inside a window or a text field.

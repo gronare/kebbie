@@ -10,7 +10,7 @@ use crate::status::{Group, Item};
 use super::{App, Column, Hit, Mode, Ongoing};
 use super::detail::task_links;
 use super::space::{Process, settings_of};
-use super::widgets::{Choice, choice, menu_lines, modal, options_lines};
+use super::widgets::{Choice, Run, choice, menu_lines, modal, options_lines};
 
 pub(super) fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_worker: Option<&str>) -> Vec<Choice> {
     if let Some((now, drop)) = item.and_then(|item| item.start_now_means().zip(item.drop_means())) {
@@ -164,19 +164,17 @@ pub(super) fn found_choices(item: &crate::found::Item, target: Option<&str>) -> 
     ]
 }
 
-pub(super) fn backlog_choices(sources: &[Source], entry: Option<&Entry>, to_write: usize, queued: usize) -> Vec<Choice> {
-    let mut choices = vec![
-        choice(Act::Go, "Start as task", "a worktree, a Space and Claude with this as its prompt"),
-        choice(Act::StartAt, "Start at…", "the same, at a time you type: it waits under Queued until then"),
-    ];
-    if entry.is_some_and(|entry| entry.source != "linear") {
-        choices.push(choice(Act::WriteOut, "Write it out", "the lead writes it out in place by the skill, even when it looks complete, and shows it to you"));
+pub(super) fn backlog_choices(sources: &[Source], entry: Option<&Entry>, now: u64) -> Vec<Choice> {
+    let mut choices = Vec::new();
+    if let Some(entry) = entry.filter(|entry| crate::backlog_file::writable(entry, now)) {
+        let label = crate::backlog_file::stale_ask(entry, now).map_or("Write it out".to_string(), |at| format!("Write it out again (asked {} ago)", crate::backlog_file::asked_ago(at, now)));
+        choices.push(Choice { key: '⏎', act: None, label, about: "the lead writes it out in place by the skill and shows it to you; the row shows writing… until it is saved".to_string(), link: None, run: Some(Run::WriteOut) });
+        if super::item_card::has_card(entry) {
+            choices.push(Choice { key: ' ', act: None, label: "Open the card".to_string(), about: "the item as it stands, with its questions".to_string(), link: None, run: Some(Run::OpenCard) });
+        }
     }
-    if queued > 0 {
-        choices.push(choice(Act::WriteAll, &format!("Writing out: {queued} wait"), "the lead gets 5 at a time, the next once it has written those"));
-    } else if to_write > 0 {
-        choices.push(choice(Act::WriteAll, &format!("Write out all {to_write} to write"), "the lead gets 5 at a time, the next once it has written those, until none is left"));
-    }
+    choices.push(choice(Act::Go, "Start as task", "a worktree, a Space and Claude with this as its prompt"));
+    choices.push(choice(Act::StartAt, "Start at…", "the same, at a time you type: it waits under Queued until then"));
     choices.push(choice(Act::Refresh, "Refresh the backlog", &backlog::refresh_label(sources)));
     if crate::config::filing(sources).is_some() {
         choices.push(choice(Act::New, "Add an item", "a line and a priority; the lead writes it out"));
@@ -211,7 +209,7 @@ impl App {
             Column::Backlog => match self.backlog_row(self.backlog_selected) {
                 Some(super::BacklogRow::Ongoing(note)) => ongoing_choices(&self.ongoing[note]),
                 Some(super::BacklogRow::Found(found)) => found_choices(&self.found[found], self.found_target(&self.found[found]).as_deref()),
-                _ => backlog_choices(&self.sources, self.selected_entry().as_ref(), crate::backlog_file::unwritten(&self.backlog.entries, &crate::backlog_file::dir()).len(), self.write_queue()),
+                _ => backlog_choices(&self.sources, self.selected_entry().as_ref(), crate::messages::now()),
             },
         }
     }
@@ -219,7 +217,7 @@ impl App {
 
 // Keys 1 to 9, one per link, so a task opens at most nine of its links from here.
 pub(super) fn link_choices(links: Vec<(String, String)>) -> Vec<Choice> {
-    links.into_iter().zip('1'..='9').map(|((label, url), key)| Choice { key, act: None, label, about: url.clone(), link: Some(url) }).collect()
+    links.into_iter().zip('1'..='9').map(|((label, url), key)| Choice { key, act: None, label, about: url.clone(), link: Some(url), run: None }).collect()
 }
 
 fn menu_group(act: Option<Act>) -> &'static str {
@@ -238,6 +236,7 @@ impl App {
         let choices = self.choices();
         let count = choices.len();
         let typed = match key.code {
+            KeyCode::Char(' ') => None,
             KeyCode::Char(character) => choices.iter().find(|choice| choice.key == character),
             _ => None,
         };
@@ -256,11 +255,21 @@ impl App {
     }
 
     pub(super) fn run_choice(&mut self, chosen: &Choice) {
-        match (&chosen.link, chosen.act) {
-            (Some(url), _) if self.viewer.is_none() => self.say(format!("No browser where the board runs; the address: {url}")),
-            (Some(url), _) => self.open_file(url),
-            (None, Some(act)) => self.act(act),
-            (None, None) => {}
+        match (&chosen.link, chosen.act, chosen.run) {
+            (Some(url), _, _) if self.viewer.is_none() => self.say(format!("No browser where the board runs; the address: {url}")),
+            (Some(url), _, _) => self.open_file(url),
+            (None, Some(act), _) => self.act(act),
+            (None, None, Some(Run::WriteOut)) => {
+                if let Some(entry) = self.selected_entry() {
+                    self.write_out(&entry);
+                }
+            }
+            (None, None, Some(Run::OpenCard)) => {
+                if let Some(entry) = self.selected_entry() {
+                    self.open_item_card(entry);
+                }
+            }
+            (None, None, None) => {}
         }
     }
 }
@@ -320,15 +329,46 @@ mod tests {
 
     #[test]
     fn the_backlog_column_adds_an_item_where_new_items_are_filed() {
-        let keys = |sources: &[Source]| backlog_choices(sources, None, 0, 0).iter().map(|choice| choice.key).collect::<String>();
+        let keys = |sources: &[Source]| backlog_choices(sources, None, 0).iter().map(|choice| choice.key).collect::<String>();
         assert_eq!(keys(&[Source::Local]), "glRn");
         assert_eq!(keys(&[Source::Vault, Source::Linear]), "glRn", "with the vault the lead files it there");
         assert_eq!(keys(&[Source::Linear]), "glR", "Linear is only read");
-        let item = |source: &str| Entry { source: source.to_string(), reference: "Projects/x.md".to_string(), ..Entry::default() };
-        let on = |entry: &Entry| backlog_choices(&[Source::Vault, Source::Linear], Some(entry), 0, 0).iter().map(|choice| choice.key).collect::<String>();
-        assert_eq!((on(&item("vault")), on(&item("kept")), on(&item("linear"))), ("glwRn".to_string(), "glwRn".to_string(), "glRn".to_string()), "any item but a Linear issue is written out on w");
-        let labels = |to_write: usize, queued: usize| backlog_choices(&[Source::Vault], None, to_write, queued).into_iter().filter(|choice| choice.act == Some(Act::WriteAll)).map(|choice| choice.label).collect::<Vec<_>>();
-        assert_eq!((labels(0, 0), labels(12, 0), labels(12, 7)), (Vec::<String>::new(), vec!["Write out all 12 to write".to_string()], vec!["Writing out: 7 wait".to_string()]));
+    }
+
+    #[test]
+    fn write_it_out_is_offered_only_for_an_item_to_write_that_no_one_is_writing() {
+        use crate::backlog_file::{Shape, State};
+        let now = 1_794_744_000;
+        let item = |source: &str, state: Option<State>, writing: Option<u64>| Entry { source: source.to_string(), reference: "Projects/x.md".to_string(), shape: Shape { state, writing, ..Shape::default() }, ..Entry::default() };
+        let labels = |entry: Entry| backlog_choices(&[Source::Vault, Source::Linear], Some(&entry), now).into_iter().map(|choice| choice.label).collect::<Vec<_>>();
+        assert_eq!(labels(item("vault", Some(State::ToWrite), None))[..3], ["Write it out", "Open the card", "Start as task"], "first, then the card");
+        assert_eq!(labels(item("kept", Some(State::ToWrite), None))[..2], ["Write it out", "Start as task"], "a kept row has no card");
+        assert_eq!(labels(item("local", Some(State::ToWrite), None))[0], "Write it out");
+        let first = |entry: Entry| labels(entry)[0].clone();
+        assert_eq!(first(item("vault", Some(State::Drafting), Some(now - 23 * 3600))), "Start as task", "asked under a day ago: writing…");
+        assert_eq!(first(item("vault", Some(State::Drafting), Some(now - 26 * 3600))), "Write it out again (asked 26 h ago)", "a request the lead left a day may go again");
+        assert_eq!(first(item("vault", Some(State::Drafting), None)), "Start as task", "the lead is drafting it");
+        assert_eq!(first(item("vault", Some(State::Ready), None)), "Start as task", "written out");
+        assert_eq!(first(item("vault", None, None)), "Start as task", "its text has not reached this machine");
+        assert_eq!(first(item("linear", Some(State::ToWrite), None)), "Start as task", "a Linear issue is written in Linear");
+        let write = backlog_choices(&[Source::Vault], Some(&item("vault", Some(State::ToWrite), None)), now).into_iter().find(|choice| choice.run == Some(Run::WriteOut)).unwrap();
+        assert_eq!((write.act, write.key), (None, '⏎'), "no key of its own: ⏎ on it in the options");
+    }
+
+    #[test]
+    fn enter_on_an_item_to_write_opens_its_options_and_on_any_other_its_card() {
+        use crate::backlog_file::{Shape, State};
+        let mut app = test_app(Vec::new());
+        let note = |reference: &str, state: State| Entry { source: "vault".to_string(), title: reference.to_string(), reference: reference.to_string(), shape: Shape { state: Some(state), ..Shape::default() }, ..Entry::default() };
+        app.backlog.entries = vec![note("Projects/old.md", State::ToWrite), note("Projects/written.md", State::Ready)];
+        (app.column, app.backlog_selected) = (Column::Backlog, 0);
+        app.open_options();
+        assert!(matches!(app.mode, Mode::Options(0)), "an item to write opens its options");
+        assert_eq!(app.choices()[0].label, "Write it out");
+        app.mode = Mode::Normal;
+        app.backlog_selected = 1;
+        app.open_options();
+        assert!(!matches!(app.mode, Mode::Options(_)), "a written item opens its card, not the options");
     }
 
     #[test]
