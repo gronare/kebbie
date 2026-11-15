@@ -22,7 +22,7 @@ pub(super) fn subtask_hint(number: usize) -> Line<'static> {
     let key = |key: String| Span::styled(key, style(MAUVE));
     let label = |text: &str| Span::styled(text.to_string(), style(MUTED));
     Line::from(vec![
-        key(keys::map().label(Act::Options)), label(&format!(" opens subtask {number} · ")), key(keys::key(Act::Permit).to_string()), label(" accepts it · "),
+        key(keys::map().label(Act::Move)), label(" steps · "), key(keys::map().label(Act::Options)), label(&format!(" opens subtask {number} · ")), key(keys::key(Act::Permit).to_string()), label(" accepts it · "),
         key(keys::key(Act::Review).to_string()), label(" reads its diff · "), key(keys::map().label(Act::Back)), label(" back to the task"),
     ])
 }

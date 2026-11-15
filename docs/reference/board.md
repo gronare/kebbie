@@ -149,16 +149,17 @@ With [`task.steps`](configuration.md) on and subtasks listed, the task's subtask
 | `accept N · r review` | Under the subtasks: the first subtask waiting for you. `r` opens the review, and [`kebbie accept`](commands.md#kebbie-accept-name-sha) accepts it. |
 | `accept subtask N · r review` | With [`task.require_accept`](configuration.md) on, a ready task with a subtask to accept waits under Needs you with this line: it cannot be pushed until subtask N is accepted. |
 
-`↓` on the selected task goes into its subtask rows, one at a time, and on to the next task after the last; `↑` goes back the same way, and from the next task lands on the last subtask. The subtask under the cursor is lit, the task keeps its bar, and the keys line at the bottom reads `⏎ opens subtask N · a accepts it · r reads its diff · esc back to the task`. A long list scrolls with the cursor. On a subtask row:
+`↑` `↓` move from task to task and never stop on a subtask row. The subtasks are reached inside the task: `S`, on the task or as *Its subtasks* in its options (`⏎`), switches to a list of them over the board, the cursor on the first that waits for you. In the list `↑` `↓` step through the task's subtasks and stay inside it, the card beside the tasks shows the subtask under the cursor, and the keys line at the bottom reads `↑ ↓ j k steps · ⏎ opens subtask N · a accepts it · r reads its diff · esc back to the task`. In the list:
 
 | Key | Action |
 | --- | --- |
-| `⏎` | Open the [subtask view](#the-subtask-view). |
+| `↑` `↓` `j` `k` | The previous or next subtask; the first and last stay where they are. |
+| `⏎` | Open the [subtask view](#the-subtask-view); `esc` there comes back to the list. |
 | `a` | Accept that subtask, as [`kebbie accept <name> --subtask <id>`](commands.md#kebbie-accept-name-sha) does. On the task's own row, `a` stays [let the lead push it](#on-a-task). |
 | `r` | Open the review on that subtask. A review already open in its Space moves to it. |
 | `esc` | Back to the task's row. |
 
-`←` `→` still switch between Work and Backlog.
+A task of a single subtask has no list: its row says it all.
 
 A subtask to accept leaves the task in the group its phase gives it, under Working while it builds on. The state word always shows: a long title is shortened at a word with `…` to make room, and only when the title would drop below 12 columns does the rules part shorten (`· 2 breaks`, `· checking`, `· not checked`, `· past the rules`) and then go. Without subtasks, the row is as above. See [Work in subtasks](../how-to/work-in-steps.md).
 
@@ -566,14 +567,14 @@ COMMITS
 | `RECIPE`, `LAST REPORT` | For a task without a card: the recipe it runs and why, and its last report with its age. |
 | `COMMITS` | Each commit's short sha and subject. |
 
-- On a subtask row it shows that subtask as the [subtask view](#the-subtask-view) does.
+- While the subtask list is open, it shows the subtask under the cursor as the [subtask view](#the-subtask-view) does.
 - On a row that is not a task, such as the bugs to send, the Done block or a comment, it says so in one line.
 - `→` or a click focuses it, and `↑` `↓` `pgup` `pgdn` then scroll it; `←` or `esc` gives the keys back to the tasks.
 - `s` opens the card in its window, with its images.
 
 ### The subtask view
 
-Opened by `⏎` on a subtask row, it fills the board:
+Opened by `⏎` in a task's [subtask list](#a-task-in-subtasks), it fills the board:
 
 ```
 Switch the payment provider to Stripe › Subtask 2 of 4
@@ -590,7 +591,7 @@ FILES
 BUILT
   Every charge goes through one gateway, so the provider is one class.
 
-← → subtask 1 or 3 · r reads the diff · a accepts · esc back to the board
+← → subtask 1 or 3 · r reads the diff · a accepts · esc back to the list
 ```
 
 | Part | Shows |
@@ -609,7 +610,7 @@ BUILT
 | `a` | Accept this subtask; the view stays open and shows it accepted. |
 | `r` | Open the review on this subtask. |
 | `⏎` | Answer the obstacle, while it waits for you. |
-| `esc`, `q` | Back to the board, the cursor on the subtask you were on, showing its new state. |
+| `esc`, `q` | Back to the subtask list, the cursor on the subtask you were on, showing its new state. |
 
 ### The card window
 

@@ -161,9 +161,10 @@ const WORK: Sheet = Sheet {
             bind(&[Act::OpenImage], "open the image", "open image"),
             bind(&[Act::Push], "push", "push"),
         ]),
-        group("ON A SUBTASK ROW", &[
-            bind(&[Act::Move], "walk in and out", "walk"),
-            bind(&[Act::Options], "open it", "open"),
+        group("SUBTASKS", &[
+            bind(&[Act::Subtasks], "list a task's", "list"),
+            bind(&[Act::Move], "step", "step"),
+            bind(&[Act::Options], "open one", "open"),
             bind(&[Act::Permit], "accept it", "accept"),
             bind(&[Act::Review], "its review", "review"),
             bind(&[Act::Back], "the task", "back"),
@@ -173,7 +174,7 @@ const WORK: Sheet = Sheet {
             bind(&[Act::Options], "answer", "answer"),
             bind(&[Act::Permit], "accept", "accept"),
             bind(&[Act::Review], "its review", "review"),
-            bind(&[Act::Back], "the board", "back"),
+            bind(&[Act::Back], "the list", "back"),
         ]),
     ],
     left: &[0, 1, 2, 3],
@@ -520,8 +521,8 @@ mod tests {
         assert!(row_with(&rows, "U         update kebbie").contains("↑ 0.26.0"), "{screen}");
         assert!(screen.contains("h         hide or show the lead's chat") && screen.contains("ctrl+c    twice: quit the board"), "{screen}");
         assert!(screen.contains("in the card window  ← → image · ↑ ↓ j k scroll · f fullscreen · o open the image · p push"), "{screen}");
-        assert!(screen.contains("on a subtask row  ↑ ↓ j k walk in and out · ⏎ open it · a accept it · r its review · esc the task"), "{screen}");
-        assert!(screen.contains("in the subtask view  ← → previous · next · ⏎ answer · a accept · r its review · esc the board"), "{screen}");
+        assert!(screen.contains("subtasks  S list a task's · ↑ ↓ j k step · ⏎ open one · a accept it · r its review · esc the task"), "{screen}");
+        assert!(screen.contains("in the subtask view  ← → previous · next · ⏎ answer · a accept · r its review · esc the list"), "{screen}");
         assert!(screen.contains("areas (3) and routines (4) show their own keys here when you are on them · any key closes") && !screen.contains("↓ more"), "{screen}");
         assert!(screen.contains(&crate::shown_kebbie()), "the window names the kebbie that runs: {screen}");
         assert!(screen.contains("a problem with kebbie? ask the lead: the bugs it saves wait under Work to be sent") && !screen.contains("bug reports"), "{screen}");

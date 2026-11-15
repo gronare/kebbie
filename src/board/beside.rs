@@ -300,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn on_a_subtask_row_the_card_is_that_subtask_and_on_the_issues_row_a_hint() {
+    fn in_the_subtask_list_the_card_is_that_subtask_and_on_the_issues_row_a_hint() {
         let mut steps = stripe();
         holds(&mut steps.items[1], &["3333333cccc"], false);
         let mut item = stepped(steps);
@@ -309,12 +309,13 @@ mod tests {
         app.subtask_io = Io { load: Rc::new(|_, _, step| Loaded { files: Vec::new(), built: vec![format!("{} keeps the charge in one place.", step.title)], obstacle: None }), ..Io::default() };
         let (side, _) = card_side(&mut app);
         assert!(side.join("\n").contains("working · billing · 2 commits · 1 of 4 subtasks accepted"), "{}", side.join("\n"));
-        press(&mut app, key(KeyCode::Down));
+        press(&mut app, key(KeyCode::Char('S')));
         press(&mut app, key(KeyCode::Down));
         let (side, _) = card_side(&mut app);
         let screen = side.join("\n");
         assert!(screen.contains("CARD   Subtask 3 of 4 · Switch the payment provider") && screen.contains("Add Stripe as the gateway"), "{screen}");
         assert!(screen.contains("Add Stripe as the gateway keeps the charge in one place.") && screen.contains("3333333  subject of 3333333cccc"), "{screen}");
+        press(&mut app, key(KeyCode::Esc));
         app.offers = vec![Offer { id: "a1b2c3".to_string(), report: BugReport { kind: None, title: "push hid git's error".to_string(), text: String::new(), version: "0.26.0".to_string(), os: "macos".to_string() } }];
         app.focus_offers(0);
         let (side, _) = card_side(&mut app);

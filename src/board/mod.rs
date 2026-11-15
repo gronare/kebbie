@@ -148,6 +148,7 @@ enum Mode {
     Update,
     AgentUpdates,
     Subtask(Box<subtask_view::View>),
+    Subtasks,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -745,6 +746,7 @@ impl App {
             Mode::Update => self.handle_update(key),
             Mode::AgentUpdates => self.handle_agent_updates(key),
             Mode::Subtask(view) => self.handle_subtask(view, key, act),
+            Mode::Subtasks => self.handle_subtasks(act, &key),
             Mode::Report { id, shown, scroll, read, .. } => self.confirm_report(id, shown, scroll, read, key, cancels),
             Mode::ReportAll { shown, scroll, read, .. } => self.confirm_report_all(shown, scroll, read, key, cancels),
             Mode::NoteCard { key: note, scroll, .. } => self.handle_note_card(note, scroll, key, cancels),
@@ -820,9 +822,6 @@ impl App {
         }
         let ctx = self.ctx();
         let Some(act) = keys::map().act(ctx, &key) else { return };
-        if ctx == Ctx::Work && self.subtask_key(act, &key) {
-            return;
-        }
         match act {
             Act::Messages => self.press_m(),
             Act::Hub => self.open_hub(),
@@ -833,7 +832,6 @@ impl App {
                     return;
                 }
                 self.move_selection(if down { 1 } else { -1 });
-                self.landed(down, before);
                 if down && ctx == Ctx::Work && self.work_selected == before {
                     if self.offers.is_empty() { self.focus_fixed() } else { self.focus_offers(0) }
                 }
@@ -987,6 +985,7 @@ impl App {
                         }
                     }
                     Act::Review => self.open_review(&item),
+                    Act::Subtasks => self.open_subtasks(&item),
                     Act::Card => match (item.path.clone(), self.card_of(&item), self.question_of(&item)) {
                         (_, _, Some(at)) => self.open_questions(Some(at)),
                         (Some(path), Some(_), None) => self.mode = Mode::Card { path, name: item.name.clone(), scroll: 0, image: 0 },

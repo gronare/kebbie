@@ -202,7 +202,7 @@ pub(super) fn hint(steps: &[Subtask], at: usize, waits: bool) -> Line<'static> {
         parts.push((keys::key(Act::Review).to_string(), " reads the diff".to_string()));
         parts.push((keys::key(Act::Permit).to_string(), " accepts".to_string()));
     }
-    parts.push((keys::map().label(Act::Back), " back to the board".to_string()));
+    parts.push((keys::map().label(Act::Back), " back to the list".to_string()));
     let mut spans = Vec::new();
     for (index, (keys, said)) in parts.into_iter().enumerate() {
         if index > 0 {
@@ -223,6 +223,24 @@ pub(super) fn draw(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), area);
 }
 
+// The list the task's options switch to: its subtasks not pushed yet, the cursor lit.
+pub(super) fn draw_list(frame: &mut Frame, app: &App) {
+    let Some(item) = app.selected_task() else { return };
+    let width = 64usize.min(frame.area().width.saturating_sub(8) as usize);
+    let cursor = app.subtask_at(&item);
+    let lines: Vec<Line<'static>> = super::steps::step_lines(&item, false, width, cursor).into_iter().map(|mut line| {
+        if let Some(first) = line.spans.first_mut() {
+            first.content = first.content.trim_start().to_string().into();
+        }
+        line
+    }).collect();
+    let room = (frame.area().height as usize).saturating_sub(6).max(1);
+    let at = cursor.map_or(0, |at| super::steps::cursor_line(&item, at));
+    let top = at.saturating_sub(room - 1).min(lines.len().saturating_sub(room));
+    let lines = lines.into_iter().skip(top).take(room).collect();
+    super::widgets::modal(frame, format!("{} · subtasks", cut(&item.titled(), 40)), lines, width as u16 + 4);
+}
+
 impl App {
     // Where the cursor is among the task's subtask rows, while that task is the selected one.
     pub(super) fn subtask_at(&self, item: &Item) -> Option<usize> {
@@ -232,7 +250,7 @@ impl App {
         walked(item).iter().position(|step| step.id == *id)
     }
 
-    // On a subtask row and in the subtask view the keys at the bottom are the subtask's.
+    // In the subtask list and the subtask view the keys at the bottom are the subtask's.
     pub(super) fn subtask_keys(&self) -> Option<Line<'static>> {
         if let Mode::Subtask(view) = &self.mode {
             let item = self.tasks.iter().find(|item| address_of(item) == view.address)?;
@@ -240,7 +258,7 @@ impl App {
             let at = steps.iter().position(|step| step.id == view.id)?;
             return Some(hint(steps, at, view.loaded.obstacle.as_ref().is_some_and(waits_for_you)));
         }
-        let item = self.selected_task().filter(|_| matches!(self.mode, Mode::Normal))?;
+        let item = self.selected_task().filter(|_| matches!(self.mode, Mode::Subtasks))?;
         let at = self.subtask_at(&item)?;
         Some(super::steps::subtask_hint(walked(&item)[at].number))
     }
@@ -249,41 +267,41 @@ impl App {
         self.subtask_row = Some((address_of(item), step.id.clone()));
     }
 
-    // The keys a subtask row takes; false leaves the key to the task.
-    pub(super) fn subtask_key(&mut self, act: Act, key: &KeyEvent) -> bool {
-        if self.column != Column::Work || self.on_parked_line() {
-            return false;
+    // The task's subtasks in a list over the board, the cursor on the first that waits for you.
+    pub(super) fn open_subtasks(&mut self, item: &Item) {
+        let steps = walked(item);
+        let Some(first) = steps.iter().find(|step| step.state == crate::tasks::SubtaskState::Ready).or_else(|| steps.first()).cloned() else {
+            self.about("subtasks", &item.name);
+            return self.say(format!("{} has no subtasks to step through", item.titled()));
+        };
+        if self.subtask_at(item).is_none() {
+            self.put_cursor(item, &first);
         }
-        let Some(item) = self.selected_task() else { return false };
-        let steps = walked(&item).to_vec();
-        let down = !matches!(key.code, KeyCode::Up | KeyCode::Char('k'));
-        match (act, self.subtask_at(&item)) {
-            (Act::Move, None) if down && !steps.is_empty() => self.put_cursor(&item, &steps[0]),
-            (Act::Move, Some(at)) if down && at + 1 < steps.len() => self.put_cursor(&item, &steps[at + 1]),
-            (Act::Move, Some(at)) if !down && at > 0 => self.put_cursor(&item, &steps[at - 1]),
-            (Act::Move, Some(_)) if !down => self.subtask_row = None,
-            (Act::Move, _) => {
-                self.subtask_row = None;
-                return false;
-            }
-            (Act::Options, Some(at)) => self.open_subtask(&item, &steps[at]),
-            (Act::Permit, Some(at)) => self.accept_subtask(&item, &steps[at]),
-            (Act::Review, Some(at)) => self.open_review_at(&item, Some(steps[at].number)),
-            (Act::Back, Some(_)) => self.subtask_row = None,
-            _ => return false,
-        }
-        true
+        self.mode = Mode::Subtasks;
     }
 
-    // Up onto another task lands on its last subtask row, the way down left it.
-    pub(super) fn landed(&mut self, down: bool, before: usize) {
-        if down || self.work_selected == before {
-            return;
-        }
-        if let Some(item) = self.selected_task()
-            && let Some(last) = walked(&item).last()
-        {
-            self.put_cursor(&item, &last.clone());
+    // Inside the list ↑ ↓ stay among the task's subtasks; esc goes back to the task.
+    pub(super) fn handle_subtasks(&mut self, act: Option<Act>, key: &KeyEvent) {
+        let Some(item) = self.selected_task() else { return };
+        let steps = walked(&item).to_vec();
+        let Some(at) = self.subtask_at(&item) else { return self.subtask_row = None };
+        self.mode = Mode::Subtasks;
+        match act {
+            Some(Act::Move) if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) => self.put_cursor(&item, &steps[at.saturating_sub(1)]),
+            Some(Act::Move) => self.put_cursor(&item, &steps[(at + 1).min(steps.len() - 1)]),
+            Some(Act::Options) => self.open_subtask(&item, &steps[at]),
+            Some(Act::Permit) => {
+                self.accept_subtask(&item, &steps[at]);
+                if matches!(self.mode, Mode::Normal) {
+                    self.mode = Mode::Subtasks;
+                }
+            }
+            Some(Act::Review) => self.open_review_at(&item, Some(steps[at].number)),
+            Some(Act::Back | Act::Close | Act::Subtasks) => {
+                self.subtask_row = None;
+                self.mode = Mode::Normal;
+            }
+            _ => {}
         }
     }
 
@@ -313,6 +331,7 @@ impl App {
                 }
                 self.column = Column::Work;
                 self.subtask_row = Some((view.address.clone(), view.id.clone()));
+                self.mode = Mode::Subtasks;
             }
             Some(Act::Switch) => {
                 let to = if key.code == KeyCode::Left { at.checked_sub(1) } else { Some(at + 1).filter(|next| *next < steps.len()) };
@@ -414,8 +433,8 @@ mod tests {
         let (_, shown) = screen(&mut app);
         assert!(!shown.contains("1 Charge through a PaymentGateway"), "{shown}");
         assert!(shown.contains("Switch the payment provider to Stripe") && shown.contains("1 to accept"), "the row and what waits stay: {shown}");
-        key(&mut app, KeyCode::Down);
-        assert_eq!(app.subtask_row, None, "no row to walk into");
+        key(&mut app, KeyCode::Char('S'));
+        assert!(app.subtask_row.is_none() && !matches!(app.mode, Mode::Subtasks), "no row to step into");
         let (_, shown) = screen(&mut app);
         assert!(!shown.contains("opens subtask"), "{shown}");
         let mut two = stripe();
@@ -426,49 +445,68 @@ mod tests {
     }
 
     #[test]
-    fn down_walks_into_the_subtask_rows_one_by_one_and_on_to_the_next_task_and_up_walks_back() {
+    fn up_and_down_move_task_to_task_and_never_stop_on_a_subtask_row() {
         let (mut app, _) = two_tasks();
         key(&mut app, KeyCode::Down);
-        let (rows, shown) = screen(&mut app);
-        assert!(bar_row(&rows, "2 Charge through a PaymentGateway").contains('▌'), "{shown}");
-        assert!(shown.contains("⏎ opens subtask 2 · a accepts it · r reads its diff · esc back to the task"), "{shown}");
-        assert!(!shown.contains("⏎ options"), "the task's own hint gives way: {shown}");
-        key(&mut app, KeyCode::Char('j'));
         let (_, shown) = screen(&mut app);
-        assert!(shown.contains("opens subtask 3"), "{shown}");
-        key(&mut app, KeyCode::Down);
-        let (_, shown) = screen(&mut app);
-        assert!(shown.contains("opens subtask 4") && app.work_selected == 0, "{shown}");
-        key(&mut app, KeyCode::Down);
-        let (_, shown) = screen(&mut app);
-        assert!(app.work_selected == 1 && app.subtask_row.is_none() && !shown.contains("opens subtask"), "after the last subtask the next task: {shown}");
-        key(&mut app, KeyCode::Up);
-        let (_, shown) = screen(&mut app);
-        assert!(app.work_selected == 0 && shown.contains("opens subtask 4"), "up lands on the last subtask: {shown}");
+        assert!(app.work_selected == 1 && app.subtask_row.is_none() && !shown.contains("opens subtask"), "down goes to the next task: {shown}");
         key(&mut app, KeyCode::Char('k'));
-        key(&mut app, KeyCode::Up);
-        key(&mut app, KeyCode::Up);
-        assert!(app.work_selected == 0 && app.subtask_row.is_none(), "up past the first subtask is the task's row");
-        key(&mut app, KeyCode::Down);
-        key(&mut app, KeyCode::Esc);
-        assert!(app.subtask_row.is_none() && app.work_selected == 0, "esc goes back to the task");
+        assert!(app.work_selected == 0 && app.subtask_row.is_none(), "up goes back to the task, not onto its last subtask");
+        key(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.work_selected, 1);
     }
 
     #[test]
-    fn the_cursor_follows_a_long_list_down_the_column() {
+    fn s_lists_the_subtasks_inside_the_task_where_up_and_down_step_through_them_and_esc_goes_back() {
+        let (mut app, _) = two_tasks();
+        key(&mut app, KeyCode::Char('S'));
+        assert!(matches!(app.mode, Mode::Subtasks));
+        let (rows, shown) = screen(&mut app);
+        assert!(shown.contains("Switch the payment provider to Stripe · subtasks") && bar_row(&rows, "4 Remove the old payment client").contains('│'), "the list opens over the board in a window: {shown}");
+        assert!(shown.contains("↑ ↓ j k steps · ⏎ opens subtask 2 · a accepts it · r reads its diff · esc back to the task"), "the cursor starts on the first that waits for you: {shown}");
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Char('j'));
+        assert!(screen(&mut app).1.contains("opens subtask 4") && app.work_selected == 0, "down steps the subtasks and stays in the task");
+        key(&mut app, KeyCode::Down);
+        assert!(screen(&mut app).1.contains("opens subtask 4") && app.work_selected == 0, "the last stays the last");
+        key(&mut app, KeyCode::Up);
+        assert!(screen(&mut app).1.contains("opens subtask 3"));
+        key(&mut app, KeyCode::Esc);
+        let (_, shown) = screen(&mut app);
+        assert!(matches!(app.mode, Mode::Normal) && app.subtask_row.is_none() && app.work_selected == 0 && !shown.contains("opens subtask"), "esc goes back to the task: {shown}");
+    }
+
+    #[test]
+    fn the_tasks_options_offer_its_subtasks_under_s_and_choosing_it_switches_to_the_list() {
+        let (mut app, _) = two_tasks();
+        key(&mut app, KeyCode::Enter);
+        let chosen = app.choices().into_iter().find(|choice| choice.act == Some(Act::Subtasks)).expect("the options name the subtasks");
+        assert_eq!((chosen.key, chosen.label.as_str()), ('S', "Its subtasks"));
+        key(&mut app, KeyCode::Char('S'));
+        assert!(matches!(app.mode, Mode::Subtasks), "the options switch to the subtask list");
+        app.work_selected = 1;
+        app.mode = Mode::Normal;
+        assert!(app.choices().iter().all(|choice| choice.act != Some(Act::Subtasks)), "a task without subtask rows offers none");
+    }
+
+    #[test]
+    fn the_subtask_list_scrolls_with_its_cursor() {
         let steps = Subtasks { items: (0..18).map(|index| held(index, &format!("Subtask number {index}"), &[&format!("{index:07}aaaa")], false)).collect(), ..Subtasks::default() };
         let mut app = test_app(vec![worked(stepped(steps))]);
+        key(&mut app, KeyCode::Char('S'));
         for _ in 0..17 {
             key(&mut app, KeyCode::Down);
         }
-        let (rows, _) = render(&mut app, 120, 20);
-        assert!(bar_row(&rows, "18 Subtask number 17").contains('▌'), "{}", rows.join("\n"));
+        let (rows, buffer) = render(&mut app, 120, 20);
+        let (x, y) = find(&rows, "18 Subtask number 17")[0];
+        assert_eq!(buffer[(x as u16, y as u16)].bg, crate::board::widgets::RAISED, "the window scrolls to the cursor and lights it: {}", rows.join("\n"));
+        assert!(rows.iter().all(|row| !row.contains("1 Subtask number 0 ")), "the top scrolled out: {}", rows.join("\n"));
     }
 
     #[test]
-    fn enter_on_a_subtask_row_opens_it_over_the_board_with_its_commits_files_and_what_was_built() {
+    fn enter_in_the_subtask_list_opens_it_over_the_board_with_its_commits_files_and_what_was_built() {
         let (mut app, _) = two_tasks();
-        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Char('S'));
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Enter);
         assert!(matches!(app.mode, Mode::Subtask(_)));
@@ -482,7 +520,7 @@ mod tests {
         assert!(rows[files + 1].trim().starts_with("✓ app/gateway.rb") && rows[files + 1].contains("+38") && rows[files + 1].contains("−12"), "{shown}");
         assert!(rows[files + 2].trim().starts_with("○ app/stripe.rb") && !rows[files + 2].contains('−'), "{shown}");
         assert!(shown.contains("BUILT") && shown.contains("Add Stripe as the gateway keeps the charge in one place."), "{shown}");
-        assert!(shown.contains("← → subtask 2 or 4 · r reads the diff · a accepts · esc back to the board"), "{shown}");
+        assert!(shown.contains("← → subtask 2 or 4 · r reads the diff · a accepts · esc back to the list"), "{shown}");
         key(&mut app, KeyCode::Right);
         let (_, shown) = screen(&mut app);
         assert!(shown.contains("Subtask 4 of 4") && shown.contains("planned · no commits yet") && !shown.contains("FILES") && shown.contains("← subtask 3 · r"), "{shown}");
@@ -508,14 +546,14 @@ mod tests {
         question.from = "kebbie".to_string();
         question.about = Some(crate::obstacle::question_about("stripe@billing", "o3"));
         app.questions = vec![question];
-        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Char('S'));
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Enter);
         let (rows, shown) = screen(&mut app);
         let at = find(&rows, "OBSTACLE o3  waits for you")[0].1;
         assert!(at < find(&rows, "COMMITS")[0].1 && shown.contains("obstacle · 1 commit · 2 files · +102 −12"), "the obstacle comes first: {shown}");
         assert!(rows[at + 1].contains("The gateway has no refund call") && shown.contains("Investigator: Add the refund call to the gateway first, then switch. Asks you: Add a refund call before this one?"), "{shown}");
-        assert!(shown.contains("⏎ answers · ← → subtask 2 or 4 · esc back to the board"), "{shown}");
+        assert!(shown.contains("⏎ answers · ← → subtask 2 or 4 · esc back to the list"), "{shown}");
         key(&mut app, KeyCode::Enter);
         assert!(matches!(app.mode, Mode::Questions(_)), "enter answers it in the questions window");
     }
@@ -523,7 +561,7 @@ mod tests {
     #[test]
     fn esc_returns_to_the_same_subtask_row_with_its_new_state() {
         let (mut app, accepted) = two_tasks();
-        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Char('S'));
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Enter);
         key(&mut app, KeyCode::Char('a'));
@@ -534,20 +572,20 @@ mod tests {
         holds(&mut app.tasks[0].subtasks.items[1], &["3333333cccc"], true);
         key(&mut app, KeyCode::Esc);
         let (rows, shown) = screen(&mut app);
-        assert!(matches!(app.mode, Mode::Normal) && app.work_selected == 0, "{shown}");
+        assert!(matches!(app.mode, Mode::Subtasks) && app.work_selected == 0, "esc goes back to the list: {shown}");
         let row = bar_row(&rows, "3 Add Stripe as the gateway");
         assert!(row.contains('▌') && row.contains("✓ 3") && row.contains("accepted · 1 commit"), "{shown}");
         assert!(shown.contains("opens subtask 3") && shown.contains("1 to accept") && !shown.contains("2 to accept"), "{shown}");
     }
 
     #[test]
-    fn a_on_a_subtask_row_accepts_that_subtask_and_r_opens_the_review_on_it() {
+    fn a_in_the_subtask_list_accepts_that_subtask_and_r_opens_the_review_on_it() {
         let (mut app, accepted) = two_tasks();
-        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Char('S'));
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Char('a'));
         assert_eq!(accepted.borrow().as_slice(), ["/work/wt1.billing stripe s3"], "the subtask under the cursor, not the first that waits");
-        assert!(app.subtask_row.is_some(), "the cursor stays on the row");
+        assert!(app.subtask_row.is_some() && matches!(app.mode, Mode::Subtasks), "the cursor stays on the row");
         key(&mut app, KeyCode::Esc);
         key(&mut app, KeyCode::Char('a'));
         assert_eq!(accepted.borrow().len(), 1, "on the task's row a is the task's own key");

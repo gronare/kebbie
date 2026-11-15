@@ -200,6 +200,11 @@ impl App {
                     let after = choices.iter().position(|choice| choice.act == Some(Act::Review)).map_or(choices.len(), |at| at + 1);
                     choices.insert(after, choice(Act::Card, "Show the card", "its sign-off card with its images; p goes on to push"));
                 }
+                if let Some(item) = item.filter(|item| super::steps::rows_shown(item)) {
+                    let after = choices.iter().rposition(|choice| menu_group(choice.act) == "SESSION").map_or(0, |at| at + 1);
+                    let open = item.subtasks.items.len();
+                    choices.insert(after, choice(Act::Subtasks, "Its subtasks", &format!("{open} not pushed: step through them, open one, accept it or read its diff")));
+                }
                 if let Some(item) = item {
                     let after = choices.iter().rposition(|choice| matches!(menu_group(choice.act), "SESSION" | "DEV")).map_or(0, |at| at + 1);
                     choices.splice(after..after, link_choices(task_links(self, item)));
@@ -223,7 +228,7 @@ pub(super) fn link_choices(links: Vec<(String, String)>) -> Vec<Choice> {
 fn menu_group(act: Option<Act>) -> &'static str {
     match act {
         None => "LINKS",
-        Some(Act::Inbox | Act::Go | Act::Chat | Act::Review | Act::Card) => "SESSION",
+        Some(Act::Inbox | Act::Go | Act::Chat | Act::Review | Act::Card | Act::Subtasks) => "SESSION",
         Some(Act::Server | Act::Worker) => "DEV",
         Some(Act::Reset | Act::Drop) => "END IT",
         Some(Act::Park) => "LATER",
