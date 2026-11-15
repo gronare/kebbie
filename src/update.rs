@@ -54,6 +54,7 @@ pub fn run(claude_dir: &Path, visible: bool, request: &Request) -> Result<Outcom
     let printer = visible.then(|| progress::print_while(path.clone(), stop.clone()));
     let (mut tracker, installed) = herdr_plugin(&plugin, &state, channel, request, tracker, old_head.as_deref());
     let result = installed.map(|line| {
+        let root = installed_root(root.clone(), kebbie_plugin().ok().as_ref().and_then(plugin_root), std::env::var_os("HOME").map(PathBuf::from).as_deref());
         let mut lines = vec![line];
         lines.extend(finish_on_new_binary(claude_dir, root.as_deref(), &path));
         lines
@@ -136,6 +137,34 @@ pub fn text(outcome: &Outcome, bugs: &[String]) -> String {
 }
 
 // The steps after the build run on the binary just built, so a fix to them reaches the update that installs it.
+fn plugin_root(plugin: &Value) -> Option<PathBuf> {
+    plugin["plugin_root"].as_str().filter(|root| !root.is_empty()).map(PathBuf::from)
+}
+
+// herdr installs a GitHub update into a new folder, so the root read before the update names the old kebbie: the update finishes on the folder herdr names now, and the link every config and the PATH reach kebbie by moves there.
+fn installed_root(before: Option<PathBuf>, now: Option<PathBuf>, home: Option<&Path>) -> Option<PathBuf> {
+    let root = now.filter(|root| root.join("target/release/kebbie").is_file()).or(before)?;
+    if let Some(home) = home {
+        let _ = relink_current(home, &root);
+    }
+    Some(root)
+}
+
+// Only herdr's startup wrote the link, so until herdr restarted an update left the board, the keeper and the kebbie on PATH on the old folder; the link is swapped by a rename, never missing in between.
+pub(crate) fn relink_current(home: &Path, root: &Path) -> Result<bool> {
+    let link = home.join(".local/share/kebbie/current");
+    if !root.join("target/release/kebbie").is_file() || link.canonicalize().ok() == root.canonicalize().ok() {
+        return Ok(false);
+    }
+    let dir = link.parent().ok_or("no folder for kebbie's current link")?;
+    std::fs::create_dir_all(dir).map_err(|error| format!("{}: {error}", dir.display()))?;
+    let fresh = dir.join(format!(".current-{}", std::process::id()));
+    let _ = std::fs::remove_file(&fresh);
+    std::os::unix::fs::symlink(root, &fresh).map_err(|error| format!("{}: {error}", fresh.display()))?;
+    std::fs::rename(&fresh, &link).map_err(|error| format!("{}: {error}", link.display()))?;
+    Ok(true)
+}
+
 fn finish_on_new_binary(claude_dir: &Path, root: Option<&Path>, progress: &Path) -> Vec<String> {
     let built = root.map(|root| root.join("target/release/kebbie")).filter(|binary| binary.is_file());
     let env = format!("{}={}", progress::ENV, progress.display());
@@ -605,6 +634,30 @@ fn updated_claude_plugin(claude_dir: &Path, claude: &str, root: Option<&Path>, f
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_update_herdr_installed_into_a_new_folder_finishes_there_and_moves_the_current_link() {
+        let home = crate::sh::test_dir("update-relink");
+        let (old, new) = (home.join("installs/1/checkout"), home.join("installs/2/checkout"));
+        for root in [&old, &new] {
+            std::fs::create_dir_all(root.join("target/release")).unwrap();
+            std::fs::write(root.join("target/release/kebbie"), "").unwrap();
+        }
+        let link = home.join(".local/share/kebbie/current");
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&old, &link).unwrap();
+        assert_eq!(installed_root(Some(old.clone()), Some(new.clone()), Some(&home)), Some(new.clone()), "the update finishes on the kebbie herdr just installed, not the one it started on");
+        assert_eq!(link.canonicalize().unwrap(), new.canonicalize().unwrap(), "the board, the keeper and the kebbie on PATH follow the link");
+        assert_eq!(relink_current(&home, &new), Ok(false), "a link already there is left alone");
+        let unbuilt = home.join("installs/3/checkout");
+        std::fs::create_dir_all(&unbuilt).unwrap();
+        assert_eq!(installed_root(Some(new.clone()), Some(unbuilt), Some(&home)), Some(new.clone()), "a folder without a built kebbie is never linked");
+        assert_eq!(link.canonicalize().unwrap(), new.canonicalize().unwrap());
+        let source = include_str!("update.rs");
+        let run = &source[source.find("pub fn run(").unwrap()..];
+        assert!(run[..run.find("\n}\n").unwrap()].contains("installed_root(root.clone(), kebbie_plugin().ok().as_ref().and_then(plugin_root)"), "the root is read again after herdr's own update");
+        let _ = std::fs::remove_dir_all(home);
+    }
 
     #[test]
     fn an_update_renews_earlier_push_blocks_before_it_restarts_the_sessions() {

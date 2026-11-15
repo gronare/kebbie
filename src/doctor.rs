@@ -274,7 +274,7 @@ pub fn current_link(home: &Path, data_home: Option<&Path>, plugin_root: Option<&
     }
     let Ok(target) = link.canonicalize() else { return fail("current link", format!("{} points nowhere", link.display()), start) };
     match plugin_root.map(|root| root.canonicalize().unwrap_or_else(|_| root.to_path_buf())) {
-        Some(root) if root != target => warn("current link", format!("{} points at {}, herdr's kebbie is at {}", link.display(), target.display(), root.display()), one("restart herdr so its startup relinks it")),
+        Some(root) if root != target => warn("current link", format!("{} points at {}, herdr's kebbie is at {}", link.display(), target.display(), root.display()), one("kebbie update moves it, as does a herdr restart")),
         _ => ok("current link", format!("{} → {}", link.display(), target.display())).brief("current link"),
     }
 }
