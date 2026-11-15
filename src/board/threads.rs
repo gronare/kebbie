@@ -25,28 +25,30 @@ pub(super) struct Snapshot {
     pub(super) comments: Vec<crate::comments::Comment>,
     pub(super) fixed: Option<crate::issue_recheck::Fixed>,
     pub(super) usage: Option<Usage>,
-    pub(super) ongoing: Vec<Ongoing>,
+    pub(super) ongoing: Option<Vec<Ongoing>>,
     pub(super) lead_chat: Option<bool>,
     pub(super) restart_auto: bool,
     pub(super) lead_context: Option<f64>,
     pub(super) devices: Vec<crate::hub::devices::Request>,
 }
 
-fn load_ongoing() -> Vec<Ongoing> {
+fn load_ongoing() -> Option<Vec<Ongoing>> {
     if !config::sources().is_ok_and(|sources| sources.contains(&Source::Vault)) && !crate::vault_cli::connected() {
-        return Vec::new();
+        return Some(Vec::new());
     }
-    let Ok(index) = vault::Index::open() else { return Vec::new() };
-    let Ok(notes) = index.ongoing() else { return Vec::new() };
+    ongoing_in(vault::Index::open(), &tasks::started_links(), &config::machine())
+}
+
+fn ongoing_in(index: Result<vault::Index, String>, links: &std::collections::HashMap<String, Vec<String>>, machine: &str) -> Option<Vec<Ongoing>> {
+    let index = index.ok()?;
+    let notes = index.ongoing().ok()?;
     let claims = index.claims();
-    let machine = config::machine();
-    let links = tasks::started_links();
-    notes.into_iter().map(|note| {
-        let (task, also) = linked_tasks(&links, &note.key);
-        let claim = claims.get(&note.key).filter(|claim| claim.elsewhere(&machine)).cloned();
+    Some(notes.into_iter().map(|note| {
+        let (task, also) = linked_tasks(links, &note.key);
+        let claim = claims.get(&note.key).filter(|claim| claim.elsewhere(machine)).cloned();
         let opening = index.opening(&note.key).or_else(|| index.body(&note.key).map(|body| super::note_card::opening(&body))).unwrap_or_default();
         Ongoing { key: note.key, title: note.title, area: note.area, task, also, claim, status: note.status, summary: note.summary, opening }
-    }).collect()
+    }).collect())
 }
 
 // A task across repos links one note from each half, and the links come in no order, so the row names the first address and the rest follow it: the same on every refresh.
@@ -276,6 +278,16 @@ mod tests {
         let detail = include_str!("detail.rs");
         let note_of = &detail[detail.find("fn note_of(").unwrap()..];
         assert!(note_of[..note_of.find("\n}\n").unwrap()].contains("|| note.also.contains(&address)"), "the other half's card shows the note too");
+    }
+
+    #[test]
+    fn an_unreadable_vault_reads_as_no_answer_and_a_readable_one_as_its_notes() {
+        let links: std::collections::HashMap<String, Vec<String>> = [("audit@api".to_string(), vec!["Projects/audit.md".to_string()])].into();
+        assert!(ongoing_in(Err("Opening the vault index: locked".to_string()), &links, "devbox").is_none(), "a failed read is not an empty vault");
+        let raw = r#"{"etag":"e1","notes":[{"key":"Projects/audit.md","stem":"audit","role":"task","kind":"task","status":"active","title":"Audit","summary":"","priority":"","area":"api","paths":[],"date":"2026-11-01","updated":"2026-11-01","mtime":1.0,"claim":null}],"openings":{},"logs":{}}"#;
+        let index = vault::Index::of_snapshot(std::sync::Arc::new(crate::vault_snapshot::parse(raw, None).unwrap()), None);
+        let read = ongoing_in(Ok(index), &links, "devbox").unwrap();
+        assert_eq!(read.iter().map(|note| (note.key.as_str(), note.task.as_deref())).collect::<Vec<_>>(), [("Projects/audit.md", Some("audit@api"))]);
     }
 
     #[test]

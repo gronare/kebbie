@@ -9,6 +9,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### Fixed
 - Answers to a backlog item's questions from your phone go through after the lead folds an earlier answer in, and a repeated press counts once.
 - The questions window sends no answer you did not pick, and a plan's approve waits for `y`, so stray Enters or arrow keys can no longer approve a plan.
+- A task's note line and the Backlog's ongoing notes stay on the board when one refresh cannot read the vault.
 
 ## 0.39.1
 

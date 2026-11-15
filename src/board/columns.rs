@@ -723,6 +723,19 @@ mod tests {
     }
 
     #[test]
+    fn a_refresh_that_cannot_read_the_vault_keeps_the_note_line_and_the_ongoing_notes() {
+        let mut app = test_app(vec![served("search-filters")]);
+        let note = Ongoing { also: vec!["search-filters@web".to_string()], key: "Projects/search-filters.md".to_string(), title: "search filters".to_string(), area: "web".to_string(), task: Some("search-filters@api".to_string()), ..Ongoing::default() };
+        app.take_ongoing(Some(vec![note]));
+        let shows = |app: &mut App| render(app, 84, 50).0.join("\n").contains("note    vault: Projects/search-filters.md");
+        assert!(shows(&mut app), "the other half's task finds the note");
+        app.take_ongoing(None);
+        assert!(shows(&mut app) && app.ongoing.len() == 1, "a failed read draws the notes it read last");
+        app.take_ongoing(Some(Vec::new()));
+        assert!(!shows(&mut app) && app.ongoing.is_empty(), "a read that finds none clears them");
+    }
+
+    #[test]
     fn ongoing_notes_head_the_backlog_with_their_task_or_a_resume() {
         let mut app = test_app(vec![served("search-filters")]);
         app.ongoing = vec![

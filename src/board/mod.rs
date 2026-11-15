@@ -362,6 +362,13 @@ impl App {
         }
     }
 
+    // A refresh that could not read the vault leaves the notes as they were, or every task's note line and the Ongoing section blink out for it.
+    fn take_ongoing(&mut self, read: Option<Vec<Ongoing>>) {
+        if let Some(ongoing) = read {
+            self.ongoing = ongoing;
+        }
+    }
+
     fn selected_ongoing(&self) -> Option<Ongoing> {
         let Some(BacklogRow::Ongoing(note)) = self.backlog_row(self.backlog_selected) else { return None };
         self.ongoing.get(note).filter(|_| self.shown(Column::Backlog, self.backlog_selected)).cloned()
@@ -1342,7 +1349,7 @@ pub fn run(overlay: bool) -> Result<String> {
                         app.fixed = snapshot.fixed.filter(|fixed| fixed.last > app.fixed_seen);
                         app.fixed_changed();
                         app.usage = snapshot.usage;
-                        app.ongoing = snapshot.ongoing;
+                        app.take_ongoing(snapshot.ongoing);
                         app.lead_chat = snapshot.lead_chat;
                         app.restart_auto = snapshot.restart_auto;
                         app.lead_context = snapshot.lead_context;
