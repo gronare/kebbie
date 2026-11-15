@@ -917,7 +917,8 @@ mod tests {
         press(&mut app, key(KeyCode::Char('2')));
         press(&mut app, key(KeyCode::Enter));
         let shown = screen(&mut app, 110, 40);
-        assert!(shown.contains("is a link") && shown.contains("[machine] name = \"mac2\""), "{shown}");
+        let unwrapped = shown.split_whitespace().filter(|word| *word != "│").collect::<Vec<_>>().join(" ");
+        assert!(unwrapped.contains("is a link") && unwrapped.contains("[machine] name = \"mac2\""), "{shown}");
         assert_eq!(std::fs::read_to_string(&real).unwrap(), "[machine]\nname = \"mac\"\n", "the linked file is left as it was");
     }
 
