@@ -942,7 +942,8 @@ pub fn checks(env: &Env) -> Vec<Check> {
         checks.push(self::tool(&tool, found.as_deref(), output.as_deref()));
     }
     if herdr.is_some() {
-        let running: Vec<_> = crate::lead::running_boards().unwrap_or_default().into_iter().map(|board| { let started = crate::restart::started(board.pid); (board, started) }).collect();
+        // A board on another binary than the installed one counts as started before any build.
+        let running: Vec<_> = crate::lead::running_boards().unwrap_or_default().into_iter().map(|board| { let started = crate::restart::started(board.pid).map(|started| if crate::lead::on_installed(&board) { started } else { 0 }); (board, started) }).collect();
         checks.extend(boards(&running, crate::lead::written_at()));
     }
     let list = herdr.and_then(|herdr| run(&herdr.to_string_lossy(), &["plugin", "list", "--json", "--plugin", "kebbie"], None).ok());

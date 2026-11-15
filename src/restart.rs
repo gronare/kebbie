@@ -189,14 +189,14 @@ fn mtime(path: &Path) -> Option<u64> {
 }
 
 #[cfg(target_os = "macos")]
-fn exe_of(pid: u32) -> Option<PathBuf> {
+pub(crate) fn exe_of(pid: u32) -> Option<PathBuf> {
     let mut buffer = vec![0u8; 4096];
     let length = unsafe { libc::proc_pidpath(pid as libc::c_int, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
     (length > 0).then(|| PathBuf::from(String::from_utf8_lossy(&buffer[..length as usize]).to_string()))
 }
 
 #[cfg(not(target_os = "macos"))]
-fn exe_of(pid: u32) -> Option<PathBuf> {
+pub(crate) fn exe_of(pid: u32) -> Option<PathBuf> {
     std::fs::read_link(format!("/proc/{pid}/exe")).ok()
 }
 

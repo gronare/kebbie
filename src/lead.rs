@@ -672,12 +672,23 @@ pub fn renew_board() -> Result<String> {
     Ok(lines.join("\n"))
 }
 
+// A board started after the build can still run another kebbie: one installed in another folder, or on Linux a binary a later build replaced, which its path names "(deleted)".
+pub(crate) fn runs_installed(running: Option<&Path>, installed: &Path) -> bool {
+    let Some(running) = running else { return true };
+    let real = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    !running.to_string_lossy().ends_with(" (deleted)") && real(running) == real(installed)
+}
+
+pub fn on_installed(board: &Board) -> bool {
+    executable().is_ok_and(|installed| runs_installed(crate::restart::exe_of(board.pid).as_deref(), &installed))
+}
+
 fn renew_one(board: &Board, built: u64) -> Result<String> {
     if board.pid == std::process::id() || board.pid == std::os::unix::process::parent_id() {
         return Ok("restarts on the new kebbie once the update's window closes".to_string());
     }
     let started = crate::restart::started(board.pid).ok_or("cannot read when it started")?;
-    if started > built {
+    if started > built && on_installed(board) {
         return Ok("up to date".to_string());
     }
     restart_board(&board.pane).map_err(|error| error.trim_start_matches("board: ").to_string())?;
@@ -788,6 +799,25 @@ pub fn chat_hidden(board_pane: &str) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_board_started_after_the_build_is_renewed_when_it_runs_another_kebbie_than_the_installed_one() {
+        let dir = crate::sh::test_dir("renew-exe");
+        let (installed, elsewhere) = (dir.join("new/target/release/kebbie"), dir.join("old/target/release/kebbie"));
+        for binary in [&installed, &elsewhere] {
+            fs::create_dir_all(binary.parent().unwrap()).unwrap();
+            fs::write(binary, "").unwrap();
+        }
+        std::os::unix::fs::symlink(dir.join("new"), dir.join("link")).unwrap();
+        assert!(runs_installed(Some(&installed), &installed) && runs_installed(Some(&dir.join("link/target/release/kebbie")), &installed), "the installed binary, by a link too");
+        assert!(runs_installed(None, &installed), "a process kebbie cannot read is judged by when it started");
+        assert!(!runs_installed(Some(&elsewhere), &installed), "a kebbie installed in another folder is an older one");
+        assert!(!runs_installed(Some(Path::new(&format!("{} (deleted)", installed.display()))), &installed), "a binary a build replaced under the board");
+        let source = include_str!("lead.rs");
+        let renew = &source[source.find("fn renew_one(").unwrap()..];
+        assert!(renew[..renew.find("\n}\n").unwrap()].contains("started > built && on_installed(board)"), "renewing asks which binary the board runs, not only when it started");
+        let _ = fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn a_board_is_found_among_its_panes_foreground_processes_whichever_comes_first() {
