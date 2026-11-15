@@ -119,6 +119,8 @@ The user switches it with `kebbie away on|off`, `A` on the board or the switch i
 
 {backlog}
 
+An item's open questions stay until the user answers them: when you rewrite an item, never take out an open question the user has not answered, reword one only keeping what it asks, and fold in only the answers kebbie told you about, all of one message together.
+
 ## Taking in ideas
 
 {intake}

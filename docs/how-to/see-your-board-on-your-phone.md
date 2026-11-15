@@ -118,7 +118,7 @@ What reaches a machine is its own choice, set by [`hub.commands`](../reference/c
 **Backlog** lists each machine's backlog as its board's Backlog page shows it, with whether an item is to write, drafting or ready and how many of its questions wait on you. Open an item to read it in full. A device that makes changes also:
 
 - **Adds an idea.** Tap **New idea**, describe what you want and pick the machine. It waits in the backlog under its first words until the lead writes it out and gives it a title, your description kept as its source.
-- **Answers an open question.** Pick the question on the item and write your answer. It waits with the lead until the lead folds it into the item, on the phone and on the board's card alike.
+- **Answers its open questions.** Write your answers on the item's questions and send them together. They wait with the lead until it folds them into the item, on the phone and on the board's card alike.
 - **Starts the item.** The machine starts it as `g` on the board does: the item is the task's prompt, and the lead picks how the task goes.
 - **Edits the item.** Tap **Edit** on its title or on a section, change it and save. The machine writes it into the item's file or vault note.
 - **Settles what tasks found.** What tasks noticed outside their work shows in the backlog as rows marked found by tasks, with the tasks that found it. Start one as a task, add it to a running task, keep it in the backlog, or dismiss it, as [`kebbie found`](../reference/commands.md#kebbie-found---json) does.
@@ -127,7 +127,9 @@ What reaches a machine is its own choice, set by [`hub.commands`](../reference/c
 
 - If questions still wait on you, the start is refused and says how many; start it again to start it anyway.
 - The phone hears `Starting <task>` while the machine starts it. If the start fails, the device that asked gets a `Not started` notification that says why, and the item stays in the backlog.
-- An answer goes to its question by the question's words, so answers you send after the lead folded an earlier one in still arrive, and sending the same answer twice tells the lead once. If the question's words changed or the lead took it out, the answer is refused; read the item again.
+- The machine keeps every answer of one send with the item and tells the lead once, so the lead folds them in together. Sending the same answers again tells the lead once; if the lead did not hear them the first time, sending again tells it.
+- If the lead reworded or took out a question before your answer arrived, the answer is still kept and reaches the lead with the words you answered. Only an item that left the backlog turns answers away.
+- A machine on an older kebbie takes the answers one at a time; the phone sends them that way to it.
 - If the item is already running as a task, or left the backlog, the machine says so.
 - A note in a vault two machines share is the same item on both; start it from one.
 - If the section changed on the machine since you opened it, the edit is refused; read it again and edit what it says now. A required section cannot be saved empty.
