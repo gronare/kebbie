@@ -1326,7 +1326,7 @@ pub fn run(overlay: bool) -> Result<String> {
                         if let Ok(sources) = config::sources() {
                             app.sources = sources;
                         }
-                        app.backlog = backlog::load();
+                        app.backlog = snapshot.backlog;
                         app.found = crate::lead::state_dir().map(|state| crate::found::open_in(&state)).unwrap_or_default();
                         if let (Mode::ItemCard(card), Ok(state)) = (&mut app.mode, crate::lead::state_dir()) {
                             card.reload(&state);

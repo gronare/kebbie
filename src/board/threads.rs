@@ -30,6 +30,7 @@ pub(super) struct Snapshot {
     pub(super) restart_auto: bool,
     pub(super) lead_context: Option<f64>,
     pub(super) devices: Vec<crate::hub::devices::Request>,
+    pub(super) backlog: crate::backlog::Backlog,
 }
 
 fn load_ongoing() -> Option<Vec<Ongoing>> {
@@ -97,7 +98,7 @@ pub(super) fn spawn_refresher(board_pane: Option<String>) -> (Receiver<std::resu
             }
             let snapshot = status::gather_with_checkouts().map(|(items, checkouts)| {
                 let questions = questions::open_now(&messages::load()).into_iter().cloned().chain(lead::state_dir().map(|state| crate::kebbie_questions::as_messages(&state)).unwrap_or_default()).collect();
-                Snapshot { checkouts, items, messages: messages::recent(200), questions, offers: super::bug_report::load_offers(), comments: crate::comments::board(), fixed: super::bug_report::load_fixed(), usage: usage::load(), ongoing: load_ongoing(), lead_chat: board_pane.as_deref().and_then(lead::chat_hidden), restart_auto: config::restart_settings().map_or(true, |(auto, _)| auto), lead_context: usage::lead_context(), devices: lead::state_dir().map(|state| crate::hub::devices::requests(&state, messages::now())).unwrap_or_default() }
+                Snapshot { checkouts, items, messages: messages::recent(200), questions, offers: super::bug_report::load_offers(), comments: crate::comments::board(), fixed: super::bug_report::load_fixed(), usage: usage::load(), ongoing: load_ongoing(), lead_chat: board_pane.as_deref().and_then(lead::chat_hidden), restart_auto: config::restart_settings().map_or(true, |(auto, _)| auto), lead_context: usage::lead_context(), devices: lead::state_dir().map(|state| crate::hub::devices::requests(&state, messages::now())).unwrap_or_default(), backlog: crate::backlog::load() }
             });
             if snapshot_tx.send(snapshot).is_err() {
                 return;
@@ -288,6 +289,17 @@ mod tests {
         let index = vault::Index::of_snapshot(std::sync::Arc::new(crate::vault_snapshot::parse(raw, None).unwrap()), None);
         let read = ongoing_in(Ok(index), &links, "devbox").unwrap();
         assert_eq!(read.iter().map(|note| (note.key.as_str(), note.task.as_deref())).collect::<Vec<_>>(), [("Projects/audit.md", Some("audit@api"))]);
+    }
+
+    #[test]
+    fn the_backlog_is_read_on_the_refresher_thread_so_a_key_never_waits_for_it() {
+        let refresher = include_str!("threads.rs");
+        let refresher = &refresher[refresher.find("pub(super) fn spawn_refresher(").unwrap()..];
+        assert!(refresher[..refresher.find("\n}\n").unwrap()].contains("backlog: crate::backlog::load()"), "the snapshot carries the backlog");
+        let board = include_str!("mod.rs");
+        let applied = &board[board.find("Ok(snapshot) => {").unwrap()..];
+        let applied = &applied[..applied.find("Err(error) => app.error").unwrap()];
+        assert!(applied.contains("app.backlog = snapshot.backlog;") && !applied.contains("backlog::load()"), "the board's own thread takes the read backlog and reads none");
     }
 
     #[test]
