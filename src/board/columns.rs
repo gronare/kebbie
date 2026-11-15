@@ -366,13 +366,12 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
             lines.extend(wanted_lines(waiting, MUTED, selected && open && unfold, width));
         }
         if selected && open && unfold {
-            let (detail, links) = unfolded_lines(app, item, width.saturating_sub(4));
+            let detail = unfolded_lines(app, item, width.saturating_sub(4));
             lines.extend(detail.into_iter().map(|line| {
                 let mut spans = vec![Span::raw("   ")];
                 spans.extend(line.spans);
                 Line::from(spans).style(Style::new().bg(SURFACE))
             }));
-            app.links.extend(links);
             if cursor.is_none() {
                 lines.push(app.s_gives(item).map_or_else(options_hint, |gives| card_hint(&gives)));
             }

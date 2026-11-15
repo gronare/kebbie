@@ -20,9 +20,9 @@ use crate::tasks;
 use super::card::card_lines;
 use super::columns::absence;
 use super::images::{ImageAt, render_image};
-use super::link::{Link, file_link};
+use super::link::{Link, file_link, note_urls};
 use super::{App, Mode};
-use super::widgets::{BLUE, GREEN, MAUVE, MUTED, PEACH, RED, SUBTEXT, SURFACE, TEAL, TEXT, YELLOW, ago, bold, cut, plural, style, wrap};
+use super::widgets::{BLUE, GREEN, MAUVE, MUTED, PEACH, RED, SUBTEXT, SURFACE, TEAL, TEXT, YELLOW, ago, bold, cut, plural, split_at_width, style, wrap};
 
 #[derive(Default)]
 pub(super) struct Detail {
@@ -148,34 +148,49 @@ fn wrapped_field(label: &str, text: &str, color: Color, width: usize, max_lines:
         .map(|(index, part)| field(if index == 0 { label } else { "" }, vec![Span::styled(part, style(color))])).collect()
 }
 
-// The running dev server's address; the shown text is what link_cells finds again on screen.
-pub(super) fn server_line(item: &Item, configured: bool, name: &str, width: usize) -> Option<(Line<'static>, Option<Link>)> {
+// The running dev server's address, whole.
+pub(super) fn server_line(item: &Item, configured: bool, name: &str, width: usize) -> Option<Vec<Line<'static>>> {
     if !item.server {
-        return configured.then(|| (field(name, vec![Span::styled(format!("○ off · {} starts it", keys::key(Act::Server)), style(MUTED))]), None));
+        return configured.then(|| vec![field(name, vec![Span::styled(format!("○ off · {} starts it", keys::key(Act::Server)), style(MUTED))])]);
     }
-    let Some(url) = &item.url else { return Some((field(name, vec![Span::styled("● running", style(GREEN))]), None)) };
-    let room = width.saturating_sub(LABEL + 12).max(2);
-    let shown = cut(url, room);
-    let line = field(name, vec![Span::styled("● running", style(GREEN)), Span::raw("  "), Span::styled(shown.clone(), style(TEAL))]);
-    Some((line, Some(Link { shown, url: url.clone() })))
+    let Some(url) = &item.url else { return Some(vec![field(name, vec![Span::styled("● running", style(GREEN))])]) };
+    Some(url_lines(name, vec![Span::styled("● running", style(GREEN)), Span::raw("  ")], url, width))
 }
 
-fn ci_lines(item: &Item, width: usize) -> (Vec<Line<'static>>, Vec<Link>) {
-    let Some(ci) = &item.ci else { return (Vec::new(), Vec::new()) };
+const LEAST_URL_ROOM: usize = 10;
+
+// The whole URL as plain text, never cut: what does not fit runs on over the next rows under the value column, so a terminal's own URL detection and copy see every character; link_urls links it.
+fn url_lines(label: &str, lead: Vec<Span<'static>>, url: &str, width: usize) -> Vec<Line<'static>> {
+    note_urls(url);
+    let room = width.saturating_sub(LABEL).max(LEAST_URL_ROOM);
+    let first = room.saturating_sub(lead.iter().map(Span::width).sum());
+    let (mut lines, rest) = if first >= LEAST_URL_ROOM {
+        let head = split_at_width(url, first).remove(0);
+        let rest = url[head.len()..].to_string();
+        let mut spans = lead;
+        spans.push(Span::styled(head, style(TEAL)));
+        (vec![field(label, spans)], rest)
+    } else {
+        (vec![field(label, lead)], url.to_string())
+    };
+    if !rest.is_empty() {
+        lines.extend(split_at_width(&rest, room).into_iter().map(|part| field("", vec![Span::styled(part, style(TEAL))])));
+    }
+    lines
+}
+
+fn ci_lines(item: &Item, width: usize) -> Vec<Line<'static>> {
+    let Some(ci) = &item.ci else { return Vec::new() };
     let (mark, color) = match ci.state {
         crate::ci::State::Running => ("◐ ", YELLOW),
         crate::ci::State::Cancelled { .. } | crate::ci::State::Unknown { .. } => ("○ ", MUTED),
         crate::ci::State::Failed { .. } => ("● ", PEACH),
     };
     let mut lines = vec![field("ci", vec![Span::styled(mark, style(color)), Span::styled(item.ci_note().unwrap_or_else(|| ci.note()), style(TEXT))])];
-    let mut links = Vec::new();
     for (title, url) in ci_urls(item).into_iter().take(4) {
-        let title = cut(&title, 16);
-        let shown = cut(&url, width.saturating_sub(LABEL + title.chars().count() + 2).max(2));
-        lines.push(field("", vec![Span::styled(title, style(MUTED)), Span::raw("  "), Span::styled(shown.clone(), style(TEAL))]));
-        links.push(Link { shown, url });
+        lines.extend(url_lines("", vec![Span::styled(cut(&title, 16), style(MUTED)), Span::raw("  ")], &url, width));
     }
-    (lines, links)
+    lines
 }
 
 // Each CI run's title and address, or the failed run's when CI named no runs.
@@ -298,31 +313,23 @@ pub(super) fn named_urls(item: &Item, card: Option<&report::Card>) -> Vec<String
 }
 
 // The row already says what the task wants and how far it got; unfolded it adds only where it lives, its links and its note.
-pub(super) fn unfolded_lines(app: &mut App, item: &Item, width: usize) -> (Vec<Line<'static>>, Vec<Link>) {
+pub(super) fn unfolded_lines(app: &mut App, item: &Item, width: usize) -> Vec<Line<'static>> {
     let detail = app.detail(item).unwrap_or_default();
     let mut lines = Vec::new();
-    let mut links = Vec::new();
     let branch = if detail.branch.is_empty() { item.name.clone() } else { detail.branch.clone() };
     let place = item.path.as_deref().map(|path| format!(" · {}", name_of(path))).unwrap_or_default();
     let made = item.queued.as_ref().map_or(String::new(), |queued| format!(", made from {} when it starts", queued.base));
     lines.push(field("branch", vec![Span::styled(format!("{branch}{place}{made}"), style(SUBTEXT))]));
-    if let Some((line, link)) = server_line(item, detail.dev_server, &detail.server_name, width) {
-        lines.push(line);
-        links.extend(link);
-    }
+    lines.extend(server_line(item, detail.dev_server, &detail.server_name, width).unwrap_or_default());
     lines.extend(worker_line(item, detail.dev_worker, &detail.worker_name));
-    let (ci, ci_links) = ci_lines(item, width);
-    lines.extend(ci);
-    links.extend(ci_links);
+    lines.extend(ci_lines(item, width));
     for url in named_urls(item, detail.card.as_ref().map(|(card, _)| card)).into_iter().take(4) {
-        let shown = cut(&url, width.saturating_sub(LABEL).max(2));
-        lines.push(field("link", vec![Span::styled(shown.clone(), style(TEAL))]));
-        links.push(Link { shown, url });
+        lines.extend(url_lines("link", Vec::new(), &url, width));
     }
     if let Some(note) = note_of(app, item) {
         lines.push(field("note", vec![Span::styled(format!("vault: {note}"), style(TEAL))]));
     }
-    (lines, links)
+    lines
 }
 
 // Every address the task's row links, all of them and in full, by what each is; the note opens in Obsidian.
@@ -417,14 +424,9 @@ pub(super) fn panel_lines(app: &mut App, item: &Item, width: usize) -> (Vec<Line
     } else if item.agent.is_none() {
         lines.push(field("claude", vec![Span::styled(format!("not running in its Space · {} restarts it", keys::key(Act::Go)), style(MUTED))]));
     }
-    if let Some((line, link)) = server_line(item, detail.dev_server, &detail.server_name, width) {
-        lines.push(line);
-        links.extend(link);
-    }
+    lines.extend(server_line(item, detail.dev_server, &detail.server_name, width).unwrap_or_default());
     lines.extend(worker_line(item, detail.dev_worker, &detail.worker_name));
-    let (ci, ci_links) = ci_lines(item, width);
-    lines.extend(ci);
-    links.extend(ci_links);
+    lines.extend(ci_lines(item, width));
     if item.git.as_ref().is_some_and(|git| git.ahead > 0) || item.verdict.is_some() || item.review.is_some() {
         let (text, color) = review_text(item);
         lines.push(field("review", vec![Span::styled(text, style(color))]));
@@ -644,16 +646,17 @@ mod tests {
     #[test]
     fn a_watched_task_shows_its_ci_state_and_links_each_run() {
         let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 0);
-        assert!(ci_lines(&item, 60).0.is_empty());
+        assert!(ci_lines(&item, 60).is_empty());
         let run = crate::ci::Run { id: 42, name: "CI".to_string(), workflow: "CI".to_string(), status: "in_progress".to_string(), conclusion: String::new(), url: "https://github.com/acme/web/actions/runs/42".to_string() };
         item.ci = Some(crate::ci::Watch {
             address: "billing@web".to_string(), repo: PathBuf::new(), slug: "acme/web".to_string(), sha: "abcdef0".to_string(),
             started_at: 0, checked_at: None, close: true, runs: vec![run], state: crate::ci::State::Running, error: None, erring_since: None, following: None, pushed: crate::ci::Pushed::default(),
         });
         crate::status::tests::rederive(&mut item);
-        let (lines, links) = ci_lines(&item, 80);
+        let lines = ci_lines(&item, 80);
         assert_eq!(lines.iter().map(Line::to_string).collect::<Vec<_>>(), ["ci      ◐ CI running: CI", "        CI  https://github.com/acme/web/actions/runs/42"]);
-        assert_eq!((links[0].shown.as_str(), links[0].url.as_str()), ("https://github.com/acme/web/actions/runs/42", "https://github.com/acme/web/actions/runs/42"));
+        let lines = ci_lines(&item, 40);
+        assert_eq!(lines.iter().map(Line::to_string).collect::<Vec<_>>(), ["ci      ◐ CI running: CI", "        CI  https://github.com/acme/web/", "        actions/runs/42"], "never cut: the rest runs on under the value column, nothing inserted in it");
         assert_eq!(row_facts(&item, None), "CI running: CI");
         assert_eq!(group_color(item.group()), YELLOW);
     }
@@ -691,24 +694,23 @@ mod tests {
     }
 
     #[test]
-    fn the_server_line_links_the_address_only_while_the_dev_server_runs() {
+    fn the_server_line_shows_the_whole_address_only_while_the_dev_server_runs() {
         let mut item = crate::status::tests::task(Some("idle"), None, 0);
         item.url = Some("https://wt1.app.dev".to_string());
-        assert_eq!(server_line(&item, true, "server", 60).unwrap().0.to_string(), "server  ○ off · w starts it", "an address from config is not a running server");
+        let text = |lines: Vec<Line>| lines.iter().map(Line::to_string).collect::<Vec<_>>();
+        assert_eq!(text(server_line(&item, true, "server", 60).unwrap()), ["server  ○ off · w starts it"], "an address from config is not a running server");
         assert!(server_line(&item, false, "server", 60).is_none(), "no dev_server, no line");
-        assert_eq!(server_line(&item, true, "web", 60).unwrap().0.to_string(), "web     ○ off · w starts it", "the label is worktree.server_name");
+        assert_eq!(text(server_line(&item, true, "web", 60).unwrap()), ["web     ○ off · w starts it"], "the label is worktree.server_name");
         item.server = true;
-        let (line, link) = server_line(&item, true, "server", 60).unwrap();
-        assert_eq!(line.to_string(), "server  ● running  https://wt1.app.dev");
-        let link = link.unwrap();
-        assert_eq!((link.shown.as_str(), link.url.as_str()), ("https://wt1.app.dev", "https://wt1.app.dev"));
+        assert_eq!(text(server_line(&item, true, "server", 60).unwrap()), ["server  ● running  https://wt1.app.dev"]);
         item.url = None;
-        assert!(server_line(&item, true, "server", 60).unwrap().1.is_none(), "dev_url off, or no port for {{port}}");
+        assert_eq!(text(server_line(&item, true, "server", 60).unwrap()), ["server  ● running"], "dev_url off, or no port for {{port}}");
         item.url = Some("https://a-very-long-worktree-name.example.dev/path".to_string());
-        let (line, link) = server_line(&item, true, "server", 40).unwrap();
-        assert!(line.width() <= 40, "{}", line.width());
-        let link = link.unwrap();
-        assert!(link.shown.ends_with('…') && link.url.ends_with("/path"));
+        let lines = server_line(&item, true, "server", 40).unwrap();
+        assert!(lines.iter().all(|line| line.width() <= 40), "{:?}", text(lines.clone()));
+        assert_eq!(text(lines), ["server  ● running  https://a-very-long-w", "        orktree-name.example.dev/path"]);
+        item.url = Some("https://x.example/abcdefghijklmnop".to_string());
+        assert_eq!(text(server_line(&item, true, "server", 28).unwrap()), ["server  ● running  ", "        https://x.example/ab", "        cdefghijklmnop"], "too little room after the state starts the address on its own row");
     }
 
     #[test]

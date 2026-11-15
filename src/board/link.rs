@@ -222,12 +222,11 @@ mod tests {
         let mut item = crate::status::tests::task(Some("idle"), None, 0);
         item.server = true;
         item.url = Some("http://localhost:3001".to_string());
-        let (line, link) = server_line(&item, true, "server", 60).unwrap();
-        let link = link.unwrap();
+        let lines = server_line(&item, true, "server", 60).unwrap();
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 3)).unwrap();
         terminal.draw(|frame| {
-            frame.render_widget(Paragraph::new(vec![Line::from("http://localhost:3001 is elsewhere too"), line]), frame.area());
-            link_cells(frame.buffer_mut(), &link);
+            frame.render_widget(Paragraph::new([vec![Line::from("")], lines].concat()), frame.area());
+            link_urls(frame.buffer_mut(), &["http://localhost:3001".to_string()]);
         }).unwrap();
         let buffer = terminal.backend().buffer();
         let id = link_id("http://localhost:3001");
@@ -296,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn a_cut_ci_run_url_and_a_cut_next_step_link_the_whole_url() {
+    fn a_ci_run_url_is_drawn_whole_over_rows_and_a_cut_next_step_links_the_whole_url() {
         let mut item = served("search-filters");
         let run = crate::ci::Run { id: 42, name: "CI".to_string(), workflow: "CI".to_string(), status: "in_progress".to_string(), conclusion: String::new(), url: LONG.to_string() };
         item.ci = Some(crate::ci::Watch {
@@ -306,9 +305,11 @@ mod tests {
         crate::status::tests::rederive(&mut item);
         let mut app = test_app(vec![item]);
         with_detail(&mut app);
-        for width in [170, 84, 60] {
-            let (_, buffer) = render(&mut app, width, 50);
-            assert_whole_link(&buffer, LONG, 1, &format!("the ci line at {width} columns"));
+        for (width, rows) in [(170, 1), (84, 2), (60, 2)] {
+            let (screen, buffer) = render(&mut app, width, 50);
+            assert_whole_link(&buffer, LONG, rows, &format!("the ci line at {width} columns"));
+            let drawn: String = buffer.content.iter().filter(|cell| link_of(cell).is_some_and(|(url, _)| url == LONG)).map(|cell| cell.symbol().split("\x1b\\").nth(1).unwrap().split('\x1b').next().unwrap().to_string()).collect();
+            assert!(!drawn.is_empty() && drawn.len() % LONG.len() == 0 && drawn == LONG.repeat(drawn.len() / LONG.len()), "every copy whole, none cut: {drawn:?}\n{}", screen.join("\n"));
         }
         let mut item = served("search-filters");
         let pull = "https://github.com/gronare/kebbie/pull/123/files?diff=split&w=1";
