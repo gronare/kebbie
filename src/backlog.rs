@@ -131,7 +131,7 @@ pub fn vault_body(index: Option<&crate::vault::Index>, state: &Path, key: &str) 
     (changed.is_none() || kept["mtime"].as_f64() == changed).then(|| kept["body"].as_str().map(str::to_string)).flatten()
 }
 
-// Fills kebbie's copy of the vault backlog notes the index has no current body for; the board's refresher runs it, away from the screen, and while the keeper's watch keeps the copy it reads only a note whose copy is missing or older than the note.
+// Fills kebbie's copy of the vault backlog notes the index has no current body for, written after each note so a reader has what is read so far and another writer's notes are kept; the board runs it on a thread of its own, and while the keeper's watch keeps the copy it reads only a note whose copy is missing or older than the note.
 pub fn fetch_vault_bodies() {
     let (Ok(state), Some(cli)) = (crate::lead::state_dir(), crate::vault_cli::cli()) else { return };
     fetch_vault_bodies_in(&cli, &state, crate::vault::Index::open);
@@ -152,10 +152,10 @@ pub fn fetch_vault_bodies_in(cli: &crate::vault_cli::Cli, state: &Path, index: i
 
 pub fn fill_vault_bodies(cli: &crate::vault_cli::Cli, state: &Path, index: &crate::vault::Index) {
     static REFUSED: std::sync::Mutex<Vec<(String, std::time::Instant)>> = std::sync::Mutex::new(Vec::new());
-    let mut cached: Value = fs::read_to_string(bodies_file(state)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_else(|| json!({}));
+    let kept = || fs::read_to_string(bodies_file(state)).ok().and_then(|text| serde_json::from_str::<Value>(&text).ok()).unwrap_or_else(|| json!({}));
+    let mut cached = kept();
     let mut refused = REFUSED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     refused.retain(|(_, at)| at.elapsed() < std::time::Duration::from_secs(300));
-    let mut changed = false;
     for [key, ..] in index.backlog().unwrap_or_default() {
         if index.body(&key).is_some() || refused.iter().any(|(held, _)| *held == key) {
             continue;
@@ -166,14 +166,12 @@ pub fn fill_vault_bodies(cli: &crate::vault_cli::Cli, state: &Path, index: &crat
         }
         match cli.read_body(&key) {
             Ok(body) => {
+                cached = kept();
                 cached[&key] = json!({ "mtime": mtime, "body": body });
-                changed = true;
+                let _ = crate::state::write(&bodies_file(state), cached.to_string());
             }
             Err(_) => refused.push((key, std::time::Instant::now())),
         }
-    }
-    if changed {
-        let _ = crate::state::write(&bodies_file(state), cached.to_string());
     }
 }
 

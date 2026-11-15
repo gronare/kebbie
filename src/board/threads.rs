@@ -49,9 +49,22 @@ fn load_ongoing() -> Vec<Ongoing> {
     }).collect()
 }
 
+// Reading every backlog note through the vault command takes minutes against a vault with no watch, so it runs apart from the snapshots and the board draws without it.
+fn spawn_body_reader() {
+    thread::spawn(|| {
+        loop {
+            if config::sources().is_ok_and(|sources| sources.contains(&Source::Vault)) {
+                crate::backlog::fetch_vault_bodies();
+            }
+            thread::sleep(Duration::from_secs(3));
+        }
+    });
+}
+
 pub(super) fn spawn_refresher(board_pane: Option<String>) -> (Receiver<std::result::Result<Snapshot, String>>, Sender<()>) {
     let (snapshot_tx, snapshot_rx) = mpsc::channel();
     let (refresh_tx, refresh_rx) = mpsc::channel::<()>();
+    spawn_body_reader();
     thread::spawn(move || {
         let mut recovered: Option<Instant> = None;
         let mut relayed: Option<Instant> = None;
@@ -71,9 +84,6 @@ pub(super) fn spawn_refresher(board_pane: Option<String>) -> (Receiver<std::resu
                         crate::recover::tick(&state);
                     }
                 }
-            }
-            if config::sources().is_ok_and(|sources| sources.contains(&Source::Vault)) {
-                crate::backlog::fetch_vault_bodies();
             }
             let snapshot = status::gather_with_checkouts().map(|(items, checkouts)| {
                 let questions = questions::open_now(&messages::load()).into_iter().cloned().chain(lead::state_dir().map(|state| crate::kebbie_questions::as_messages(&state)).unwrap_or_default()).collect();
@@ -246,6 +256,18 @@ fn gather_detail(path: &Path, repo: Option<&Path>) -> Detail {
 mod tests {
     use super::*;
     use crate::repo;
+
+    #[test]
+    fn the_board_draws_its_first_snapshot_without_waiting_for_the_vaults_backlog_texts() {
+        let source = include_str!("threads.rs");
+        let refresher = &source[source.find("pub(super) fn spawn_refresher(").unwrap()..];
+        let refresher = &refresher[..refresher.find("\n}\n").unwrap()];
+        assert!(refresher.contains("spawn_body_reader();") && !refresher.contains("fetch_vault_bodies"), "the texts are read on a thread of their own, never before a snapshot");
+        let bodies = include_str!("../backlog.rs");
+        let fill = &bodies[bodies.find("pub fn fill_vault_bodies(").unwrap()..];
+        let read = &fill[fill.find("Ok(body) =>").unwrap()..fill.find("Err(_) => refused.push").unwrap()];
+        assert!(read.contains("cached = kept();") && read.contains("crate::state::write(&bodies_file(state)"), "each text is kept as it is read, on top of what another writer kept meanwhile");
+    }
 
     #[test]
     fn the_changed_list_keeps_a_modified_unstaged_first_file_whole() {
