@@ -728,7 +728,7 @@ It is yours, or the lead's on your explicit choice. The lead's settings do not a
 `kebbie ask`:
 
 - A question about how goes to the lead instead.
-- The question opens with one plain sentence on what the task is doing.
+- The question comes first, then at most three plain sentences on what the task is doing.
 - Each of the two to four options says what you get with it, one recommended, without flags, commit ids, file names or internal terms you did not use.
 - `--plan <file>` or `--plan vault:<note>` asks you to approve a plan instead.
 

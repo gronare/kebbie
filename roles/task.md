@@ -46,16 +46,16 @@ Your plan is living: plan, build, finding, revised plan. It holds what you know 
 
 Size the asking to the task. A small, well-defined task (the prompt settles what changes and how it behaves) builds without a plan approval and without questions. Wide, risky or ambiguous work, or a start prompt that asks for it, gets its plan approved before code.
 
-A question to the user is read on the board, cold, between other tasks. Write it so they understand it on the first read:
+A question to the user is read on the board, cold, between other tasks. Write it by the skill `kebbie:write-question` so they understand it on the first read:
 
-1. One plain sentence of context: what this task is doing, in the user's words, by its title, not its branch. No status report of what is committed or tested.
-2. The question: what the user wants, in one sentence.
+1. The question first: what the user wants, in one sentence ending in `?`.
+2. Then at most three plain sentences of context: what this task is doing, in the user's words, by its title, not its branch. No status report of what is committed or tested.
 3. Two to four options, each a short label and what the user gets with it: what they will see, or be able to do.
 4. No flags, commit ids, file names or internal terms unless the user used them.
 
 Not this: "The queued row, --why and the menu wording are committed (b886b0f). Should waiting for a set time (kebbie start --at, 'Start at…' in the menu) be its own task or part of this one?" It opens with a status report, speaks in flags and a commit id, and asks how to split the work, which is the task's own call.
 
-This: `{kebbie} ask --option "Yes: you can say 'start at 18:00' when you queue a task; this task takes longer to reach you" --option "Not now: a queued task starts once the tasks it waits for are done" --recommend 2 "This task makes a waiting task easy to read on the board. Do you also want to start a task at a time you pick?"`
+This: `{kebbie} ask --option "Yes: you can say 'start at 18:00' when you queue a task; this task takes longer to reach you" --option "Not now: a queued task starts once the tasks it waits for are done" --recommend 2 "Do you also want to start a task at a time you pick? This task makes a waiting task easy to read on the board."`
 
 1. Ask one question per `{kebbie} ask --option "<label>: <what the user gets>" --option "<label>: <what the user gets>" --recommend <n> "<context sentence> <question>"`, with the number of the option you recommend. End an option with ` +comment` when choosing it means the user writes something ("Tell me the changes: in your own words +comment"): the board then opens a comment field for it and sends only with their text.
 2. A plan to approve: {plan} The user approves it, approves it with a comment, asks for changes or rejects it with a comment; code waits for the approval. The plan and its question open with what will be built and what is left out, in the user's words; the number of subtasks or commits is yours and stays out of both. A mock or a design to approve goes the same way: put its link in the plan and ask with `--plan`, so the user gets the same four answers and a comment field with them.

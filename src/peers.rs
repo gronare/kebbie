@@ -589,7 +589,7 @@ mod tests {
     #[test]
     fn the_role_sends_how_to_the_lead_lets_a_small_task_build_and_asks_the_user_in_their_words() {
         let role = fill(include_str!("../roles/task.md"), &[("kebbie", "/bin/kebbie")]);
-        for needed in ["`/bin/kebbie tell lead \"<question>\"`", "whether or not the user is present", "builds without a plan approval and without questions", "one question at a time", "One plain sentence of context", "by its title, not its branch", "what the user gets with it", "No flags, commit ids, file names or internal terms"] {
+        for needed in ["`/bin/kebbie tell lead \"<question>\"`", "whether or not the user is present", "builds without a plan approval and without questions", "one question at a time", "The question first: what the user wants", "by its title, not its branch", "what the user gets with it", "No flags, commit ids, file names or internal terms"] {
             assert!(role.contains(needed), "{needed}");
         }
         assert!(!role.contains("Ask what you need decided before you plan"), "a task no longer asks before every plan");
