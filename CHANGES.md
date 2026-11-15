@@ -5,17 +5,16 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
-- On your phone a task's question shows a short title, its text, its links as rows and its plan as the vault note stands now, and the task card lists the task's links.
-- Write it out on a backlog item on your phone has the lead write out an item not filled in.
+- On your phone a task's question shows its title, text, links and current plan, and the task card lists the task's links.
 - lead.profile runs the lead on its own model and effort, picked on the Settings page.
 - L preselects resuming the lead's conversation while work is going on, and a new one when nothing is.
-- Pushing from the board runs in the background, with a line saying each step and the task's row marked pushing.
+- Pushing from the board runs in the background, with a line saying each step.
 - The board's ↓ walks into a task's subtasks, and ⏎ opens one with its commits, files and what it built.
 - The board shows each task as a block, a line apart, with the selection running down the whole block.
 - The backlog has its own board page on 2, with every title whole; Areas and Routines move to 3 and 4.
 - The Work page shows the selected task's card beside the tasks, and it follows the cursor.
 - A vault backlog note missing a section of its template shows to write on the Backlog page.
-- Write it out, in a backlog item's options on ⏎, has the lead write out an item not filled in, and the item shows writing… until it is done; after 24 hours it can be asked again.
+- Write it out, on a backlog item's ⏎ options or on your phone, has the lead write out an item not filled in.
 - An idea the lead merges into an older note stays on the Backlog page for a week, pointing at that note.
 
 ### Fixed
@@ -44,7 +43,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - With the bugs-to-send row, the "Done in kebbie" line or a comment selected, no task on the board looks selected.
 - The board's header dates the vault backlog by its last vault sync, or says live while kebbie watches the vault.
 - Backlog rows from the vault show their current title, priority and age, not those of the lead's last save.
-- A sandboxed task writes its worktree's setup note, and kebbie refuses its shell's plain writes outside the worktree as it refuses its file tools'.
+- A sandboxed task writes its worktree's setup note, and its shell's writes outside the worktree are refused.
 
 ## 0.38.0
 
