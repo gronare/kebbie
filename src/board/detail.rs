@@ -327,6 +327,12 @@ pub(super) fn unfolded_lines(app: &mut App, item: &Item, width: usize) -> (Vec<L
 
 // Every address the task's row links, all of them and in full, by what each is; the note opens in Obsidian.
 pub(super) fn task_links(app: &App, item: &Item) -> Vec<(String, String)> {
+    let card = item.path.as_ref().and_then(|path| app.details.get(path)).and_then(|detail| detail.card.as_ref().map(|(card, _)| card));
+    task_urls(item, card, note_of(app, item).as_deref())
+}
+
+// The board's task links from what the task holds, its card and its note, so the phone gets the same set.
+pub(crate) fn task_urls(item: &Item, card: Option<&report::Card>, note: Option<&str>) -> Vec<(String, String)> {
     let mut links: Vec<(String, String)> = Vec::new();
     if item.server && let Some(url) = &item.url {
         links.push(("Open the dev server".to_string(), url.clone()));
@@ -334,9 +340,8 @@ pub(super) fn task_links(app: &App, item: &Item) -> Vec<(String, String)> {
     let runs = ci_urls(item);
     let single = runs.len() == 1;
     links.extend(runs.into_iter().map(|(title, url)| (if single { "Open the CI run".to_string() } else { format!("Open the CI run {}", cut(&title, 24)) }, url)));
-    let card = item.path.as_ref().and_then(|path| app.details.get(path)).and_then(|detail| detail.card.as_ref().map(|(card, _)| card));
     links.extend(named_urls(item, card).into_iter().map(|url| (link_label(&url), url)));
-    links.extend(note_of(app, item).map(|note| ("Open the note".to_string(), obsidian_url(&note))));
+    links.extend(note.map(|note| ("Open the note".to_string(), obsidian_url(note))));
     let mut seen: Vec<String> = Vec::new();
     for (label, _) in &mut links {
         let count = seen.iter().filter(|other| *other == label).count();
@@ -348,7 +353,7 @@ pub(super) fn task_links(app: &App, item: &Item) -> Vec<(String, String)> {
     links
 }
 
-pub(super) fn link_label(url: &str) -> String {
+pub(crate) fn link_label(url: &str) -> String {
     let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
     let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
     let named = if rest.contains("/actions/runs/") {

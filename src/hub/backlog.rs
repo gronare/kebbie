@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use kebbie_hub_protocol::{BacklogBody, BacklogRow, BacklogState, BodySection, Home, HomeKind, Id, Idea, ItemAnswer, ItemEdit, ItemKey, MAX_FOUND_SOURCES, OpenQuestion, Outcome, Payload, Priority, Reason, StartItem, text_hash};
+use kebbie_hub_protocol::{BacklogBody, BacklogRow, BacklogState, BodySection, Home, HomeKind, Id, Idea, ItemAnswer, ItemEdit, ItemKey, ItemWrite, MAX_FOUND_SOURCES, OpenQuestion, Outcome, Payload, Priority, Reason, StartItem, text_hash};
 
 use super::blobs::{Attachment, PLAN_LIMIT};
 use super::commands::{Done, plain};
@@ -143,6 +143,7 @@ pub fn rows(items: &[(Entry, Option<String>)], state: &Path, root: Option<&Path>
             goal,
             body: None,
             found: None,
+            writing: entry.shape.writing,
         });
         if let Some(body) = body {
             let written = body_of_item(body, template, questions);
@@ -190,6 +191,7 @@ pub fn found_rows(items: &[crate::found::Item]) -> Vec<BacklogRow> {
             goal: None,
             body: None,
             found: Some(kebbie_hub_protocol::Found { sources, count }),
+            writing: None,
         })
     }).collect()
 }
@@ -536,6 +538,35 @@ pub fn item_edit(_: &Caller, edit: &ItemEdit) -> Done {
     }
 }
 
+// kebbie's notice as the phone shows it: its headline, one line.
+fn headline(text: &str) -> String {
+    crate::notice::Notice::read(text, false).headline
+}
+
+// The phone's Write it out runs what Enter's Write it out runs; its refusals reach the phone as their one line.
+pub fn write_on(state: &Path, entry: &Entry, caller: &Caller, dir: &Path, now: u64, tell: &dyn Fn(&str) -> Result<()>) -> Done {
+    match backlog_file::write_out(state, entry, &who(caller), dir, now, tell) {
+        Ok(text) => (Outcome::Done, headline(&text)),
+        Err(text) => refused(Reason::BadRequest, &headline(&text)),
+    }
+}
+
+pub fn item_write(caller: &Caller, write: &ItemWrite) -> Done {
+    if write.item.home() == HomeKind::Found {
+        return refused(Reason::BadRequest, "Not sent: a found item is the tasks' own words; start it, add it to a task or dismiss it");
+    }
+    let state = match crate::lead::state_dir() {
+        Ok(state) => state,
+        Err(error) => return (Outcome::Failed, error),
+    };
+    let root = crate::vault::root();
+    let backlog = crate::backlog::load();
+    match backlog.entries.iter().find(|entry| key_of(entry, root.as_deref()).as_ref() == Some(&write.item)) {
+        Some(entry) => write_on(&state, entry, caller, &backlog_file::dir(), crate::messages::now(), &tell_lead),
+        None => refused(Reason::UnknownItem, "That item is no longer in this machine's backlog"),
+    }
+}
+
 pub fn start_item(_: &Caller, start: &StartItem) -> Done {
     match crate::lead::state_dir() {
         Ok(state) => start_on(&desk_for(&state, &start.item, &tell_lead), start, start_found),
@@ -600,6 +631,24 @@ mod tests {
         crate::backlog::shape_all(&mut items, &Default::default(), None, &state, &templates());
         assert_eq!(rows(&items, &state, None, today(), &templates()).0[0].state, BacklogState::Drafting, "from the ask, before the lead starts");
         let _ = std::fs::remove_dir_all(state);
+    }
+
+    #[test]
+    fn the_phones_write_it_out_asks_the_lead_and_the_row_says_when_and_a_refusal_comes_back_as_one_line() {
+        let (state, dir) = (crate::sh::test_dir("phone-write-out-state"), crate::sh::test_dir("phone-write-out-dir"));
+        let heard = RefCell::new(Vec::new());
+        let tell = |text: &str| -> Result<()> { heard.borrow_mut().push(text.to_string()); Ok(()) };
+        let at = 1_794_744_000;
+        let to_write = Entry { shape: Shape { state: Some(State::ToWrite), ..Shape::default() }, ..entry("vault", "Projects/old.md") };
+        let (outcome, said) = write_on(&state, &to_write, &hub(), &dir, at, &tell);
+        assert_eq!((outcome, said.as_str()), (Outcome::Done, "Sent to the lead"));
+        assert!(heard.borrow()[0].starts_with("The user on iPhone 16 asks you to write out"), "{}", heard.borrow()[0]);
+        let asked = Entry { shape: Shape { state: Some(State::Drafting), writing: Some(at), ..Shape::default() }, ..to_write.clone() };
+        let refused = write_on(&state, &asked, &hub(), &dir, at + 2 * 3600, &tell);
+        assert_eq!(refused, (Outcome::Refused { reason: Reason::BadRequest }, "Not sent: it is being written out already (writing… 2 h)".to_string()), "one line, the notice's headline");
+        assert_eq!(rows(&[(asked, None)], &state, None, today(), &templates()).0[0].writing, Some(at), "the row says when the write-out was asked");
+        assert_eq!(item_write(&hub(), &ItemWrite { item: ItemKey::parse("found:f3").unwrap() }).0, Outcome::Refused { reason: Reason::BadRequest });
+        let _ = (std::fs::remove_dir_all(state), std::fs::remove_dir_all(dir));
     }
 
     #[test]

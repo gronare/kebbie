@@ -6,6 +6,7 @@ mod columns;
 mod comments;
 mod confirm;
 mod detail;
+pub(crate) use detail::{link_label, task_urls};
 mod draw;
 mod editor;
 mod header;

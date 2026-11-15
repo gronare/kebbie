@@ -5,6 +5,8 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- On your phone a task's question shows a short title, its text, its links as rows and its plan as the vault note stands now, and the task card lists the task's links.
+- Write it out on a backlog item on your phone has the lead write out an item not filled in.
 - lead.profile runs the lead on its own model and effort, picked on the Settings page.
 - L preselects resuming the lead's conversation while work is going on, and a new one when nothing is.
 - Pushing from the board runs in the background, with a line saying each step and the task's row marked pushing.

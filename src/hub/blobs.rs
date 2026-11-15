@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use kebbie_hub_protocol::{BACKLOG_BODY_MEDIA_TYPE, BlobRef, CARD_MEDIA_TYPE, Board, CardRef, Id, ItemKey, seal_blob, seal_blob_with};
+use kebbie_hub_protocol::{BACKLOG_BODY_MEDIA_TYPE, BlobRef, CARD_MEDIA_TYPE, Board, CardRef, Id, ItemKey, PlanNote, seal_blob, seal_blob_with};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -21,6 +21,7 @@ pub(super) const NONCE_LEN: usize = 12;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Attachment {
     Plan { address: String, text: String, at: Option<u64> },
+    PlanNote { address: String, text: String, item: ItemKey, updated: u64 },
     Card { address: String, text: String, sha: String, current: bool, data: bool },
     Backlog { item: ItemKey, text: String },
 }
@@ -28,13 +29,13 @@ pub enum Attachment {
 impl Attachment {
     fn text(&self) -> &str {
         match self {
-            Attachment::Plan { text, .. } | Attachment::Card { text, .. } | Attachment::Backlog { text, .. } => text,
+            Attachment::Plan { text, .. } | Attachment::PlanNote { text, .. } | Attachment::Card { text, .. } | Attachment::Backlog { text, .. } => text,
         }
     }
 
     fn media_type(&self) -> &'static str {
         match self {
-            Attachment::Backlog { .. } => BACKLOG_BODY_MEDIA_TYPE,
+            Attachment::Backlog { .. } | Attachment::PlanNote { .. } => BACKLOG_BODY_MEDIA_TYPE,
             Attachment::Card { data: true, .. } => CARD_MEDIA_TYPE,
             Attachment::Plan { .. } | Attachment::Card { .. } => MEDIA_TYPE,
         }
@@ -196,7 +197,7 @@ fn stop(cache: &mut Cache, stopped: &mut bool, error: &HubError, now: u64) {
 
 fn place(board: &mut Board, attachment: &Attachment, blob: &BlobRef) {
     let address = match attachment {
-        Attachment::Plan { address, .. } | Attachment::Card { address, .. } => address,
+        Attachment::Plan { address, .. } | Attachment::PlanNote { address, .. } | Attachment::Card { address, .. } => address,
         Attachment::Backlog { item, .. } => {
             if let Some(row) = board.backlog.iter_mut().flatten().find(|row| &row.item == item) {
                 row.body = Some(blob.clone());
@@ -210,6 +211,13 @@ fn place(board: &mut Board, attachment: &Attachment, blob: &BlobRef) {
             if let Some(question) = item.question.as_mut() {
                 question.plan = Some(blob.clone());
                 question.plan_at = *at;
+            }
+        }
+        Attachment::PlanNote { item: key, updated, .. } => {
+            if let Some(question) = item.question.as_mut() {
+                question.plan = Some(blob.clone());
+                question.plan_at = None;
+                question.plan_note = Some(PlanNote { key: key.clone(), updated: *updated });
             }
         }
         Attachment::Card { sha, current, .. } => item.card = Some(CardRef { sha: sha.clone(), current: *current, blob: blob.clone() }),

@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Mutex;
 
+use kebbie_hub_protocol::{Link, LinkKind, MAX_LINKS, MAX_QUESTION_BODY_CHARS, MAX_QUESTION_TITLE_CHARS, is_link_url};
 use kebbie_hub_protocol::{Agent, AgentStatus, Board, Checkout, Ci, CiState, Counts, Git, Group, Item, Later, LaterState, MAX_RULE_NAMES, NextPart, NextRow, OverrideBy, Prompt, PromptOption, PushPermission, Question, QuestionOption, Recover, Report, RoutineSummary, Rules, RulesOverride, RulesState, SecondOpinion, Verdict, VerdictOutcome};
 use kebbie_hub_protocol::{Added, Assessment, AssessmentWord, Judgement, MAX_ASSESSMENT_REASON_CHARS, DecidedBy, DecisionKind, KebbieQuestion, MAX_ADDED_REASON_CHARS, MAX_OBSTACLE_CHARS, Obstacle, ObstacleDecision, ObstacleState, OrderRow, Pushable, Stage, Subtask, SubtaskState};
 
@@ -24,6 +25,8 @@ pub struct Seen {
     pub obstacles: BTreeMap<String, Obstacle>,
     pub kebbie: BTreeMap<String, Vec<crate::kebbie_questions::Asked>>,
     pub assessed: BTreeMap<String, u64>,
+    pub cards: BTreeMap<String, String>,
+    pub notes: BTreeMap<String, String>,
 }
 
 fn group(group: status::Group) -> Option<Group> {
@@ -57,11 +60,104 @@ fn report(item: &status::Item) -> Option<Report> {
     Some(Report { state: report.state.clone(), next: message.next_for_you().map(str::to_string), summary: message.text.clone(), at: message.at })
 }
 
+const ANSWER: &str = "answer: ";
+
+fn fits_title(text: &str) -> bool {
+    !text.trim().is_empty() && text.chars().count() <= MAX_QUESTION_TITLE_CHARS && !text.chars().any(char::is_control)
+}
+
+// What is asked on one line and the rest as its body: the question's first line when more follow, else the report's next when the question starts with it.
+pub fn title_and_body(text: &str, next: Option<&str>) -> (Option<String>, Option<String>) {
+    let text = text.trim();
+    let body = |rest: &str| -> Option<String> {
+        let rest: String = rest.trim().chars().map(|char| if char.is_control() && char != '\n' { ' ' } else { char }).collect();
+        (!rest.is_empty()).then_some(rest)
+    };
+    let (first, rest) = text.split_once('\n').unwrap_or((text, ""));
+    let first = first.trim();
+    if !rest.trim().is_empty() && fits_title(first) {
+        return (Some(first.to_string()), body(rest));
+    }
+    let next = next.map(|next| next.strip_prefix(ANSWER).unwrap_or(next).trim()).filter(|next| fits_title(next));
+    if let Some((next, after)) = next.and_then(|next| Some((next, text.strip_prefix(next)?))) {
+        return (Some(next.to_string()), body(after));
+    }
+    if fits_title(text) { (Some(text.to_string()), None) } else { (None, None) }
+}
+
+fn local_host(url: &str) -> bool {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
+    ["localhost", "127.", "0.0.0.0", "[::1]"].iter().any(|local| host.starts_with(local))
+}
+
+// The board's own link label as the phone names it: what the link is, without the verb.
+fn link(label: &str, url: &str) -> Option<Link> {
+    if local_host(url) || !is_link_url(url) {
+        return None;
+    }
+    let named = label.strip_prefix("Open ").unwrap_or(label);
+    let named = named.strip_prefix("the ").unwrap_or(named);
+    let (kind, label) = if url.starts_with("obsidian://") {
+        (LinkKind::Note, "Vault note".to_string())
+    } else if named.starts_with("CI run") {
+        (LinkKind::Ci, named.to_string())
+    } else if let Some(more) = named.strip_prefix("pull request") {
+        (LinkKind::Pr, format!("Pull request{more}"))
+    } else if let Some(more) = named.strip_prefix("mock") {
+        (LinkKind::Mock, format!("Mockup{more}"))
+    } else if let Some(more) = named.strip_prefix("dev server") {
+        (LinkKind::Dev, format!("Dev server{more}"))
+    } else {
+        (LinkKind::Other, named.to_string())
+    };
+    let label: String = label.chars().take(kebbie_hub_protocol::MAX_LINK_LABEL_CHARS).collect();
+    (!label.trim().is_empty()).then_some(Link { kind, label, url: url.to_string() })
+}
+
+fn unique(links: impl IntoIterator<Item = Link>) -> Vec<Link> {
+    let mut kept: Vec<Link> = Vec::new();
+    for link in links {
+        if kept.len() < MAX_LINKS && !kept.iter().any(|seen| seen.url == link.url) {
+            kept.push(link);
+        }
+    }
+    kept
+}
+
+fn urls_in(text: &str) -> Vec<String> {
+    let mut urls: Vec<String> = Vec::new();
+    for word in text.split(|character: char| character.is_whitespace() || "()<>[]\"'`".contains(character)) {
+        let url = word.trim_end_matches(['.', ',', ';', ':', '!', '?']);
+        if (url.starts_with("https://") || url.starts_with("http://")) && url.len() > 8 && !urls.iter().any(|seen| seen == url) {
+            urls.push(url.to_string());
+        }
+    }
+    urls
+}
+
+// Every address the Mac board's task links name, from the task, its card and its note; the dev server only when it is not on this machine.
+pub fn task_links(item: &status::Item, address: &str, seen: &Seen) -> Vec<Link> {
+    let card = seen.cards.get(address).map(|text| crate::report::Card { sha: String::new(), text: text.clone(), file: std::path::PathBuf::new(), data: None });
+    unique(crate::board::task_urls(item, card.as_ref(), seen.notes.get(address).map(String::as_str)).into_iter().filter_map(|(label, url)| link(&label, &url)))
+}
+
 // The plan reaches the phone as a blob the relay attaches, so its path or vault key stays on the machine.
 fn question(item: &status::Item) -> Option<Question> {
     let message = item.question.as_ref()?;
     let asked = message.question.as_ref()?;
+    let next = item.report.as_ref().and_then(|report| report.next_for_you()).or_else(|| message.next_for_you());
+    let (title, body) = match title_and_body(&message.text, next) {
+        (_, Some(body)) if body.chars().count() > MAX_QUESTION_BODY_CHARS => (None, None),
+        split => split,
+    };
+    let links = unique(urls_in(&message.text).into_iter().filter_map(|url| link(&crate::board::link_label(&url), &url)));
     Some(Question {
+        title,
+        body,
+        links,
+        plan_note: None,
         id: message.id.clone(),
         text: message.text.clone(),
         options: asked.options.iter().enumerate().map(|(index, (label, meaning))| QuestionOption { label: label.clone(), meaning: meaning.clone(), comment: asked.comment.contains(&index) }).collect(),
@@ -321,6 +417,7 @@ pub fn item(item: &status::Item, seen: &Seen) -> Option<Item> {
         assessment: item.assessment.as_ref().and_then(|word| assessment(word, seen.assessed.get(&address).copied())),
         second_opinion: item.second.as_ref().map(|second| SecondOpinion { by: second.by.clone(), points: second.points.map(count), running: second.running }),
         review: super::review::offer(item),
+        links: task_links(item, &address, seen),
         address,
     })
 }
@@ -418,7 +515,10 @@ fn seen(items: &[status::Item]) -> Seen {
         let address = crate::peers::address(&item.name, &item.place);
         Some((address.clone(), crate::assessment::at_in(state.as_deref()?, &address)?))
     }).collect();
-    Seen { menus, models, home: std::env::var("HOME").ok(), accepting, obstacles, kebbie, assessed }
+    let tasks: Vec<String> = items.iter().filter(|item| item.is_task()).map(|item| crate::peers::address(&item.name, &item.place)).collect();
+    let cards = state.as_deref().map(|state| tasks.iter().filter_map(|address| Some((address.clone(), crate::report::card_in(state, address)?.text))).collect()).unwrap_or_default();
+    let notes = state.as_deref().map(|state| tasks.iter().filter_map(|address| Some((address.clone(), crate::task_note::linked(state, address)?.trim_start_matches(crate::questions::VAULT_PLAN).to_string()))).collect()).unwrap_or_default();
+    Seen { menus, models, home: std::env::var("HOME").ok(), accepting, obstacles, kebbie, assessed, cards, notes }
 }
 
 // HEAD still makes the change the card was written for, by the push dialog's rule; the answer is kept per (card, HEAD) so the board loop runs git only when either moves.
@@ -443,14 +543,34 @@ fn card_current(item: &status::Item, sha: &str) -> bool {
     current
 }
 
+// A vault plan goes as the note's body as it stands on this board, with the note's time, so the phone reads it as the backlog card reads a note; a file plan goes as the markdown it was asked with.
+fn plan_attachment(address: &str, asked: &crate::messages::Question, state: &Path) -> Option<Attachment> {
+    let text = crate::questions::plan_text(asked).filter(|text| !text.trim().is_empty() && text.len() <= PLAN_LIMIT)?;
+    let at = asked.plan_at.and_then(|millis| u64::try_from(millis / 1000).ok());
+    let note = asked.plan.as_deref().and_then(|plan| plan.strip_prefix(crate::questions::VAULT_PLAN));
+    let vault = note.and_then(|key| {
+        let item = kebbie_hub_protocol::ItemKey::vault(key).ok()?;
+        let changed = crate::vault::Index::open().ok().and_then(|index| index.changed_at(key)).map(|seconds| seconds as u64);
+        Some(note_plan(address, &text, item, changed.or(at)?, state))
+    });
+    vault.flatten().or(Some(Attachment::Plan { address: address.to_string(), text, at }))
+}
+
+pub fn note_plan(address: &str, text: &str, item: kebbie_hub_protocol::ItemKey, updated: u64, state: &Path) -> Option<Attachment> {
+    let template = crate::item_template::for_vault();
+    let key = item.as_str().trim_start_matches(crate::questions::VAULT_PLAN);
+    let questions = super::backlog::open_questions(text, key, state, &template);
+    let body = serde_json::to_string(&super::backlog::body_of_item(text, &template, questions)).ok().filter(|body| body.len() <= PLAN_LIMIT)?;
+    Some(Attachment::PlanNote { address: address.to_string(), text: body, item, updated })
+}
+
 // A card kept as data goes up as the structured card with the choices made on its noticed lines; a card written before that, or a routine's findings, as the text it is.
 pub fn attachments(items: &[status::Item], state: &Path) -> Vec<Attachment> {
     let found = crate::found::load(state);
     items.iter().filter(|item| item.is_task() && group(item.group()).is_some()).flat_map(|item| {
         let address = crate::peers::address(&item.name, &item.place);
         let asked = item.question.as_ref().and_then(|message| message.question.as_ref()).filter(|asked| asked.plan.is_some());
-        let at = asked.and_then(|asked| asked.plan_at).and_then(|millis| u64::try_from(millis / 1000).ok());
-        let plan = asked.and_then(crate::questions::plan_text).filter(|text| !text.trim().is_empty() && text.len() <= PLAN_LIMIT).map(|text| Attachment::Plan { address: address.clone(), text, at });
+        let plan = asked.and_then(|asked| plan_attachment(&address, asked, state));
         let card = crate::report::card_in(state, &address).filter(|card| !card.text.is_empty() && card.text.len() <= PLAN_LIMIT).map(|card| {
             let current = card_current(item, &card.sha);
             let wired = card.data.as_ref().and_then(|data| crate::card::wire(data, &found)).and_then(|wired| serde_json::to_string(&wired).ok());
@@ -488,6 +608,67 @@ pub(crate) mod tests {
         });
         in_phase(&mut item, Phase::NeedsYou(crate::phase::Why::Question));
         item
+    }
+
+    #[test]
+    fn a_question_reaches_the_phone_as_its_title_its_body_and_its_links() {
+        let split = |text: &str, next: Option<&str>| title_and_body(text, next);
+        assert_eq!(split("Keep the old endpoint?\nClients on the old app still call it.\n\nMore.", None), (Some("Keep the old endpoint?".to_string()), Some("Clients on the old app still call it.\n\nMore.".to_string())), "the first line when more lines follow");
+        let one = "Is this the app to build? The mockup of the native iOS app. https://claude.ai/artifact/PtjPD12V3DKH1RV5e1dfn3";
+        assert_eq!(split(one, Some("answer: Is this the app to build?")), (Some("Is this the app to build?".to_string()), Some("The mockup of the native iOS app. https://claude.ai/artifact/PtjPD12V3DKH1RV5e1dfn3".to_string())), "else the report's next where the question starts with it");
+        assert_eq!(split("Keep the old endpoint?", None), (Some("Keep the old endpoint?".to_string()), None));
+        assert_eq!(split(&"x ".repeat(200), Some("answer: something else")), (None, None), "a long line with no title stays the question's text alone");
+        let mut item = asking("refunds", "shop");
+        item.question.as_mut().unwrap().text = one.to_string();
+        item.report = Some(Message { report: Some(crate::messages::Report { state: "needs-you".to_string(), next: "answer: Is this the app to build?".to_string(), head: None, after: Vec::new() }), ..item.question.clone().unwrap() });
+        let board = build(&[item], &[], Vec::new(), None, &Seen::default());
+        let question = board.items[0].question.as_ref().unwrap();
+        assert_eq!(question.title.as_deref(), Some("Is this the app to build?"));
+        assert_eq!(question.text, one, "the whole text stays for a phone that reads no title");
+        assert_eq!(question.links, [Link { kind: LinkKind::Mock, label: "Mockup".to_string(), url: "https://claude.ai/artifact/PtjPD12V3DKH1RV5e1dfn3".to_string() }]);
+        assert_eq!(kebbie_hub_protocol::Payload::Board(board.clone()).validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_task_names_the_links_the_mac_board_names_and_none_that_opens_only_on_this_machine() {
+        let mut item = asking("refunds", "shop");
+        item.server = true;
+        item.url = Some("http://localhost:3003".to_string());
+        item.report = Some(Message { text: "drew the mock: https://claude.ai/artifact/abc, draft PR https://github.com/acme/shop/pull/42".to_string(), ..item.question.clone().unwrap() });
+        let seen = Seen { cards: BTreeMap::from([("refunds@shop".to_string(), "Built it. CI https://github.com/acme/shop/actions/runs/7".to_string())]), notes: BTreeMap::from([("refunds@shop".to_string(), "Projects/refunds.md".to_string())]), ..Seen::default() };
+        let links = &build(&[item], &[], Vec::new(), None, &seen).items[0].links;
+        let shown: Vec<(LinkKind, &str, &str)> = links.iter().map(|link| (link.kind, link.label.as_str(), link.url.as_str())).collect();
+        assert_eq!(shown, [
+            (LinkKind::Ci, "CI run", "https://github.com/acme/shop/actions/runs/7"),
+            (LinkKind::Mock, "Mockup", "https://claude.ai/artifact/abc"),
+            (LinkKind::Pr, "Pull request", "https://github.com/acme/shop/pull/42"),
+            (LinkKind::Note, "Vault note", "obsidian://open?file=Projects%2Frefunds.md"),
+        ], "the dev server on localhost opens nowhere on the phone, so it stays here");
+    }
+
+    #[test]
+    fn a_vault_plan_goes_to_the_phone_as_the_notes_body_with_its_time_and_a_new_body_as_a_new_blob() {
+        let state = crate::sh::test_dir("plan-note-blob");
+        let key = kebbie_hub_protocol::ItemKey::vault("Projects/refunds.md").unwrap();
+        let note = |text: &str, updated: u64| note_plan("refunds@shop", text, key.clone(), updated, &state).unwrap();
+        let body = "## Goal\n\nRefunds round like invoices.\n\n## Open questions\n\n- [ ] Half up or to even?\n";
+        let first = note(body, 1_000);
+        let mut board = build(&[asking("refunds", "shop")], &[], Vec::new(), None, &Seen::default());
+        board.items[0].question.as_mut().unwrap().plan_at = Some(5);
+        let dir = crate::sh::test_dir("plan-note-blobs");
+        let put = std::cell::RefCell::new(Vec::new());
+        let shown = super::super::blobs::attach(&dir, &board, std::slice::from_ref(&first), 2_000, |id, ciphertext| { put.borrow_mut().push((id.clone(), ciphertext.to_vec())); Ok(()) });
+        let question = shown.items[0].question.as_ref().unwrap();
+        let plan = question.plan.clone().unwrap();
+        assert_eq!(plan.media_type, kebbie_hub_protocol::BACKLOG_BODY_MEDIA_TYPE);
+        assert_eq!((question.plan_note.as_ref().map(|note| (note.key.as_str(), note.updated)), question.plan_at), (Some(("vault:Projects/refunds.md", 1_000)), None));
+        let opened: kebbie_hub_protocol::BacklogBody = serde_json::from_slice(&kebbie_hub_protocol::open_blob(&plan, &put.borrow()[0].1).unwrap()).unwrap();
+        assert_eq!(opened.questions.iter().map(|question| question.text.as_str()).collect::<Vec<_>>(), ["Half up or to even?"]);
+        let changed = super::super::blobs::attach(&dir, &board, &[note(&body.replace("like invoices", "exactly like invoices"), 3_000)], 3_000, |_, _| Ok(()));
+        let again = changed.items[0].question.as_ref().unwrap();
+        assert_ne!(again.plan.as_ref().unwrap().id, plan.id, "the note changed, so the phone reads a new body");
+        assert_eq!(again.plan_note.as_ref().unwrap().updated, 3_000);
+        let _ = (std::fs::remove_dir_all(state), std::fs::remove_dir_all(dir));
     }
 
     #[test]
@@ -730,7 +911,7 @@ pub(crate) mod tests {
         agent.kind = crate::agent::Agent::Codex;
         agent.answer = status::answer_in_space(crate::agent::Agent::Codex);
         let menu = crate::menu::parse_for(CODEX_APPROVAL, crate::agent::Agent::Codex).unwrap();
-        let seen = Seen { menus: BTreeMap::from([("hub@kebbie".to_string(), menu.clone())]), models: BTreeMap::from([("task".to_string(), "gpt-6.1-sol".to_string())]), home: Some("/Users/u".to_string()), accepting: BTreeSet::new(), obstacles: BTreeMap::new(), kebbie: BTreeMap::new(), assessed: BTreeMap::new() };
+        let seen = Seen { menus: BTreeMap::from([("hub@kebbie".to_string(), menu.clone())]), models: BTreeMap::from([("task".to_string(), "gpt-6.1-sol".to_string())]), home: Some("/Users/u".to_string()), accepting: BTreeSet::new(), obstacles: BTreeMap::new(), kebbie: BTreeMap::new(), assessed: BTreeMap::new(), ..Seen::default() };
         let board = build(std::slice::from_ref(&item), &[], Vec::new(), None, &seen);
         let shown = &board.items[0];
         let prompt = shown.prompt.as_ref().unwrap();

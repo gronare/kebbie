@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use kebbie_hub::{CommandGate, Config, Hub, Refusal, serve};
+use kebbie_hub::{Config, Gated, Hub, Plans, Refusal, serve};
 use kebbie_hub_fakes::browser::Browser;
 use kebbie_hub_protocol::{Board, Id, Kind};
 
@@ -32,7 +32,7 @@ impl TestHub {
         TestHub::start_gated(configure, None)
     }
 
-    fn start_gated(configure: impl FnOnce(&mut Config), gate: Option<CommandGate>) -> TestHub {
+    fn start_gated(configure: impl FnOnce(&mut Config), gate: Option<Box<dyn Plans>>) -> TestHub {
         let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
         let mut config = Config::new(crate::sh::test_dir("hub-data"));
         configure(&mut config);
@@ -826,7 +826,7 @@ pub(crate) fn open_hub(configure: impl FnOnce(&mut Config)) -> TestHub {
     open_gated_hub(configure, None)
 }
 
-fn open_gated_hub(configure: impl FnOnce(&mut Config), gate: Option<CommandGate>) -> TestHub {
+fn open_gated_hub(configure: impl FnOnce(&mut Config), gate: Option<Box<dyn Plans>>) -> TestHub {
     TestHub::start_gated(
         |config| {
             config.connect_interval = 0;
@@ -967,7 +967,7 @@ fn an_own_hub_is_tested_before_it_is_saved_once_and_never_through_a_linked_confi
 
 #[test]
 fn a_hub_that_refuses_commands_still_takes_the_board_and_status_and_doctor_say_nothing_of_it() {
-    let hub = open_gated_hub(|_| {}, Some(Box::new(|_, _| Err(Refusal { url: Some("https://hub.example.com/account".to_string()) }))));
+    let hub = open_gated_hub(|_| {}, Some(Box::new(|_: &kebbie_hub::store::Store, _: &str, gated: Gated| match gated { Gated::Command(_) => Err(Refusal { url: Some("https://hub.example.com/account".to_string()), pro: false }), _ => Ok(()) })));
     let mut browser = member(&hub);
     let state = connected_state(&hub, &mut browser);
     let rev = relay::relay(&state, &board_of(&[asking("refunds", "shop")]), now()).unwrap().expect("the gate covers commands only, so the board goes out");
