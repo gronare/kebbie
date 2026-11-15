@@ -6,7 +6,7 @@ Answer the questions your tasks ask through the board, each with options and a r
 
 1. Press `i` on the board. The inbox opens with the waiting questions on the left and the selected question's detail or plan in the middle.
 
-2. Pick an option with `↑` `↓` or `j` `k`. In a plan, `←` `→` pick too. The cursor starts on the recommended one, marked `recommended`.
+2. Pick an option with `↑` `↓` or `j` `k`. In a plan, `←` `→` pick too. The cursor starts on the recommended one, marked `recommended`, but `⏎` sends nothing until you have picked one.
 
 3. To add a comment, start typing, or press `tab` to reach the comment field.
 
@@ -14,7 +14,7 @@ Answer the questions your tasks ask through the board, each with options and a r
 
 If no option fits, select "In my own words" and write the answer as the comment. The task follows words that tell it what to do. When your words ask it something, it answers with a new question on the board before it writes code.
 
-If it is a plan, the options are approve, approve with a comment, ask for changes, and reject with a comment.
+If it is a plan, the options are approve, approve with a comment, ask for changes, and reject with a comment. Approve then asks once more: press `y` to send it, or any other key to go back.
 
 If a plan, or a question taller than its window, does not fit, `PageUp` and `PageDown` scroll it, in every question window.
 

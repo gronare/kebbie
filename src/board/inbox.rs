@@ -30,6 +30,8 @@ pub(super) struct QuestionWindow {
     pub(super) typing: bool,
     pub(super) comment: TextArea<'static>,
     notice: Option<(bool, String)>,
+    picked: bool,
+    confirming: bool,
 }
 
 fn comment_field() -> TextArea<'static> {
@@ -42,7 +44,7 @@ fn comment_field() -> TextArea<'static> {
 
 impl QuestionWindow {
     fn new(questions: &[Message], selected: usize) -> Self {
-        let mut window = Self { id: String::new(), selected: 0, option: 0, scroll: 0, shift: 0, typing: false, comment: comment_field(), notice: None };
+        let mut window = Self { id: String::new(), selected: 0, option: 0, scroll: 0, shift: 0, typing: false, comment: comment_field(), notice: None, picked: false, confirming: false };
         window.select(questions, selected);
         window
     }
@@ -58,6 +60,7 @@ impl QuestionWindow {
         }
         self.id = id;
         self.option = message.and_then(|message| message.question.as_ref()).map_or(0, |question| question.recommend.saturating_sub(1));
+        (self.picked, self.confirming) = (false, false);
         self.scroll = 0;
         self.shift = 0;
     }
@@ -76,7 +79,7 @@ impl QuestionWindow {
 
     // A click selects an answer, and opens the comment field of one that takes a comment; it never sends.
     pub(super) fn click(&mut self, questions: &[Message], index: usize) {
-        self.option = index;
+        (self.option, self.picked, self.confirming) = (index, true, false);
         let answers = questions.get(self.selected).map(answers).unwrap_or_default();
         self.typing = false;
         if let Some(answer) = answers.get(index).filter(|answer| answer.takes_comment) {
@@ -85,7 +88,7 @@ impl QuestionWindow {
     }
 
     fn pick(&mut self, option: usize) {
-        self.option = option;
+        (self.option, self.picked, self.confirming) = (option, true, false);
         self.shift = 0;
     }
 
@@ -125,6 +128,8 @@ struct Answer {
 
 const PLAN_KEYS: [(char, &str); 4] = [('a', "approve"), ('c', "comment"), ('r', "changes"), ('x', "reject")];
 const OWN_WORDS: &str = "In my own words";
+// A key no Enter, arrow or split escape sequence produces, so a plan is approved only on purpose.
+const CONFIRM: char = 'y';
 
 fn answers(message: &Message) -> Vec<Answer> {
     let question = message.question.as_ref();
@@ -196,6 +201,18 @@ impl App {
             self.mode = Mode::Questions(window);
             return;
         }
+        if window.confirming {
+            match key.code {
+                KeyCode::Char(CONFIRM) if busy => window.notice = Some((false, "An answer is still sending; press y again once it is through.".to_string())),
+                KeyCode::Char(CONFIRM) => {
+                    (window.confirming, window.notice) = (false, None);
+                    self.send(&mut window, &answers);
+                }
+                _ => (window.confirming, window.notice) = (false, None),
+            }
+            self.mode = Mode::Questions(window);
+            return;
+        }
         let pressed = match key.code {
             KeyCode::Char(character) if !busy => answers.iter().position(|answer| answer.key == character),
             _ => None,
@@ -216,6 +233,7 @@ impl App {
             KeyCode::Right if planned => window.pick((window.option + 1) % count_answers),
             KeyCode::PageUp => window.page(planned, -PAGE),
             KeyCode::PageDown => window.page(planned, PAGE),
+            KeyCode::Enter if !busy && !window.picked => window.notice = Some((false, "Pick an answer first: ↑ ↓ or its key, then ⏎.".to_string())),
             KeyCode::Enter if !busy => self.choose(&mut window, &answers),
             KeyCode::Char(character) if character == keys::key(Act::Go) => {
                 let workspace = self.questions.get(window.selected).and_then(|message| self.task_of(&message.from)).and_then(|item| item.workspace.clone());
@@ -242,8 +260,12 @@ impl App {
 
     fn choose(&mut self, window: &mut QuestionWindow, answers: &[Answer]) {
         let Some(answer) = answers.get(window.option) else { return };
+        let planned = self.questions.get(window.selected).and_then(|message| message.question.as_ref()).is_some_and(|question| question.plan.is_some());
         if answer.takes_comment {
             window.open_comment(answer);
+        } else if planned {
+            window.confirming = true;
+            window.notice = Some((false, format!("{} the plan as written? {CONFIRM} sends it, any other key goes back.", answer.label)));
         } else {
             self.send(window, answers);
         }
@@ -416,14 +438,12 @@ fn answer_row(answers: &[Answer], option: usize, area: Rect, hits: &mut Vec<(Rec
     fit(spans, area.width as usize)
 }
 
-fn question_keys(typing: bool, plan: bool, several: bool, open: bool) -> String {
+fn question_keys(typing: bool, picked: bool, plan: bool, several: bool, open: bool) -> String {
     let map = keys::map();
     if typing {
         return format!("{} send · pgup pgdn scroll · {} back to the answers", map.label(Act::Options), map.label(Act::Back));
     }
-    let mut keys = vec![if plan { format!("↑ ↓ {} pick", map.label(Act::Switch)) } else { "↑ ↓ pick".to_string() }];
-    keys.push("pgup pgdn scroll".to_string());
-    keys.push(format!("{} send", map.label(Act::Options)));
+    let mut keys = pick_hints(if plan { format!("↑ ↓ {} pick", map.label(Act::Switch)) } else { "↑ ↓ pick".to_string() }, picked);
     if several {
         keys.push(format!("{} next", map.label(Act::Lead)));
     }
@@ -549,7 +569,7 @@ pub(super) fn draw_questions(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit
         keys.push(Span::styled(format!("{} {} · ", if *ok { "✓" } else { "!" }, notice.split_whitespace().collect::<Vec<_>>().join(" ")), style(if *ok { GREEN } else { RED })));
     }
     let open = viewer && plan_file(message).is_some();
-    keys.push(Span::styled(question_keys(window.typing, planned, questions.len() > 1, open), style(MUTED)));
+    keys.push(Span::styled(question_keys(window.typing, window.picked, planned, questions.len() > 1, open), style(MUTED)));
     frame.render_widget(Paragraph::new(fit(keys, foot.width as usize)), foot);
     hits
 }
@@ -558,7 +578,12 @@ const ASK_WIDTH: u16 = 80;
 const PAGE: i32 = 10;
 const INDENT: usize = 5;
 
-fn ask_keys(typing: bool, options: usize, several: bool, wide: bool) -> String {
+fn pick_hints(pick: String, picked: bool) -> Vec<String> {
+    let enter = keys::map().label(Act::Options);
+    if picked { vec![pick, "pgup pgdn scroll".to_string(), format!("{enter} send")] } else { vec![format!("{pick}, {enter} send"), "pgup pgdn scroll".to_string()] }
+}
+
+fn ask_keys(typing: bool, picked: bool, options: usize, several: bool, wide: bool) -> String {
     let map = keys::map();
     if typing {
         return format!("{} send · pgup pgdn scroll · {} back to the answers", map.label(Act::Options), map.label(Act::Back));
@@ -566,7 +591,7 @@ fn ask_keys(typing: bool, options: usize, several: bool, wide: bool) -> String {
     let range = if options > 1 { format!("1–{options}") } else { "1".to_string() };
     let mut keys = vec![format!("{range} answer"), "w own words".to_string()];
     if wide {
-        keys.extend(["↑ ↓ pick".to_string(), "pgup pgdn scroll".to_string(), format!("{} send", map.label(Act::Options))]);
+        keys.extend(pick_hints("↑ ↓ pick".to_string(), picked));
     }
     if several {
         keys.push(format!("{} next", map.label(Act::Lead)));
@@ -692,7 +717,7 @@ fn draw_ask(frame: &mut Frame, window: &mut QuestionWindow, message: &Message, c
         keys.push(Span::styled(format!("{} {} · ", if *ok { "✓" } else { "!" }, notice.split_whitespace().collect::<Vec<_>>().join(" ")), style(if *ok { GREEN } else { RED })));
     }
     let options = answers.iter().filter(|answer| answer.choice.is_some()).count();
-    keys.push(Span::styled(ask_keys(window.typing, options, count > 1, inner_width >= 70), style(MUTED)));
+    keys.push(Span::styled(ask_keys(window.typing, window.picked, options, count > 1, inner_width >= 70), style(MUTED)));
     frame.render_widget(Paragraph::new(fit(keys, foot.width as usize)), foot);
 }
 
@@ -743,7 +768,7 @@ mod tests {
         assert!(rows[answers].contains("c comment") && rows[answers].contains("r changes"), "{screen}");
         assert_eq!(row_of(&rows, "recommended · build it as planned"), answers + 1, "the selected answer's meaning under the row");
         assert!(rows[answers].contains("x reject w own words"), "every answer fits a 60-column window: {screen}");
-        assert!(rows[answers + 2].contains("────") && rows[answers + 3].contains("│ ↑ ↓ ← → pick · pgup pgdn scroll · ⏎ send"), "the footer: a rule, then the keys: {screen}");
+        assert!(rows[answers + 2].contains("────") && rows[answers + 3].contains("│ ↑ ↓ ← → pick, ⏎ send · pgup pgdn scroll"), "the footer: a rule, then the keys: {screen}");
         assert!(rows[answers + 4].contains("╰"), "the keys are the window's last inner row: {screen}");
         assert_eq!(row_of(&rows, "ANSWER ─"), answers - 1);
         assert_eq!(app.hits.iter().filter(|(_, hit)| matches!(hit, Hit::Question(_))).count(), 0, "no list in a narrow window");
@@ -1212,6 +1237,67 @@ mod tests {
         assert_eq!(typing(&app), (true, false, None), "from the enter menu");
     }
 
+    fn planned_row() -> App {
+        let mut app = crate::board::test_support::carded(false);
+        let place = app.tasks[0].place.clone();
+        app.questions = messages::fold(&crate::board::test_support::PLAN.replace("payload@api", &format!("search-filters@{place}")));
+        render(&mut app, 112, 40);
+        app
+    }
+
+    fn feed(app: &mut App, bytes: &[KeyCode]) {
+        for code in bytes {
+            crate::board::test_support::press(app, KeyEvent::from(*code));
+        }
+    }
+
+    #[test]
+    fn enters_and_arrows_on_a_plans_row_never_approve_it() {
+        let mut app = planned_row();
+        feed(&mut app, &[KeyCode::Enter, KeyCode::Enter, KeyCode::Enter, KeyCode::Enter]);
+        assert!(matches!(app.mode, Mode::Questions(_)) && app.answering.is_none(), "Enter on the row, the menu and the window sends nothing unpicked");
+        let mut app = planned_row();
+        feed(&mut app, &[KeyCode::Enter, KeyCode::Enter, KeyCode::Down, KeyCode::Up, KeyCode::Enter, KeyCode::Enter, KeyCode::Right, KeyCode::Left, KeyCode::Enter]);
+        assert!(app.answering.is_none(), "arrows onto Approve and Enter only ask for the confirm");
+        let mut app = planned_row();
+        feed(&mut app, &[KeyCode::Enter, KeyCode::Esc, KeyCode::Char('['), KeyCode::Char('B'), KeyCode::Esc, KeyCode::Char('O'), KeyCode::Char('A')]);
+        assert!(app.answering.is_none(), "an arrow split into esc and letters answers nothing");
+    }
+
+    #[test]
+    fn a_plans_approve_waits_for_y_and_any_other_key_takes_it_back() {
+        let mut app = planned_row();
+        feed(&mut app, &[KeyCode::Char('s'), KeyCode::Char('a')]);
+        let (_, sent, notice) = typing(&app);
+        assert!(!sent && notice.as_deref() == Some("Approve the plan as written? y sends it, any other key goes back."), "{notice:?}");
+        feed(&mut app, &[KeyCode::Enter]);
+        assert_eq!(typing(&app), (false, false, None), "Enter is not the confirm");
+        feed(&mut app, &[KeyCode::Char('a')]);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        app.answering = Some(("other".to_string(), receiver));
+        feed(&mut app, &[KeyCode::Char('y')]);
+        let Mode::Questions(window) = &app.mode else { panic!() };
+        assert!(window.confirming && window.notice.as_ref().is_some_and(|(_, text)| text.starts_with("An answer is still sending")), "y mid-send says so and keeps the confirm");
+        drop(sender);
+        app.answering = None;
+        feed(&mut app, &[KeyCode::Esc]);
+        feed(&mut app, &[KeyCode::Down, KeyCode::Up, KeyCode::Enter, KeyCode::Char('y')]);
+        assert!(typing(&app).1, "picked, chosen, then y sends it");
+    }
+
+    #[test]
+    fn enter_sends_a_questions_answer_only_once_one_is_picked() {
+        let mut app = test_app(Vec::new());
+        app.questions = messages::fold(crate::board::test_support::QUESTION);
+        app.open_questions(Some(0));
+        press(&mut app, KeyCode::Enter);
+        let (_, sent, notice) = typing(&app);
+        assert!(!sent && notice.is_some_and(|notice| notice.starts_with("Pick an answer first")), "the recommended answer is shown, not chosen");
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        assert!(typing(&app).1, "a picked answer goes on Enter");
+    }
+
     #[test]
     fn a_plans_commented_answers_need_their_comment_too() {
         let mut app = test_app(Vec::new());
@@ -1223,6 +1309,8 @@ mod tests {
         assert!(open && !sent && notice.is_some_and(|notice| notice.starts_with("Ask for changes")), "a plan asked before the mark existed still needs the text");
         press(&mut app, KeyCode::Esc);
         press(&mut app, KeyCode::Char('a'));
-        assert!(typing(&app).1, "approve sends at once");
+        assert!(!typing(&app).1, "approve asks for its confirm");
+        press(&mut app, KeyCode::Char('y'));
+        assert!(typing(&app).1, "y sends it");
     }
 }

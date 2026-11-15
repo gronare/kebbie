@@ -699,10 +699,10 @@ The answers sit on one row at the bottom under an `ANSWER` header, each as its k
 | Key | Action |
 | --- | --- |
 | `tab`, `shift-tab` | The next or previous question, wrapping around. |
-| `↑` `↓`, `j` `k` | Scroll the plan. `PageUp`, `PageDown` scroll by ten lines, also while typing a comment. |
-| `←` `→` | Select an answer, wrapping around. |
-| `⏎` | Send the selected answer, or open the comment box when it takes a comment. In the comment box, send the answer with the comment. |
-| an answer's letter or number | Send that answer at once, or open the comment box when it takes a comment. |
+| `↑` `↓`, `j` `k` | Select an answer, wrapping around; in a plan `←` `→` too. `PageUp`, `PageDown` scroll by ten lines, also while typing a comment. |
+| `⏎` | Send the answer you picked, or open the comment box when it takes a comment; before you pick one it sends nothing and says to pick. In the comment box, send the answer with the comment. |
+| an answer's letter or number | Send that answer at once (a plan's approve asks for `y` first), or open the comment box when it takes a comment. |
+| `y` | After a plan's approve, send it; any other key goes back to the answers. |
 | `o` | Open the plan file in the system viewer, as `o` opens a card's image. Offered for a plan kept as a file, not for a vault note. |
 | `g` | Go to the asking task's Space. |
 | `esc` | In the comment box, back to the answers. Otherwise, close. |
