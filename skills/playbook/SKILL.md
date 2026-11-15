@@ -23,6 +23,8 @@ Three pages hold what happens between the start and the push. Read the one your 
 - [PLAN.md](PLAN.md): when a task's plan changes: the loop of plan, build, finding and revision, and when a revision is the user's question.
 - [CARD.md](CARD.md): when a task writes its sign-off card.
 
+[WORDS.md](WORDS.md) holds the rules for every text the user reads (a plan brief, a question, a card, a report line), which the skills `kebbie:write-plan-brief`, `kebbie:write-question`, `kebbie:write-push-summary` and `kebbie:write-decision-line` build on.
+
 ## Review by assessment
 
 Whether a task needs a reviewer is the assessor's judgement of its work, as your role's Review station says: no recipe adds a review or skips one. Bring the user each `review suggested` with your recommendation, and send it on their word.
