@@ -948,7 +948,7 @@ mod tests {
 
     #[test]
     fn the_rows_goal_is_the_templates_goal_or_else_its_first_required_section() {
-        let template = Template { sections: vec![crate::item_template::Section { key: "context".to_string(), heading: "Context".to_string(), required: false }, crate::item_template::Section { key: "problem".to_string(), heading: "Problem".to_string(), required: true }], questions: None };
+        let template = Template { sections: vec![crate::item_template::Section { key: "context".to_string(), heading: "Context".to_string(), required: false }, crate::item_template::Section { key: "problem".to_string(), heading: "Problem".to_string(), required: true }], questions: None, language: None };
         let state = crate::sh::test_dir("backlog-goal");
         let templates = Templates { local: template.clone(), vault: template };
         let rows = rows(&[(entry("vault", "Projects/retry.md"), Some("## Context\n\nSome.\n\n## Problem\n\nIt breaks.\n".to_string()))], &state, None, today(), &templates).0;

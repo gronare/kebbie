@@ -30,6 +30,8 @@ pub struct Template {
     pub sections: Vec<Section>,
     #[serde(default)]
     pub questions: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -98,6 +100,7 @@ impl Template {
                 section("source", "Source", true),
             ],
             questions: Some("questions".to_string()),
+            language: None,
         }
     }
 
@@ -321,18 +324,19 @@ pub struct Kept {
     pub at: u64,
     pub template: Option<Template>,
     pub failed: bool,
+    pub language_asked: bool,
 }
 
 impl Kept {
-    // A failed ask is tried again after RETRY, an answer, with a template or without, after VAULT_TTL.
+    // A failed ask is tried again after RETRY, an answer, with a template or without, after VAULT_TTL; one kept before kebbie kept the language is asked again.
     fn fresh(&self, command: &str, now: u64) -> bool {
-        self.command == command && now.saturating_sub(self.at) < if self.failed { RETRY } else { VAULT_TTL }
+        self.command == command && self.language_asked && now.saturating_sub(self.at) < if self.failed { RETRY } else { VAULT_TTL }
     }
 }
 
 fn read_kept(path: &Path) -> Option<Kept> {
     let value: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
-    Some(Kept { command: value["command"].as_str().unwrap_or_default().to_string(), at: value["at"].as_u64().unwrap_or_default(), template: Template::from_value(&value["template"]).ok(), failed: value["failed"] == true })
+    Some(Kept { command: value["command"].as_str().unwrap_or_default().to_string(), at: value["at"].as_u64().unwrap_or_default(), template: Template::from_value(&value["template"]).ok(), failed: value["failed"] == true, language_asked: value.get("language").is_some() })
 }
 
 static KEPT: Mutex<Option<Held<Option<Kept>>>> = Mutex::new(None);
@@ -347,6 +351,29 @@ pub fn kept_in(state: &Path) -> Option<Kept> {
 // The vault's task template as kebbie last read it, or None while the vault has given none.
 pub fn vault() -> Option<Template> {
     kept_in(&crate::lead::state_location().ok()?)?.template
+}
+
+// The language the vault writes its notes in, by name, for the roles to write questions, plans and cards in; English when the vault gives none.
+pub fn content_language() -> String {
+    language_name(vault().and_then(|template| template.language).as_deref())
+}
+
+pub fn language_name(code: Option<&str>) -> String {
+    let Some(code) = code.map(str::trim).filter(|code| !code.is_empty()) else { return "English".to_string() };
+    let base = code.split(['-', '_']).next().unwrap_or(code).to_lowercase();
+    let name = match base.as_str() {
+        "en" => return "English".to_string(),
+        "sv" => "Swedish",
+        "nb" | "nn" | "no" => "Norwegian",
+        "da" => "Danish",
+        "fi" => "Finnish",
+        "de" => "German",
+        "fr" => "French",
+        "es" => "Spanish",
+        "nl" => "Dutch",
+        _ => return format!("the language `{code}`, the vault's"),
+    };
+    format!("{name}, the vault's language")
 }
 
 pub fn for_vault() -> Template {
@@ -381,7 +408,8 @@ pub fn refresh(cli: &Cli, state: &Path, now: u64) -> Result<bool> {
         Ok(template) => template.clone(),
         Err(_) => kept.and_then(|kept| kept.template),
     };
-    crate::state::write(&path, json!({ "command": cli.cache_key(), "at": now, "template": template, "failed": fetched.is_err() }).to_string())?;
+    let language = template.as_ref().and_then(|template| template.language.clone());
+    crate::state::write(&path, json!({ "command": cli.cache_key(), "at": now, "template": template, "failed": fetched.is_err(), "language": language }).to_string())?;
     forget();
     fetched.map(|_| true)
 }
@@ -517,6 +545,24 @@ mod tests {
         assert_eq!(away.calls().len(), 1);
         assert!(refresh(&cli, &state, 100 + RETRY).is_err());
         assert_eq!(away.calls().len(), 2);
+    }
+
+    #[test]
+    fn the_vaults_language_is_kept_with_its_template_and_named_for_the_roles() {
+        let fake = crate::vault_cli::fake::Fake::new("template-language");
+        let state = fake.state();
+        let cli = Cli { capabilities: Some(vec!["templates".to_string()]), ..fake.cli.clone() };
+        crate::state::write(&file(&state), json!({ "command": cli.cache_key(), "at": 100, "template": Template::builtin(), "failed": false }).to_string()).unwrap();
+        fake.answer("template", r##"{"kind":"task","language":"sv","sections":[{"key":"problem","heading":"Problem","required":true}],"questions":null,"skeleton":""}"##);
+        assert!(refresh(&cli, &state, 101).unwrap(), "a template kept without its language is asked again");
+        assert_eq!(kept_in(&state).and_then(|kept| kept.template).and_then(|template| template.language).as_deref(), Some("sv"));
+        assert!(!refresh(&cli, &state, 102).unwrap());
+        assert_eq!(language_name(Some("sv")), "Swedish, the vault's language");
+        assert_eq!(language_name(Some("sv-SE")), "Swedish, the vault's language");
+        assert_eq!(language_name(Some("en")), "English");
+        assert_eq!(language_name(None), "English", "a vault that gives no language writes in English");
+        assert_eq!(language_name(Some(" ")), "English");
+        assert_eq!(language_name(Some("is")), "the language `is`, the vault's");
     }
 
     #[test]

@@ -52,6 +52,7 @@ A question to the user is read on the board, cold, between other tasks. Write it
 2. Then at most three plain sentences of context: what this task is doing, in the user's words, by its title, not its branch. No status report of what is committed or tested.
 3. Two to four options, each a short label and what the user gets with it: what they will see, or be able to do.
 4. No flags, commit ids, file names or internal terms unless the user used them.
+5. Write them in {language}, as you write your plans and your card.
 
 Not this: "The queued row, --why and the menu wording are committed (b886b0f). Should waiting for a set time (kebbie start --at, 'Start at…' in the menu) be its own task or part of this one?" It opens with a status report, speaks in flags and a commit id, and asks how to split the work, which is the task's own call.
 

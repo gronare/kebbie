@@ -17,7 +17,7 @@ fn task_role() -> String {
 }
 
 fn lead_role() -> String {
-    crate::lead::role_text(&file("roles/lead.md"), "kebbie", &[Source::Vault], true, true)
+    crate::lead::role_text(&file("roles/lead.md"), "kebbie", &[Source::Vault], true, true, "English")
 }
 
 fn playbook(page: &str) -> String {

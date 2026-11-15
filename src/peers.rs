@@ -368,7 +368,7 @@ fn role_values(task: &str, place: &Place, peers: &str) -> Result<Vec<(&'static s
     let docs = docs_line(place.agent, settings.docs_required.value);
     let tests = tests_line(crate::full_tests::required(&settings).as_deref());
     let steps = steps_section(settings.steps.value, &kebbie);
-    let mut values = vec![("address", me.clone()), ("task", task.to_string()), ("repo", repo), ("noticed", noticed), ("steps", steps), ("kebbie", kebbie), ("peers", peers), ("plan", plan), ("vault", vault), ("docs", docs), ("tests", tests)];
+    let mut values = vec![("address", me.clone()), ("task", task.to_string()), ("repo", repo), ("noticed", noticed), ("steps", steps), ("kebbie", kebbie), ("peers", peers), ("plan", plan), ("vault", vault), ("docs", docs), ("tests", tests), ("language", crate::item_template::content_language())];
     values.extend(worktree_values(place)?);
     Ok(values)
 }
@@ -614,6 +614,15 @@ mod tests {
         assert!(!file.contains("vault"), "{file}");
         let role = fill(include_str!("../roles/task.md"), &[("plan", &file)]);
         assert!(role.contains(&format!("2. A plan to approve: {file} The user approves it")) && !role.contains("{plan}"), "{role}");
+    }
+
+    #[test]
+    fn the_vaults_language_reaches_the_task_role() {
+        let role = fill(include_str!("../roles/task.md"), &[("language", &crate::item_template::language_name(Some("sv")))]);
+        assert!(role.contains("Write them in Swedish, the vault's language, as you write your plans and your card.") && !role.contains("{language}"), "{role}");
+        let source = include_str!("peers.rs");
+        let values = &source[source.find("\nfn role_values(").unwrap()..];
+        assert!(values[..values.find("\n}\n").unwrap()].contains("(\"language\", crate::item_template::content_language())"), "the role names the language the vault gives");
     }
 
     #[test]
