@@ -42,11 +42,19 @@ fn load_ongoing() -> Vec<Ongoing> {
     let machine = config::machine();
     let links = tasks::started_links();
     notes.into_iter().map(|note| {
-        let task = links.iter().find(|(_, items)| items.contains(&note.key)).map(|(address, _)| address.clone());
+        let (task, also) = linked_tasks(&links, &note.key);
         let claim = claims.get(&note.key).filter(|claim| claim.elsewhere(&machine)).cloned();
         let opening = index.opening(&note.key).or_else(|| index.body(&note.key).map(|body| super::note_card::opening(&body))).unwrap_or_default();
-        Ongoing { key: note.key, title: note.title, area: note.area, task, claim, status: note.status, summary: note.summary, opening }
+        Ongoing { key: note.key, title: note.title, area: note.area, task, also, claim, status: note.status, summary: note.summary, opening }
     }).collect()
+}
+
+// A task across repos links one note from each half, and the links come in no order, so the row names the first address and the rest follow it: the same on every refresh.
+fn linked_tasks(links: &std::collections::HashMap<String, Vec<String>>, key: &str) -> (Option<String>, Vec<String>) {
+    let mut tasks: Vec<String> = links.iter().filter(|(_, items)| items.iter().any(|item| item == key)).map(|(address, _)| address.clone()).collect();
+    tasks.sort();
+    let mut tasks = tasks.into_iter();
+    (tasks.next(), tasks.collect())
 }
 
 // Reading every backlog note through the vault command takes minutes against a vault with no watch, so it runs apart from the snapshots and the board draws without it.
@@ -256,6 +264,19 @@ fn gather_detail(path: &Path, repo: Option<&Path>) -> Detail {
 mod tests {
     use super::*;
     use crate::repo;
+
+    #[test]
+    fn a_note_two_halves_of_a_task_link_names_the_same_half_on_every_refresh_and_both_cards_find_it() {
+        let note = "Projects/hub-commands.md".to_string();
+        for _ in 0..20 {
+            let links: std::collections::HashMap<String, Vec<String>> = [("hub-commands@kebbie-hub", &note), ("hub-commands@kebbie", &note), ("other@kebbie", &"Projects/other.md".to_string())].into_iter().map(|(address, item)| (address.to_string(), vec![item.clone()])).collect();
+            assert_eq!(linked_tasks(&links, &note), (Some("hub-commands@kebbie".to_string()), vec!["hub-commands@kebbie-hub".to_string()]), "a map's order changes from one build to the next; the row does not");
+        }
+        assert_eq!(linked_tasks(&std::collections::HashMap::new(), &note), (None, Vec::new()));
+        let detail = include_str!("detail.rs");
+        let note_of = &detail[detail.find("fn note_of(").unwrap()..];
+        assert!(note_of[..note_of.find("\n}\n").unwrap()].contains("|| note.also.contains(&address)"), "the other half's card shows the note too");
+    }
 
     #[test]
     fn the_board_draws_its_first_snapshot_without_waiting_for_the_vaults_backlog_texts() {

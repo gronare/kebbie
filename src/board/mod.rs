@@ -281,6 +281,7 @@ struct Ongoing {
     title: String,
     area: String,
     task: Option<String>,
+    also: Vec<String>,
     claim: Option<crate::vault::Claim>,
     status: String,
     summary: String,

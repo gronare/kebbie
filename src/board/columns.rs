@@ -693,8 +693,8 @@ mod tests {
         let claim = |since: &str, updated: &str| crate::vault::Claim { machine: "devbox".to_string(), task: "billing".to_string(), repo: "web".to_string(), since: format!("{since}T08:00:00Z"), updated: updated.to_string() };
         let mut app = test_app(vec![served("search-filters")]);
         app.ongoing = vec![
-            Ongoing { key: "Projects/web-billing.md".to_string(), title: "web billing".to_string(), area: "web".to_string(), task: None, claim: Some(claim(&day(2), &day(2))), ..Ongoing::default() },
-            Ongoing { key: "Projects/web-old.md".to_string(), title: "web old".to_string(), area: "web".to_string(), task: None, claim: Some(claim(&day(30), &day(20))), ..Ongoing::default() },
+            Ongoing { also: Vec::new(), key: "Projects/web-billing.md".to_string(), title: "web billing".to_string(), area: "web".to_string(), task: None, claim: Some(claim(&day(2), &day(2))), ..Ongoing::default() },
+            Ongoing { also: Vec::new(), key: "Projects/web-old.md".to_string(), title: "web old".to_string(), area: "web".to_string(), task: None, claim: Some(claim(&day(30), &day(20))), ..Ongoing::default() },
         ];
         app.column = Column::Backlog;
         let (rows, _) = render(&mut app, 200, 50);
@@ -726,8 +726,8 @@ mod tests {
     fn ongoing_notes_head_the_backlog_with_their_task_or_a_resume() {
         let mut app = test_app(vec![served("search-filters")]);
         app.ongoing = vec![
-            Ongoing { key: "Projects/search-filters.md".to_string(), title: "search filters".to_string(), area: "web".to_string(), task: Some("search-filters@web".to_string()), claim: None, ..Ongoing::default() },
-            Ongoing { key: "Projects/docs-refresh.md".to_string(), title: "docs refresh".to_string(), area: "shop".to_string(), task: None, claim: None, ..Ongoing::default() },
+            Ongoing { also: Vec::new(), key: "Projects/search-filters.md".to_string(), title: "search filters".to_string(), area: "web".to_string(), task: Some("search-filters@web".to_string()), claim: None, ..Ongoing::default() },
+            Ongoing { also: Vec::new(), key: "Projects/docs-refresh.md".to_string(), title: "docs refresh".to_string(), area: "shop".to_string(), task: None, claim: None, ..Ongoing::default() },
         ];
         let screen = render(&mut app, 84, 50).0.join("\n");
         assert!(screen.contains("note    vault: Projects/search-filters.md"), "the task shows its note: {screen}");
@@ -826,8 +826,8 @@ mod tests {
 
     fn two_notes_and_two_entries(app: &mut crate::board::App) {
         app.ongoing = vec![
-            Ongoing { key: "Projects/search-filters.md".to_string(), title: "search filters".to_string(), area: "web".to_string(), task: Some("search-filters@web".to_string()), claim: None, ..Ongoing::default() },
-            Ongoing { key: "Projects/docs-refresh.md".to_string(), title: "docs refresh".to_string(), area: "shop".to_string(), task: None, claim: None, ..Ongoing::default() },
+            Ongoing { also: Vec::new(), key: "Projects/search-filters.md".to_string(), title: "search filters".to_string(), area: "web".to_string(), task: Some("search-filters@web".to_string()), claim: None, ..Ongoing::default() },
+            Ongoing { also: Vec::new(), key: "Projects/docs-refresh.md".to_string(), title: "docs refresh".to_string(), area: "shop".to_string(), task: None, claim: None, ..Ongoing::default() },
         ];
         let entry = |title: &str, reference: &str| crate::backlog::Entry { source: "vault".to_string(), title: title.to_string(), priority: "high".to_string(), area: "web".to_string(), reference: reference.to_string(), summary: String::new(), age: String::new(), shape: Default::default() };
         app.backlog.entries = vec![entry("nightly import", "Projects/nightly.md"), entry("price alerts", "Projects/alerts.md")];
@@ -912,7 +912,7 @@ mod tests {
         let mut app = test_app(vec![served("search-filters")]);
         let title = "search filters that remember price and size across visits and devices";
         let claim = crate::vault::Claim { machine: "devbox".to_string(), task: "billing".to_string(), repo: "web".to_string(), since: "2026-10-19T08:00:00Z".to_string(), updated: "2026-10-20".to_string() };
-        app.ongoing = vec![Ongoing {
+        app.ongoing = vec![Ongoing { also: Vec::new(),
             key: "Projects/search-filters.md".to_string(), title: title.to_string(), area: "web".to_string(), task: Some("search-filters@web".to_string()), claim: Some(claim),
             status: "active".to_string(), summary: "Filters survive a reload.".to_string(), opening: super::super::note_card::opening(body),
         }];
@@ -936,7 +936,7 @@ mod tests {
     fn a_long_note_scrolls_in_its_card() {
         let mut app = test_app(Vec::new());
         let body: String = (1..=60).map(|line| format!("line {line} of the problem\n")).collect();
-        app.ongoing = vec![Ongoing { key: "Projects/long.md".to_string(), title: "long".to_string(), area: "web".to_string(), opening: super::super::note_card::opening(&format!("## Problem\n{body}")), ..Ongoing::default() }];
+        app.ongoing = vec![Ongoing { also: Vec::new(), key: "Projects/long.md".to_string(), title: "long".to_string(), area: "web".to_string(), opening: super::super::note_card::opening(&format!("## Problem\n{body}")), ..Ongoing::default() }];
         app.column = Column::Backlog;
         press(&mut app, key(KeyCode::Enter));
         let (rows, _) = render(&mut app, 100, 30);

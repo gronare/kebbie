@@ -625,7 +625,7 @@ mod tests {
         item.report.as_mut().unwrap().text = format!("mock at {long} and the PR https://github.com/acme/web/pull/7, also https://docs.example.org/guide");
         let mut app = test_app(vec![item]);
         with_detail(&mut app);
-        app.ongoing = vec![Ongoing { key: "Projects/search filters.md".to_string(), title: "search filters".to_string(), area: "web".to_string(), task: Some("search-filters@web".to_string()), claim: None, ..Ongoing::default() }];
+        app.ongoing = vec![Ongoing { also: Vec::new(), key: "Projects/search filters.md".to_string(), title: "search filters".to_string(), area: "web".to_string(), task: Some("search-filters@web".to_string()), claim: None, ..Ongoing::default() }];
         app
     }
 
