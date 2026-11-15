@@ -69,10 +69,25 @@ impl Lab {
         fs::write(answers.join("workspace-get.json"), r#"{"result":{"workspace":{"tokens":{}}}}"#).unwrap();
         self.screen("❯ ");
         let script = format!(
-            "#!/bin/sh\nd='{}'\nfor a in \"$@\"; do printf '%s\\037' \"$a\" >> \"$d/herdr.log\"; done\nprintf '\\036' >> \"$d/herdr.log\"\nkey=\"$1-$2\"\nif [ -f \"$d/answers/$key.json\" ]; then cat \"$d/answers/$key.json\"; exit 0; fi\necho '{{\"error\":{{\"code\":\"not_faked\",\"message\":\"the fake herdr has no answer\"}}}}' >&2\nexit 1\n",
+            "#!/bin/sh\nd='{}'\nfor a in \"$@\"; do printf '%s\\037' \"$a\" >> \"$d/herdr.log\"; done\nprintf '\\036' >> \"$d/herdr.log\"\nkey=\"$1-$2\"\n[ -f \"$d/live.sh\" ] && . \"$d/live.sh\"\nif [ -f \"$d/answers/$key.json\" ]; then cat \"$d/answers/$key.json\"; exit 0; fi\necho '{{\"error\":{{\"code\":\"not_faked\",\"message\":\"the fake herdr has no answer\"}}}}' >&2\nexit 1\n",
             self.root.display()
         );
         crate::executable::write(&self.herdr, script).unwrap();
+    }
+
+    // A Claude behind the fake herdr as a start meets it: listed once herdr started it, a bracketed paste shown folded in its box, and Enter taking it.
+    fn live_claude(&self) {
+        let rule = "─".repeat(60);
+        fs::write(self.root.join("live.sh"), format!(r#"box() {{ printf '⏺ Done.\n\n{rule}\n%s\n{rule}\n  ? for shortcuts\n' "$1" > "$d/answers/pane-read.json"; }}
+case "$key" in
+  agent-start) shift 2; name=$1; while [ $# -gt 0 ] && [ "$1" != --pane ]; do shift; done; entry="{{\"name\":\"$name\",\"agent\":\"claude\",\"workspace_id\":\"w_live\",\"pane_id\":\"$2\",\"agent_status\":\"idle\",\"interactive_ready\":true}}"; sed -e "s/\"agents\":\[\]/\"agents\":[$entry]/" -e t -e "s/\"agents\":\[/\"agents\":[$entry,/" "$d/answers/agent-list.json" > "$d/agent-list.tmp" && mv "$d/agent-list.tmp" "$d/answers/agent-list.json";;
+  pane-send-text) box '❯ [Pasted text #1 +3 lines]'; touch "$d/pasted";;
+  pane-send-keys) [ "$4" = enter ] && [ -f "$d/pasted" ] && {{ rm -f "$d/pasted"; box '❯ '; }};;
+esac
+"#)).unwrap();
+        for ok in ["pane-send-text", "pane-send-keys"] {
+            fs::write(self.root.join("answers").join(format!("{ok}.json")), r#"{"result":{}}"#).unwrap();
+        }
     }
 
     // What the fake herdr shows as every pane's visible screen: Claude's input box holding this line.
@@ -1716,6 +1731,7 @@ fn a_due_routine_starts_as_a_task_in_the_keeper_round_reports_its_findings_and_c
     fs::write(answers.join("pane-process-info.json"), r#"{"result":{"process_info":{"shell_pid":1,"foreground_processes":[]}}}"#).unwrap();
     fs::write(answers.join("agent-start.json"), r#"{"result":{}}"#).unwrap();
     tab_named(&lab, "1");
+    lab.live_claude();
 
     let listed = stdout(&lab.run(&["routines"]));
     assert!(listed.starts_with("cluster-health  Cluster health\n  every 1h in ") && listed.contains("fix, pushes its fix; next run now") && listed.ends_with("last: not run yet"), "{listed}");
@@ -1732,7 +1748,8 @@ fn a_due_routine_starts_as_a_task_in_the_keeper_round_reports_its_findings_and_c
     assert!(opened.contains(&task) && opened.contains(&"--no-focus".to_string()), "{opened:?}");
     assert!(!calls.iter().any(|call| call[..2] == ["workspace", "focus"]), "a run never steals focus");
     assert!(calls.contains(&vec!["tab".to_string(), "rename".to_string(), "w_lead:t1".to_string(), task.clone()]), "the task's tab carries the task's name: {calls:?}");
-    assert!(calls.iter().any(|call| call[..2] == ["agent", "prompt"] && call[3].contains("This is the routine \"Cluster health\" (cluster-health)") && call[3].contains("routine ok")), "{calls:?}");
+    let pasted = calls.iter().position(|call| call[..2] == ["pane", "send-text"] && call[3].starts_with("\u{1b}[200~") && call[3].contains("This is the routine \"Cluster health\" (cluster-health)") && call[3].contains("routine ok")).expect("the start prompt goes in as one bracketed paste");
+    assert!(calls[pasted..].iter().any(|call| call[..2] == ["pane", "send-keys"] && call[3] == "enter"), "Enter follows the paste on its own: {calls:?}");
     assert!(lab.state.join("push-permits").join(&address).is_file(), "a fix routine with push = true carries the task's push permission");
 
     let mut state: serde_json::Value = serde_json::from_str(&fs::read_to_string(lab.state.join("routines/cluster-health.json")).unwrap()).unwrap();

@@ -7,7 +7,7 @@ use serde_json::Value;
 
 pub const KEBBIE: &str = env!("CARGO_BIN_EXE_kebbie");
 
-// A herdr that keeps its Spaces and agents as files, starts an agent by marking its pane as running, and shows a pane's screen from screens/<pane>, or the agent's empty input box while it runs.
+// A herdr that keeps its Spaces and agents as files, starts an agent by marking its pane as running, and shows a pane's screen from screens/<pane>, or the agent's empty input box while it runs; a bracketed paste shows folded in that box until Enter takes it.
 const HERDR: &str = r#"#!/bin/sh
 d=$(dirname "$0")
 for a in "$@"; do printf '%s\037' "$a" >> "$d/herdr.log"; done
@@ -24,7 +24,8 @@ case "$1 $2" in
   'pane process-info') p=$4; if [ -f "$d/running-$p" ]; then printf '{"result":{"process_info":{"foreground_process_group_id":%s,"shell_pid":1,"foreground_processes":[{"argv0":"agent","argv":%s,"cwd":"%s","pid":%s}]}}}\n' "$(cat "$d/pid")" "$(cat "$d/argv-$p")" "$(cat "$d/cwd-$p" 2>/dev/null)" "$(cat "$d/pid")"; else printf '{"result":{"process_info":{"foreground_process_group_id":1,"shell_pid":1,"foreground_processes":[]}}}\n'; fi; exit 0;;
   'agent start') p=$(flag --pane "$@"); kind=$(flag --kind "$@"); touch "$d/running-$p"; argv "$kind" "$@" > "$d/argv-$p"; [ -f "$d/agents/${p#p_}.json" ] || printf '{"name":"%s","agent":"%s","workspace_id":"w_%s","pane_id":"%s","agent_status":"idle","interactive_ready":true}' "$3" "$kind" "${p#p_}" "$p" > "$d/agents/${p#p_}.json"; [ -f "$d/screens/$p" ] || cp "$d/screens/$kind" "$d/screens/$p"; echo '{"result":{}}'; exit 0;;
   'pane run') echo "${4#cd }" | tr -d "'" > "$d/cwd-$3"; echo '{"result":{}}'; exit 0;;
-  'pane send-keys') case "$*" in *ctrl+c*) rm -f "$d/running-$3" "$d/screens/$3";; *) [ -f "$d/screens/$3.next" ] && mv "$d/screens/$3.next" "$d/screens/$3";; esac; echo '{"result":{}}'; exit 0;;
+  'pane send-text') case "$4" in "$(printf '\033')[200~"*) [ -f "$d/screens/$3" ] && [ ! -f "$d/screens/$3.unpasted" ] && { mv "$d/screens/$3" "$d/screens/$3.unpasted"; sed 's/^❯ $/❯ [Pasted text #1 +3 lines]/' "$d/screens/$3.unpasted" > "$d/screens/$3"; };; esac; echo '{"result":{}}'; exit 0;;
+  'pane send-keys') case "$*" in *ctrl+c*) rm -f "$d/running-$3" "$d/screens/$3" "$d/screens/$3.unpasted";; *enter*) if [ -f "$d/screens/$3.unpasted" ]; then mv "$d/screens/$3.unpasted" "$d/screens/$3"; elif [ -f "$d/screens/$3.next" ]; then mv "$d/screens/$3.next" "$d/screens/$3"; fi;; *) [ -f "$d/screens/$3.next" ] && mv "$d/screens/$3.next" "$d/screens/$3";; esac; echo '{"result":{}}'; exit 0;;
   'pane read'|'agent read') if [ -f "$d/screens/$3" ]; then cat "$d/screens/$3"; else echo 'you@host $'; fi; exit 0;;
 esac
 for key in "$1-$2-$3" "$1-$2"; do if [ -f "$d/answers/$key.json" ]; then cat "$d/answers/$key.json"; exit 0; fi; done
@@ -195,8 +196,11 @@ impl Lab {
             .collect()
     }
 
+    // What was typed to an agent: herdr's agent prompt, or a start's bracketed paste into its pane.
     pub fn prompts_to(&self, target: &str) -> Vec<String> {
-        self.herdr_calls().into_iter().filter(|call| call.len() > 3 && call[..2] == ["agent", "prompt"] && (call[2] == target || call[2] == format!("p_{target}"))).map(|call| call[3].clone()).collect()
+        let pasted = |call: &Vec<String>| call[..2] == ["pane", "send-text"] && call[3].starts_with("\u{1b}[200~");
+        self.herdr_calls().into_iter().filter(|call| call.len() > 3 && (call[..2] == ["agent", "prompt"] || pasted(call)) && (call[2] == target || call[2] == format!("p_{target}")))
+            .map(|call| call[3].trim_start_matches("\u{1b}[200~").trim_end_matches("\u{1b}[201~").to_string()).collect()
     }
 
     pub fn screen(&self, pane: &str, text: &str) {

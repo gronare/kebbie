@@ -211,11 +211,7 @@ fn said_at(transcript: &str, text: &str, since_ms: u64, enqueued: bool) -> Optio
 
 // Claude records a prompt submitted while its turn runs as an enqueue without the text, and takes it only when the turn ends; with kebbie's text gone from the box, that enqueue is kebbie's. An enqueue with another text (a task notification) is not. Codex records a queued prompt only once its turn ends, so its box letting go of the text is the take, once settled: the box was seen holding it, or long enough has passed for a paste to show.
 fn taken(agent: Agent, transcript: Option<&str>, shown: &Draft, text: &str, since_ms: u64, settled: bool) -> bool {
-    let left_box = match shown {
-        Draft::Empty => true,
-        Draft::Typed(box_text) => !holds(box_text, text),
-        Draft::Unreadable => false,
-    };
+    let left_box = left_box(shown, text);
     if agent == Agent::Codex {
         return (left_box && settled) || transcript.is_some_and(|transcript| taken_in(transcript, text, since_ms));
     }
@@ -232,12 +228,15 @@ fn queued_since(transcript: &str, since_ms: u64) -> bool {
     })
 }
 
-// A box that still holds what was typed: its start, or the agent's fold of a long paste.
+// A box that still holds what was typed: its start, the window Claude scrolls a long draft to (its end), or the agent's fold of a long paste.
 fn holds(box_text: &str, text: &str) -> bool {
-    let shown = normalized(box_text);
-    let start: String = normalized(text).chars().take(40).collect();
+    let (shown, text) = (normalized(box_text), normalized(text));
+    let start: String = text.chars().take(40).collect();
     let shown_start: String = shown.chars().take(40).collect();
-    shown.contains("[Pasted text") || shown.contains("[Pasted Content") || (shown_start.chars().count() >= 10 && (shown_start.starts_with(&start) || start.starts_with(&shown_start)))
+    let tail = |words: &str| words.chars().rev().take(40).collect::<String>();
+    let begins = shown_start.chars().count() >= 10 && (shown_start.starts_with(&start) || start.starts_with(&shown_start));
+    let window = shown.chars().count() >= 40 && (text.contains(&shown) || tail(&text) == tail(&shown));
+    shown.contains("[Pasted text") || shown.contains("[Pasted Content") || begins || window
 }
 
 pub fn now_ms() -> u64 {
@@ -283,17 +282,18 @@ struct Place {
     pane: String,
     transcript: Option<PathBuf>,
     agent: Agent,
+    running: bool,
 }
 
 fn place(target: &str) -> Place {
     let agents = herdr::agents().unwrap_or_default();
-    let Some(agent) = agents.iter().find(|agent| agent["pane_id"] == target || agent["name"] == target) else { return Place { pane: target.to_string(), transcript: None, agent: Agent::Claude } };
+    let Some(agent) = agents.iter().find(|agent| agent["pane_id"] == target || agent["name"] == target) else { return Place { pane: target.to_string(), transcript: None, agent: Agent::Claude, running: false } };
     let pane = agent["pane_id"].as_str().unwrap_or(target).to_string();
     let session = agent["agent_session"]["value"].as_str().filter(|id| !id.is_empty());
     let cwd = agent["cwd"].as_str().map(Path::new);
     let kind = Agent::of(agent).unwrap_or(Agent::Claude);
     let transcript = session.zip(kind.home()).and_then(|(session, home)| kind.session_transcript(&home, cwd, session));
-    Place { pane, transcript, agent: kind }
+    Place { pane, transcript, agent: kind, running: true }
 }
 
 pub fn transcript_of(target: &str) -> Option<PathBuf> {
@@ -313,27 +313,148 @@ pub enum Outcome {
 }
 
 pub fn advance(typed: &mut Typed) -> Outcome {
-    let Place { pane, transcript, agent } = place(&typed.target);
+    let Place { pane, transcript, agent, .. } = place(&typed.target);
     let transcript = transcript.and_then(|file| std::fs::read_to_string(file).ok());
     if typed.inbox {
         return advance_inbox(typed, transcript.as_deref(), now_ms());
     }
-    let shown = draft_in(&pane, agent);
-    let elapsed = Duration::from_millis(now_ms().saturating_sub(typed.at_ms));
-    typed.seen |= matches!(&shown, Draft::Typed(text) if holds(text, &typed.text));
-    let settled = typed.seen || elapsed >= Duration::from_millis(PASTE_SHOWS_MS);
-    let taken = taken(agent, transcript.as_deref(), &shown, &typed.text, typed.at_ms, settled);
-    match step(elapsed, typed.presses, taken) {
-        Step::Taken => Outcome::Taken,
-        Step::Wait => Outcome::Waiting,
+    let mut live = Live { target: typed.target.clone(), pane, transcript: None, agent };
+    let shown = live.read();
+    let taken = live.settled_taken(typed, &shown, transcript.as_deref(), now_ms());
+    let (outcome, press) = move_on(typed, &shown, taken, now_ms());
+    if press {
+        let _ = live.enter();
+    }
+    outcome
+}
+
+// One look at a typed text: the outcome so far, and whether Enter is pressed again now, only ever on a box that still shows the text.
+fn move_on(typed: &mut Typed, shown: &Draft, taken: bool, now_ms: u64) -> (Outcome, bool) {
+    match step(Duration::from_millis(now_ms.saturating_sub(typed.at_ms)), typed.presses, taken) {
+        Step::Taken => (Outcome::Taken, false),
+        Step::Wait => (Outcome::Waiting, false),
         Step::Enter => {
             typed.presses += 1;
-            if matches!(&shown, Draft::Typed(text) if holds(text, &typed.text)) {
-                let _ = herdr::send_keys(&pane, &["enter"]);
-            }
-            Outcome::Waiting
+            (Outcome::Waiting, matches!(shown, Draft::Typed(text) if holds(text, &typed.text)))
         }
-        Step::GiveUp => Outcome::NotDelivered,
+        Step::GiveUp => (Outcome::NotDelivered, false),
+    }
+}
+
+// The input box of an agent's pane as a start submits its prompt there.
+pub(crate) trait InputBox {
+    fn read(&mut self) -> Draft;
+    fn transcript(&mut self) -> Option<String>;
+    fn working(&mut self) -> bool;
+    fn paste(&mut self, text: &str) -> Result<()>;
+    fn enter(&mut self) -> Result<()>;
+    fn now(&mut self) -> u64;
+    fn pause(&mut self, ms: u64);
+
+    fn settled_taken(&mut self, typed: &mut Typed, shown: &Draft, transcript: Option<&str>, now_ms: u64) -> bool {
+        typed.seen |= matches!(shown, Draft::Typed(text) if holds(text, &typed.text));
+        let settled = typed.seen || now_ms.saturating_sub(typed.at_ms) >= PASTE_SHOWS_MS;
+        taken(typed.agent, transcript, shown, &typed.text, typed.at_ms, settled) || (typed.seen && left_box(shown, &typed.text) && self.working())
+    }
+}
+
+struct Live {
+    target: String,
+    pane: String,
+    transcript: Option<PathBuf>,
+    agent: Agent,
+}
+
+impl Live {
+    fn at(target: &str) -> (Live, bool) {
+        let Place { pane, transcript, agent, running } = place(target);
+        (Live { target: target.to_string(), pane, transcript, agent }, running)
+    }
+}
+
+// A new conversation's transcript is written with its first message, so it is looked for again until it is there.
+impl InputBox for Live {
+    fn read(&mut self) -> Draft {
+        draft_in(&self.pane, self.agent)
+    }
+    fn transcript(&mut self) -> Option<String> {
+        if self.transcript.is_none() {
+            self.transcript = place(&self.target).transcript;
+        }
+        self.transcript.as_ref().and_then(|file| std::fs::read_to_string(file).ok())
+    }
+    fn working(&mut self) -> bool {
+        herdr::agents().unwrap_or_default().iter().any(|agent| agent["pane_id"] == self.pane.as_str() && agent["agent_status"] == "working")
+    }
+    fn paste(&mut self, text: &str) -> Result<()> {
+        herdr::paste(&self.pane, text)
+    }
+    fn enter(&mut self) -> Result<()> {
+        herdr::send_keys(&self.pane, &["enter"])
+    }
+    fn now(&mut self) -> u64 {
+        now_ms()
+    }
+    fn pause(&mut self, ms: u64) {
+        std::thread::sleep(Duration::from_millis(ms));
+    }
+}
+
+fn left_box(shown: &Draft, text: &str) -> bool {
+    match shown {
+        Draft::Empty => true,
+        Draft::Typed(box_text) => !holds(box_text, text),
+        Draft::Unreadable => false,
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum Submitted {
+    Taken,
+    Busy(String),
+    Unsent(Typed),
+}
+
+// A new Claude can still be drawing its banner and notices when herdr calls it ready, so the box is waited for this long before the prompt is held instead.
+const BOX_SHOWS_MS: u64 = 30_000;
+const PASTE_WAIT_MS: u64 = 5_000;
+const LOOK_MS: u64 = 250;
+
+// A start's prompt goes in as one bracketed paste into an empty box, and Enter is pressed apart from it once the box shows the paste, as herdr's Enter 300 ms after its text was seen lost on a Claude still starting; Enter is pressed again at 5, 10 and 20 s while the box holds it.
+pub(crate) fn submit_start(input: &mut dyn InputBox, typed: Typed) -> Result<Submitted> {
+    let began = input.now();
+    loop {
+        match input.read() {
+            Draft::Empty => break,
+            Draft::Typed(held) => return Ok(Submitted::Busy(format!("already holds \"{}\"", held.lines().next().unwrap_or_default().chars().take(60).collect::<String>()))),
+            Draft::Unreadable if input.now().saturating_sub(began) >= BOX_SHOWS_MS => return Ok(Submitted::Busy("is not one kebbie can read as empty".to_string())),
+            Draft::Unreadable => input.pause(LOOK_MS),
+        }
+    }
+    let mut typed = Typed { at_ms: input.now(), presses: 0, seen: false, inbox: false, ..typed };
+    input.paste(&typed.text)?;
+    while !typed.seen {
+        if matches!(input.read(), Draft::Typed(text) if holds(&text, &typed.text)) {
+            typed.seen = true;
+        } else if input.now().saturating_sub(typed.at_ms) >= PASTE_WAIT_MS {
+            return Err(format!("its input box did not show the prompt kebbie pasted within {} s", PASTE_WAIT_MS / 1000));
+        } else {
+            input.pause(LOOK_MS);
+        }
+    }
+    input.enter()?;
+    loop {
+        input.pause(1000);
+        let shown = input.read();
+        let transcript = input.transcript();
+        let now = input.now();
+        let taken = input.settled_taken(&mut typed, &shown, transcript.as_deref(), now);
+        match move_on(&mut typed, &shown, taken, now) {
+            (Outcome::Taken, _) => return Ok(Submitted::Taken),
+            (Outcome::NotDelivered, _) => return Ok(Submitted::Unsent(typed)),
+            (Outcome::Waiting, true) => input.enter()?,
+            (Outcome::Waiting, false) => {}
+        }
     }
 }
 
@@ -471,6 +592,12 @@ impl Drop for CheckLock {
 pub fn check() {
     let Ok(dir) = typed_dir() else { return };
     let Some(_lock) = CheckLock::take(&dir.join("check.lock")) else { return };
+    if let Ok(state) = crate::lead::state_dir() {
+        sweep_unsent_in(&state, &mut |typed| match Live::at(&typed.target) {
+            (mut live, true) => live.read(),
+            (_, false) => Draft::Empty,
+        });
+    }
     for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
         let path = entry.path();
         if path.extension().is_none_or(|extension| extension != "json") {
@@ -501,17 +628,98 @@ pub fn check() {
 pub enum Unsent {
     Busy(String),
     Asks(crate::agent::Started),
+    Unsubmitted,
 }
 
-// A new Codex's composer can already hold text, and what kebbie pastes would join it, so a start types into Codex only when its composer is empty: Some says why it typed nothing.
+// A start types only into an empty box, as what kebbie pastes would join a draft: Some says why its prompt is not under way, and a prompt left typed but not sent is kept for the board to send.
 pub fn prompt_into_empty(target: &str, text: &str, label: &str) -> Result<Option<Unsent>> {
-    let Place { pane, agent, .. } = place(target);
-    if agent == Agent::Codex
-        && let Some(unsent) = unsent_into_codex(&screen(&pane).unwrap_or_default())
-    {
-        return Ok(Some(unsent));
+    let (mut live, running) = Live::at(target);
+    if !running {
+        return Err(format!("no agent runs as {target}: it did not start in its pane, or its shell asked something as it started"));
     }
-    prompt_confirmed(target, text, label).map(|()| None)
+    if live.agent == Agent::Codex {
+        if let Some(unsent) = unsent_into_codex(&screen(&live.pane).unwrap_or_default()) {
+            return Ok(Some(unsent));
+        }
+        return prompt_confirmed(target, text, label).map(|()| None);
+    }
+    let typed = Typed { target: target.to_string(), label: label.to_string(), text: text.to_string(), at_ms: 0, presses: 0, inbox: false, agent: live.agent, seen: false };
+    match submit_start(&mut live, typed)? {
+        Submitted::Taken => Ok(None),
+        Submitted::Busy(busy) => Ok(Some(Unsent::Busy(busy))),
+        Submitted::Unsent(typed) => {
+            mark_unsent_in(&crate::lead::state_dir()?, &typed)?;
+            Ok(Some(Unsent::Unsubmitted))
+        }
+    }
+}
+
+fn unsent_file(state: &Path, address: &str) -> PathBuf {
+    state.join("unsent").join(format!("{}.json", address.replace('/', "_")))
+}
+
+pub(crate) fn mark_unsent_in(state: &Path, typed: &Typed) -> Result<()> {
+    crate::state::write(&unsent_file(state, &typed.label), typed.to_json().to_string())
+}
+
+// A start prompt kebbie typed into the task's box and could not get sent; the board puts the task under Needs you until it is.
+pub(crate) fn unsent_in(state: &Path, address: &str) -> Option<Typed> {
+    std::fs::read_to_string(unsent_file(state, address)).ok().and_then(|text| Typed::from_json_text(&text))
+}
+
+pub(crate) fn forget_unsent(state: &Path, address: &str) {
+    let _ = std::fs::remove_file(unsent_file(state, address));
+}
+
+// An unsent prompt is settled once the box no longer shows it: sent by the user's Enter, or cleared; a box kebbie cannot read keeps it.
+fn sweep_unsent_in(state: &Path, read: &mut dyn FnMut(&Typed) -> Draft) {
+    for entry in std::fs::read_dir(state.join("unsent")).into_iter().flatten().flatten() {
+        let Some(typed) = std::fs::read_to_string(entry.path()).ok().and_then(|text| Typed::from_json_text(&text)) else {
+            let _ = std::fs::remove_file(entry.path());
+            continue;
+        };
+        if left_box(&read(&typed), &typed.text) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+const SEND_AGAIN_MS: u64 = 10_000;
+
+// The board's ⏎ on a task whose start prompt sits unsent: Enter on the box that shows it, then wait for Claude to take it.
+pub(crate) fn send_again(input: &mut dyn InputBox, typed: &Typed) -> Result<bool> {
+    let shown = input.read();
+    if !matches!(&shown, Draft::Typed(text) if holds(text, &typed.text)) {
+        return Ok(left_box(&shown, &typed.text));
+    }
+    let mut typed = Typed { at_ms: input.now(), presses: 0, seen: true, ..typed.clone() };
+    input.enter()?;
+    while input.now().saturating_sub(typed.at_ms) < SEND_AGAIN_MS {
+        input.pause(500);
+        let shown = input.read();
+        let transcript = input.transcript();
+        let now = input.now();
+        if input.settled_taken(&mut typed, &shown, transcript.as_deref(), now) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+pub fn send_unsent(address: &str) -> Result<String> {
+    use crate::notice::{Notice, Tone};
+    let state = crate::lead::state_dir()?;
+    let Some(typed) = unsent_in(&state, address) else { return Notice::new(Tone::NotNow, "Nothing to send").next("Its start prompt is no longer waiting in its input box.").detail("task", address).ok() };
+    let (mut live, running) = Live::at(&typed.target);
+    if !running {
+        forget_unsent(&state, address);
+        return Notice::new(Tone::NotNow, "Its Claude is not running").next("g restarts it with its prompt.").detail("task", address).err();
+    }
+    if send_again(&mut live, &typed)? {
+        forget_unsent(&state, address);
+        return Notice::new(Tone::Done, "Sent its start prompt").detail("task", address).ok();
+    }
+    Notice::new(Tone::You, "Its start prompt is still not sent").you("Press Enter in its Space.").detail("task", address).err()
 }
 
 // A start-up question's menu opens its focused option with the same › as the composer, so the question is read before the box.
@@ -635,8 +843,9 @@ mod tests {
         assert_eq!(step(at(40), 3, false), Step::GiveUp);
         assert_eq!(step(at(45), 0, true), Step::Taken, "taken wins at any time");
         let source = include_str!("typing.rs");
-        let advance = &source[source.find("pub fn advance").unwrap()..source.find("pub fn not_delivered").unwrap()];
-        assert!(advance.contains("send_keys(&pane, &[\"enter\"])") && !advance.contains("prompt_agent"), "a retry presses Enter, it never types the text again");
+        let advance = &source[source.find("pub fn advance").unwrap()..source.find("\nfn move_on(").unwrap()];
+        assert!(advance.contains("live.enter()") && !advance.contains("prompt_agent") && !advance.contains("paste("), "a retry presses Enter, it never types the text again");
+        assert!(source.contains("fn enter(&mut self) -> Result<()> {\n        herdr::send_keys(&self.pane, &[\"enter\"])"));
         assert!(holds("[Pasted text #1 +40 lines]", "long") && holds("[from lead] check the", "[from lead] check the tests") && !holds("my own words", "[from lead] check"));
     }
 
@@ -699,5 +908,142 @@ mod tests {
         assert!(!taken(Agent::Claude, Some(""), &Draft::Empty, text, at, true), "Claude's rule stays its own");
         assert!(!taken(Agent::Codex, Some(""), &Draft::Empty, text, at, false), "a box read right after the paste, before Codex drew the text, has not let it go");
         assert!(taken(Agent::Codex, Some(&legacy), &Draft::Empty, text, at, false), "the rollout says it whatever the box shows");
+    }
+
+    // A Claude in a pane, as a start meets it: its box unreadable while it draws its banner, a paste shown as Claude shows it, and Enter dropped this many times.
+    struct Claude {
+        now: u64,
+        drawn_at: u64,
+        held: Option<String>,
+        drops: usize,
+        shows: fn(&str) -> String,
+        pastes: Vec<String>,
+        enters: Vec<u64>,
+        sent: bool,
+    }
+
+    impl Claude {
+        fn new(drawn_at: u64, drops: usize, shows: fn(&str) -> String) -> Claude {
+            Claude { now: 0, drawn_at, held: None, drops, shows, pastes: Vec::new(), enters: Vec::new(), sent: false }
+        }
+    }
+
+    impl InputBox for Claude {
+        fn read(&mut self) -> Draft {
+            if self.now < self.drawn_at {
+                return Draft::Unreadable;
+            }
+            match &self.held {
+                Some(text) => draft(&screen_with(&[&(self.shows)(text)])),
+                None => Draft::Empty,
+            }
+        }
+        fn transcript(&mut self) -> Option<String> {
+            None
+        }
+        fn working(&mut self) -> bool {
+            self.sent
+        }
+        fn paste(&mut self, text: &str) -> Result<()> {
+            assert!(self.now >= self.drawn_at, "pasted before the box was drawn");
+            self.pastes.push(text.to_string());
+            self.held = Some(text.to_string());
+            Ok(())
+        }
+        fn enter(&mut self) -> Result<()> {
+            self.enters.push(self.now);
+            if self.held.is_some() && self.drops > 0 {
+                self.drops -= 1;
+            } else if self.held.take().is_some() {
+                self.sent = true;
+            }
+            Ok(())
+        }
+        fn now(&mut self) -> u64 {
+            self.now
+        }
+        fn pause(&mut self, ms: u64) {
+            self.now += ms;
+        }
+    }
+
+    const QUEUED_PROMPT: &str = "This task waited for partner-first-launch@kattmat-ios, which is done. Its commits (subjects as that task wrote them):\n> b37c18ef Add the partner onboarding screen\n> 929e513c Ship the first-launch flag\n\nWire the first launch of the partner app to the onboarding screen and keep the flag off for existing users; the tests in the iOS target cover both paths and run on the simulator.";
+
+    // Claude 2.1.311 and 2.1.325 on this Mac draw a long typed draft scrolled to its end, the box's first line cut mid-word.
+    fn scrolled(text: &str) -> String {
+        let flat = normalized(text);
+        let cut = flat.char_indices().nth(flat.chars().count().saturating_sub(120)).map_or(0, |(at, _)| at);
+        format!("❯ {}", &flat[cut..])
+    }
+
+    fn folded(_: &str) -> String {
+        "❯ [Pasted text #1 +5 lines]".to_string()
+    }
+
+    fn typed_for(text: &str) -> Typed {
+        Typed { target: "partner-first-launch".to_string(), label: "partner-first-launch@kattmat-ios".to_string(), text: text.to_string(), at_ms: 0, presses: 0, inbox: false, agent: Agent::Claude, seen: false }
+    }
+
+    #[test]
+    fn a_long_prompt_claude_shows_scrolled_to_its_end_still_counts_as_kebbies_text_in_the_box() {
+        let shown = draft(&screen_with(&["❯ r sentence for length. Filler sentence for length. Filler sentence for length.", "  Reply with only the word OK and do nothing else."]));
+        let text = format!("This task waited for billing@api, which is done.\n\n{}Reply with only the word OK and do nothing else.", "Filler sentence for length. ".repeat(40));
+        assert!(matches!(&shown, Draft::Typed(box_text) if holds(box_text, &text)), "the box as herdr read it on a live Claude: {shown:?}");
+        assert!(!holds("fix the flaky test", &text) && !holds("Reply with only", &text), "a short draft of the user's own is never taken for kebbie's text");
+        let mut typed = Typed { at_ms: 0, ..typed_for(&text) };
+        assert_eq!(move_on(&mut typed, &shown, false, 5_000), (Outcome::Waiting, true), "Enter is pressed again on the scrolled box");
+    }
+
+    #[test]
+    fn a_start_prompt_waits_for_the_drawn_box_is_pasted_once_and_enter_follows_once_the_paste_shows() {
+        let mut claude = Claude::new(3_000, 1, scrolled);
+        assert_eq!(submit_start(&mut claude, typed_for(QUEUED_PROMPT)), Ok(Submitted::Taken));
+        assert_eq!(claude.pastes, [QUEUED_PROMPT], "pasted once, never typed again");
+        assert!(claude.enters.len() == 2 && claude.enters[0] >= 3_000 && claude.enters[1] >= 5_000, "the dropped Enter is pressed again at 5 s: {:?}", claude.enters);
+        let mut folding = Claude::new(0, 0, folded);
+        assert_eq!(submit_start(&mut folding, typed_for(QUEUED_PROMPT)), Ok(Submitted::Taken));
+        assert_eq!(folding.enters.len(), 1);
+        let source = include_str!("typing.rs");
+        let body = &source[source.find("pub(crate) fn submit_start(").unwrap()..];
+        let body = &body[..body.find("\n}\n").unwrap()];
+        assert!(body.contains("input.paste(") && !body.contains("prompt_agent"), "herdr's agent prompt sends Enter 300 ms after the text, which a starting Claude can lose");
+    }
+
+    #[test]
+    fn a_start_prompt_claude_never_takes_is_pressed_four_times_then_reported_unsent() {
+        let mut claude = Claude::new(0, usize::MAX, scrolled);
+        let Ok(Submitted::Unsent(typed)) = submit_start(&mut claude, typed_for(QUEUED_PROMPT)) else { panic!("an Enter that never lands is reported") };
+        assert_eq!((claude.pastes.len(), claude.enters.len(), typed.presses), (1, 4, 3), "Enter once after the paste, again at 5, 10 and 20 s");
+        assert!(claude.now >= GIVE_UP * 1000 && claude.held.as_deref() == Some(QUEUED_PROMPT));
+        let mut drafted = Claude::new(0, 0, scrolled);
+        drafted.held = Some("my own half sentence".to_string());
+        assert_eq!(submit_start(&mut drafted, typed_for(QUEUED_PROMPT)), Ok(Submitted::Busy("already holds \"my own half sentence\"".to_string())));
+        assert!(drafted.pastes.is_empty() && drafted.enters.is_empty(), "nothing joins the user's draft");
+        let mut never = Claude::new(u64::MAX, 0, scrolled);
+        assert_eq!(submit_start(&mut never, typed_for(QUEUED_PROMPT)), Ok(Submitted::Busy("is not one kebbie can read as empty".to_string())));
+    }
+
+    #[test]
+    fn an_unsent_start_prompt_stays_marked_until_its_box_lets_it_go_and_the_boards_enter_sends_it() {
+        let state = crate::sh::test_dir("typing-unsent");
+        let typed = typed_for(QUEUED_PROMPT);
+        mark_unsent_in(&state, &typed).unwrap();
+        assert_eq!(unsent_in(&state, &typed.label).map(|kept| kept.text), Some(QUEUED_PROMPT.to_string()));
+        sweep_unsent_in(&state, &mut |_| Draft::Unreadable);
+        sweep_unsent_in(&state, &mut |kept| draft(&screen_with(&[&scrolled(&kept.text)])));
+        assert!(unsent_in(&state, &typed.label).is_some(), "a box kebbie cannot read, or one that still shows it, keeps it under Needs you");
+        sweep_unsent_in(&state, &mut |_| Draft::Empty);
+        assert!(unsent_in(&state, &typed.label).is_none(), "the user's own Enter settles it");
+        let mut claude = Claude::new(0, 0, scrolled);
+        claude.held = Some(QUEUED_PROMPT.to_string());
+        assert_eq!(send_again(&mut claude, &typed), Ok(true));
+        assert_eq!(claude.enters.len(), 1);
+        let mut stuck = Claude::new(0, usize::MAX, scrolled);
+        stuck.held = Some(QUEUED_PROMPT.to_string());
+        assert_eq!(send_again(&mut stuck, &typed), Ok(false));
+        let mut gone = Claude::new(0, 0, scrolled);
+        assert_eq!(send_again(&mut gone, &typed), Ok(true), "an empty box has nothing left to send");
+        assert!(gone.enters.is_empty());
+        let _ = std::fs::remove_dir_all(&state);
     }
 }

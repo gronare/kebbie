@@ -204,7 +204,7 @@ kebbie keeps one phase per task, and only what changes it writes it: its start, 
 
 - Whether its Claude is mid-turn shows as the row's `◐`, never as a move. A task reading kebbie's update notice, or one the lead tells to fix a commit, stays in its group until it reports.
 - Only a prompt of your own, typed into its Space or sent as your answer, moves a task that waits for you or for work under Working. A message from the lead, another task or kebbie does not.
-- Four things put a task under Needs you whatever its phase, for as long as they last: Claude's own prompt on its screen, an open question, messages held behind your draft, and landed work kebbie leaves to you.
+- Five things put a task under Needs you whatever its phase, for as long as they last: Claude's own prompt on its screen, an open question, messages held behind your draft, a start prompt typed but not sent, and landed work kebbie leaves to you.
 
 ### Needs you
 
@@ -212,6 +212,7 @@ kebbie keeps one phase per task, and only what changes it writes it: its start, 
 - An open question from `kebbie ask`.
 - A review whose findings only ask for your confirmation, marked `confirm what its review asks · <the finding>`: Confirm passes the review, Change it sends your comment to the task.
 - Messages held behind a draft in its input box.
+- A start prompt Claude has not taken, marked `its start prompt is typed but not sent · ⏎ sends it`: kebbie pasted it into the task's input box and pressed Enter four times over 20 seconds. `⏎` on the row presses Enter there again; your own Enter in its Space, or clearing the box, settles it too.
 - A queued task whose start failed, with why it did not start, as when its shell asked a question while it started.
 - A task whose commits are on the default branch that kebbie does not close by itself, marked `landed on main · d closes it` beside a question (kebbie asks you whether to close it), or `landed on main, but its worktree has uncommitted changes or a stash` (see [`kebbie done`](commands.md#kebbie-done-name)).
 - A task that reported needs-you, or ready with nothing committed.

@@ -835,6 +835,12 @@ impl App {
             Act::Help => self.mode = Mode::Help(Default::default()),
             Act::Inbox => self.open_questions(None),
             Act::Options if self.on_parked_line() => self.show_parked(true),
+            Act::Options if self.column == Column::Work && self.selected_task().is_some_and(|item| item.unsent_start) => {
+                let Some(item) = self.selected_task() else { return };
+                let address = peers::address(&item.name, &item.place);
+                self.about("prompt", &item.name);
+                self.in_background(format!("Sending {}'s start prompt…", item.name), move || crate::typing::send_unsent(&address));
+            }
             Act::Options => {
                 let has_selection = match self.column {
                     Column::Work => self.selected_task().is_some(),

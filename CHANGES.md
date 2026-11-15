@@ -19,6 +19,8 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - An idea the lead merges into an older note stays on the Backlog page for a week, pointing at that note.
 
 ### Fixed
+- A started task's prompt is sent once Claude's input box is drawn, and Enter is pressed again until Claude takes it.
+- A start prompt Claude has not taken shows under Needs you, and ⏎ on the row sends it.
 - A queued task whose start fails stays under Needs you with why it did not start.
 - A rewritten or merged vault note shows its current text on the board and the phone, never an old copy.
 - A daily or weekly routine runs once on the night the clocks go back, and on time the day they go forward.

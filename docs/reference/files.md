@@ -109,6 +109,7 @@ A `comments/` file holds the comment as GitHub gave it (author, text, file and l
 | `messages.jsonl` | Every message between sessions. |
 | `messages.jsonl.1`, `messages.lock` | The previous message log, kept when the log rotates, and the lock its writers take. |
 | `typed/` | One file per message kebbie typed into a Claude's input box or gave to its inbox, while the board checks the conversation for it. |
+| `unsent/` | One file per task whose start prompt sits in its Claude's input box unsent, `<task>@<repo>.json`, until the box lets it go or the task ends. |
 | `inbox/` | Per session, `<address>.json`: the Claude Code inbox socket, its token and the session id its last start recorded, which kebbie delivers messages through. |
 | `lead-session` | The lead's Claude session id, so it resumes its conversation. |
 | `lead-previous` | The Space you were in before `kebbie lead`, to go back to. |

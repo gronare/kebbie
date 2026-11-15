@@ -18,6 +18,7 @@ pub const CHECKING: &str = "lead checking project rules";
 pub const REVIEWER_CHECKING: &str = "checking project rules";
 pub const STAGED: &str = "on local main · waiting for your push";
 pub const GIT_UNREAD: &str = "git cannot read its worktree";
+pub const UNSENT_START: &str = "its start prompt is typed but not sent";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Group {
@@ -181,6 +182,7 @@ pub struct Item {
     pub push_waits: Option<tasks::PendingPush>,
     pub queued: Option<Queued>,
     pub held_by_draft: Option<String>,
+    pub unsent_start: bool,
     pub phase: Option<crate::phase::Record>,
     pub landed: Option<tasks::LandedUnsure>,
     pub ci_outside: Option<String>,
@@ -238,7 +240,7 @@ impl Item {
             name: wait.task.clone(), title, place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
             report: None, question: None, ci: None, recover: None, routine: None, push_waits: None,
             queued: Some(Queued { after, blocked: wait.blocked.clone(), waiting, names, base, at, backlog: wait.backlog.is_some() }),
-            held_by_draft: None, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), unrecorded: None, push_left: None, staged: false, subtasks: tasks::Subtasks::default(), to_accept: None, parked: None, assessment: None, recipe: None, obstacle: None, built: Built::default(),
+            held_by_draft: None, unsent_start: false, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), unrecorded: None, push_left: None, staged: false, subtasks: tasks::Subtasks::default(), to_accept: None, parked: None, assessment: None, recipe: None, obstacle: None, built: Built::default(),
         }
     }
 
@@ -437,7 +439,7 @@ impl Item {
 
     // What wants the user now, whatever the phase: Claude's own prompt, a question, a draft holding messages back, or work that landed and waits for them.
     pub(crate) fn wants_you_now(&self) -> bool {
-        self.blocked_on_a_prompt() || self.question.is_some() || self.held_by_draft.is_some() || self.landed.is_some_and(tasks::LandedUnsure::waits_for_you) || self.git_error().is_some()
+        self.blocked_on_a_prompt() || self.unsent_start || self.question.is_some() || self.held_by_draft.is_some() || self.landed.is_some_and(tasks::LandedUnsure::waits_for_you) || self.git_error().is_some()
     }
 
     pub fn git_error(&self) -> Option<&str> {
@@ -451,6 +453,9 @@ impl Item {
         }
         if let Some(queued) = &self.queued {
             return if queued.blocked.is_some() { Group::NeedsYou } else { Group::Queued };
+        }
+        if self.unsent_start {
+            return Group::NeedsYou;
         }
         let Some(phase) = self.phase() else {
             return match self.agent.as_ref().map(|agent| agent.status.as_str()) {
@@ -535,6 +540,9 @@ impl Item {
         if self.blocked_on_a_prompt() {
             return self.agent.as_ref().map(|agent| agent.answer.as_str());
         }
+        if self.unsent_start {
+            return Some("send its start prompt: it is typed into its input box but not sent");
+        }
         if self.turn_under_way() || self.recovering().is_some() || matches!(self.phase(), Some(Phase::Pushing { .. } | Phase::CiRunning { .. } | Phase::CiRed { .. } | Phase::NeedsYou(Why::Cancelled | Why::Unreadable) | Phase::Closing)) {
             return None;
         }
@@ -560,6 +568,9 @@ impl Item {
         }
         if self.blocked_on_a_prompt() {
             return self.agent.as_ref().map(|agent| format!("{} · {go} goes there", agent.answer.trim_end_matches(IN_SPACE)));
+        }
+        if self.unsent_start {
+            return Some(format!("{UNSENT_START} · {} sends it", crate::keys::map().label(crate::keys::Act::Options)));
         }
         if let Some(error) = self.git_error() {
             return Some(format!("git cannot read its worktree: {error}"));
@@ -1144,6 +1155,7 @@ fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>,
                 push_waits: state.as_deref().and_then(|state| tasks::pending_push(state, &address)),
                 queued: None,
                 held_by_draft: held_by_draft(&log, &task, &address),
+                unsent_start: state.as_deref().is_some_and(|state| crate::typing::unsent_in(state, &address).is_some()),
                 landed: state.as_deref().and_then(|state| tasks::landed_mark(state, &address, &slot.path)),
                 ci_outside: state.as_deref().and_then(|state| tasks::ci_outside_reason(state, &address)),
                 ci_dismissed: state.as_deref().map(|state| tasks::ci_dismissed(state, &address)).unwrap_or_default(),
@@ -1218,6 +1230,7 @@ fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>,
             push_waits: None,
             queued: None,
             held_by_draft: None,
+            unsent_start: false,
             phase: None,
             landed: None,
             ci_outside: None,
@@ -1292,6 +1305,7 @@ pub(crate) mod tests {
             push_waits: None,
             queued: None,
             held_by_draft: None,
+            unsent_start: false,
             phase: None,
             landed: None,
             ci_outside: None,
@@ -1930,6 +1944,22 @@ pub(crate) mod tests {
         let delivered = messages::fold(r#"{"id":"m1","at":1,"from":"lead","to":"billing@web","text":"a","state":"held","why":"has a draft in its input box"}
 {"id":"m1","at":2,"state":"delivered"}"#);
         assert_eq!(held_by_draft(&delivered, "billing", "billing@web"), None);
+    }
+
+    #[test]
+    fn a_task_whose_start_prompt_sits_typed_but_not_sent_needs_you_and_its_row_says_enter_sends_it() {
+        let mut item = task(Some("idle"), None, 0);
+        moved(&mut item, &Event::Started { prompted: true });
+        assert_eq!(item.group(), Group::Working, "a started task reads as starting while its prompt is on its way");
+        item.unsent_start = true;
+        assert_eq!(item.group(), Group::NeedsYou);
+        assert_eq!(item.wanted("g").as_deref(), Some("its start prompt is typed but not sent · ⏎ sends it"));
+        assert!(item.next_for_you().is_some_and(|next| next.starts_with("send its start prompt")));
+        item.phase = None;
+        assert_eq!(item.group(), Group::NeedsYou, "with no phase kept either");
+        let board = include_str!("board/mod.rs");
+        let options = &board[board.find("Act::Options if self.column == Column::Work && self.selected_task().is_some_and(|item| item.unsent_start)").unwrap()..];
+        assert!(options[..options.find("\n            }\n").unwrap()].contains("crate::typing::send_unsent(&address)"), "⏎ on the row sends it");
     }
 
     #[test]

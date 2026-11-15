@@ -854,6 +854,7 @@ fn send_prompt(name: &str, started: &Started, prompt: Option<&str>, type_now: im
                 found = asked;
                 &found
             }
+            Some(Unsent::Unsubmitted) => return Ok(Asks { you: Some(format!("Send the task's prompt: kebbie typed it into {name}'s input box, but {name} did not take it after Enter was pressed four times. ⏎ on its row on the board sends it, or press Enter in its Space.")), ..Asks::default() }),
             Some(Unsent::Busy(busy)) => {
                 let prompt = prompt.unwrap_or_default();
                 return Ok(match hold(prompt) {
@@ -1060,6 +1061,8 @@ mod tests {
         let busy = send_prompt("Codex", &Started::Ready, Some("Fix the flaky test"), |_| Ok(Some(Unsent::Busy("already holds \"check the deploy\"".to_string()))), |text| { held.borrow_mut().push(text.to_string()); Ok(()) }).unwrap();
         assert_eq!(held.into_inner(), ["Fix the flaky test"], "a composer that holds text gets the prompt once it is empty, never glued onto it");
         assert_eq!(busy.next.as_deref(), Some("Codex's input box already holds \"check the deploy\", so kebbie holds the task's prompt and types it in once the box is empty, while the keeper or an open board runs."));
+        let unsent = send_prompt("Claude", &Started::Ready, Some("Fix the flaky test"), |_| Ok(Some(Unsent::Unsubmitted)), |_| panic!("a prompt typed into the box is not held as well")).unwrap();
+        assert!(unsent.you.as_deref().is_some_and(|you| you.starts_with("Send the task's prompt: kebbie typed it into Claude's input box") && you.contains("⏎ on its row")), "a start whose Enter never landed asks the user, never reads as begun: {unsent:?}");
         let held = std::cell::RefCell::new(Vec::new());
         let trust = send_prompt("Codex", &Started::Ready, Some("Fix the flaky test"), |_| Ok(Some(Unsent::Asks(Started::AwaitsTrust))), |text| { held.borrow_mut().push(text.to_string()); Ok(()) }).unwrap();
         assert_eq!(held.into_inner(), ["Fix the flaky test"]);
