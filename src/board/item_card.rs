@@ -445,7 +445,7 @@ impl App {
 // The answer is kept with the item until the lead folds it in, and the lead hears it at once; the pick moves on to the next question waiting.
 pub(super) fn send_answer(state: &Path, card: &mut ItemCard, answer: &str, tell: &mut dyn FnMut(&str) -> Result<()>) -> Result<()> {
     let question = card.questions().get(card.pick).cloned().ok_or("This item has no open question to answer.")?;
-    let given = Answer { item: card.entry.reference.clone(), question: question.text.clone(), answer: answer.to_string(), at: crate::messages::now() };
+    let given = Answer { item: card.entry.reference.clone(), question: question.text.clone(), answer: answer.to_string(), at: crate::messages::now(), ..Answer::default() };
     crate::backlog_kept::answer(state, given.clone())?;
     tell(&crate::backlog_kept::answer_text("The user", &card.entry.title, &card.wherein(), &question.text, answer))?;
     card.answers.retain(|other| other.question != given.question);

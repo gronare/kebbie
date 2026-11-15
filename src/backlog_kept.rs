@@ -32,12 +32,15 @@ pub struct Merged {
     pub at: u64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+// `told` once the lead heard of it; `against` the hash of the item's open questions when the user's question was no longer among them, and the answer waits until those change.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Answer {
     pub item: String,
     pub question: String,
     pub answer: String,
     pub at: u64,
+    pub told: bool,
+    pub against: Option<String>,
 }
 
 fn kept_file(state: &Path) -> PathBuf {
@@ -178,20 +181,44 @@ impl Kept {
 }
 
 pub fn answers_in(state: &Path) -> Vec<Answer> {
-    read(&answers_file(state)).iter().map(|value| Answer { item: text(value, "item"), question: text(value, "question"), answer: text(value, "answer"), at: value["at"].as_u64().unwrap_or(0) })
-        .filter(|answer| !answer.item.is_empty()).collect()
+    read(&answers_file(state)).iter().map(|value| Answer {
+        item: text(value, "item"),
+        question: text(value, "question"),
+        answer: text(value, "answer"),
+        at: value["at"].as_u64().unwrap_or(0),
+        told: value["told"].as_bool().unwrap_or(true),
+        against: value["against"].as_str().map(str::to_string),
+    }).filter(|answer| !answer.item.is_empty()).collect()
 }
 
 fn write_answers(state: &Path, answers: &[Answer]) -> Result<()> {
-    let values: Vec<Value> = answers.iter().map(|answer| json!({ "item": answer.item, "question": answer.question, "answer": answer.answer, "at": answer.at })).collect();
+    let values: Vec<Value> = answers.iter().map(|answer| json!({ "item": answer.item, "question": answer.question, "answer": answer.answer, "at": answer.at, "told": answer.told, "against": answer.against })).collect();
     crate::state::write(&answers_file(state), Value::Array(values).to_string())
 }
 
+pub fn questions_hash<'a>(questions: impl IntoIterator<Item = &'a str>) -> String {
+    sha1_smol::Sha1::from(questions.into_iter().collect::<Vec<_>>().join("\n")).digest().to_string()
+}
+
 pub fn answer(state: &Path, given: Answer) -> Result<()> {
+    answer_all(state, std::slice::from_ref(&given))
+}
+
+// Every answer of one send goes in one write, so a send is never kept in part.
+pub fn answer_all(state: &Path, given: &[Answer]) -> Result<()> {
     let _locked = Locked::take(&answers_file(state))?;
     let mut answers = answers_in(state);
-    answers.retain(|other| !(other.item == given.item && other.question == given.question));
-    answers.push(given);
+    answers.retain(|other| !given.iter().any(|new| other.item == new.item && other.question == new.question));
+    answers.extend(given.iter().cloned());
+    write_answers(state, &answers)
+}
+
+pub fn mark_told(state: &Path, item: &str, questions: &[String]) -> Result<()> {
+    let _locked = Locked::take(&answers_file(state))?;
+    let mut answers = answers_in(state);
+    for answer in answers.iter_mut().filter(|answer| answer.item == item && questions.contains(&answer.question)) {
+        answer.told = true;
+    }
     write_answers(state, &answers)
 }
 
@@ -199,7 +226,20 @@ pub fn answer_text(who: &str, title: &str, wherein: &str, question: &str, answer
     format!("{who} answered an open question on the backlog item \"{title}\" ({wherein}). Question: \"{question}\" Answer: \"{answer}\". Fold the answer into the item with the skill `{}` and take the question out.", crate::backlog_file::SKILL)
 }
 
-// An answer leaves once its question is gone from the item: the lead has folded it in.
+// One message for every answer of one send, so the lead folds them in one save; an answer whose question was reworded before it arrived carries the words the user saw.
+pub fn answers_text(who: &str, title: &str, wherein: &str, answers: &[Answer]) -> String {
+    let lines: Vec<String> = answers.iter().map(|answer| match answer.against {
+        None => format!("- Question: \"{}\" Answer: \"{}\"", answer.question, answer.answer),
+        Some(_) => format!("- Asked as: \"{}\" (the item no longer asks it in those words; fold it into the question it became) Answer: \"{}\"", answer.question, answer.answer),
+    }).collect();
+    let (asked, fold) = match answers.len() {
+        1 => ("an open question".to_string(), "Fold the answer"),
+        count => (format!("{count} open questions"), "Fold all of these answers together, in one save,"),
+    };
+    format!("{who} answered {asked} on the backlog item \"{title}\" ({wherein}):\n{}\n{fold} into the item with the skill `{}` and take each answered question out. Keep every other open question; reword one only keeping what it asks.", lines.join("\n"), crate::backlog_file::SKILL)
+}
+
+// An answer leaves once its question is gone from the item, or for an answer kept against reworded questions once those questions change: the lead has folded it in.
 pub fn settle(state: &Path, item: &str, body: &str, template: &Template) -> Vec<Answer> {
     settle_all(state, &[(item, body, template)]).into_iter().filter(|answer| answer.item == item).collect()
 }
@@ -207,7 +247,10 @@ pub fn settle(state: &Path, item: &str, body: &str, template: &Template) -> Vec<
 // The same for the whole backlog, given each item's body and template; an item not listed, or one read without its template's questions heading (half written as it was read), keeps its answers. Every answer still with the lead comes back.
 pub fn settle_all(state: &Path, bodies: &[(&str, &str, &Template)]) -> Vec<Answer> {
     let open: Vec<(&str, Vec<Question>)> = bodies.iter().filter(|(_, body, template)| template.questions.as_deref().is_some_and(|key| template.has(body, key))).map(|(item, body, template)| (*item, template.questions_in(body))).collect();
-    let still_open = |answer: &Answer| open.iter().find(|(item, _)| *item == answer.item).is_none_or(|(_, questions)| questions.iter().any(|question| question.text == answer.question));
+    let still_open = |answer: &Answer| open.iter().find(|(item, _)| *item == answer.item).is_none_or(|(_, questions)| match &answer.against {
+        Some(against) => questions_hash(questions.iter().map(|question| question.text.as_str())) == *against,
+        None => questions.iter().any(|question| question.text == answer.question),
+    });
     let (kept, folded): (Vec<Answer>, Vec<Answer>) = answers_in(state).into_iter().partition(still_open);
     if folded.is_empty() {
         return kept;
@@ -303,7 +346,7 @@ mod tests {
     #[test]
     fn an_item_read_half_written_keeps_its_answers() {
         let state = crate::sh::test_dir("backlog-answers-half");
-        answer(&state, Answer { item: "local:x".to_string(), question: "Which job?".to_string(), answer: "e2e".to_string(), at: 1 }).unwrap();
+        answer(&state, Answer { item: "local:x".to_string(), question: "Which job?".to_string(), answer: "e2e".to_string(), at: 1, ..Answer::default() }).unwrap();
         let whole = body("- [ ] Which job?");
         let cut = &whole[..whole.find("## Open questions").unwrap()];
         assert_eq!(settle(&state, "local:x", cut, &Template::builtin()).len(), 1, "read while the lead was writing it, its questions only look gone");
@@ -316,7 +359,7 @@ mod tests {
     fn the_half_written_guard_reads_the_templates_own_questions_heading() {
         let state = crate::sh::test_dir("backlog-answers-template");
         let template = Template::parse(r#"{"sections":[{"key":"problem","heading":"Problem","required":true},{"key":"risks","heading":"Risks"}],"questions":"risks"}"#).unwrap();
-        answer(&state, Answer { item: "Projects/x.md".to_string(), question: "Which job?".to_string(), answer: "e2e".to_string(), at: 1 }).unwrap();
+        answer(&state, Answer { item: "Projects/x.md".to_string(), question: "Which job?".to_string(), answer: "e2e".to_string(), at: 1, ..Answer::default() }).unwrap();
         assert_eq!(settle(&state, "Projects/x.md", "## Problem\n\nIt broke.\n\n## Open questions\n\n", &template).len(), 1, "no Risks heading yet: half written");
         assert_eq!(settle(&state, "Projects/x.md", "## Problem\n\nIt broke.\n\n## Risks\n\n- [ ] Which job?\n", &template).len(), 1);
         assert!(settle(&state, "Projects/x.md", "## Problem\n\nIt broke.\n\n## Risks\n\n", &template).is_empty(), "under Risks and gone: folded in");
@@ -326,7 +369,7 @@ mod tests {
     #[test]
     fn a_note_in_another_shape_with_its_open_questions_folds_its_answers() {
         let state = crate::sh::test_dir("backlog-answers-shape");
-        answer(&state, Answer { item: "Projects/old.md".to_string(), question: "Which job?".to_string(), answer: "e2e".to_string(), at: 1 }).unwrap();
+        answer(&state, Answer { item: "Projects/old.md".to_string(), question: "Which job?".to_string(), answer: "e2e".to_string(), at: 1, ..Answer::default() }).unwrap();
         let older = "## Background\n\nB.\n\n## Open questions\n\n- [ ] Which repo?\n";
         assert!(settle(&state, "Projects/old.md", older, &Template::builtin()).is_empty(), "no Goal or Source heading, yet its questions are all there: the answer was folded in");
         assert!(answers_in(&state).is_empty());
@@ -341,7 +384,7 @@ mod tests {
                 let state = &state;
                 scope.spawn(move || {
                     for round in 0..10 {
-                        answer(state, Answer { item: format!("local:{writer}"), question: format!("Q{round}?"), answer: "a".to_string(), at: 1 }).unwrap();
+                        answer(state, Answer { item: format!("local:{writer}"), question: format!("Q{round}?"), answer: "a".to_string(), at: 1, ..Answer::default() }).unwrap();
                         keep(state, &format!("idea {writer} {round}"), "", "low", "", 1_000).unwrap();
                     }
                 });
@@ -354,12 +397,36 @@ mod tests {
     #[test]
     fn an_answer_waits_with_the_lead_until_its_question_leaves_the_item() {
         let state = crate::sh::test_dir("backlog-answers");
-        let given = |question: &str| Answer { item: "local:x".to_string(), question: question.to_string(), answer: "Only e2e.".to_string(), at: 1 };
+        let given = |question: &str| Answer { item: "local:x".to_string(), question: question.to_string(), answer: "Only e2e.".to_string(), at: 1, ..Answer::default() };
         answer(&state, given("Which job?")).unwrap();
         answer(&state, given("Which job?")).unwrap();
         answer(&state, Answer { item: "local:y".to_string(), ..given("Other?") }).unwrap();
         assert_eq!(settle(&state, "local:x", &body("- [ ] Which job?"), &Template::builtin()).len(), 1, "a second answer to one question replaces the first");
         assert!(settle(&state, "local:x", &body(""), &Template::builtin()).is_empty());
         assert_eq!(answers_in(&state).len(), 1, "folded in, it leaves; another item's answer stays");
+    }
+
+    #[test]
+    fn an_answer_to_a_reworded_question_waits_until_the_items_questions_change() {
+        let state = crate::sh::test_dir("backlog-answers-reworded");
+        let now = body("- [ ] Which jobs count?\n- [ ] How long to wait?");
+        let questions: Vec<String> = Template::builtin().questions_in(&now).into_iter().map(|question| question.text).collect();
+        let against = questions_hash(questions.iter().map(String::as_str));
+        answer_all(&state, &[
+            Answer { item: "local:x".to_string(), question: "Which job?".to_string(), answer: "e2e".to_string(), at: 1, told: false, against: Some(against) },
+            Answer { item: "local:x".to_string(), question: "How long to wait?".to_string(), answer: "A minute".to_string(), at: 1, told: false, against: None },
+        ]).unwrap();
+        assert_eq!(settle(&state, "local:x", &now, &Template::builtin()).len(), 2, "kept with the words the user saw while the item asks what it asked then");
+        mark_told(&state, "local:x", &["Which job?".to_string()]).unwrap();
+        assert_eq!(answers_in(&state).iter().map(|answer| answer.told).collect::<Vec<_>>(), [true, false]);
+        assert!(settle(&state, "local:x", &body("- [ ] How long to wait?"), &Template::builtin()).iter().all(|answer| answer.question == "How long to wait?"), "the lead folded it and took the reworded question out");
+        assert!(settle(&state, "local:x", &body(""), &Template::builtin()).is_empty());
+    }
+
+    #[test]
+    fn an_answer_kept_before_told_was_written_counts_as_told() {
+        let state = crate::sh::test_dir("backlog-answers-older");
+        crate::state::write(&answers_file(&state), r#"[{"item":"local:x","question":"Which job?","answer":"e2e","at":1}]"#).unwrap();
+        assert_eq!(answers_in(&state), [Answer { item: "local:x".to_string(), question: "Which job?".to_string(), answer: "e2e".to_string(), at: 1, told: true, against: None }]);
     }
 }

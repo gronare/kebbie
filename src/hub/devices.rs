@@ -266,6 +266,7 @@ impl Asked {
             Payload::PromptAnswer(prompt) => Asked { kind: Kind::PromptAnswer, task: task(&prompt.address), said: None },
             Payload::Idea(idea) => Asked { kind: Kind::Idea, task: String::new(), said: Some(short(&idea.text)) },
             Payload::ItemAnswer(answer) => Asked { kind: Kind::ItemAnswer, task: item(&answer.item), said: Some(short(&answer.answer)) },
+            Payload::ItemAnswers(answers) => Asked { kind: Kind::ItemAnswers, task: item(&answers.item), said: None },
             Payload::StartItem(start) => Asked { kind: Kind::StartItem, task: item(&start.item), said: None },
             Payload::ItemEdit(edit) => Asked { kind: Kind::ItemEdit, task: item(&edit.item), said: None },
             Payload::ReviewOpen(open) => Asked { kind: Kind::ReviewOpen, task: task(&open.address), said: None },
@@ -289,6 +290,7 @@ impl Asked {
             Kind::PromptAnswer => format!("choice on {}'s prompt", self.task),
             Kind::Idea => "idea for the backlog".to_string(),
             Kind::ItemAnswer => format!("answer on the backlog item {}", self.task),
+            Kind::ItemAnswers => format!("set of answers on the backlog item {}", self.task),
             Kind::StartItem => format!("start of the backlog item {}", self.task),
             Kind::ItemEdit => format!("edit of the backlog item {}", self.task),
             Kind::ReviewOpen => format!("look at {}'s review", self.task),
@@ -669,5 +671,6 @@ auto_approve = \"24h\"
         assert!(decided(&phone, "MacBook", Decision::Deny, &[answer.clone(), answer.clone()], DEVICE, true).starts_with("✓ iPhone 16 stays view only on MacBook\n  next: Its 2 commands are dropped; kebbie hub devices approve \"iPhone 16\" lets it in later."));
         assert_eq!(answer.described(), "an answer to billing, \"Per invoice\"");
         assert_eq!(Asked { kind: Kind::Push, task: "cache".to_string(), said: None }.described(), "a push of cache");
+        assert_eq!(Asked { kind: Kind::ItemAnswers, task: "Projects/retry.md".to_string(), said: None }.described(), "a set of answers on the backlog item Projects/retry.md");
     }
 }

@@ -707,7 +707,7 @@ mod tests {
         let state = crate::sh::test_dir("backlog-one-pass");
         let item = |stem: &str, questions: &str| crate::backlog_file::parse(stem, &format!("+++\ntitle = \"{stem}\"\npriority = \"high\"\nrepo = \"app\"\nstatus = \"backlog\"\nfiled = \"2026-11-01\"\n+++\n\n## Background\n\nB.\n\n## Goal\n\nG.\n\n## What we know\n\nK.\n\n## Open questions\n\n{questions}\n\n## Out of scope\n\nO.\n\n## Source\n\nS.\n")).unwrap();
         let (one, two) = (item("not-on-disk-one", "- [ ] Which job?"), item("not-on-disk-two", "- [ ] Which repo?"));
-        let given = |item: &str, question: &str| crate::backlog_kept::Answer { item: item.to_string(), question: question.to_string(), answer: "e2e".to_string(), at: 1 };
+        let given = |item: &str, question: &str| crate::backlog_kept::Answer { item: item.to_string(), question: question.to_string(), answer: "e2e".to_string(), at: 1, ..Default::default() };
         for answer in [given(&one.reference(), "Which job?"), given(&two.reference(), "Folded already?"), given("local:elsewhere", "Kept?")] {
             crate::backlog_kept::answer(&state, answer).unwrap();
         }
