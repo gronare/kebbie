@@ -309,7 +309,7 @@ mod tests {
             let (screen, buffer) = render(&mut app, width, 50);
             assert_whole_link(&buffer, LONG, rows, &format!("the ci line at {width} columns"));
             let drawn: String = buffer.content.iter().filter(|cell| link_of(cell).is_some_and(|(url, _)| url == LONG)).map(|cell| cell.symbol().split("\x1b\\").nth(1).unwrap().split('\x1b').next().unwrap().to_string()).collect();
-            assert!(!drawn.is_empty() && drawn.len() % LONG.len() == 0 && drawn == LONG.repeat(drawn.len() / LONG.len()), "every copy whole, none cut: {drawn:?}\n{}", screen.join("\n"));
+            assert!(!drawn.is_empty() && drawn.len().is_multiple_of(LONG.len()) && drawn == LONG.repeat(drawn.len() / LONG.len()), "every copy whole, none cut: {drawn:?}\n{}", screen.join("\n"));
         }
         let mut item = served("search-filters");
         let pull = "https://github.com/gronare/kebbie/pull/123/files?diff=split&w=1";
