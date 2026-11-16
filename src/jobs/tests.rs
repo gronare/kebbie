@@ -44,7 +44,7 @@ fn names_from_the_other_machine_never_leave_their_folder_and_names_for_the_hub_a
 #[test]
 fn a_worker_is_picked_by_its_system_or_its_name_and_the_one_heard_from_last_wins() {
     let me = machine(1);
-    let cluster = Cluster { keys: Default::default(), rows: vec![row(1, "devbox", Some("linux"), Some(500)), row(2, "MacBook", Some("macos"), Some(100)), row(3, "studio", Some("macos"), Some(300)), row(4, "laptop", None, Some(900)), row(5, "old-box", Some("linux"), Some(50))] };
+    let cluster = Cluster { counter: 1, keys: Default::default(), rows: vec![row(1, "devbox", Some("linux"), Some(500)), row(2, "MacBook", Some("macos"), Some(100)), row(3, "studio", Some("macos"), Some(300)), row(4, "laptop", None, Some(900)), row(5, "old-box", Some("linux"), Some(50))] };
     let picked = |on: Option<&str>| cluster::pick(&cluster, &me, on).map(|row| row.name.clone());
     assert_eq!(picked(Some("macos")).as_deref(), Some("studio"), "of two Macs, the one heard from last");
     assert_eq!(picked(Some("macbook")).as_deref(), Some("MacBook"), "by its name, in any case");
@@ -380,7 +380,7 @@ fn a_report_from_a_machine_that_is_not_the_jobs_worker_is_refused_end_to_end() {
     let ended = master::go(&master.hub(), &asked, &mut |text| printed.push_str(text), &mut || {
         if forged.borrow().is_empty() {
             let sent: Sent = std::fs::read_dir(master.state.join("jobs")).unwrap().flatten().find(|entry| entry.file_name().to_string_lossy().ends_with(".sent.json")).map(|entry| serde_json::from_str(&std::fs::read_to_string(entry.path()).unwrap()).unwrap()).unwrap();
-            let keys = cluster::sender(&stranger.dir, &stranger.client(), &stranger.account, &master.identity.machine).unwrap().0;
+            let keys = cluster::sender(&stranger.dir, &stranger.client(), &stranger.account, &master.identity.machine, false).unwrap().0;
             let report = JobReport { job: sent.id.clone(), seq: 0, log: "forged\n".into(), end: Some(JobEnd::Exited { code: 0, artifacts: Vec::new() }) };
             let envelope = cluster::seal_to(&stranger.identity, &stranger.account, &master.identity.machine, &keys, cluster::new_id().unwrap(), &Payload::JobReport(report), crate::messages::now()).unwrap();
             cluster::post(&stranger.client(), &envelope).unwrap();
@@ -416,8 +416,24 @@ fn only_machines_on_the_accounts_signed_list_send_or_take_jobs() {
     let mut tampered = listed.clone();
     tampered.list.as_mut().unwrap().list.machines.push(ListedMachine { machine: outsider.clone(), keys: SecretKeys::generate().public() });
     assert!(cluster::verify(&tampered, &master.account).is_err(), "a list changed after the account signed it trusts no one");
-    assert!(cluster::sender(&worker.dir, &worker.client(), &worker.account, &outsider).unwrap_err().contains("is not on the account's signed list"));
-    assert!(cluster::sender(&worker.dir, &worker.client(), &worker.account, &master.identity.machine).is_ok());
+    assert!(cluster::sender(&worker.dir, &worker.client(), &worker.account, &outsider, true).unwrap_err().contains("is not on the account's signed list"));
+    assert!(cluster::sender(&worker.dir, &worker.client(), &worker.account, &master.identity.machine, true).is_ok());
+}
+
+#[test]
+fn a_machine_the_account_removed_sends_no_more_jobs_and_a_list_older_than_one_seen_is_refused() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let (master, worker) = (Machine::connected(&hub, &mut browser, "devbox"), Machine::connected(&hub, &mut browser, "studio"));
+    let from = master.identity.machine.clone();
+    assert!(cluster::sender(&worker.dir, &worker.client(), &worker.account, &from, false).is_ok());
+    let before: AccountMachines = worker.client().get("/v1/m/machines").unwrap();
+    hub.runtime.block_on(browser.remove_machine(&from)).unwrap();
+    assert!(cluster::sender(&worker.dir, &worker.client(), &worker.account, &from, false).is_ok(), "a report may still use the list cached a moment ago");
+    assert!(cluster::sender(&worker.dir, &worker.client(), &worker.account, &from, true).unwrap_err().contains("is not on the account's signed list"), "a job is checked against the list as it is now");
+    assert!(cluster::trust(&worker.dir, &before, &worker.account).unwrap_err().contains("older than version"), "the hub handing back the list from before the removal is refused");
+    std::fs::write(worker.dir.join("jobs/machines.json"), serde_json::to_string(&before).unwrap()).unwrap();
+    assert!(cluster::sender(&worker.dir, &worker.client(), &worker.account, &from, false).unwrap_err().contains("is not on the account's signed list"), "and so is a cache rolled back to it");
 }
 
 #[test]

@@ -276,7 +276,7 @@ fn ended_as(end: &JobEnd) -> String {
 
 pub fn run_one(dir: &Path, identity: &Identity, account: &AccountKey, client: &Client, data: &Path, queued: &Queued, halted: &dyn Fn() -> bool) -> String {
     let said = format!("jobs: {} for {} ({}) from {}", queued.job.name, queued.job.repo, queued.job.task, queued.from_name);
-    let keys = match cluster::sender(dir, client, account, &queued.from) {
+    let keys = match cluster::sender(dir, client, account, &queued.from, false) {
         Ok((keys, _)) => keys,
         Err(error) => return format!("{said} did not run, as no report could go back: {error}"),
     };
@@ -296,7 +296,7 @@ pub fn run_one(dir: &Path, identity: &Identity, account: &AccountKey, client: &C
 pub fn refuse(dir: &Path, identity: &Identity, account: &AccountKey, client: &Client, queued: &Queued, why: &str) -> String {
     let said = format!("jobs: refused {} for {} from {}: {why}", queued.job.name, queued.job.repo, queued.from_name);
     let report = JobReport { job: queued.id.clone(), seq: 0, log: String::new(), end: Some(JobEnd::Refused { reason: reason(why) }) };
-    match cluster::sender(dir, client, account, &queued.from).and_then(|(keys, _)| deliver(client, identity, account, &queued.from, &keys, &report, &|| true)) {
+    match cluster::sender(dir, client, account, &queued.from, false).and_then(|(keys, _)| deliver(client, identity, account, &queued.from, &keys, &report, &|| true)) {
         Ok(()) => said,
         Err(error) => format!("{said}; the refusal did not reach the master: {error}"),
     }

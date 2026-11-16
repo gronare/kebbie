@@ -9,10 +9,14 @@ use crate::hub::identity::Identity;
 use crate::sh::Result;
 
 const FILE: &str = "jobs/machines.json";
+const PIN: &str = "jobs/machines.counter";
+const PIN_LOCK: &str = "jobs/machines.lock";
+const FRESH: u64 = 300;
 
 // The machines of the account as the account itself signed them, keys and all; the hub's rows beside them are hints for picking a worker, kept only for a machine on the signed list.
 #[derive(Clone, Debug)]
 pub struct Cluster {
+    pub counter: u64,
     pub keys: BTreeMap<Id, PublicKeys>,
     pub rows: Vec<AccountMachine>,
 }
@@ -28,30 +32,56 @@ pub fn verify(listed: &AccountMachines, account: &AccountKey) -> Result<Cluster>
         .ok_or("the hub's list of this account's machines is not signed by the account, so no machine on it is trusted; open the hub in a browser signed in to the account to sign it again")?;
     let keys: BTreeMap<Id, PublicKeys> = signed.list.machines.iter().map(|listed| (listed.machine.clone(), listed.keys)).collect();
     let rows = listed.machines.iter().filter(|row| keys.contains_key(&row.machine)).cloned().collect();
-    Ok(Cluster { keys, rows })
+    Ok(Cluster { counter: signed.list.counter, keys, rows })
 }
 
 fn file(dir: &Path) -> PathBuf {
     dir.join(FILE)
 }
 
+fn pinned(dir: &Path) -> u64 {
+    std::fs::read_to_string(dir.join(PIN)).ok().and_then(|text| text.trim().parse().ok()).unwrap_or(0)
+}
+
+// The account raises the counter with every change, so a list below the highest one seen is the hub handing back one the account replaced, as one that still holds a removed machine.
+pub fn trust(dir: &Path, listed: &AccountMachines, account: &AccountKey) -> Result<Cluster> {
+    let cluster = verify(listed, account)?;
+    let _held = crate::state::Locked::wait(&dir.join(PIN_LOCK))?;
+    let pin = pinned(dir);
+    if cluster.counter < pin {
+        return Err(format!("the hub handed over the account's list of machines at version {}, older than version {pin} this machine already saw, so no machine on it is trusted", cluster.counter));
+    }
+    if cluster.counter > pin {
+        crate::state::write(&dir.join(PIN), cluster.counter.to_string())?;
+    }
+    Ok(cluster)
+}
+
 pub fn fetch(dir: &Path, client: &Client, account: &AccountKey) -> std::result::Result<Cluster, HubError> {
     let listed: AccountMachines = client.get("/v1/m/machines")?;
+    let cluster = trust(dir, &listed, account).map_err(HubError::Transport)?;
     if let Ok(text) = serde_json::to_string(&listed) {
         let _ = crate::state::write(&file(dir), text);
     }
-    verify(&listed, account).map_err(HubError::Transport)
+    Ok(cluster)
+}
+
+fn young(file: &Path) -> bool {
+    std::fs::metadata(file).and_then(|meta| meta.modified()).ok().and_then(|at| at.elapsed().ok()).is_some_and(|age| age.as_secs() < FRESH)
 }
 
 fn cached(dir: &Path, account: &AccountKey) -> Option<Cluster> {
+    if !young(&file(dir)) {
+        return None;
+    }
     let listed: AccountMachines = std::fs::read_to_string(file(dir)).ok().and_then(|text| serde_json::from_str(&text).ok())?;
-    verify(&listed, account).ok()
+    trust(dir, &listed, account).ok()
 }
 
-// A sender's keys come from the signed list, cached, and fetched again when the sender is not on the cached one, as for a machine the account added since.
-pub fn sender(dir: &Path, client: &Client, account: &AccountKey, from: &Id) -> Result<(PublicKeys, String)> {
+// A job's sender is checked against the list as the hub has it now, so a machine the account removed sends none; a report may use a list cached for five minutes.
+pub fn sender(dir: &Path, client: &Client, account: &AccountKey, from: &Id, fresh: bool) -> Result<(PublicKeys, String)> {
     let known = |cluster: &Cluster| cluster.keys.get(from).map(|keys| (*keys, cluster.name_of(from)));
-    if let Some(found) = cached(dir, account).as_ref().and_then(known) {
+    if !fresh && let Some(found) = cached(dir, account).as_ref().and_then(known) {
         return Ok(found);
     }
     let cluster = fetch(dir, client, account).map_err(|error| error.to_string())?;

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use kebbie_hub_protocol::{AccountKey, Envelope, Payload};
+use kebbie_hub_protocol::{AccountKey, Envelope, Kind, Payload};
 
 use crate::hub::http::Client;
 use crate::hub::identity::Identity;
@@ -103,7 +103,7 @@ fn snapshot(worktree: &Path, id: &str) -> Result<String> {
 
 pub fn receive(dir: &Path, identity: &Identity, account: &AccountKey, client: &Client, envelope: &Envelope, now: u64) -> Option<String> {
     let header = &envelope.header;
-    let opened = cluster::sender(dir, client, account, &header.from).and_then(|(keys, name)| cluster::open_message(envelope, identity, &keys, now).map(|payload| (payload, name)));
+    let opened = cluster::sender(dir, client, account, &header.from, header.kind == Kind::Job).and_then(|(keys, name)| cluster::open_message(envelope, identity, &keys, now).map(|payload| (payload, name)));
     match opened {
         Err(error) => Some(format!("jobs: dropped {} {} from {}: {error}", header.kind.name(), header.id, header.from)),
         Ok((Payload::Job(job), name)) => worker::take(dir, &header.from, &name, &header.id, job, now),
