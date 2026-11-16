@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::time::Duration;
 
 use kebbie_hub_protocol::{BLOB_OVERHEAD, BlobRef, JOB_BUNDLE_MEDIA_TYPE, MAX_BLOB_BYTES, MAX_JOB_BUNDLE_PARTS, open_blob, seal_blob};
 
@@ -7,6 +8,67 @@ use crate::sh::Result;
 
 pub const PART: usize = MAX_BLOB_BYTES - BLOB_OVERHEAD;
 const INCOMING: &str = "refs/kebbie/incoming";
+const BURST: f64 = 30.0;
+const PER_SECOND: f64 = 1.0;
+const TRIES: u32 = 6;
+
+// The hub lets a machine's token make 60 calls at once and then 2 a second, its keeper's calls included, so blob calls keep to half of that.
+#[derive(Clone, Debug)]
+pub struct Pace {
+    tokens: f64,
+    at_ms: u64,
+}
+
+impl Pace {
+    pub fn new(now_ms: u64) -> Pace {
+        Pace { tokens: BURST, at_ms: now_ms }
+    }
+
+    // How long to wait before the next call, which it counts.
+    pub fn next(&mut self, now_ms: u64) -> u64 {
+        let now = now_ms.max(self.at_ms);
+        self.tokens = (self.tokens + (now - self.at_ms) as f64 / 1000.0 * PER_SECOND).min(BURST);
+        self.at_ms = now;
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            return now - now_ms;
+        }
+        let wait = ((1.0 - self.tokens) / PER_SECOND * 1000.0).ceil() as u64;
+        self.tokens = 0.0;
+        self.at_ms = now + wait;
+        self.at_ms - now_ms
+    }
+}
+
+// Blob calls at the pace, each tried again after 1, 2, 4, 8 and 16 s when the hub was busy, down or said 429, as job reports are.
+pub struct Calls<'a> {
+    pace: Pace,
+    clock: &'a dyn Fn() -> u64,
+    sleep: &'a dyn Fn(Duration),
+}
+
+impl<'a> Calls<'a> {
+    pub fn new(clock: &'a dyn Fn() -> u64, sleep: &'a dyn Fn(Duration)) -> Calls<'a> {
+        Calls { pace: Pace::new(clock()), clock, sleep }
+    }
+
+    pub fn call<T>(&mut self, once: &mut dyn FnMut() -> std::result::Result<T, HubError>) -> std::result::Result<T, HubError> {
+        let mut tried = 0;
+        loop {
+            let wait = self.pace.next((self.clock)());
+            if wait > 0 {
+                (self.sleep)(Duration::from_millis(wait));
+            }
+            match once() {
+                Err(error) if !error.is_final() && tried + 1 < TRIES => {
+                    (self.sleep)(Duration::from_secs(1 << tried));
+                    tried += 1;
+                }
+                done => return done,
+            }
+        }
+    }
+}
 
 pub fn split(bundle: &[u8]) -> Result<Vec<&[u8]>> {
     let parts: Vec<&[u8]> = bundle.chunks(PART).collect();
@@ -39,11 +101,14 @@ pub fn create(repo: &Path, refname: &str, commit: &str, base: Option<&str>, scra
     made
 }
 
-pub fn upload(client: &Client, bundle: &[u8]) -> std::result::Result<Vec<BlobRef>, String> {
+pub type Put<'a> = dyn Fn(&str, &[u8]) -> std::result::Result<(), HubError> + 'a;
+
+pub fn upload(bundle: &[u8], calls: &mut Calls, put: &Put) -> std::result::Result<Vec<BlobRef>, String> {
     let mut parts = Vec::new();
     for chunk in split(bundle)? {
         let (blob, ciphertext) = seal_blob(chunk, JOB_BUNDLE_MEDIA_TYPE);
-        client.put_bytes(&format!("/v1/m/blobs/{}", blob.id), &ciphertext).map_err(|error| hub_said(&error))?;
+        let path = format!("/v1/m/blobs/{}", blob.id);
+        calls.call(&mut || put(&path, &ciphertext)).map_err(|error| hub_said(&error))?;
         parts.push(blob);
     }
     Ok(parts)
@@ -56,10 +121,11 @@ fn hub_said(error: &HubError) -> String {
     }
 }
 
-pub fn download(client: &Client, parts: &[BlobRef]) -> Result<Vec<u8>> {
+pub fn download(client: &Client, calls: &mut Calls, parts: &[BlobRef]) -> Result<Vec<u8>> {
     let mut opened = Vec::new();
     for part in parts {
-        let ciphertext = client.get_bytes(&format!("/v1/m/blobs/{}", part.id)).map_err(|error| format!("part {}: {error}", part.id))?;
+        let path = format!("/v1/m/blobs/{}", part.id);
+        let ciphertext = calls.call(&mut || client.get_bytes(&path)).map_err(|error| format!("part {}: {error}", part.id))?;
         opened.push(open_blob(part, &ciphertext).map_err(|error| format!("part {} does not open: {error:?}", part.id))?);
     }
     Ok(join(opened))

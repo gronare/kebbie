@@ -148,8 +148,10 @@ pub fn follow(state: &Path, sent: &Sent, print: &mut dyn FnMut(&str), pause: &mu
 }
 
 fn forget(state: &Path, client: &Client, sent: &Sent) {
+    let mut calls = bundle::Calls::new(&crate::typing::now_ms, &std::thread::sleep);
     for blob in &sent.blobs {
-        let _ = client.delete(&format!("/v1/m/blobs/{blob}"));
+        let path = format!("/v1/m/blobs/{blob}");
+        let _ = calls.call(&mut || client.delete(&path));
     }
     for kind in ["sent.json", "heard.json", "end.json", "log", "lock"] {
         let _ = std::fs::remove_file(part(state, &sent.id, kind));
@@ -192,7 +194,8 @@ fn attempt(hub: &Hub, client: &Client, asked: &Asked, worker: &AccountMachine, k
     let id = cluster::new_id()?;
     crate::state::private_dir(&hub.state.join(DIR))?;
     let bytes = bundle::create(asked.top, snapshot, commit, base, &part(hub.state, &id, "scratch"))?;
-    let parts = bundle::upload(client, &bytes).map_err(|error| format!("kebbie: the job's commit did not go up to the hub: {error}"))?;
+    let mut calls = bundle::Calls::new(&crate::typing::now_ms, &std::thread::sleep);
+    let parts = bundle::upload(&bytes, &mut calls, &|path, body| client.put_bytes(path, body)).map_err(|error| format!("kebbie: the job's commit did not go up to the hub: {error}"))?;
     let sent = Sent { id: id.clone(), worker: worker.machine.clone(), worker_name: worker.name.clone(), repo: asked.repo.clone(), name: asked.name.clone(), commit: commit.to_string(), base: base.map(str::to_string), blobs: parts.iter().map(|part| part.id.clone()).collect(), at: now() };
     let followed = (|| {
         write(&part(hub.state, &id, "sent.json"), &sent)?;

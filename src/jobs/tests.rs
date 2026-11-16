@@ -85,6 +85,30 @@ fn a_bundle_goes_up_in_parts_a_blob_holds_and_comes_back_whole() {
 }
 
 #[test]
+fn blob_calls_keep_to_half_the_hubs_rate_limit_and_wait_out_a_busy_hub() {
+    let mut pace = bundle::Pace::new(0);
+    let waits: Vec<u64> = (0..33).map(|_| pace.next(0)).collect();
+    assert!(waits[..30].iter().all(|wait| *wait == 0) && waits[30..] == [1_000, 2_000, 3_000], "thirty at once, then one a second: {waits:?}");
+    assert_eq!(pace.next(13_000), 0, "ten seconds later ten more may go");
+    let slept = RefCell::new(Vec::new());
+    let sleep = |wait: std::time::Duration| slept.borrow_mut().push(wait.as_secs());
+    let puts = std::cell::Cell::new(0);
+    let busy_twice = |_: &str, _: &[u8]| {
+        puts.set(puts.get() + 1);
+        if puts.get() <= 2 { Err(crate::hub::http::HubError::Status { status: 429, code: "rate-limited".into() }) } else { Ok(()) }
+    };
+    let bundle = vec![7u8; 2 * bundle::PART + 1];
+    let parts = bundle::upload(&bundle, &mut bundle::Calls::new(&|| 0, &sleep), &busy_twice).unwrap();
+    assert_eq!((parts.len(), puts.get(), slept.borrow().clone()), (3, 5, vec![1, 2]), "a 429 is waited out and tried again");
+    puts.set(0);
+    let refused = bundle::upload(&bundle, &mut bundle::Calls::new(&|| 0, &sleep), &|_, _| {
+        puts.set(puts.get() + 1);
+        Err(crate::hub::http::HubError::Status { status: 413, code: "blob-quota".into() })
+    });
+    assert!(refused.unwrap_err().contains("quota is full") && puts.get() == 1, "a refusal that would repeat is not tried again");
+}
+
+#[test]
 fn output_goes_to_the_master_every_two_seconds_or_once_twelve_kib_wait_and_a_silent_job_still_says_it_runs() {
     let mut batch = Batch::new(0);
     assert!(!batch.due(10_000), "nothing to send yet");

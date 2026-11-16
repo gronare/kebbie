@@ -289,7 +289,7 @@ pub fn run_one(dir: &Path, identity: &Identity, account: &AccountKey, client: &C
             lost.get_or_insert(error);
         }
     };
-    let end = execute(queued, data, &|parts| bundle::download(client, parts), &mut send, halted, &crate::typing::now_ms);
+    let end = execute(queued, data, &|parts| bundle::download(client, &mut bundle::Calls::new(&crate::typing::now_ms, &std::thread::sleep), parts), &mut send, halted, &crate::typing::now_ms);
     format!("{said}: {}{}", ended_as(&end), lost.map(|error| format!("; a report did not reach the master: {error}")).unwrap_or_default())
 }
 
