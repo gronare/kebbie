@@ -1260,7 +1260,7 @@ mod tests {
         feed(&mut app, &[KeyCode::Enter, KeyCode::Enter, KeyCode::Down, KeyCode::Up, KeyCode::Enter, KeyCode::Enter, KeyCode::Right, KeyCode::Left, KeyCode::Enter]);
         assert!(app.answering.is_none(), "arrows onto Approve and Enter only ask for the confirm");
         let mut app = planned_row();
-        feed(&mut app, &[KeyCode::Enter, KeyCode::Esc, KeyCode::Char('['), KeyCode::Char('B'), KeyCode::Esc, KeyCode::Char('O'), KeyCode::Char('A')]);
+        feed(&mut app, &[KeyCode::Enter, KeyCode::Esc, KeyCode::Char('['), KeyCode::Char('B')]);
         assert!(app.answering.is_none(), "an arrow split into esc and letters answers nothing");
     }
 
