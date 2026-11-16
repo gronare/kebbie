@@ -836,7 +836,8 @@ impl App {
                     if self.offers.is_empty() { self.focus_fixed() } else { self.focus_offers(0) }
                 }
             }
-            Act::Switch => self.focus_beside(),
+            Act::Switch if key.code == KeyCode::Right => self.enter_task(),
+            Act::Switch => {}
             Act::Back | Act::Close => self.at_top(Some(act)),
             Act::Help => self.mode = Mode::Help(Default::default()),
             Act::Inbox => self.open_questions(None),
@@ -1261,7 +1262,6 @@ pub fn run(overlay: bool) -> Result<String> {
     app.offer_panel.shown = bug_report::load_shown(app.offer_panel.file.as_deref());
     app.comment_panel.file = comments::panel_file();
     app.comment_panel.folded_at = comments::load_folded(app.comment_panel.file.as_deref());
-    app.beside.spawn_loader();
     if let Ok(state) = std::env::var(RESTART_STATE) {
         let mut parts = state.splitn(3, '\t');
         match parts.next() {
@@ -1374,7 +1374,6 @@ pub fn run(overlay: bool) -> Result<String> {
                 }
             }
             changed |= app.take_images();
-            changed |= app.beside.take_loads();
             app.areas.tick();
             app.routines.tick();
             let mut repos: Vec<PathBuf> = app.tasks.iter().filter_map(|item| item.repo.clone()).chain(app.areas.repos()).collect();

@@ -232,7 +232,7 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::Options, on: &[Backlog], help: "the selected item's card: its sections and open questions, which you answer there; an ongoing note's card; on a row kebbie keeps or a Linear issue, its options", hint: Hint::Both },
     Binding { act: Act::ItemOptions, on: &[Backlog], help: "options for the selected backlog item, each one explained", hint: Hint::No },
     Binding { act: Act::Options, on: &[Areas], help: "actions for the selected area (in the detail: run the selected action)", hint: Hint::Both },
-    Binding { act: Act::Switch, on: &[Work], help: "move focus between the tasks and the card beside them, where ↑ ↓ pgup pgdn scroll it", hint: Hint::No },
+    Binding { act: Act::Switch, on: &[Work], help: "→ steps into the task: ↑ ↓ step its subtasks, or scroll its card when it has none, pgup pgdn scroll the card; beside the tasks, or in a window on a narrow board; ← or esc back", hint: Hint::No },
     Binding { act: Act::Options, on: &[Routines], help: "options for the selected routine (on a narrow board: open it, then options)", hint: Hint::No },
     Binding { act: Act::Switch, on: &[Areas], help: "list · detail", hint: Hint::No },
     Binding { act: Act::Move, on: ALL, help: "move", hint: Hint::No },

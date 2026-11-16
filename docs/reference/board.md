@@ -32,7 +32,7 @@ The status line shows:
 | `⇣ updating kebbie · U` | An update whose window you hid runs. |
 | `✓ kebbie updated · U` | The update's summary waits for you. |
 
-In a pane under 86 columns the Work page shows only the tasks, with no card column; `s` or *Show the card* in the options (`⏎`) opens the card in its window. The status line keeps only the counts that are not zero, without their words, so the page tabs still fit.
+In a pane under 86 columns the Work page shows only the tasks, with no card column; `→` opens the task's subtasks and card in a window, and `s` or *Show the card* in the options (`⏎`) opens the card window. The status line keeps only the counts that are not zero, without their words, so the page tabs still fit.
 
 The lead line shows while the lead is stale, and says what happens next:
 
@@ -149,7 +149,7 @@ With [`task.steps`](configuration.md) on and subtasks listed, the task's subtask
 | `accept N · r review` | Under the subtasks: the first subtask waiting for you. `r` opens the review, and [`kebbie accept`](commands.md#kebbie-accept-name-sha) accepts it. |
 | `accept subtask N · r review` | With [`task.require_accept`](configuration.md) on, a ready task with a subtask to accept waits under Needs you with this line: it cannot be pushed until subtask N is accepted. |
 
-`↑` `↓` move from task to task and never stop on a subtask row. The subtasks are reached inside the task: `S`, on the task or as *Its subtasks* in its options (`⏎`), switches to a list of them over the board, the cursor on the first that waits for you. In the list `↑` `↓` step through the task's subtasks and stay inside it, the card beside the tasks shows the subtask under the cursor, and the keys line at the bottom reads `↑ ↓ j k steps · ⏎ opens subtask N · a accepts it · r reads its diff · esc back to the task`. In the list:
+`↑` `↓` move from task to task and never stop on a subtask row. The subtasks are reached by stepping into the task: `→` (the selected row's last line ends in `→ subtasks`), `S`, or *Its subtasks* in its options (`⏎`). Beside the tasks, the card column then lights in mauve under the task's name, `▸ <title>`, with the subtasks at its top and the cursor on the first that waits for you, the task's card under them; the tasks fade, all but a `▸` on the task you are in. Under 86 columns the same list and card open in a window over the faded board. The keys line at the bottom reads `↑ ↓ j k steps · ⏎ opens subtask N · a accepts it · r reads its diff · esc back to the task`. Inside the task:
 
 | Key | Action |
 | --- | --- |
@@ -157,7 +157,8 @@ With [`task.steps`](configuration.md) on and subtasks listed, the task's subtask
 | `⏎` | Open the [subtask view](#the-subtask-view); `esc` there comes back to the list. |
 | `a` | Accept that subtask, as [`kebbie accept <name> --subtask <id>`](commands.md#kebbie-accept-name-sha) does. On the task's own row, `a` stays [let the lead push it](#on-a-task). |
 | `r` | Open the review on that subtask. A review already open in its Space moves to it. |
-| `esc` | Back to the task's row. |
+| `pgup` `pgdn` `space` | Scroll the card under the subtasks. |
+| `←` `esc` | Back to the task's row. |
 
 A task of a single subtask has no list: its row says it all.
 
@@ -343,7 +344,7 @@ kebbie never posts a reply.
 | --- | --- |
 | `⏎` | Options for the selected task. On the Backlog page, the item's card. |
 | `↑` `↓`, `j` `k` | Move. |
-| `←` `→` | Focus the card beside the tasks, where `↑` `↓` `pgup` `pgdn` scroll it, and back to the tasks. |
+| `→` | Step into the selected task: its [subtasks](#a-task-in-subtasks), or, for a task without them, its card beside the tasks, where `↑` `↓` `pgup` `pgdn` scroll it. Under 86 columns, without subtasks, the card window. `←` or `esc` back to the tasks. |
 | `1`, `2`, `3`, `4`, `,` | The Work page, the [Backlog page](#backlog-page), the Areas page, the Routines page, the [Settings page](#settings-page). |
 | `tab` | Move focus to the lead's chat, showing it first when it is hidden. |
 | `h` | Hide the lead's chat so the board takes the whole width while the chat runs on, or show it again. Only on the board in the lead Space. See [Hiding the chat](../explanation/lead-and-away-mode.md#hiding-the-chat). |
@@ -567,11 +568,11 @@ COMMITS
 | `RECIPE`, `LAST REPORT` | For a task without a card: the recipe it runs and why, and its last report with its age. |
 | `COMMITS` | Each commit's short sha and subject. |
 
-- While the subtask list is open, it shows the subtask under the cursor as the [subtask view](#the-subtask-view) does.
+- Inside a task with subtasks, it lists them over the card, the cursor on one; `⏎` opens that subtask in the [subtask view](#the-subtask-view).
 - On a row that is not a task, such as the bugs to send, the Done block or a comment, it says so in one line.
-- `→` or a click focuses it, and `↑` `↓` `pgup` `pgdn` then scroll it; `←` or `esc` gives the keys back to the tasks.
+- `→` or a click focuses it: its heading becomes `▸ <title>` in mauve and the tasks fade. `↑` `↓` `pgup` `pgdn` then scroll it; `←` or `esc` gives the keys back to the tasks.
 - `s` opens the card in its window, with its images.
-- Under 86 columns the column is not drawn, and `→` stays on the tasks.
+- Under 86 columns the column is not drawn; `→` opens the task in a window instead.
 
 ### The subtask view
 

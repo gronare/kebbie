@@ -124,14 +124,26 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         render_column(frame, work_area, work, work_selected, work_rows, &mut app.hits);
         draw_panel(frame, app, panel_area);
         app.draw_beside(frame, backlog_area);
+        if app.inside_task() {
+            app.dim_tasks(frame, Rect { width: panel_area.right() - work_area.x, ..work_area });
+        }
     } else if body.width >= 86 {
         let [work_area, _, backlog_area] = Layout::horizontal([Constraint::Percentage(54), Constraint::Length(4), Constraint::Min(20)]).areas(body);
         let (work, work_selected, work_rows) = work_lines(app, work_area.width as usize, true, work_area.height as usize);
         render_column(frame, work_area, work, work_selected, work_rows, &mut app.hits);
         app.draw_beside(frame, backlog_area);
+        if app.inside_task() {
+            app.dim_tasks(frame, work_area);
+        }
     } else {
         let (lines, work_selected, rows) = work_lines(app, body.width as usize, true, body.height as usize);
         render_column(frame, body, lines, work_selected, rows, &mut app.hits);
+        if app.inside_task() {
+            app.dim_tasks(frame, body);
+        }
+    }
+    if matches!(app.mode, Mode::Subtasks) && !app.beside.shown {
+        app.draw_inside_window(frame);
     }
 
     let mut modal_hits = Vec::new();
@@ -140,7 +152,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     }
     match &app.mode {
         Mode::Normal | Mode::ItemCard(_) | Mode::Subtask(_) => {}
-        Mode::Subtasks => super::subtask_view::draw_list(frame, app),
+        Mode::Subtasks => {}
         Mode::Options(index) => modal_hits = draw_options(frame, app, *index),
         Mode::ReviewMenu(menu) => modal_hits = super::send_review::draw_review_menu(frame, menu),
         Mode::Questions(_) => modal_hits = draw_questions(frame, app),

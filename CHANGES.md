@@ -6,7 +6,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 
 ### What's new
 
-- The board's ↑ ↓ move task to task, and S lists a task's subtasks to step through inside it.
+- The board's ↑ ↓ move task to task, and → steps into a task: its subtasks and card light up beside the tasks, which fade so you see where you are, or open in a window on a narrow board.
 
 ### Fixed
 - In a narrow board pane the Work page shows only the tasks, and the card opens in its window from s or ⏎, as before the card column.

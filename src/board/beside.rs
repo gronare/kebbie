@@ -1,9 +1,3 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread;
-use std::time::{Duration, Instant};
-
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
@@ -12,63 +6,53 @@ use ratatui::Frame;
 
 use crate::keys::{self, Act, Ctx};
 use crate::status::Item;
-use crate::tasks::{Subtask, SubtaskState};
+use crate::tasks::SubtaskState;
 use super::card::{card_parts, indented, rich_wrap};
 use super::columns::group_color;
 use super::detail::Detail;
 use super::review_data as data;
-use super::steps::{rows_shown, walked};
-use super::subtask_view::{self, Loaded, address_of, section};
-use super::widgets::{MAUVE, MUTED, SURFACE, TEAL, TEXT, YELLOW, ago, bold, cut, fit, plural, style, wrap};
-use super::{App, Hit};
+use super::steps::{cursor_line, rows_shown, step_lines, walked};
+use super::subtask_view::{address_of, section};
+use super::widgets::{FAINT, MAUVE, MUTED, SURFACE, TEAL, TEXT, YELLOW, ago, bold, cut, fit, modal, plural, style, wrap};
+use super::{App, Hit, Mode};
 
-type Key = (String, String);
-type Request = (PathBuf, String, Subtask);
-type Answer = (Key, Option<String>, Loaded);
-
-// The card beside the tasks: what it shows, how far it is scrolled, and the subtasks read off the UI thread.
+// The card beside the tasks: whether it is drawn, whether it has the keys, and how far it is scrolled.
 #[derive(Default)]
 pub(super) struct Beside {
     pub(super) focused: bool,
     pub(super) shown: bool,
     pub(super) scroll: u16,
+    room: u16,
     subject: String,
-    loads: HashMap<Key, (Option<String>, Loaded)>,
-    asked: HashMap<Key, (Option<String>, Instant)>,
-    requests: Option<Sender<Request>>,
-    results: Option<Receiver<Answer>>,
 }
 
-impl Beside {
-    pub(super) fn spawn_loader(&mut self) {
-        let (request_tx, request_rx) = mpsc::channel::<Request>();
-        let (answer_tx, answer_rx) = mpsc::channel::<Answer>();
-        thread::spawn(move || {
-            while let Ok((path, address, subtask)) = request_rx.recv() {
-                let loaded = subtask_view::load(&path, &address, &subtask);
-                if answer_tx.send(((address, subtask.id.clone()), subtask.head().map(str::to_string), loaded)).is_err() {
-                    return;
-                }
-            }
-        });
-        (self.requests, self.results) = (Some(request_tx), Some(answer_rx));
+fn heading(title: Vec<Span<'static>>, inside: bool, width: usize) -> Vec<Line<'static>> {
+    if inside && !title.is_empty() {
+        let mut spans = vec![Span::styled("▸ ", bold(MAUVE))];
+        spans.extend(title.into_iter().map(|span| Span::styled(span.content, bold(MAUVE))));
+        return vec![fit(spans, width), Line::from(Span::styled("━".repeat(width), style(MAUVE)))];
     }
-
-    pub(super) fn take_loads(&mut self) -> bool {
-        let Some(results) = &self.results else { return false };
-        let mut changed = false;
-        while let Ok((key, head, loaded)) = results.try_recv() {
-            self.loads.insert(key, (head, loaded));
-            changed = true;
-        }
-        changed
-    }
-}
-
-fn heading(title: Vec<Span<'static>>, focused: bool, width: usize) -> Vec<Line<'static>> {
-    let mut spans = vec![Span::styled("CARD", bold(if focused { MAUVE } else { MUTED })), Span::raw("   ")];
+    let mut spans = vec![Span::styled("CARD", bold(if inside { MAUVE } else { MUTED })), Span::raw("   ")];
     spans.extend(title);
     vec![fit(spans, width), Line::from(Span::styled("─".repeat(width), style(SURFACE)))]
+}
+
+fn accepted(item: &Item) -> usize {
+    let steps = &item.subtasks;
+    steps.pushed.len() + steps.items.iter().filter(|step| matches!(step.state, SubtaskState::Accepted | SubtaskState::Pushed)).count()
+}
+
+fn subtask_list(item: &Item, at: usize, width: usize) -> Vec<Line<'static>> {
+    let mut head = section("SUBTASKS");
+    head.spans.push(Span::styled(format!("  {} of {} accepted", accepted(item), item.subtasks.pushed.len() + item.subtasks.items.len()), style(MUTED)));
+    let mut lines = vec![head];
+    lines.extend(step_lines(item, false, width, Some(at)).into_iter().map(|mut line| {
+        if let Some(first) = line.spans.first_mut() {
+            first.content = first.content.trim_start().to_string().into();
+        }
+        line
+    }));
+    lines
 }
 
 fn body(text: &str, width: usize) -> Vec<Line<'static>> {
@@ -84,9 +68,7 @@ fn facts(item: &Item, detail: Option<&Detail>) -> Line<'static> {
         parts.push(plural(commits, "commit"));
     }
     if rows_shown(item) {
-        let steps = &item.subtasks;
-        let accepted = steps.pushed.len() + steps.items.iter().filter(|step| matches!(step.state, SubtaskState::Accepted | SubtaskState::Pushed)).count();
-        parts.push(format!("{accepted} of {} subtasks accepted", steps.pushed.len() + steps.items.len()));
+        parts.push(format!("{} of {} subtasks accepted", accepted(item), item.subtasks.pushed.len() + item.subtasks.items.len()));
     }
     match detail.map(|detail| detail.card.as_ref()) {
         None if item.path.is_some() => parts.push("reading the card…".to_string()),
@@ -147,7 +129,32 @@ fn task_lines(item: &Item, detail: Option<&Detail>, width: usize) -> Vec<Line<'s
 }
 
 impl App {
-    // ← → from a row under the tasks or from the tasks themselves.
+    // Focus is inside the selected task: its subtasks are stepped, or its card is scrolled.
+    pub(super) fn inside_task(&self) -> bool {
+        !self.in_messages && self.column == super::Column::Work && (self.beside.focused || matches!(self.mode, Mode::Subtasks))
+    }
+
+    // → on a task: its subtasks when it has them, else its card, beside the tasks or in a window on a narrow board.
+    pub(super) fn enter_task(&mut self) {
+        let Some(item) = self.selected_task() else { return self.focus_beside() };
+        if !walked(&item).is_empty() {
+            self.beside.scroll = 0;
+            return self.open_subtasks(&item);
+        }
+        if self.beside.shown { self.focus_beside() } else { self.act(Act::Card) }
+    }
+
+    // After a step among the subtasks the card scrolls just enough to keep the cursor's row in sight.
+    pub(super) fn follow_cursor(&mut self) {
+        let Some(item) = self.selected_task() else { return };
+        let Some(at) = self.subtask_at(&item) else { return };
+        let row = 1 + cursor_line(&item, at) as u16;
+        let room = self.beside.room.max(1);
+        let scroll = &mut self.beside.scroll;
+        *scroll = (*scroll).min(row).max((row + 1).saturating_sub(room));
+    }
+
+    // ← → from a row under the tasks.
     pub(super) fn focus_beside(&mut self) {
         if !self.beside.shown {
             return;
@@ -174,52 +181,36 @@ impl App {
         true
     }
 
-    // The subtask as its view reads it; the board's own loader reads it on a thread and the last reading shows meanwhile.
-    fn subtask_loaded(&mut self, item: &Item, step: &Subtask) -> Option<Loaded> {
-        let path = item.path.clone()?;
-        let address = address_of(item);
-        let Some(requests) = &self.beside.requests else { return Some((self.subtask_io.load)(&path, &address, step)) };
-        let key = (address.clone(), step.id.clone());
-        let head = step.head().map(str::to_string);
-        let fresh = self.beside.asked.get(&key).is_some_and(|(asked, at)| *asked == head && at.elapsed() < Duration::from_secs(4));
-        if !fresh {
-            let _ = requests.send((path, address, step.clone()));
-            self.beside.asked.insert(key.clone(), (head, Instant::now()));
-        }
-        self.beside.loads.get(&key).map(|(_, loaded)| loaded.clone())
-    }
-
     // The card for what the cursor is on, its title line apart so it stays put while the rest scrolls.
     pub(super) fn beside_lines(&mut self, width: usize) -> (Vec<Line<'static>>, Vec<Line<'static>>, String) {
-        let focused = self.beside.focused && !self.in_messages;
+        let focused = self.inside_task();
         let off_tasks = self.offer_panel.focused || self.comment_panel.focused || self.on_parked_line();
         let Some(item) = self.selected_task().filter(|_| !off_tasks) else {
             let hint = "Not a task: move to one to see its card here.".to_string();
             return (heading(Vec::new(), focused, width), wrap(&hint, width, 3).into_iter().map(|text| Line::from(Span::styled(text, style(MUTED)))).collect(), "none".to_string());
         };
-        if let Some(at) = self.subtask_at(&item) {
-            let step = walked(&item)[at].clone();
-            let loaded = self.subtask_loaded(&item, &step);
-            let mut lines = subtask_view::view_lines(&item, &step, &loaded.clone().unwrap_or_default(), width);
-            let mut title: Vec<Span<'static>> = lines.remove(0).spans.into_iter().rev().collect();
-            title.truncate(1);
-            title.push(Span::styled(format!(" · {}", item.titled()), style(MUTED)));
-            if loaded.is_none() {
-                lines.push(Line::from(Span::styled("reading its files…", style(MUTED))));
-            }
-            return (heading(title, focused, width), lines, format!("{}:{}", address_of(&item), step.id));
-        }
         let detail = self.detail(&item);
         let title = vec![Span::styled(item.titled(), bold(TEXT))];
+        if let Some(at) = self.subtask_at(&item).filter(|_| matches!(self.mode, Mode::Subtasks)) {
+            let mut lines = subtask_list(&item, at, width);
+            lines.push(Line::default());
+            lines.extend(task_lines(&item, detail.as_deref(), width));
+            return (heading(title, focused, width), lines, address_of(&item));
+        }
         (heading(title, focused, width), task_lines(&item, detail.as_deref(), width), address_of(&item))
     }
 
     pub(super) fn draw_beside(&mut self, frame: &mut Frame, area: Rect) {
         let (head, lines, subject) = self.beside_lines(area.width as usize);
-        if subject != self.beside.subject {
+        let room = area.height.saturating_sub(head.len() as u16);
+        let new_subject = subject != self.beside.subject;
+        if new_subject {
             (self.beside.subject, self.beside.scroll) = (subject, 0);
         }
-        let room = area.height.saturating_sub(head.len() as u16);
+        if new_subject || room != self.beside.room {
+            self.beside.room = room;
+            self.follow_cursor();
+        }
         self.beside.scroll = self.beside.scroll.min(lines.len().saturating_sub(room as usize) as u16);
         let top = Rect { height: (head.len() as u16).min(area.height), ..area };
         let rest = Rect { y: area.y + top.height, height: room, ..area };
@@ -227,6 +218,39 @@ impl App {
         frame.render_widget(Paragraph::new(lines).scroll((self.beside.scroll, 0)), rest);
         self.beside.shown = true;
         self.hits.push((area, Hit::Beside));
+    }
+
+    // While focus is inside a task the tasks fade, all but a mark on the one it is inside.
+    pub(super) fn dim_tasks(&self, frame: &mut Frame, area: Rect) {
+        let buffer = frame.buffer_mut();
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                buffer[(x, y)].set_fg(FAINT).set_bg(ratatui::style::Color::Reset);
+            }
+        }
+        let marked = self.hits.iter().find(|(rect, hit)| *hit == Hit::Task(self.work_selected) && area.intersects(*rect));
+        if let Some((rect, _)) = marked {
+            buffer[(rect.x, rect.y)].set_symbol("▸").set_fg(MAUVE);
+        }
+    }
+
+    // On a narrow board the task's inside is a window: its subtasks with the cursor, its card under them.
+    pub(super) fn draw_inside_window(&mut self, frame: &mut Frame) {
+        let Some(item) = self.selected_task() else { return };
+        let Some(at) = self.subtask_at(&item) else { return };
+        let width = 64usize.min(frame.area().width.saturating_sub(8) as usize);
+        let room = (frame.area().height as usize).saturating_sub(6).max(1);
+        let detail = self.detail(&item);
+        let mut lines = subtask_list(&item, at, width);
+        lines.push(Line::default());
+        lines.extend(task_lines(&item, detail.as_deref(), width));
+        if room as u16 != self.beside.room {
+            self.beside.room = room as u16;
+            self.follow_cursor();
+        }
+        self.beside.scroll = self.beside.scroll.min(lines.len().saturating_sub(room) as u16);
+        let lines = lines.into_iter().skip(self.beside.scroll as usize).take(room).collect();
+        modal(frame, format!("▸ {}", cut(&item.titled(), 48)), lines, width as u16 + 4);
     }
 }
 
@@ -239,9 +263,8 @@ mod tests {
 
     use crate::board::bug_report::Offer;
     use crate::board::steps::tests::{holds, stepped, stripe};
-    use crate::board::subtask_view::{Io, Loaded};
     use crate::board::test_support::*;
-    use crate::board::widgets::{LAVENDER, MAUVE, MUTED};
+    use crate::board::widgets::{FAINT, LAVENDER, MAUVE, MUTED};
     use crate::board::{App, Column, Page};
     use crate::report;
     use crate::report_wire::BugReport;
@@ -305,21 +328,21 @@ mod tests {
     }
 
     #[test]
-    fn in_the_subtask_list_the_card_is_that_subtask_and_on_the_issues_row_a_hint() {
+    fn inside_a_task_the_column_lists_its_subtasks_over_its_card_and_on_the_issues_row_a_hint() {
         let mut steps = stripe();
         holds(&mut steps.items[1], &["3333333cccc"], false);
         let mut item = stepped(steps);
         item.path = Some(PathBuf::from("/work/wt1.billing"));
         let mut app = test_app(vec![item]);
-        app.subtask_io = Io { load: Rc::new(|_, _, step| Loaded { files: Vec::new(), built: vec![format!("{} keeps the charge in one place.", step.title)], obstacle: None }), ..Io::default() };
         let (side, _) = card_side(&mut app);
-        assert!(side.join("\n").contains("working · billing · 2 commits · 1 of 4 subtasks accepted"), "{}", side.join("\n"));
-        press(&mut app, key(KeyCode::Char('S')));
+        assert!(side.join("\n").contains("working · billing · 2 commits · 1 of 4 subtasks accepted") && !side.join("\n").contains("SUBTASKS"), "{}", side.join("\n"));
+        press(&mut app, key(KeyCode::Right));
         press(&mut app, key(KeyCode::Down));
         let (side, _) = card_side(&mut app);
         let screen = side.join("\n");
-        assert!(screen.contains("CARD   Subtask 3 of 4 · Switch the payment provider") && screen.contains("Add Stripe as the gateway"), "{screen}");
-        assert!(screen.contains("Add Stripe as the gateway keeps the charge in one place.") && screen.contains("3333333  subject of 3333333cccc"), "{screen}");
+        let list = side.iter().position(|row| row.trim_start().starts_with("SUBTASKS  1 of 4 accepted")).unwrap_or_else(|| panic!("{screen}"));
+        let facts = side.iter().position(|row| row.contains("working · billing")).unwrap_or_else(|| panic!("{screen}"));
+        assert!(side.iter().any(|row| row.trim() == "▸ Switch the payment provider to Stripe") && list < facts && screen.contains("Add Stripe as the gateway"), "{screen}");
         press(&mut app, key(KeyCode::Esc));
         app.offers = vec![Offer { id: "a1b2c3".to_string(), report: BugReport { kind: None, title: "push hid git's error".to_string(), text: String::new(), version: "0.26.0".to_string(), os: "macos".to_string() } }];
         app.focus_offers(0);
@@ -345,8 +368,10 @@ mod tests {
         assert!(heading(&mut app).ends_with("search-filters"));
         press(&mut app, key(KeyCode::Right));
         let (rows, buffer) = render(&mut app, 140, 12);
-        let (x, y) = find(&rows, "CARD   search-filters")[0];
-        assert_eq!(buffer[(x as u16, y as u16)].fg, MAUVE, "focused, the column's name lights");
+        let (x, y) = find(&rows, "▸ search-filters")[0];
+        assert_eq!(buffer[(x as u16, y as u16)].fg, MAUVE, "focused, the column is named after the task and lights");
+        let (x, y) = find(&rows, "checkout-copy")[0];
+        assert_eq!(buffer[(x as u16, y as u16)].fg, FAINT, "focused, the tasks fade");
         press(&mut app, key(KeyCode::Char('j')));
         render(&mut app, 140, 12);
         assert!(app.beside.scroll == 1 && app.work_selected == 0, "focused, j scrolls the card and leaves the cursor");

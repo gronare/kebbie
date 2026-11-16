@@ -224,23 +224,6 @@ pub(super) fn draw(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 // The list the task's options switch to: its subtasks not pushed yet, the cursor lit.
-pub(super) fn draw_list(frame: &mut Frame, app: &App) {
-    let Some(item) = app.selected_task() else { return };
-    let width = 64usize.min(frame.area().width.saturating_sub(8) as usize);
-    let cursor = app.subtask_at(&item);
-    let lines: Vec<Line<'static>> = super::steps::step_lines(&item, false, width, cursor).into_iter().map(|mut line| {
-        if let Some(first) = line.spans.first_mut() {
-            first.content = first.content.trim_start().to_string().into();
-        }
-        line
-    }).collect();
-    let room = (frame.area().height as usize).saturating_sub(6).max(1);
-    let at = cursor.map_or(0, |at| super::steps::cursor_line(&item, at));
-    let top = at.saturating_sub(room - 1).min(lines.len().saturating_sub(room));
-    let lines = lines.into_iter().skip(top).take(room).collect();
-    super::widgets::modal(frame, format!("{} · subtasks", cut(&item.titled(), 40)), lines, width as u16 + 4);
-}
-
 impl App {
     // Where the cursor is among the task's subtask rows, while that task is the selected one.
     pub(super) fn subtask_at(&self, item: &Item) -> Option<usize> {
@@ -286,9 +269,19 @@ impl App {
         let steps = walked(&item).to_vec();
         let Some(at) = self.subtask_at(&item) else { return self.subtask_row = None };
         self.mode = Mode::Subtasks;
+        let scroll = &mut self.beside.scroll;
+        match key.code {
+            KeyCode::PageUp => return *scroll = scroll.saturating_sub(10),
+            KeyCode::PageDown | KeyCode::Char(' ') => return *scroll = scroll.saturating_add(10),
+            KeyCode::Right => return,
+            _ => {}
+        }
         match act {
-            Some(Act::Move) if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) => self.put_cursor(&item, &steps[at.saturating_sub(1)]),
-            Some(Act::Move) => self.put_cursor(&item, &steps[(at + 1).min(steps.len() - 1)]),
+            Some(Act::Move) => {
+                let to = if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) { at.saturating_sub(1) } else { (at + 1).min(steps.len() - 1) };
+                self.put_cursor(&item, &steps[to]);
+                self.follow_cursor();
+            }
             Some(Act::Options) => self.open_subtask(&item, &steps[at]),
             Some(Act::Permit) => {
                 self.accept_subtask(&item, &steps[at]);
@@ -297,7 +290,7 @@ impl App {
                 }
             }
             Some(Act::Review) => self.open_review_at(&item, Some(steps[at].number)),
-            Some(Act::Back | Act::Close | Act::Subtasks) => {
+            Some(Act::Back | Act::Close | Act::Subtasks | Act::Switch) => {
                 self.subtask_row = None;
                 self.mode = Mode::Normal;
             }
@@ -457,12 +450,19 @@ mod tests {
     }
 
     #[test]
-    fn s_lists_the_subtasks_inside_the_task_where_up_and_down_step_through_them_and_esc_goes_back() {
+    fn right_steps_into_the_task_where_up_and_down_step_its_subtasks_beside_the_faded_tasks_and_esc_goes_back() {
         let (mut app, _) = two_tasks();
-        key(&mut app, KeyCode::Char('S'));
-        assert!(matches!(app.mode, Mode::Subtasks));
-        let (rows, shown) = screen(&mut app);
-        assert!(shown.contains("Switch the payment provider to Stripe · subtasks") && bar_row(&rows, "4 Remove the old payment client").contains('│'), "the list opens over the board in a window: {shown}");
+        assert!(screen(&mut app).1.contains("⏎ options · → subtasks"), "the task's row says → steps in");
+        key(&mut app, KeyCode::Right);
+        assert!(matches!(app.mode, Mode::Subtasks) && app.inside_task());
+        let (rows, buffer) = render(&mut app, 120, 40);
+        let shown = rows.join("\n");
+        let (head_x, head_y) = find(&rows, "▸ Switch the payment provider to Stripe")[0];
+        assert_eq!(buffer[(head_x as u16, head_y as u16)].fg, crate::board::widgets::MAUVE, "the card column is lit and named after the task: {shown}");
+        let (list_x, _) = find(&rows, "4 Remove the old payment client").into_iter().max().unwrap();
+        assert!(list_x >= head_x && find(&rows, "SUBTASKS").iter().any(|(x, _)| *x >= head_x), "the subtasks list in the column, not over the board: {shown}");
+        let (task_x, task_y) = find(&rows, "search")[0];
+        assert_eq!(buffer[(task_x as u16, task_y as u16)].fg, crate::board::widgets::FAINT, "the other tasks fade: {shown}");
         assert!(shown.contains("↑ ↓ j k steps · ⏎ opens subtask 2 · a accepts it · r reads its diff · esc back to the task"), "the cursor starts on the first that waits for you: {shown}");
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Char('j'));
@@ -471,9 +471,37 @@ mod tests {
         assert!(screen(&mut app).1.contains("opens subtask 4") && app.work_selected == 0, "the last stays the last");
         key(&mut app, KeyCode::Up);
         assert!(screen(&mut app).1.contains("opens subtask 3"));
+        key(&mut app, KeyCode::Left);
+        let (rows, buffer) = render(&mut app, 120, 40);
+        let shown = rows.join("\n");
+        assert!(matches!(app.mode, Mode::Normal) && app.subtask_row.is_none() && app.work_selected == 0 && !shown.contains("opens subtask"), "← goes back to the task: {shown}");
+        let (task_x, task_y) = find(&rows, "search")[0];
+        assert_ne!(buffer[(task_x as u16, task_y as u16)].fg, crate::board::widgets::FAINT, "back on the board the tasks are lit again: {shown}");
+        key(&mut app, KeyCode::Char('S'));
         key(&mut app, KeyCode::Esc);
-        let (_, shown) = screen(&mut app);
-        assert!(matches!(app.mode, Mode::Normal) && app.subtask_row.is_none() && app.work_selected == 0 && !shown.contains("opens subtask"), "esc goes back to the task: {shown}");
+        assert!(matches!(app.mode, Mode::Normal) && app.subtask_row.is_none(), "S steps in as → does, and esc goes back");
+    }
+
+    #[test]
+    fn on_a_narrow_board_right_opens_the_task_in_a_window_with_its_subtasks_over_its_card() {
+        let (mut app, _) = two_tasks();
+        render(&mut app, 80, 40);
+        key(&mut app, KeyCode::Right);
+        let (rows, _) = render(&mut app, 80, 40);
+        let shown = rows.join("\n");
+        assert!(shown.contains("▸ Switch the payment provider to Stripe") && bar_row(&rows, "4 Remove the old payment client").contains('│'), "the task opens in a window: {shown}");
+        let (_, list_y) = find(&rows, "SUBTASKS")[0];
+        let (_, facts_y) = find(&rows, "working · billing")[0];
+        assert!(list_y < facts_y, "its card under the subtasks: {shown}");
+        key(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal) && !render(&mut app, 80, 40).0.join("\n").contains("SUBTASKS"), "esc closes the window");
+    }
+
+    #[test]
+    fn up_down_and_left_on_the_board_never_step_into_a_task() {
+        let (mut app, _) = two_tasks();
+        key(&mut app, KeyCode::Left);
+        assert!(matches!(app.mode, Mode::Normal) && !app.inside_task(), "← on the board stays on the board");
     }
 
     #[test]
@@ -497,10 +525,12 @@ mod tests {
         for _ in 0..17 {
             key(&mut app, KeyCode::Down);
         }
-        let (rows, buffer) = render(&mut app, 120, 20);
-        let (x, y) = find(&rows, "18 Subtask number 17")[0];
-        assert_eq!(buffer[(x as u16, y as u16)].bg, crate::board::widgets::RAISED, "the window scrolls to the cursor and lights it: {}", rows.join("\n"));
-        assert!(rows.iter().all(|row| !row.contains("1 Subtask number 0 ")), "the top scrolled out: {}", rows.join("\n"));
+        for width in [120, 80] {
+            let (rows, buffer) = render(&mut app, width, 20);
+            let (x, y) = find(&rows, "18 Subtask number 17").into_iter().max().unwrap();
+            assert_eq!(buffer[(x as u16, y as u16)].bg, crate::board::widgets::RAISED, "the list scrolls to the cursor and lights it at {width}: {}", rows.join("\n"));
+            assert!(rows.iter().all(|row| !row.contains("1 Subtask number 0 ")), "the top scrolled out at {width}: {}", rows.join("\n"));
+        }
     }
 
     #[test]
