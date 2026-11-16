@@ -32,17 +32,17 @@ kebbie asks this first, at each `kebbie doctor` run and whenever its kept answer
 
 | Capability | Calls kebbie makes | Without it |
 | --- | --- | --- |
-| `tasks` | `task open`, `task check`, `task close`, `task backlog` | The vault is off for tasks: no notes, no Problem gate. |
+| `tasks` | `task open`, `task close`, `task backlog` | The vault is off for tasks: no notes. |
 | `claims` | `task claim`, `task release` | Notes are kept, but claimed by no machine. |
 | `log` | `log append`, `log path` | Pushes write no log lines. |
 | `snapshot` | `snapshot --json [--since <etag>]` | The board reads the vault's local index instead. |
 | `watch` | `watch --json --body [--since <cursor>]`, one long-lived process the keeper runs | The keeper asks for `snapshot` every 20 seconds and reads each changed backlog note with `read`. |
 | `read` | `read <note> --body` | A plan in a vault note shows only from the local index. |
-| `templates` | `template --json --kind task`, and `task check` with no `--need` | Items and task notes use kebbie's own sections, and the edit gate and done check `problem`, `solution` and `decisions`. |
+| `templates` | `template --json --kind task` | Local and vault items are drafted in kebbie's own sections. |
 | `styles` | `style write --kind backlog --file - --version <n>`, the style on stdin | The vault holds no backlog style, and kebbie's bundled default applies. |
 | `write` | `read --json -- <note>`, answering `{"text", "etag"}`, then `write --etag <etag> -- <note>` with the note on stdin, answering `{"path", "etag"}` | An edit from the phone to a vault backlog item is refused. |
 
-With `templates`, kebbie asks for the task template at most every six hours and keeps it in `item-template.json` in its state directory. An answer with no sections means the vault has no task template, and is kept as long; an ask that fails is tried again after ten minutes. Backlog items are read and written by its sections, found under a heading of any level as the vault finds them, the phone shows them in its order, the task's edits wait for its required sections, and so does done.
+With `templates`, kebbie asks for the task template at most every six hours and keeps it in `item-template.json` in its state directory. An answer with no sections means the vault has no task template, and is kept as long; an ask that fails is tried again after ten minutes. kebbie drafts a short vault item in its sections, and the phone shows an item's sections in its order. An item is read in whatever shape it was written: its questions are the bullets under its questions heading, `Open questions` or `Öppna frågor`, and it is to write only while it is a draft.
 
 ## The backlog style
 

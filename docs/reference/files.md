@@ -42,7 +42,6 @@ The folder is `0700` and its files `0600`. Each file is replaced whole on write.
 | `started/` | Per task half, the vault note it was started from or opened. |
 | `recipes/` | Per task, `<task>@<repo>.json`: its [recipe](commands.md#kebbie-recipe-task-recipe-why), its why and who chose it. |
 | `notes/` | Per task without a vault note, `<task>@<repo>.md`: its note, a Decisions section with one dated line per decision, such as its recipe and the assessor's word on its review. When the task ends its note moves to `notes/ended/<task>@<repo>.<time>.md`, so a later task by the same name starts its own. |
-| `vault-gate/` | Per task, the mark that its note's Problem is written, so its edits go through. |
 | `halves/` | Per task, every worktree it has across repos, so each half's file tools take the others' worktrees as the task's own. |
 | `landed/` | Per task: why the keeper leaves a landed task open, at which head and since when, and the mark of a task pushed to keep open. |
 | `parked/` | Per task, `<task>@<repo>`: when the parked task comes back, kept until it does or the task ends. |
@@ -206,40 +205,31 @@ When the machine was connected from its link, `identity.json` also holds the acc
 
 ## The local backlog
 
-`backlog/` next to the machine config, one markdown file per item: TOML between `+++` lines, then the item's sections.
+`backlog/` next to the machine config, one markdown file per item: TOML between `+++` lines, then the item in its [backlog style](vault-contract.md#the-backlog-style).
 
 ```markdown
 +++
-title = "Fix login"
+title = "Keep the session on reload"
 priority = "high"
 repo = "app"
 status = "backlog"
 filed = "2026-11-12"
 +++
 
-## Background
-
-Reloading a page signs you out.
-
-## Goal
-
 You stay signed in across reloads.
 
-## What we know
+## Plan
 
-The session cookie is set in src/session.rs.
+- **Keep the session** in the keychain, so a reload finds it.
+- **Read it back** before the first request.
 
 ## Open questions
 
 - [ ] Should sessions from before the fix keep working?
 
-## Out of scope
+## Left out
 
 Single sign-on.
-
-## Source
-
-The user, 2026-11-12: "Fix login — the session drops on reload (app)"
 ```
 
 | Field | Rule |
@@ -254,8 +244,8 @@ The item's reference is `local:` and its file name without `.md`, such as `local
 
 `kebbie backlog` marks an item that is not ready:
 
-- `to write`: its status is `draft`, or a section is missing. A file you write without the `+++` header counts as one, titled by its first line.
-- `drafting`: its status is `drafting`, or an open question starts with `- [ ] `, which blocks the start until you answer it. A plain `- ` question is settled during the work.
+- `to write`: its status is `draft`, its body is kebbie's draft text, or it holds no more than one line of text. A file you write without the `+++` header counts as one, titled by its first line.
+- `drafting`: its status is `drafting`, or a question under `Open questions` starts with `- [ ] `, which blocks the start until you answer it. A plain `- ` question is settled during the work. An item in an older shape, with Background, Goal and Source, reads the same way.
 
 A `backlog.md` from an earlier version moves into the folder the first time kebbie reads it: each item line becomes an item to write, and the file stays beside it as `backlog.md.bak`.
 

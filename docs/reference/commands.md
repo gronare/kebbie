@@ -358,7 +358,7 @@ Mark the comment's reply as posted, which takes it off the board. Yours alone. S
 
 ### `kebbie done [name]`
 
-Close a task once every change on its branch is on the default branch, pushed as is, cherry-picked or squashed, and it has no uncommitted changes or stash. It closes its Space, deletes the branch, frees the worktree, and fast-forwards a clean main checkout. Otherwise it names the missing commits.
+Close a task once every change on its branch is on the default branch, pushed as is, cherry-picked or squashed, and it has no uncommitted changes or stash. It closes its Space, deletes the branch, frees the worktree, fast-forwards a clean main checkout and, with the vault, closes the task's note whatever it holds. Otherwise it names the missing commits.
 
 You rarely need it. Every minute the keeper closes a task whose commits reached the default branch some other way than kebbie's push of that task: pushed with git, cherry-picked or rebased with conflict resolutions, squashed, or carried by another task's push.
 
@@ -572,7 +572,7 @@ The **push order** is the branch's commits not yet on origin's default branch, o
 | `kebbie messages` | The sessions' messages, live. `--print` prints the last 30. |
 | `kebbie backlog` | The backlog the board shows. |
 | `kebbie backlog --search "<words>"` | The backlog items and Found by tasks holding every word, from the backlog as kebbie last read it. It changes nothing, and a task runs it before it files what it noticed. |
-| `kebbie backlog add [--priority <p>] [--repo <repo>] "<line>" [-]` | Add a backlog item where new items go. A line alone is a short item the lead writes out in full; with `-`, the written-out item's sections come on stdin. See [Fill the backlog](../how-to/fill-the-backlog.md#add-an-item). |
+| `kebbie backlog add [--priority <p>] [--repo <repo>] "<line>" [-]` | Add a backlog item where new items go. A line alone is a short item the lead writes out in full; with `-`, the written-out item comes on stdin, in any shape. See [Fill the backlog](../how-to/fill-the-backlog.md#add-an-item). |
 | `kebbie backlog template [--local\|--vault] [--json]` | The sections a backlog item is written in where new items go, the required ones marked: the vault's task template, the file [`board.backlog.template`](configuration.md#backlog-sources) names, or kebbie's own. `--local` or `--vault` shows the other place's. After them, how the item reads: the vault's [backlog style](vault-contract.md#the-backlog-style), your override in place of the default, or kebbie's bundled default when the vault gives none. `--json` adds it as `style`, with `from` and `text`. |
 | `kebbie backlog write <ref>` | Send the lead an item marked to write, to write out in place; it shows you the written item, and the item shows `writing…` until its text is complete. `<ref>` is the reference `kebbie backlog` lists: a vault path (with or without `vault:`), `local:<name>`, or `kept:<id>`. An item written out is refused, and so is one being written, until its request is 24 hours old. The same as **Write it out** in the item's options on the [Backlog page](board.md#on-the-backlog-page). |
 

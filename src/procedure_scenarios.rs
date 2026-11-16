@@ -94,7 +94,7 @@ fn something_on_the_tasks_own_path_is_an_obstacle_and_not_an_also_noticed_line()
 fn a_finding_seen_in_another_task_is_added_to_its_item_and_the_lead_raises_it_once_as_its_own_problem() {
     let role = task_role();
     says(section(&role, "## What you notice outside your task"), &["search the backlog for it first", "add this task to its Source"], "the same failing suite was filed four ways");
-    says(&file("skills/write-backlog-item/SKILL.md"), &["Search first", "add your source to its Source"], "the backlog skill searches before it files");
+    says(&file("skills/write-backlog-item/SKILL.md"), &["Search first", "one item per problem"], "the backlog skill searches before it files");
     says(&lead_role(), &["seen in a second task", "its own problem", "once", "found twice"], "the lead heard about it once and two tasks skipped it");
     says(section(&role, "## What you notice outside your task"), &["Found by tasks", "/bin/kebbie found", "(found:<id>)", "counts as found again"], "a repeat counts on its item instead of filing a second one");
     says(&playbook("CARD.md"), &["(found:<id>)", "kebbie found"], "the card's Also noticed lines link to their item");

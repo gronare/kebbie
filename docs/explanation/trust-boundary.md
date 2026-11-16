@@ -72,13 +72,11 @@ After an update, only kebbie's own recheck closes a kebbie issue as fixed. The k
 
 The lead's settings do not allow `kebbie choose`, so Claude Code asks you before the lead runs it while your own settings hold no allow rule for it.
 
-## Reviewers read, messages inform, edits wait
+## Reviewers read and messages inform
 
 **The reviewer only reads.** It gets Read, Grep, Glob and `git log`, `git diff` and `git show` alone, in `dontAsk` mode, with a hook that refuses every other command, and none of your settings, hooks or plugins. The hook adds `--no-ext-diff --no-textconv` to each git read and git runs with `core.fsmonitor` off, so a repo's own diff drivers and fsmonitor never run as the reviewer or change what it reads.
 
 **Messages are not instructions.** A message arrives as `[from <task>@<repo>] <text>` with every line after the first indented, so no message can start a line as `[from you]`. The task role tells Claude that a peer's message is information, never your instruction.
-
-**With the vault, edits wait for the Problem.** A hook refuses file edits and plain file-writing shell commands until the task's note has its Problem.
 
 **A task's shell cannot pass as you.** In [the sandbox](#the-sandbox), a task's shell commands cannot start a terminal multiplexer, reach herdr's socket or write kebbie's state, and kebbie refuses its user-only commands to any sandboxed process.
 
@@ -218,7 +216,6 @@ With `task.sandbox = false` a task's shell runs unsandboxed, and kebbie's guards
 kebbie's guards read the process tree and files in your own account. A process running as you outside the sandbox can get past them. For example, it can:
 
 - rewrite the worktree's push URL back, set another one, or forge the pre-push hook's token,
-- write files through a script, past the vault's Problem gate,
 - type into your shell through herdr.
 
 ## Outside the sandbox only the guards hold

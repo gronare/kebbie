@@ -53,18 +53,14 @@ The vault also makes Claude state the problem before it starts changing code. A 
 | --- | --- |
 | Start | Every task opens a note under `Projects/`, or claims the vault backlog note it was started from. A task across several repos shares one note. The task's role names the note. |
 | Push | After each push, kebbie writes the repo's log line itself: the commit subjects with their shas. |
-| Done | Waits until the note has its solution and decisions. kebbie tells the task what is missing, and once they are written it closes the note. |
+| Done | Closes the note. |
 | Reset and drop | Put the note back in the backlog. |
 | Plans | `kebbie ask --plan vault:<note>` asks you to approve a plan written in the task's note. |
 | The board | The Backlog page lists ONGOING, the project notes in progress, where [`board.backlog.ongoing`](../reference/configuration.md#keys) puts them. The Areas page lists the vault's system notes with their repos. |
 
-## Edits wait for the Problem
+## The note is the task's memory
 
-Until the note's Problem section is written, the task's Claude cannot edit files, nor run a shell command that plainly writes one in its worktree: a `>` redirect, `tee`, `sed -i`, `cp` or `mv` into it, `git apply`, `patch`.
-
-Claude writes the Problem in its own words from your prompt; your prompt never goes into the vault as you typed it.
-
-With a vault that has note templates (the `templates` capability), the note is the task template's sections, and edits wait for its required ones instead of Problem: Background, Goal and Source in the default template. Done then waits for the same sections.
+The note is the task's own memory: research, paths and decisions with their reasons, in whatever shape serves it. A short purpose line at its top, what you can do once the task is done, helps whoever reads it next. Nothing waits for the note: edits go through from the start, and done closes it whatever it holds.
 
 ## Two machines, one vault
 
@@ -103,11 +99,7 @@ The vault plugin's Stop hook asks a session to write the repo log before it ends
 
 ## A vault outage never blocks work
 
-A vault call that fails never stops a start, a push or a done; the output says what was not written. A vault that does not answer lets an edit through with a warning, so an outage never locks a task out.
-
-## The Problem gate is a guard rail, not a lock
-
-The Problem gate catches the common ways Claude writes files. A script that writes files gets past it. That is deliberate: the gate exists to make writing the problem down the easy path, not to contain a hostile process. See [The trust boundary](trust-boundary.md).
+A vault call that fails never stops a start, a push or a done; the output says what was not written.
 
 ## The board reads without credentials
 

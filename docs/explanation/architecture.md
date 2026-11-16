@@ -26,7 +26,7 @@ The Claude Code plugin carries kebbie's skills (worktree setup, commit rules, th
 
 ## The vault and the hub are optional
 
-**The vault.** A vault command, such as [mindin](https://mindin.dev), keeps notes in a vault. With it in `vault.command`, kebbie runs it for every task, whatever agent runs the task: each task gets a note, edits wait until the problem is written down, and pushes are logged. Without it, kebbie keeps its own state and loses nothing it needs to run. See [The vault](vault.md).
+**The vault.** A vault command, such as [mindin](https://mindin.dev), keeps notes in a vault. With it in `vault.command`, kebbie runs it for every task, whatever agent runs the task: each task gets a note as its memory, and pushes are logged. Without it, kebbie keeps its own state and loses nothing it needs to run. See [The vault](vault.md).
 
 **The hub.** A [kebbie hub](https://github.com/gronare/kebbie-hub) relays each machine's board, sealed to the account that connected it, to any phone or browser signed in with that account's passkey. It also takes kebbie's error signals and bug reports for its maintainers. The phone only reads: the hub cannot start anything on the machine. Notifications through the hub are not available in this version. See [See your board on your phone](../how-to/see-your-board-on-your-phone.md) and [What goes to the hub](trust-boundary.md#what-goes-to-the-hub).
 

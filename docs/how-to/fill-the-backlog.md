@@ -39,20 +39,19 @@ When the lead is not running, the item waits as you typed it, and the lead write
 
 ## What a written-out item holds
 
-Every item, whoever files it, has the sections of its place's template: the vault's task template for vault notes, the file [`board.backlog.template`](../reference/configuration.md#backlog-sources) names for local items, else kebbie's own. `kebbie backlog template` prints the one where new items go. kebbie's own, which the vault's default matches:
+A written-out item follows kebbie's [backlog style](#change-how-an-item-reads), which `kebbie backlog template` prints:
 
-| Section | Holds |
+| Part | Holds |
 | --- | --- |
-| Background | What happens today and why it is a problem. |
-| Goal | What you can do when it is done. |
-| What we know | The files, commits, earlier decisions and links that bear on it. |
-| Open questions | What you must decide before work starts. |
-| Out of scope | What the item leaves alone. |
-| Source | Who said it and when, with your own words. |
+| Title | What changes, in at most 12 words. |
+| Purpose | One line on what you can do once it is done. |
+| Plan | 3 to 5 bullets, each with a short bold lead. |
+| Open questions | What you must decide before work starts (`- [ ] `), and what the work settles (`- `). |
+| Left out | One line on what the item leaves alone. |
 
-Background, Goal and Source are required. An item that lacks a heading or leaves a required section empty is to write. What the lead could not find out goes under Open questions. While one of them blocks the start, the item is drafting, and its row says how many questions wait on you.
+The research behind it stays in the lead's own vault notes, linked from the item. kebbie itself reads only the title, priority, repo and status, and the questions under `Open questions`. While a `- [ ] ` question waits on you, the item is drafting, and its row says how many questions wait on you.
 
-A vault note short of a section of the vault's task template, or with a required one empty, shows as to write too, a note written before the vault had its template among them. The lead leaves such a note as it is until you start it, when its task writes the sections before it changes code, or until you ask for it to be written out. Format: [The local backlog](../reference/files.md#the-local-backlog).
+An item is to write while it is a draft: a line you added, a note the vault filed as a draft, or no more than one line of text. An item written in an older shape, such as Background, Goal and Source, keeps that shape and reads as before. Format: [The local backlog](../reference/files.md#the-local-backlog).
 
 ## Change how an item reads
 

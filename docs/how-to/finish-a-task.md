@@ -28,4 +28,4 @@ If a run fails, the task moves to Needs you with the workflow and job that faile
 
 ## When done refuses
 
-`done` refuses while a change on the branch is not on the default branch, and names the missing commits. With the vault, it also waits for the task's note to have its solution and decisions.
+`done` refuses while a change on the branch is not on the default branch, and names the missing commits. With the vault, it closes the task's note whatever the note holds.

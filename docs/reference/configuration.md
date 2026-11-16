@@ -36,13 +36,13 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 | --- | --- | --- | --- |
 | `board.backlog.sources` | `["local"]` | config.toml only | Where the backlog finds work and new items are written: `"local"` or `"vault"`, and `"linear"` beside either. See [Backlog sources](#backlog-sources). |
 | `board.backlog.ongoing` | `"top"` | config.toml only | Where the Backlog page shows ONGOING, the vault notes in progress: `"top"`, `"bottom"` or `"hidden"`. |
-| `board.backlog.template` | none | config.toml only | A file with the sections of local backlog items. See [Backlog sources](#backlog-sources). |
+| `board.backlog.template` | none | config.toml only | A file with the sections kebbie drafts local backlog items in. See [Backlog sources](#backlog-sources). |
 | `board.groups` | the order below | config.toml only | The order of the Work column's groups. |
 | `[keys]` | the board's own | config.toml only | The board's keys by action, a table of strings, as `inbox = "I"`. See [Board](board.md#keys-in-configtoml). |
 
 - `board.backlog.sources`: new items are written to `"local"` or `"vault"`, so a list holds one of them; Linear is only read. A config that lists both reads as the vault alone, and `kebbie doctor` says so. `[]` turns the backlog off.
 - `board.backlog.ongoing`: above the backlog items, below them, or not at all. Hidden, a note another machine claims still asks before it starts here.
-- `board.backlog.template`: a JSON or TOML file, read from the folder of config.toml when the path is relative. Unset, local items have kebbie's own sections: Background, Goal and Source required, What we know, Open questions and Out of scope beside them. Vault items follow the vault's task template, and kebbie's own when the vault has none. `kebbie backlog template --local` shows the one in use.
+- `board.backlog.template`: a JSON or TOML file, read from the folder of config.toml when the path is relative. Unset, kebbie drafts a short local item in its own sections: Background, Goal, What we know, Open questions, Out of scope and Source. A short vault item is drafted in the vault's task template, and kebbie's own when the vault has none. The template also names the heading an item's questions sit under; a written item keeps whatever shape its [style](vault-contract.md#the-backlog-style) gave it. `kebbie backlog template --local` shows the one in use.
 
   ```toml
   # ~/.config/kebbie/item.toml

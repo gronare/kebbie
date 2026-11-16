@@ -12,7 +12,7 @@ The skills the Claude Code plugin `kebbie@kebbie` ships, and the hooks kebbie gi
 | `kebbie:playbook` | The lead, when it plans or starts a task; a task's Claude, when it meets an obstacle, revises its plan or writes its card | The recipes for how a task gets done: when each applies, its phases and where you are needed. The lead names one with `kebbie start --recipe`. Its pages hold what happens on the way: [obstacles](../explanation/obstacles-and-findings.md), plan revisions and the sign-off card. |
 | `kebbie:investigate` | kebbie's investigator, which the keeper starts on an obstacle or a review finding about scope or intent | Decides what happens to it in line with the task's goal: a workaround, a preparatory subtask, a task of its own first, or a question to you. |
 | `kebbie:using-kebbie` | Claude, the lead and tasks, when you ask about kebbie itself | Answers a question about kebbie from kebbie's own docs first, and cites the page the answer came from. |
-| `kebbie:write-backlog-item` | The lead, and a task's Claude filing what it noticed | Searches for the item first and adds to it when it is filed already; otherwise writes it out in full while it is filed: Background, Goal, What we know, Open questions, Out of scope and Source. See [Fill the backlog](../how-to/fill-the-backlog.md#what-a-written-out-item-holds). |
+| `kebbie:write-backlog-item` | The lead, and a task's Claude filing what it noticed | Searches for the item first and adds to it when it is filed already; otherwise writes it out while it is filed, by the backlog style `kebbie backlog template` prints. See [Fill the backlog](../how-to/fill-the-backlog.md#what-a-written-out-item-holds). |
 | `kebbie:propose-change` | The lead, when kebbie cost something; a task's Claude, to tell the lead | Proposes saving what kebbie cost as a [kebbie issue](commands.md#kebbie-issues), at a calm moment. |
 | `kebbie:review-split` | `/kebbie:review-split [base or what to review]` | Opens the [review split](review-split.md). |
 | `kebbie:history-split` | `/kebbie:history-split` | Opens `tig` in a split next to the pane. |
@@ -59,7 +59,6 @@ Each task's Claude starts with settings kebbie writes:
 | --- | --- | --- |
 | `SessionStart` | `kebbie hook inbox <task>` | Recording the session's inbox socket, which kebbie delivers its messages through. |
 | `UserPromptSubmit`, `Stop` | `kebbie hook` | Delivering held messages and collecting the task's report at the end of a turn. |
-| `PreToolUse` on `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `Bash` | `kebbie hook gate <task>` | With the vault only: holding edits until the task's note has its Problem. |
 | `PreToolUse` on `Edit`, `Write`, `MultiEdit`, `NotebookEdit` | `kebbie hook files <task> …` | With the sandbox on only: keeping Claude's file tools to the task's worktrees and temp folder. |
 | `PostToolUse`, `PostToolUseFailure` on `Bash` | `kebbie hook evidence <task>` | Recording the task's test runs for [`kebbie evidence`](commands.md#kebbie-evidence-name---json). It speaks to Claude only about a test run it could not record. |
 

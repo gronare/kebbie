@@ -85,7 +85,7 @@ A backlog item's row shows its state in the right field:
 
 | Right field | Means |
 | --- | --- |
-| `to write · 0 d` | An item the lead has yet to write out: a short one you added, or a vault note short of a section of the vault's task template or with a required one empty. A row marked `kept by kebbie` is one you added while the vault takes new items: kebbie keeps it until the lead's note replaces it. A vault note shows its state once kebbie has its text, never before. |
+| `to write · 0 d` | An item the lead has yet to write out: a short one you added, a note the vault filed as a draft, or one with no more than one line of text. A row marked `kept by kebbie` is one you added while the vault takes new items: kebbie keeps it until the lead's note replaces it. A vault note shows its state once kebbie has its text, never before. |
 | `drafting · 0 d` | The lead is writing it out. A muted line under the row says so. |
 | `writing… 2 h · 0 d` | You asked for it to be written out 2 hours ago, and the lead has yet to finish it. It shows from the moment you ask until its text is complete, also after a restart. |
 | `2 questions · 3 d` | Questions on the item wait on you before it can start, in yellow. Answer them on its card. |
@@ -477,7 +477,7 @@ The note's card shows its whole title, area, status and summary, and who works o
 - `esc` closes it.
 - A click on the selected note opens it too.
 
-The item's card shows its title, priority, repo, state, the day it was filed and its file or vault note, then its six sections. Under Open questions, a peach `?` marks a question that blocks the start and a muted `·` one the work settles.
+The item's card shows its title, priority, repo, state, the day it was filed and its file or vault note, then its sections. Under Open questions, a peach `?` marks a question that blocks the start and a muted `·` one the work settles.
 
 | Key | Action |
 | --- | --- |
