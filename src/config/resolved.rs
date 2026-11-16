@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::{group_order, load_machine, load_repo, path, repo_file, short_hostname, AgentUpdates, AlsoNoticed, ApproveFrom, AutoApprove, BeforePush, Channel, HubCommands, HubTrust, Machine, OngoingAt, ReportText, ReviewAuto, Second, Source, read_sources, Worktree, DEFAULT_HUB_URL, DEFAULT_IDLE_MINUTES, DEFAULT_KEEPER, DEFAULT_PROPOSE_ISSUES, DEFAULT_RECOVER, NONE};
+use super::{group_order, load_machine, load_repo, path, repo_file, short_hostname, AgentUpdates, AlsoNoticed, ApproveFrom, AutoApprove, BeforePush, Channel, HubCommands, HubTrust, Machine, OngoingAt, ReportText, ReviewAuto, Second, Source, read_sources, Worktree, DEFAULT_BUILD_COMMANDS, DEFAULT_BUILD_SLOTS, DEFAULT_HUB_URL, DEFAULT_IDLE_MINUTES, DEFAULT_KEEPER, DEFAULT_PROPOSE_ISSUES, DEFAULT_RECOVER, NONE};
 use crate::sh::Result;
 use crate::status::Group;
 
@@ -84,6 +84,8 @@ pub struct Settings {
     pub docs_required: Setting<bool>,
     pub keeper: Setting<bool>,
     pub worker: Setting<bool>,
+    pub build_slots: Setting<u32>,
+    pub build_commands: Setting<Vec<String>>,
     pub recover: Setting<bool>,
     pub machine_name: Setting<String>,
     pub hub_url: Setting<String>,
@@ -164,6 +166,8 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         docs_required: or_default(pick(repo.docs_required.as_ref(), None), false),
         keeper: or_default(pick(None, machine.keeper.as_ref()), DEFAULT_KEEPER),
         worker: or_default(pick(None, machine.worker.as_ref()), false),
+        build_slots: or_default(pick(None, machine.builds.slots.as_ref()), DEFAULT_BUILD_SLOTS),
+        build_commands: or_default(pick(None, machine.builds.commands.as_ref()), DEFAULT_BUILD_COMMANDS.map(str::to_string).to_vec()),
         recover: or_default(pick(None, machine.recover.as_ref()), DEFAULT_RECOVER),
         machine_name: pick(None, machine.machine_name.as_ref()).unwrap_or_else(|| Setting { value: short_hostname(), layer: Layer::Default }),
         hub_url: or_default(pick(None, machine.hub_url.as_ref()), DEFAULT_HUB_URL.to_string()),

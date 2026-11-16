@@ -1421,12 +1421,13 @@ mod tests {
             name: "designer".to_string(), model: Some("opus".to_string()), effort: Some("high".to_string()), permission_mode: Some("acceptEdits".to_string()),
             deny: vec!["Bash(rm -rf:*)".to_string()], allow: vec!["Bash(npx playwright:*)".to_string()], plugins: vec!["design@claude-plugins".to_string()], ..task.clone()
         };
-        let mut plain: Value = serde_json::from_str(&crate::inbox::with_inbox(&settings("/bin/kebbie", "billing@app", None, None), "/bin/kebbie", "billing@app")).unwrap();
+        let mut plain: Value = serde_json::from_str(&crate::agent::claude::with_build_guard(&crate::inbox::with_inbox(&settings("/bin/kebbie", "billing@app", None, None), "/bin/kebbie", "billing@app"), "/bin/kebbie")).unwrap();
         let ours: Value = serde_json::from_str(&Agent::Claude.task_settings("/bin/kebbie", "billing@app", None, &task, false)).unwrap();
         assert_eq!(ours["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "'/bin/kebbie' hook push-guard --own-cluster", "an unsandboxed task's kubectl is the user's own");
         plain["hooks"]["PreToolUse"][0]["hooks"][0]["command"] = json!("'/bin/kebbie' hook push-guard --own-cluster");
         assert_eq!(ours, plain, "the built-in task's settings are kebbie's own, nothing else added");
         assert_eq!((&ours["crossSessionInbound"], &ours["hooks"]["SessionStart"][0]["hooks"][0]["command"]), (&json!("accept"), &json!("'/bin/kebbie' hook inbox 'billing@app'")), "a task takes kebbie's messages in its inbox, whatever its permission mode");
+        assert_eq!(ours["hooks"]["SessionStart"][1]["hooks"][0]["command"], "'/bin/kebbie' hook builds", "a task's builds go through the build guard");
         let written: Value = serde_json::from_str(&Agent::Claude.task_settings("/bin/kebbie", "billing@app", None, &designer, false)).unwrap();
         let deny = written["permissions"]["deny"].as_array().unwrap();
         let kebbies = plain["permissions"]["deny"].as_array().unwrap();

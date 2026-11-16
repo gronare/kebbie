@@ -74,6 +74,14 @@ For every command a Codex task runs:
 | `TMPDIR` | The task's temp folder, `/tmp/kebbie-<uid>/<worktree>-<hash>`, short enough for the Unix sockets tools such as headless Chrome make in it |
 | `KUBECONFIG` | The profile's [`sandbox.kubeconfig`](configuration.md#profiles), when it names one. A Claude task gets it in its settings' `env` too. |
 
+For a Claude task's build, run through the [build guard](configuration.md#builds):
+
+| Variable | Value |
+| --- | --- |
+| `PATH` | The guard's folder first, `build-guard` in the state directory, with one script for each program in `builds.commands` |
+| `KEBBIE_BUILD_SLOT` | The task's address, while its build holds a slot, so a build a build runs takes no second one |
+| `RUSTC_WRAPPER` | The `sccache` on PATH, for cargo, when neither `RUSTC_WRAPPER` nor a cargo config sets a wrapper |
+
 For `worktree.dev_server` and `worktree.dev_worker`:
 
 | Variable | Value |

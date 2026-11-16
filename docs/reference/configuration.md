@@ -269,6 +269,8 @@ commands = ["answer", "prompt", "idea"]
 | `keeper.enabled` | `true` | config.toml only | Whether the keeper, one background kebbie per machine, runs the routines. |
 | `worker.enabled` | `false` | config.toml only | Whether this machine runs [jobs](#jobs) for the other machines of its hub account. |
 | `recover.enabled` | `true` | config.toml only | Whether kebbie resumes a task whose Claude an API error stopped, and puts a Codex task an API error stopped under Needs you. |
+| `builds.slots` | `1` | config.toml only | How many task builds run at once on this machine, a whole number from 1 to 64. See [Builds](#builds). |
+| `builds.commands` | `["cargo"]` | config.toml only | The commands that take a build slot: a program, and the words its arguments start with, such as `"npm run build"`. |
 
 `ci.watch` needs origin on GitHub and `gh` logged in. `false` closes the task right after the push, as for a repo without useful CI. See [Watch CI after a push](../explanation/trunk-based.md#ci-after-the-push).
 
@@ -292,11 +294,32 @@ full_command = "cargo test --locked"
 `keeper.enabled`: the keeper's routines then go on with the board closed. `false` runs them in an open board instead, and the board then posts the hub's board once a minute. See [The keeper](../explanation/updates-and-restarts.md#the-keeper). The routines are:
 
 - held messages and delivery checks of typed prompts, stale-session restarts and the update check;
+- handing a freed build slot to the next task in line;
 - once an hour, linking kebbie in herdr again when herdr links it from a folder that is gone;
 - the push lines and local-main staging, CI watches, comments on pushed commits, closing landed tasks and rebasing the tasks that follow main;
 - relaying a task's Claude's own prompts to the lead, resuming tasks an API error stopped, and the rules check on a ready report;
 - rechecking kebbie issues after an update, the scheduled `[[routines]]`, and starting the queued tasks whose wait is over;
 - posting the board to a [kebbie hub](../how-to/see-your-board-on-your-phone.md), sending error signals and bug reports to kebbie's maintainers, and with `report.inbox_token` fetching the reports inbox.
+
+#### Builds
+
+Each Claude task runs its builds through a guard kebbie puts first on the PATH of its commands. A build takes one of the machine's `builds.slots`:
+
+- A task that finds every slot taken is told its place in line, and its command exits with status 75. The board shows `waiting for a build slot, 2nd` on its row.
+- When a slot frees, the keeper tells the next task in line that its turn has come and holds the slot 3 minutes for it. A task that does not build in that time loses its turn to the next, and is told so.
+- `kebbie update` goes first in line and waits there.
+- A command a build runs, such as `cargo` from a build script, runs in its build's slot. The next command of the same script finds the slot it just left for 10 seconds.
+- The guard runs cargo with `sccache` as `RUSTC_WRAPPER` when `sccache` is on PATH and neither `RUSTC_WRAPPER` nor a cargo config sets a wrapper, so the machine compiles each dependency once; each worktree builds its own crate in its own `target/`.
+- Without a keeper running, a build goes ahead without waiting.
+
+`"cargo"` in `builds.commands` counts only cargo's compiling commands: `build`, `check`, `test`, `run`, `clippy`, `bench`, `doc`, `install`, `rustc`, `rustdoc`, `fix`, `nextest` and `llvm-cov`. A task started after a change to the list has the new one.
+
+```toml
+# ~/.config/kebbie/config.toml
+[builds]
+slots = 2
+commands = ["cargo", "xcodebuild", "npm run build"]
+```
 
 `recover.enabled`: see [When the API stops a task](../explanation/lead-and-away-mode.md#when-the-api-stops-a-task).
 

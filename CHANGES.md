@@ -16,6 +16,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - n on the board asks only what you want done and in which repo, then starts it as a task named from your first words or adds it to the backlog.
 - kebbie job run builds or tests a task's worktree on another machine of your hub account, as an Xcode build on a Mac, once worker.enabled is on there.
 - A task ready to push keeps its card in your vault, in the Kebbie folder, linked up to its task note and archived with it when the task ends.
+- Tasks on one machine take turns to build: a build waits for a free one of builds.slots, the board shows "waiting for a build slot, 2nd" on a waiting task, kebbie tells it when its turn comes, and cargo runs with sccache so each dependency compiles once per machine.
 
 ### Fixed
 - After kebbie update the open board and the keeper move to the new kebbie by themselves, also when herdr installed it in a new folder.

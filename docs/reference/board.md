@@ -117,6 +117,7 @@ A task row shows its commits, uncommitted and untracked files, and how far it is
 | `bypass` | Its Claude runs in bypass permissions mode. The open task says `bypass permissions: Claude asks for no permission`. |
 | `you:` | Your next step, from the task's last report. |
 | `obstacle · investigating` | The task raised an [obstacle](../explanation/obstacles-and-findings.md) and kebbie's investigator is on it; the task shows under Working. `obstacle · asked you` while its question waits, `obstacle · with the lead` when the lead decides it. |
+| `waiting for a build slot, 2nd` | Its build waits in the machine's [build queue](configuration.md#builds): it is second in line, and kebbie tells its Claude when its turn comes. |
 | `web` | While its dev server runs: the server's address as a link. |
 | `push waits for tests · you` | A push waits for the task's Claude to test the files the default branch changed under it. `· lead` when the lead pushed. kebbie pushes once the task reports ready with the same commits. |
 | `recipe: small fix`, muted | Under the row: how the task is done, by the [recipe](commands.md#kebbie-recipe-task-recipe-why) the lead named; the open task adds its why. The assessor's word follows it on the same line. |

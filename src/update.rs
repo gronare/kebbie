@@ -425,6 +425,7 @@ fn herdr_plugin(plugin: &Value, state: &Path, channel: Channel, request: &Reques
     let building = if release_build { "Downloading kebbie" } else { "Building kebbie" };
     let local = plugin["source"]["kind"] == "local";
     let plan = release::install(&root, state, channel, request, !local, &release::Binaries::of(&root));
+    let _slot = if release_build || plan.is_err() { None } else { crate::builds::wait_for_update() };
     match plan {
         Err(error) => {
             tracker.fail_current();
@@ -491,6 +492,7 @@ pub fn rebuild_staged(repo: &Path, announce: bool) -> Option<String> {
     if announce {
         eprintln!("building kebbie from local main…");
     }
+    let _slot = crate::builds::wait_for_update();
     Some(build(&root, Channel::Main, None).unwrap_or_else(|error| format!("the build failed: {error}")))
 }
 

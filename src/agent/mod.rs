@@ -123,7 +123,7 @@ impl Agent {
 
     pub fn task_settings(self, kebbie: &str, address: &str, dirs: Option<&crate::sandbox::TaskDirs>, profile: &Profile, sandbox: bool) -> String {
         match self {
-            Agent::Claude => claude::with_profile(&crate::inbox::with_inbox(&claude::settings(kebbie, address, dirs, sandbox.then_some(&profile.sandbox)), kebbie, address), profile),
+            Agent::Claude => claude::with_profile(&claude::with_build_guard(&crate::inbox::with_inbox(&claude::settings(kebbie, address, dirs, sandbox.then_some(&profile.sandbox)), kebbie, address), kebbie), profile),
             Agent::Codex => serde_json::json!({ "agent": "codex" }).to_string(),
         }
     }
