@@ -197,6 +197,7 @@ pub struct Item {
     pub recipe: Option<crate::recipe::Recipe>,
     pub obstacle: Option<crate::obstacle::Shown>,
     pub built: Built,
+    pub build_wait: Option<usize>,
 }
 
 // The files a task's commits change and when its first commit was made, which orders two pushes of the same files.
@@ -240,7 +241,7 @@ impl Item {
             name: wait.task.clone(), title, place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
             report: None, question: None, ci: None, recover: None, routine: None, push_waits: None,
             queued: Some(Queued { after, blocked: wait.blocked.clone(), waiting, names, base, at, backlog: wait.backlog.is_some() }),
-            held_by_draft: None, unsent_start: false, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), unrecorded: None, push_left: None, staged: false, subtasks: tasks::Subtasks::default(), to_accept: None, parked: None, assessment: None, recipe: None, obstacle: None, built: Built::default(),
+            held_by_draft: None, unsent_start: false, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), unrecorded: None, push_left: None, staged: false, subtasks: tasks::Subtasks::default(), to_accept: None, parked: None, assessment: None, recipe: None, obstacle: None, built: Built::default(), build_wait: None,
         }
     }
 
@@ -694,7 +695,7 @@ impl Item {
             let dirty = if git.uncommitted > 0 { format!(" · {}", plural(git.uncommitted, "uncommitted file")) } else { String::new() };
             return format!("{} · ready to push{dirty}{behind}{review}{turn}", plural(git.ahead, "commit"));
         }
-        let mut parts: Vec<String> = self.git_error().map(|_| GIT_UNREAD.to_string()).into_iter().chain(self.obstacle.as_ref().map(crate::obstacle::Shown::note)).chain(crate::tasks::rollout::note(&self.subtasks.stages)).chain(self.staged.then(|| STAGED.to_string())).chain(self.phase_note()).chain(self.ci_note()).chain(self.recover_note()).chain(self.push_note()).chain(self.landed.filter(|why| !why.waits_for_you()).and(self.landed_note())).collect();
+        let mut parts: Vec<String> = self.git_error().map(|_| GIT_UNREAD.to_string()).into_iter().chain(self.build_wait.map(crate::builds::board_note)).chain(self.obstacle.as_ref().map(crate::obstacle::Shown::note)).chain(crate::tasks::rollout::note(&self.subtasks.stages)).chain(self.staged.then(|| STAGED.to_string())).chain(self.phase_note()).chain(self.ci_note()).chain(self.recover_note()).chain(self.push_note()).chain(self.landed.filter(|why| !why.waits_for_you()).and(self.landed_note())).collect();
         if git.ahead > 0 {
             parts.push(plural(git.ahead, "commit"));
         }
@@ -1169,6 +1170,7 @@ fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>,
                 recipe: state.as_deref().and_then(|state| crate::recipe::load(state, &address)),
                 obstacle: state.as_deref().and_then(|state| crate::obstacle::shown_in(state, &address)),
                 built: match shas.as_ref().filter(|_| ahead > 0) { Some(shas) => built(&slot.path, shas), None => Built::default() },
+                build_wait: state.as_deref().and_then(|_| crate::builds::place(&address)),
                 phase: None,
                 title: state.as_deref().and_then(|state| title_of(state, &address, agent_title.as_deref(), &name_of(repo), &task, &name_of(&slot.path))),
                 name: task,
@@ -1245,6 +1247,7 @@ fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>,
             recipe: None,
             obstacle: None,
             built: Built::default(),
+            build_wait: None,
         });
     }
     // A task's halves in different repos sit together within a group, after what needs you most.
@@ -1320,6 +1323,7 @@ pub(crate) mod tests {
             recipe: None,
             obstacle: None,
             built: Built::default(),
+            build_wait: None,
         };
         rederive(&mut item);
         item

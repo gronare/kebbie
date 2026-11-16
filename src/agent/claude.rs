@@ -294,6 +294,17 @@ pub(crate) fn settings(kebbie: &str, address: &str, gate: Option<&str>, dirs: Op
     written.to_string()
 }
 
+// Appended after the inbox hook, which stays first in SessionStart.
+pub(crate) fn with_build_guard(settings: &str, kebbie: &str) -> String {
+    let mut written: Value = serde_json::from_str(settings).expect("kebbie writes its own task settings as JSON");
+    let entry = json!({ "hooks": [{ "type": "command", "command": format!("{} hook builds", crate::sh::quote(kebbie)) }] });
+    match written["hooks"]["SessionStart"].as_array_mut() {
+        Some(entries) => entries.push(entry),
+        None => written["hooks"]["SessionStart"] = json!([entry]),
+    }
+    written.to_string()
+}
+
 pub(crate) const TMP_VARS: [&str; 4] = ["TMPDIR", "TMP", "TEMP", "CLAUDE_CODE_TMPDIR"];
 
 // A profile's rules go after kebbie's own, so kebbie's deny rules, hooks and env stay whatever the profile says; a profile that runs ssh keeps the user's ssh agent, and one with a kubeconfig points kubectl and helm at it while Claude's file tools stay out of it.

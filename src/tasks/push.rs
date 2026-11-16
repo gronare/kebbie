@@ -508,7 +508,7 @@ pub(crate) fn place_in_line(ahead: usize, after: Option<&str>) -> String {
     }
 }
 
-fn ordinal(number: usize) -> String {
+pub(crate) fn ordinal(number: usize) -> String {
     let suffix = match (number % 10, number % 100) {
         (_, 11..=13) => "th",
         (1, _) => "st",

@@ -35,6 +35,11 @@ pub fn lead_profile() -> Result<Option<String>> {
     Ok(load_machine(&path())?.lead_profile.filter(|name| name != super::NONE))
 }
 
+pub fn build_settings() -> Result<(u32, Vec<String>)> {
+    let builds = load_machine(&path())?.builds;
+    Ok((builds.slots.unwrap_or(super::DEFAULT_BUILD_SLOTS), builds.commands.unwrap_or_else(|| super::DEFAULT_BUILD_COMMANDS.map(str::to_string).to_vec())))
+}
+
 pub fn keeper_enabled() -> Result<bool> {
     Ok(load_machine(&path())?.keeper.unwrap_or(DEFAULT_KEEPER))
 }

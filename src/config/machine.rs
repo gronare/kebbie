@@ -25,8 +25,18 @@ pub struct Machine {
     pub report: Report,
     pub propose_issues: Option<bool>,
     pub lead_profile: Option<String>,
+    pub builds: Builds,
     pub worktree: Worktree,
 }
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Builds {
+    pub slots: Option<u32>,
+    pub commands: Option<Vec<String>>,
+}
+
+pub const DEFAULT_BUILD_SLOTS: u32 = 1;
+pub const DEFAULT_BUILD_COMMANDS: [&str; 1] = ["cargo"];
 
 pub const DEFAULT_HUB_URL: &str = "https://hub.kebbie.dev";
 pub(super) const DEFAULT_KEEPER: bool = true;
@@ -163,6 +173,22 @@ fn restart(table: &Table) -> Result<Restart> {
     Ok(Restart { idle_minutes, auto })
 }
 
+fn builds(table: &Table) -> Result<Builds> {
+    let Some(builds) = subtable(table, "builds", "builds")? else { return Ok(Builds::default()) };
+    let slots = match builds.get("slots") {
+        None => None,
+        Some(value) => Some(value.as_integer().filter(|slots| (1..=64).contains(slots)).ok_or("builds.slots: must be a whole number of builds at once, 1 to 64")? as u32),
+    };
+    let commands = builds.get("commands").map(|value| strings(value, "builds.commands")).transpose()?;
+    for command in commands.iter().flatten() {
+        let program = command.split_whitespace().next().unwrap_or_default();
+        if program.is_empty() || !program.chars().all(|character| character.is_ascii_alphanumeric() || "._-".contains(character)) {
+            return Err(format!("builds.commands: \"{command}\" must start with a program's name, such as \"cargo\", \"xcodebuild\" or \"npm run build\""));
+        }
+    }
+    Ok(Builds { slots, commands })
+}
+
 fn propose_issues(table: &Table) -> Result<Option<bool>> {
     let Some(section) = subtable(table, "issues", "issues")? else { return Ok(None) };
     flag(section, "propose", "issues.propose")
@@ -276,5 +302,5 @@ pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     }
     crate::routines::parse_list(&table, None, source).map_err(fail)?;
     let Board { sources, groups, ongoing, template } = board(&table).map_err(fail)?;
-    Ok(Machine { keys: keys(&table).map_err(fail)?, sources, groups, ongoing, template, channel: update(&table).map_err(fail)?, agent_updates: agent_updates(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, keeper: enabled_in(&table, "keeper").map_err(fail)?, recover: enabled_in(&table, "recover").map_err(fail)?, machine_name: machine_name(&table).map_err(fail)?, hub_url: hub_url(&table).map_err(fail)?, hub_commands: hub_commands(&table).map_err(fail)?, hub_trust: hub_choice(&table, "trust", &HubTrust::ALL.map(|trust| (trust.key(), trust))).map_err(fail)?, hub_auto_approve: hub_choice(&table, "auto_approve", &AutoApprove::ALL.map(|auto| (auto.key(), auto))).map_err(fail)?, hub_approve_from: hub_choice(&table, "approve_from", &ApproveFrom::ALL.map(|from| (from.key(), from))).map_err(fail)?, report: report(&table).map_err(fail)?, propose_issues: propose_issues(&table).map_err(fail)?, lead_profile: lead_profile(&table).map_err(fail)?, worktree })
+    Ok(Machine { keys: keys(&table).map_err(fail)?, sources, groups, ongoing, template, channel: update(&table).map_err(fail)?, agent_updates: agent_updates(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, keeper: enabled_in(&table, "keeper").map_err(fail)?, recover: enabled_in(&table, "recover").map_err(fail)?, machine_name: machine_name(&table).map_err(fail)?, hub_url: hub_url(&table).map_err(fail)?, hub_commands: hub_commands(&table).map_err(fail)?, hub_trust: hub_choice(&table, "trust", &HubTrust::ALL.map(|trust| (trust.key(), trust))).map_err(fail)?, hub_auto_approve: hub_choice(&table, "auto_approve", &AutoApprove::ALL.map(|auto| (auto.key(), auto))).map_err(fail)?, hub_approve_from: hub_choice(&table, "approve_from", &ApproveFrom::ALL.map(|from| (from.key(), from))).map_err(fail)?, report: report(&table).map_err(fail)?, propose_issues: propose_issues(&table).map_err(fail)?, lead_profile: lead_profile(&table).map_err(fail)?, builds: builds(&table).map_err(fail)?, worktree })
 }

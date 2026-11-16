@@ -3,6 +3,7 @@ mod agent;
 mod agent_check;
 mod area_page;
 mod areas;
+mod builds;
 mod assessment;
 mod backlog;
 mod backlog_file;
@@ -750,6 +751,9 @@ fn run(arguments: &Arguments) -> Result<String> {
             if name == Some("evidence") {
                 return Ok(arguments.positional(2).map(|address| evidence::hook(address, &input)).unwrap_or_default());
             }
+            if name == Some("builds") {
+                return Ok(builds::hook());
+            }
             if name == Some("inbox") {
                 return Ok(arguments.positional(2).map(|address| inbox::hook(address, &input)).unwrap_or_default());
             }
@@ -980,6 +984,9 @@ fn main() -> ExitCode {
     if argv.len() > 2 && argv[0] == "notify" && argv[1] == hub::notices::DELIVER {
         hub::notices::deliver(&argv[2..]);
         return ExitCode::SUCCESS;
+    }
+    if argv.first().is_some_and(|first| first == "build-guard") {
+        return builds::guard(&argv[1..]);
     }
     let arguments = Arguments::parse();
     if arguments.positional(0) == Some("doctor") {

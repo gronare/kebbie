@@ -6,6 +6,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 
 ### What's new
 
+- Tasks on one machine take turns to build: a build waits for a free one of builds.slots, the board shows "waiting for a build slot, 2nd" on a waiting task, kebbie tells it when its turn comes, and cargo runs with sccache so each dependency compiles once per machine.
 - The board's ↑ ↓ move task to task, and → steps into a task: its subtasks and card light up beside the tasks, which fade so you see where you are, or open in a window on a narrow board.
 
 ### Fixed

@@ -345,6 +345,7 @@ pub(super) fn forget_address(state: &Path, address: &str) {
     super::stage::forget(state, address);
     crate::report::forget_check_in(state, address);
     crate::status::forget_title(state, address);
+    crate::builds::forget(address);
 }
 
 fn forget_held_prompt(address: &str) {
