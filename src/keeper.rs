@@ -506,6 +506,9 @@ pub fn run() -> Result<String> {
     log.line(&format!("started: pid {}, kebbie {}, {}", std::process::id(), env!("CARGO_PKG_VERSION"), exe.display()));
     crate::hub::commands::spawn(&dir);
     crate::vault_watch::spawn(&dir);
+    if let Some(line) = crate::backlog_style::sync_here() {
+        log.line(&line);
+    }
     let routines = routines();
     let mut tracks = vec![Track::default(); routines.len()];
     let mut ctx = Ctx::default();

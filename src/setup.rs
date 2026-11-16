@@ -114,6 +114,7 @@ pub fn install(yes: bool) -> Result<String> {
     let asking = if yes { Asking::Yes } else { Asking::Closed };
     let rows = crate::setup_guide::without_asking(&env, asking);
     let mut lines: Vec<String> = rows.iter().map(|(step, outcome)| outcome.line(step)).collect();
+    lines.extend(crate::backlog_style::sync_here());
     lines.extend(crate::setup_guide::ending(None, &crate::doctor::checks(&crate::doctor::Env::current()), &std::env::var("SHELL").unwrap_or_default()));
     if crate::hub::identity::load(&env.state).ok().flatten().is_none() {
         lines.extend(crate::setup_guide::PHONE.iter().map(|line| line.to_string()));

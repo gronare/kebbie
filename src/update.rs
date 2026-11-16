@@ -187,6 +187,7 @@ pub fn finish(claude_dir: &Path, progress: Option<&Path>) -> Result<Vec<String>>
     }
     match steps {
         Ok(mut lines) => {
+            lines.extend(crate::backlog_style::sync_here());
             lines.push(keeper);
             Ok(lines)
         }

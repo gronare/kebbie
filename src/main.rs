@@ -7,6 +7,7 @@ mod assessment;
 mod backlog;
 mod backlog_file;
 mod backlog_kept;
+mod backlog_style;
 mod card;
 mod changes;
 mod board;

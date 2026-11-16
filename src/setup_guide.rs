@@ -1612,6 +1612,7 @@ fn ask(env: &Env, at: Step) -> Result<(Next, Guide)> {
                         let rows = apply(&planned, env, &mut Screen { terminal: &mut terminal, guide: &mut guide });
                         let codex = guide.codex_on().then(|| login::codex(guide.facts.codex_bin.as_deref(), login::TIMEOUT));
                         guide.ending = ending(codex, &crate::doctor::checks(&crate::doctor::Env::current()), &std::env::var("SHELL").unwrap_or_default());
+                        guide.ending.splice(0..0, crate::backlog_style::sync_here());
                         guide.applied = Some(rows);
                         guide.done = true;
                     }

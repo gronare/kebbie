@@ -41,6 +41,12 @@ pub enum Wrote {
     Stale,
 }
 
+#[derive(Debug, PartialEq)]
+pub enum StyleWrote {
+    Saved,
+    Newer,
+}
+
 // The one line mindin's write answers when the note changed since the etag was read.
 fn stale_etag(etag: &str, key: &str) -> String {
     format!("mindin: the etag {etag} no longer matches {key}; it changed since it was read")
@@ -61,6 +67,7 @@ pub const WATCH: &str = "watch";
 pub const READ: &str = "read";
 pub const TEMPLATES: &str = "templates";
 pub const WRITE: &str = "write";
+pub const STYLES: &str = "styles";
 
 // What the vault command says it is: `about --json` where it answers that, else the bridge read from `status` and its help (vaults up to 0.13).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -302,6 +309,18 @@ impl Cli {
         }
     }
 
+    pub fn write_style(&self, kind: &str, version: u32, text: &str) -> Result<StyleWrote> {
+        if !self.can(STYLES) {
+            return Err("the vault states no styles capability".to_string());
+        }
+        let version = version.to_string();
+        match self.run_with(&self.command, &["style", "write", "--kind", kind, "--file", "-", "--version", &version], Some(text))? {
+            Ok(_) => Ok(StyleWrote::Saved),
+            Err(error) if error.contains("newer than") => Ok(StyleWrote::Newer),
+            Err(error) => Err(format!("vault style write: {error}")),
+        }
+    }
+
     // `snapshot --json [--since ETAG]`; the inner error is the server's refusal, an unknown command on a server without snapshots.
     pub fn snapshot(&self, since: Option<&str>) -> Result<std::result::Result<String, String>> {
         let mut args = vec!["snapshot", "--json"];
@@ -374,6 +393,7 @@ fn needs(args: &[&str]) -> Option<&'static str> {
         ("read", _) => Some(READ),
         ("template", _) => Some(TEMPLATES),
         ("write", _) => Some(WRITE),
+        ("style", _) => Some(STYLES),
         _ => None,
     }
 }
