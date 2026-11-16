@@ -403,7 +403,7 @@ impl App {
     // Write it out, in the item's options: the lead hears it, and the row shows writing… from now, without waiting for the next read of the backlog.
     pub(super) fn write_out(&mut self, entry: &Entry) {
         let now = crate::messages::now();
-        let result = crate::lead::state_dir().and_then(|state| crate::backlog_file::write_out(&state, entry, "The user", &crate::backlog_file::dir(), now, &|text| crate::messages::to_lead(crate::messages::ToLead::BacklogItem, text)));
+        let result = crate::lead::state_dir().and_then(|state| crate::backlog_file::write_out(&state, entry, "The user", &crate::backlog_file::dir(), now, &|text| crate::backlog_writer::hand(&state, text, &crate::permit::Caller::User, &crate::backlog_file::tell_lead)));
         if result.is_ok() && let Some(shown) = self.backlog.entries.iter_mut().find(|shown| shown.source == entry.source && shown.reference == entry.reference) {
             (shown.shape.state, shown.shape.writing) = (Some(State::Drafting), Some(now));
         }

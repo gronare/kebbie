@@ -98,6 +98,8 @@ pub struct Settings {
     pub report_inbox: Setting<bool>,
     pub propose_issues: Setting<bool>,
     pub lead_profile: Setting<Option<String>>,
+    pub writer_profile: Setting<String>,
+    pub ideas_machine: Setting<Option<String>>,
 }
 
 pub struct Loaded {
@@ -180,6 +182,8 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         report_inbox: or_default(pick(None, machine.report.inbox_token.as_ref().map(|_| &true)), false),
         propose_issues: or_default(pick(None, machine.propose_issues.as_ref()), DEFAULT_PROPOSE_ISSUES),
         lead_profile: optional(pick(None, machine.lead_profile.as_ref())).map(|profile| profile.filter(|name| name != NONE)),
+        writer_profile: or_default(pick(None, machine.writer_profile.as_ref()), crate::backlog_writer::WRITER.to_string()),
+        ideas_machine: optional(pick(None, machine.ideas_machine.as_ref())),
     }
 }
 

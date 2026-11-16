@@ -526,7 +526,7 @@ pub fn idea(caller: &Caller, idea: &Idea) -> Done {
         Ok(sources) => {
             let (dir, state) = (backlog_file::dir(), crate::lead::state_dir());
             match state {
-                Ok(state) => idea_on(&Shelf { dir: &dir, state: &state, tell: &tell_lead }, &sources, caller, idea),
+                Ok(state) => idea_on(&Shelf { dir: &dir, state: &state, tell: &tell_lead, write: &|text| crate::backlog_writer::hand(&state, text, caller, &tell_lead) }, &sources, caller, idea),
                 Err(error) => (Outcome::Failed, error),
             }
         }
@@ -600,7 +600,7 @@ pub fn item_write(caller: &Caller, write: &ItemWrite) -> Done {
     let root = crate::vault::root();
     let backlog = crate::backlog::load();
     match backlog.entries.iter().find(|entry| key_of(entry, root.as_deref()).as_ref() == Some(&write.item)) {
-        Some(entry) => write_on(&state, entry, caller, &backlog_file::dir(), crate::messages::now(), &tell_lead),
+        Some(entry) => write_on(&state, entry, caller, &backlog_file::dir(), crate::messages::now(), &|text| crate::backlog_writer::hand(&state, text, caller, &tell_lead)),
         None => refused(Reason::UnknownItem, "That item is no longer in this machine's backlog"),
     }
 }
@@ -751,7 +751,7 @@ mod tests {
         let (dir, state) = (crate::sh::test_dir("idea-dir"), crate::sh::test_dir("idea-state"));
         let told = RefCell::new(Vec::new());
         let tell = |text: &str| { told.borrow_mut().push(text.to_string()); Ok(()) };
-        let shelf = Shelf { dir: &dir, state: &state, tell: &tell };
+        let shelf = Shelf { dir: &dir, state: &state, tell: &tell, write: &tell };
         let idea = Idea { text: "When a run goes red on a flaky test,\nrerun it once by itself.\n\n## Not the push".to_string(), repo: Some("web".to_string()) };
         let (outcome, text) = idea_on(&shelf, &[Source::Local], &hub(), &idea);
         assert_eq!((outcome, text.as_str()), (Outcome::Done, "Added to the backlog. The lead writes it out; it waits for the lead when none runs."));
@@ -776,7 +776,7 @@ mod tests {
         let (rows, _) = rows(&[(kept[0].entry(0), None)], &state, None, 0, &templates());
         assert_eq!(rows[0].goal.as_deref(), Some("When a run goes red on a flaky test, rerun it once by itself. ## Not the push"), "the phone shows them on the row");
         let silent = |_: &str| -> Result<()> { Err("the lead is not running".to_string()) };
-        let unheard = Shelf { dir: &dir, state: &state, tell: &silent };
+        let unheard = Shelf { dir: &dir, state: &state, tell: &silent, write: &silent };
         assert_eq!(idea_on(&unheard, &[Source::Vault], &hub(), &Idea { text: "Another idea".to_string(), repo: None }).0, Outcome::Failed);
         assert_eq!(crate::backlog_kept::kept_in(&state).len(), 1, "a row is kept only once the lead was told, so trying again adds no second one");
     }

@@ -23,7 +23,7 @@ If you want no backlog, set `sources = []`.
 
 ## Add an item
 
-Write what you want in a line. The lead writes it out in full at once, from your conversation, the code and the notes, and shows you the written item.
+Write what you want in a line. kebbie's writer writes it out in full at once from the code, the notes and the web, apart from the lead's chat; the lead reviews the draft, adds what it knows from your conversation, keeps only the open questions you must answer, and shows you the written item. [`writer.profile`](../reference/configuration.md#writer) picks the writer's agent and model; with `"none"` the lead writes it out itself.
 
 On the board, press `2` for the Backlog page and press `n`, then enter the line and a priority. Or from a shell:
 

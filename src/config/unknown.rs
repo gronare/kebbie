@@ -23,9 +23,9 @@ pub(super) fn warn_once<T>(value: T, unknown: &[String]) -> T {
     value
 }
 
-pub(super) const MACHINE_KEYS: [&str; 23] = ["board", "worktree", "task", "review", "investigate", "notify", "vault", "update", "restart", "keeper", "builds", "recover", "machine", "hub", "keys", "ci", "tests", "comments", "routines", "report", "issues", "lead", "worker"];
+pub(super) const MACHINE_KEYS: [&str; 24] = ["board", "worktree", "task", "review", "investigate", "writer", "notify", "vault", "update", "restart", "keeper", "builds", "recover", "machine", "hub", "keys", "ci", "tests", "comments", "routines", "report", "issues", "lead", "worker"];
 pub(super) const REPO_KEYS: [&str; 11] = ["actions", "worktree", "task", "review", "investigate", "ci", "tests", "comments", "docs", "routines", "jobs"];
-const SECTION_KEYS: [(&str, &[&str]); 23] = [
+const SECTION_KEYS: [(&str, &[&str]); 24] = [
     ("worker", &["enabled"]),
     ("board", &["groups", "backlog"]),
     ("board.backlog", &["sources", "ongoing", "template"]),
@@ -38,11 +38,12 @@ const SECTION_KEYS: [(&str, &[&str]); 23] = [
     ("issues", &["propose"]),
     ("lead", &["profile"]),
     ("machine", &["name"]),
-    ("hub", &["url", "commands", "trust", "auto_approve", "approve_from"]),
+    ("hub", &["url", "commands", "trust", "auto_approve", "approve_from", "ideas_machine"]),
     ("worktree", &["setup_skill", "setup_command", "dev_server", "dev_worker", "dev_url", "dev_route", "stage_on_main", "server_name", "worker_name", "clean_on_release"]),
     ("task", &["rules_skill", "test_commands", "also_noticed", "permission_mode", "profile", "sandbox", "steps", "require_accept"]),
     ("review", &["model", "auto", "profile", "second"]),
     ("investigate", &["profile"]),
+    ("writer", &["profile"]),
     ("notify", &["command"]),
     ("vault", &["command"]),
     ("ci", &["watch", "deploy"]),

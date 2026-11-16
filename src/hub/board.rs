@@ -489,6 +489,7 @@ pub fn build(items: &[status::Item], checkouts: &[status::Checkout], routines: V
         devices: None,
         backlog: None,
         lead: None,
+        idea_machine: crate::config::is_idea_machine(),
     }
 }
 

@@ -7,6 +7,7 @@ mod builds;
 mod assessment;
 mod backlog;
 mod backlog_file;
+mod backlog_writer;
 mod backlog_kept;
 mod backlog_style;
 mod card;
@@ -798,6 +799,7 @@ fn run(arguments: &Arguments) -> Result<String> {
             messages::unread_for_lead()
         }
         Some("messages") => messages::run(),
+        Some("backlog") if arguments.flag("--write-run") => backlog_writer::run(),
         Some("backlog") if arguments.positional(1) == Some("save") => backlog::save(),
         Some("backlog") if arguments.positional(1) == Some("filed") => backlog_file::filed(arguments.positional(2).unwrap_or_default(), arguments.positional(3)),
         Some("backlog") if arguments.positional(1) == Some("write") => backlog_file::write_out_cli(arguments.positional(2).unwrap_or_default()),

@@ -591,7 +591,7 @@ fn intake_role(sources: &[Source], vault: bool) -> String {
          2. Show the user the item, and ask with the AskUserQuestion tool: start it now as a task, file it in the backlog, or change it first.\n\
          3. On file: {save}. On start: {start}. On change: rewrite it and ask again.\n\n\
          The idea is taken in when the user has picked start or file and the item exists.\n\n\
-         A short item the user adds outside this chat (`n` on the board, `kebbie backlog add`, a file of their own) reaches you as a message from kebbie, or as `to write` in `kebbie backlog`: write it out by the skill at once and save it where it is, then show the user the written item. \
+         A short item the user adds outside this chat (`n` on the board, `kebbie backlog add`, an idea from their phone, Write it out) goes to kebbie's writer (`writer.profile`), which researches and writes it apart from your chat; its draft reaches you as a message from kebbie. Review it before the user sees it: add what you know from your conversation, keep only the open questions the user must answer, then save it where it is and show the user the written item. One that reaches you without a draft (the writer is off or failed), or a file of their own that `kebbie backlog` marks `to write`, you write out by the skill at once. \
          An item's questions belong to the item: they stay under its Open questions, never in `kebbie ask` and never under Needs you. The user answers them on the item's card on the board, and kebbie brings you each answer with its question: fold the answer into the item and take the question out; the item is ready once no question blocks it.",
     );
     let steps = if source == Source::Vault { format!("{steps}\n\n{OLD_NOTES}") } else { steps };
