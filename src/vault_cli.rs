@@ -47,6 +47,12 @@ pub enum StyleWrote {
     Newer,
 }
 
+#[derive(Debug, PartialEq)]
+pub struct VaultStyle {
+    pub text: String,
+    pub source: String,
+}
+
 // The one line mindin's write answers when the note changed since the etag was read.
 fn stale_etag(etag: &str, key: &str) -> String {
     format!("mindin: the etag {etag} no longer matches {key}; it changed since it was read")
@@ -319,6 +325,11 @@ impl Cli {
             Err(error) if error.contains("newer than") => Ok(StyleWrote::Newer),
             Err(error) => Err(format!("vault style write: {error}")),
         }
+    }
+
+    pub fn style(&self, kind: &str) -> Result<Option<VaultStyle>> {
+        let value = self.call(&["template", "--json", "--kind", kind])?;
+        Ok(value["style"].as_str().map(|text| VaultStyle { text: text.to_string(), source: field(&value, "style_source") }))
     }
 
     // `snapshot --json [--since ETAG]`; the inner error is the server's refusal, an unknown command on a server without snapshots.

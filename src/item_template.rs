@@ -432,10 +432,15 @@ pub fn shown(local_only: bool, vault_only: bool, as_json: bool) -> Result<String
             (template, None) => (template, "kebbie's own".to_string()),
         }
     };
+    let style = crate::backlog_style::applied(crate::vault_cli::detect().as_ref());
+    Ok(rendered(&template, &from, &style, as_json))
+}
+
+fn rendered(template: &Template, from: &str, style: &crate::backlog_style::Applied, as_json: bool) -> String {
     if as_json {
-        return serde_json::to_string_pretty(&json!({ "from": from, "sections": template.sections, "questions": template.questions, "skeleton": template.skeleton() })).map_err(|error| error.to_string());
+        return serde_json::to_string_pretty(&json!({ "from": from, "sections": template.sections, "questions": template.questions, "skeleton": template.skeleton(), "style": { "from": style.from, "text": style.text } })).unwrap_or_default();
     }
-    Ok(format!("A backlog item's sections, in order ({from}):\n\n{}", template.shown_lines()))
+    format!("A backlog item's sections, in order ({from}):\n\n{}\n\nHow the item reads ({}):\n\n{}", template.shown_lines(), style.from, style.text.trim())
 }
 
 #[cfg(test)]
@@ -550,6 +555,16 @@ mod tests {
         fake.answer("template", r##"{"kind":"task","sections":[{"key":"goal","heading":"Goal","required":true}]}"##);
         refresh(&cli, &state, 100 + VAULT_TTL).unwrap();
         assert_eq!(read().as_deref(), Some("Goal"), "not the answer held from before the rewrite");
+    }
+
+    #[test]
+    fn the_template_prints_the_style_that_applies_beside_the_sections() {
+        let style = crate::backlog_style::Applied { text: "Mine, short.".to_string(), from: "the user's override in the vault".to_string() };
+        let text = rendered(&Template::builtin(), "kebbie's own", &style, false);
+        assert!(text.starts_with("A backlog item's sections, in order (kebbie's own):\n\n## Background"), "{text}");
+        assert!(text.ends_with("How the item reads (the user's override in the vault):\n\nMine, short."), "{text}");
+        let json: Value = serde_json::from_str(&rendered(&Template::builtin(), "kebbie's own", &style, true)).unwrap();
+        assert_eq!((json["style"]["text"].as_str(), json["sections"].as_array().map(Vec::len)), (Some("Mine, short."), Some(6)));
     }
 
     #[test]
