@@ -13,6 +13,9 @@ The skills the Claude Code plugin `kebbie@kebbie` ships, and the hooks kebbie gi
 | `kebbie:investigate` | kebbie's investigator, which the keeper starts on an obstacle or a review finding about scope or intent | Decides what happens to it in line with the task's goal: a workaround, a preparatory subtask, a task of its own first, or a question to you. |
 | `kebbie:using-kebbie` | Claude, the lead and tasks, when you ask about kebbie itself | Answers a question about kebbie from kebbie's own docs first, and cites the page the answer came from. |
 | `kebbie:write-backlog-item` | The lead, and a task's Claude filing what it noticed | Searches for the item first and adds to it when it is filed already; otherwise writes it out while it is filed, by the backlog style `kebbie backlog template` prints. See [Fill the backlog](../how-to/fill-the-backlog.md#what-a-written-out-item-holds). |
+| `kebbie:write-question` | A task's Claude, the lead and the investigator, when they ask you something | The question first, at most three plain sentences of context, and two to four options that each say what you get. |
+| `kebbie:write-push-summary` | A task's Claude, when it writes its sign-off card | The card's short headline, and a first Built line saying what changes for you when you push it and what proves it. |
+| `kebbie:write-decision-line` | A task's Claude, when it writes the card's Decisions | Each decision as one line: the choice as you meet it, its reason in one clause, and who took it. |
 | `kebbie:propose-change` | The lead, when kebbie cost something; a task's Claude, to tell the lead | Proposes saving what kebbie cost as a [kebbie issue](commands.md#kebbie-issues), at a calm moment. |
 | `kebbie:review-split` | `/kebbie:review-split [base or what to review]` | Opens the [review split](review-split.md). |
 | `kebbie:history-split` | `/kebbie:history-split` | Opens `tig` in a split next to the pane. |
