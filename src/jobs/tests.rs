@@ -45,13 +45,24 @@ fn names_from_the_other_machine_never_leave_their_folder_and_names_for_the_hub_a
 fn a_worker_is_picked_by_its_system_or_its_name_and_the_one_heard_from_last_wins() {
     let me = machine(1);
     let cluster = Cluster { counter: 1, keys: Default::default(), rows: vec![row(1, "devbox", Some("linux"), Some(500)), row(2, "MacBook", Some("macos"), Some(100)), row(3, "studio", Some("macos"), Some(300)), row(4, "laptop", None, Some(900)), row(5, "old-box", Some("linux"), Some(50))] };
-    let picked = |on: Option<&str>| cluster::pick(&cluster, &me, on).map(|row| row.name.clone());
+    let picked = |on: Option<&str>| cluster::pick(&cluster, &me, on, 640).map(|row| row.name.clone());
     assert_eq!(picked(Some("macos")).as_deref(), Some("studio"), "of two Macs, the one heard from last");
     assert_eq!(picked(Some("macbook")).as_deref(), Some("MacBook"), "by its name, in any case");
     assert_eq!(picked(Some("linux")).as_deref(), Some("old-box"), "never this machine itself");
     assert_eq!(picked(None).as_deref(), Some("studio"), "any worker, never a machine that is none");
     assert_eq!(picked(Some("windows")), None);
     assert!(master::no_worker(Some("macos")).starts_with("No machine of your hub account on macos runs jobs.") && master::no_worker(None).contains("set [worker] enabled = true"));
+}
+
+#[test]
+fn a_worker_the_hub_has_not_heard_from_for_ten_minutes_is_not_picked_and_kebbie_says_so() {
+    let me = machine(1);
+    let cluster = Cluster { counter: 1, keys: Default::default(), rows: vec![row(2, "studio", Some("macos"), Some(1_000)), row(3, "MacBook", Some("macos"), None), row(4, "devbox", Some("linux"), Some(1_500))] };
+    assert_eq!(cluster::pick(&cluster, &me, Some("macos"), 1_600).map(|row| row.name.as_str()), Some("studio"));
+    assert_eq!(cluster::pick(&cluster, &me, None, 1_600).map(|row| row.name.as_str()), Some("devbox"));
+    assert_eq!(cluster::pick(&cluster, &me, Some("macos"), 1_601), None, "ten minutes and a second without a word is too long");
+    assert_eq!(master::no_live_worker(&cluster, &me, Some("macos"), 1_000 + 5_400), "No machine of your hub account on macos runs jobs right now. studio is a worker, but the hub last heard from it 90 minutes ago: is it on, and its keeper running?");
+    assert_eq!(master::no_live_worker(&cluster, &me, Some("windows"), 1_600), master::no_worker(Some("windows")), "with no worker at all, kebbie says how to make one");
 }
 
 #[test]
@@ -539,7 +550,7 @@ fn only_machines_on_the_accounts_signed_list_send_or_take_jobs() {
     listed.machines.push(AccountMachine { machine: outsider.clone(), name: "outsider".into(), worker_os: Some("macos".into()), last_seen: Some(u64::MAX) });
     let cluster = cluster::verify(&listed, &master.account).unwrap();
     assert!(!cluster.rows.iter().any(|row| row.machine == outsider), "a row the hub lists beside the signed list is no machine of the account");
-    assert_eq!(cluster::pick(&cluster, &master.identity.machine, None).map(|row| row.name.as_str()), Some("studio"), "even when the hub says it was seen last");
+    assert_eq!(cluster::pick(&cluster, &master.identity.machine, None, crate::messages::now()).map(|row| row.name.as_str()), Some("studio"), "even when the hub says it was seen last");
     let mut tampered = listed.clone();
     tampered.list.as_mut().unwrap().list.machines.push(ListedMachine { machine: outsider.clone(), keys: SecretKeys::generate().public() });
     assert!(cluster::verify(&tampered, &master.account).is_err(), "a list changed after the account signed it trusts no one");

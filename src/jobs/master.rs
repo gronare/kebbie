@@ -242,6 +242,21 @@ pub fn no_worker(on: Option<&str>) -> String {
     format!("{which}. On the machine that should run it, set [worker] enabled = true in ~/.config/kebbie/config.toml; its keeper then tells the hub, and kebbie job run finds it")
 }
 
+fn ago(seconds: u64) -> String {
+    match seconds {
+        seconds if seconds < 2 * 3_600 => format!("{} minutes", seconds / 60),
+        seconds if seconds < 2 * 86_400 => format!("{} hours", seconds / 3_600),
+        seconds => format!("{} days", seconds / 86_400),
+    }
+}
+
+pub fn no_live_worker(cluster: &cluster::Cluster, me: &Id, on: Option<&str>, now: u64) -> String {
+    let Some(quiet) = cluster::quiet(cluster, me, on) else { return no_worker(on) };
+    let which = on.map_or_else(String::new, |on| format!(" on {on}"));
+    let heard = quiet.last_seen.map_or_else(|| "the hub has never heard from it".to_string(), |seen| format!("the hub last heard from it {} ago", ago(now.saturating_sub(seen))));
+    format!("No machine of your hub account{which} runs jobs right now. {} is a worker, but {heard}: is it on, and its keeper running?", quiet.name)
+}
+
 pub struct Asked<'a> {
     pub top: &'a Path,
     pub repo: String,
@@ -306,7 +321,7 @@ pub fn go(hub: &Hub, asked: &Asked, print: &mut dyn FnMut(&str), pause: &mut dyn
     let client = Client::new(&hub.identity.url, Some(hub.identity.token()), CALL);
     sweep(hub.state, &client);
     let cluster = cluster::fetch(hub.dir, &client, hub.account).map_err(|error| format!("kebbie: the hub's list of your machines was not read: {error}"))?;
-    let worker = cluster::pick(&cluster, &hub.identity.machine, asked.def.on.as_deref()).cloned().ok_or_else(|| no_worker(asked.def.on.as_deref()))?;
+    let worker = cluster::pick(&cluster, &hub.identity.machine, asked.def.on.as_deref(), now()).cloned().ok_or_else(|| no_live_worker(&cluster, &hub.identity.machine, asked.def.on.as_deref(), now()))?;
     let keys = *cluster.keys.get(&worker.machine).ok_or_else(|| no_worker(asked.def.on.as_deref()))?;
     let mut left = Leftovers::new(hub.state, &client, asked.top);
     let snapshot_id = cluster::new_id()?;

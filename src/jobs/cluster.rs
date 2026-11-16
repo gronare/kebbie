@@ -114,7 +114,19 @@ pub fn new_id() -> Result<Id> {
     Id::new(Prefix::Command).map_err(|error| error.to_string())
 }
 
-pub fn pick<'a>(cluster: &'a Cluster, me: &Id, on: Option<&str>) -> Option<&'a AccountMachine> {
-    let takes = |row: &AccountMachine| on.is_none_or(|on| row.worker_os.as_deref().is_some_and(|os| os.eq_ignore_ascii_case(on)) || row.name.eq_ignore_ascii_case(on) || super::token(&row.name) == super::token(on));
-    cluster.rows.iter().filter(|row| row.worker_os.is_some() && &row.machine != me && takes(row)).max_by_key(|row| row.last_seen.unwrap_or(0))
+// A worker's keeper reaches the hub at least every ten minutes, renewing it as a worker, so one not heard from for longer is off or its keeper stopped.
+pub const STALE: u64 = 600;
+
+fn workers<'a>(cluster: &'a Cluster, me: &'a Id, on: Option<&'a str>) -> impl Iterator<Item = &'a AccountMachine> {
+    let takes = move |row: &&AccountMachine| on.is_none_or(|on| row.worker_os.as_deref().is_some_and(|os| os.eq_ignore_ascii_case(on)) || row.name.eq_ignore_ascii_case(on) || super::token(&row.name) == super::token(on));
+    cluster.rows.iter().filter(move |row| row.worker_os.is_some() && &row.machine != me).filter(takes)
+}
+
+pub fn pick<'a>(cluster: &'a Cluster, me: &'a Id, on: Option<&'a str>, now: u64) -> Option<&'a AccountMachine> {
+    workers(cluster, me, on).filter(|row| row.last_seen.is_some_and(|seen| now.saturating_sub(seen) <= STALE)).max_by_key(|row| row.last_seen.unwrap_or(0))
+}
+
+// The worker heard from last of those the hub has not heard from lately.
+pub fn quiet<'a>(cluster: &'a Cluster, me: &'a Id, on: Option<&'a str>) -> Option<&'a AccountMachine> {
+    workers(cluster, me, on).max_by_key(|row| row.last_seen.unwrap_or(0))
 }
