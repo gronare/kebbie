@@ -50,17 +50,6 @@ pub enum Source {
     Plan,
 }
 
-impl Source {
-    fn word(self) -> &'static str {
-        match self {
-            Source::Question => "question",
-            Source::Method => "question of method",
-            Source::Obstacle => "obstacle",
-            Source::Plan => "approved with the plan",
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Decision {
     pub text: String,
@@ -80,7 +69,7 @@ pub struct Noticed {
     pub found: Option<String>,
 }
 
-// The card as kebbie keeps it: the task's headline, Built and Also noticed in its words, the decisions with who took each from kebbie's own records, and the version before it.
+// The card as kebbie keeps it: the task's headline, Built, Decisions and Also noticed in its words, who took each decision from kebbie's own records, the recorded decisions the card leaves out (never shown), and the version before it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Data {
     pub version: u32,
@@ -90,6 +79,8 @@ pub struct Data {
     pub built: Vec<String>,
     pub decisions: Vec<Decision>,
     pub noticed: Vec<Noticed>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recorded: Vec<Decision>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous: Option<Box<Data>>,
 }
@@ -296,7 +287,7 @@ fn significant(text: &str) -> BTreeSet<String> {
     text.split(|character: char| !character.is_alphanumeric()).map(str::to_lowercase).filter(|word| word.chars().count() > 3 && word != "because").collect()
 }
 
-// A line names its record by key, or claims who took it and shares most of its words; words alone never move a line from the task to someone else.
+// A line names its record by key, or claims who took it and shares most of its words; words alone never move a line from the task to someone else, and a claim with no such record takes the earliest answer of that decider left.
 fn same_decision(line: &Claimed, record: &Record) -> bool {
     if record.key.as_ref().is_some_and(|key| line.text.split(|character: char| !character.is_alphanumeric()).any(|word| word == key)) {
         return true;
@@ -304,7 +295,7 @@ fn same_decision(line: &Claimed, record: &Record) -> bool {
     line.by == Some(record.by) && similar(&line.text, &record.text)
 }
 
-fn similar(one: &str, other: &str) -> bool {
+pub(crate) fn similar(one: &str, other: &str) -> bool {
     let (ours, theirs) = (significant(one), significant(other));
     let common = ours.intersection(&theirs).count();
     common >= 2 && common * 2 >= ours.len().min(theirs.len())
@@ -347,13 +338,20 @@ pub fn answered(messages: &[crate::messages::Message], address: &str) -> Vec<Rec
     }).collect()
 }
 
-// The card's decisions: each line the task wrote, with who took it from kebbie's records, then each recorded decision the task left out; a line no record backs is the task's own, whatever it says.
-pub fn decisions(claimed: &[Claimed], records: &[Record], red: Option<&str>) -> (Vec<Decision>, Vec<String>) {
+// The card's decisions as the task wrote them, with who took each from kebbie's records; a line no record backs is the task's own, whatever it says.
+pub struct Taken {
+    pub decisions: Vec<Decision>,
+    pub unbacked: Vec<String>,
+    pub left_out: Vec<Decision>,
+}
+
+pub fn decisions(claimed: &[Claimed], records: &[Record], red: Option<&str>) -> Taken {
     let mut used = vec![false; records.len()];
     let mut taken: Vec<Decision> = Vec::new();
     let mut unbacked = Vec::new();
     let matched = |line: &Claimed, used: &mut Vec<bool>| -> Option<usize> {
-        let found = records.iter().enumerate().find(|(index, record)| !used[*index] && same_decision(line, record)).map(|(index, _)| index)?;
+        let open = |index: &usize| !used[*index];
+        let found = records.iter().enumerate().find(|(index, record)| open(index) && same_decision(line, record)).or_else(|| records.iter().enumerate().find(|(index, record)| open(index) && record.key.is_none() && line.by == Some(record.by) && record.by != By::Task)).map(|(index, _)| index)?;
         used[found] = true;
         Some(found)
     };
@@ -373,9 +371,6 @@ pub fn decisions(claimed: &[Claimed], records: &[Record], red: Option<&str>) -> 
         }
         taken.push(decision);
     }
-    for (_, record) in records.iter().enumerate().filter(|(index, _)| !used[*index]) {
-        taken.push(Decision { text: record.text.clone(), by: record.by, source: Some(record.source), at: Some(record.at), replaced_by: None });
-    }
     if let Some(cause) = red {
         taken.push(Decision { text: clip(&format!("The latest test run stays red: {cause}"), MAX_DECISION), by: By::Task, source: None, at: None, replaced_by: None });
     }
@@ -392,7 +387,8 @@ pub fn decisions(claimed: &[Claimed], records: &[Record], red: Option<&str>) -> 
     for decision in &mut taken {
         decision.replaced_by = decision.replaced_by.filter(|at| *at < len);
     }
-    (taken, unbacked)
+    let left_out = records.iter().enumerate().filter(|(index, _)| !used[*index]).map(|(_, record)| Decision { text: record.text.clone(), by: record.by, source: Some(record.source), at: Some(record.at), replaced_by: None }).collect();
+    Taken { decisions: taken, unbacked, left_out }
 }
 
 fn found_mark(line: &str) -> (String, Option<String>) {
@@ -406,16 +402,16 @@ fn found_mark(line: &str) -> (String, Option<String>) {
 }
 
 // The new version of the card: the same lines keep the version they have, changed ones count up and carry the version before them.
-pub fn next_version(parsed: &Parsed, decisions: Vec<Decision>, before: Option<Data>, now: u64) -> Data {
+pub fn next_version(parsed: &Parsed, decisions: Vec<Decision>, recorded: Vec<Decision>, before: Option<Data>, now: u64) -> Data {
     let mut seen = BTreeSet::new();
     let noticed = parsed.noticed.iter().map(|line| {
         let (text, found) = found_mark(line);
         Noticed { text, found: found.filter(|id| seen.insert(id.clone())) }
     }).collect();
-    let fresh = Data { version: 1, changed_at: None, headline: parsed.headline.clone(), built: parsed.built.clone(), decisions, noticed, previous: None };
+    let fresh = Data { version: 1, changed_at: None, headline: parsed.headline.clone(), built: parsed.built.clone(), decisions, noticed, recorded, previous: None };
     match before {
-        Some(before) if before.same_lines(&fresh) => before,
-        Some(before) => Data { version: before.version + 1, changed_at: Some(now), previous: Some(Box::new(Data { previous: None, ..before })), ..fresh },
+        Some(before) if before.same_lines(&fresh) => Data { recorded: fresh.recorded, ..before },
+        Some(before) => Data { version: before.version + 1, changed_at: Some(now), previous: Some(Box::new(Data { previous: None, recorded: Vec::new(), ..before })), ..fresh },
         None => fresh,
     }
 }
@@ -458,10 +454,8 @@ pub fn chosen(id: &str, items: &[crate::found::Item]) -> Option<(Chosen, String)
 }
 
 fn decision_line(decision: &Decision, data: &Data) -> String {
-    let mut who = vec![decision.by.word().to_string()];
-    who.extend(decision.source.map(|source| source.word().to_string()));
     let replaced = decision.replaced_by.and_then(|at| data.decisions.get(at)).map_or_else(String::new, |by| format!(" · replaced by: {}", by.text));
-    format!("- {} ({}){replaced}", decision.text, who.join(" · "))
+    format!("- {}{replaced}", decision.text)
 }
 
 fn changes(data: &Data) -> Vec<String> {
@@ -478,8 +472,8 @@ fn changes(data: &Data) -> Vec<String> {
     }).collect()
 }
 
-// The card as the board draws it: the headline, its three parts with who decided and what became of each noticed line, and what changed since the version before.
-pub fn render(data: &Data, items: &[crate::found::Item]) -> String {
+// The card as the board draws it: the headline and its three parts in the task's own words, and what changed since the version before.
+pub fn render(data: &Data) -> String {
     let mut text = vec![format!("**{}**", data.headline)];
     let changed = changes(data);
     if let Some(before) = &data.previous {
@@ -498,13 +492,7 @@ pub fn render(data: &Data, items: &[crate::found::Item]) -> String {
     if !data.noticed.is_empty() {
         text.push(String::new());
         text.push(format!("{NOTICED}:"));
-        text.extend(data.noticed.iter().map(|noticed| match &noticed.found {
-            Some(id) => {
-                let state = chosen(id, items).map_or_else(|| format!("open under {}: start it, add it to a task or keep it from the backlog column", crate::found::SECTION), |(_, said)| said);
-                format!("- {} (found:{id} · {state})", noticed.text)
-            }
-            None => format!("- {}", noticed.text),
-        }));
+        text.extend(data.noticed.iter().map(|noticed| format!("- {}", noticed.text)));
     }
     text.join("\n")
 }
@@ -618,12 +606,31 @@ mod tests {
             record("the lint needs frontmatter: subtask first: Store frontmatter, because the index stores only titles", By::Investigator, Source::Obstacle, 40, Some("o1")),
             record("Which file holds the flags: config.toml", By::Lead, Source::Method, 60, None),
         ];
-        let (decisions, unbacked) = decisions(&claimed, &records, None);
+        let Taken { decisions, unbacked, left_out } = decisions(&claimed, &records, None);
         let who: Vec<(By, Option<Source>)> = decisions.iter().map(|decision| (decision.by, decision.source)).collect();
-        assert_eq!(who, [(By::You, Some(Source::Question)), (By::Task, None), (By::Investigator, Some(Source::Obstacle)), (By::Task, None), (By::Lead, Some(Source::Method))]);
+        assert_eq!(who, [(By::You, Some(Source::Question)), (By::Task, None), (By::Investigator, Some(Source::Obstacle)), (By::Task, None)]);
         assert_eq!(decisions[1].text, "Keep the old endpoint a week", "the claim of (you) is dropped, its words kept");
         assert_eq!(unbacked, ["Keep the old endpoint a week"], "the task is told which of its lines no record backs");
-        assert_eq!(decisions[4].text, "Which file holds the flags: config.toml", "a recorded decision the card left out is added");
+        assert_eq!(left_out.iter().map(|decision| (decision.text.as_str(), decision.by)).collect::<Vec<_>>(), [("Which file holds the flags: config.toml", By::Lead)], "a recorded decision the card left out stays out of its lines, kept apart");
+    }
+
+    #[test]
+    fn the_task_writes_your_answer_as_the_decision_it_settled_and_the_card_shows_only_that_line() {
+        let records = [record("This task makes the lead name tasks by the title the board shows. Should that be part of this task? → in this task", By::You, Source::Question, 50, None)];
+        let claimed = parse("**Leaden kallar tasks vid titeln, inte grennamnet**\n\nBuilt:\n- x\n\nDecisions:\n- Taskens titel och valvnot skrivs på valvets språk, svenska, och noten heter som titeln (you)\n").unwrap().decisions;
+        let Taken { decisions, unbacked, left_out } = decisions(&claimed, &records, None);
+        assert_eq!(decisions.iter().map(|decision| (decision.text.as_str(), decision.by, decision.source)).collect::<Vec<_>>(), [("Taskens titel och valvnot skrivs på valvets språk, svenska, och noten heter som titeln", By::You, Some(Source::Question))], "the claim takes the answer it settled, though the words differ");
+        assert!(unbacked.is_empty() && left_out.is_empty());
+        let parsed = parse("**Leaden kallar tasks vid titeln, inte grennamnet**\n\nBuilt:\n- När leaden skriver till dig om en task står titeln du ser på boardet.\n").unwrap();
+        let shown = render(&next_version(&parsed, decisions, Vec::new(), None, 1));
+        assert!(shown.ends_with("Decisions:\n- Taskens titel och valvnot skrivs på valvets språk, svenska, och noten heter som titeln"), "no who, no source, no question: {shown}");
+        let forgot = decisions_left(&records);
+        let shown = render(&next_version(&parsed, Vec::new(), forgot, None, 1));
+        assert!(!shown.contains("Decisions:") && !shown.contains("→") && !shown.contains("Should that"), "an answer the card leaves out is never pasted in: {shown}");
+    }
+
+    fn decisions_left(records: &[Record]) -> Vec<Decision> {
+        decisions(&[], records, None).left_out
     }
 
     #[test]
@@ -637,16 +644,17 @@ mod tests {
         let records = [record("Should refunds show on the invoice page? → Yes, under the total", By::You, Source::Question, 50, None)];
         for card in ["- Refunds page uses the invoice layout because the design had none (task)", "- Refunds page uses the invoice layout because the design had none"] {
             let claimed = parse(&format!("**Refunds.**\n\nBuilt:\n- x\n\nDecisions:\n{card}\n")).unwrap().decisions;
-            let (decisions, _) = decisions(&claimed, &records, None);
-            let who: Vec<By> = decisions.iter().map(|decision| decision.by).collect();
-            assert_eq!(who, [By::Task, By::You], "{card}: the task's line stays its own and your answer is listed as itself");
+            let taken = decisions(&claimed, &records, None);
+            let who: Vec<By> = taken.decisions.iter().map(|decision| decision.by).collect();
+            assert_eq!(who, [By::Task], "{card}: the task's line stays its own");
+            assert_eq!(taken.left_out.len(), 1, "{card}: your answer is kept apart, not listed as a line");
         }
     }
 
     #[test]
     fn a_reversed_decision_keeps_its_place_and_points_at_the_one_that_replaced_it() {
         let claimed = parse("**VAT.**\n\nBuilt:\n- x\n\nDecisions:\n- Round VAT per line (task) replaced by: Round VAT per invoice, as the accountant books it\n- Round VAT per invoice, as the accountant books it (you)\n- Keep the cache (task); replaced by: drop the cache\n").unwrap().decisions;
-        let (decisions, _) = decisions(&claimed, &[], Some("the CI-only test needs a device"));
+        let decisions = decisions(&claimed, &[], Some("the CI-only test needs a device")).decisions;
         assert_eq!(decisions[0].replaced_by, Some(1));
         assert_eq!(decisions[2].text, "Keep the cache");
         let last = decisions.last().unwrap();
@@ -656,7 +664,7 @@ mod tests {
 
     fn data(built: &str, noticed: &[&str]) -> Data {
         let parsed = parse(&format!("**Refunds.**\n\nBuilt:\n- {built}\n\nAlso noticed:\n{}\n", noticed.iter().map(|line| format!("- {line}")).collect::<Vec<_>>().join("\n"))).unwrap();
-        next_version(&parsed, vec![Decision { text: "Per invoice".to_string(), by: By::You, source: Some(Source::Question), at: Some(5), replaced_by: None }], None, 10)
+        next_version(&parsed, vec![Decision { text: "Per invoice".to_string(), by: By::You, source: Some(Source::Question), at: Some(5), replaced_by: None }], Vec::new(), None, 10)
     }
 
     #[test]
@@ -664,21 +672,21 @@ mod tests {
         let first = data("Refunds list under each invoice.", &["The README names an old flag (found:f2)"]);
         assert_eq!((first.version, first.changed_at, first.noticed[0].found.as_deref(), first.noticed[0].text.as_str()), (1, None, Some("f2"), "The README names an old flag"));
         let parsed = parse("**Refunds.**\n\nBuilt:\n- Refunds list under each invoice.\n\nAlso noticed:\n- The README names an old flag (found:f2)\n").unwrap();
-        let again = next_version(&parsed, first.decisions.clone(), Some(first.clone()), 20);
+        let again = next_version(&parsed, first.decisions.clone(), Vec::new(), Some(first.clone()), 20);
         assert_eq!(again, first, "the same lines keep their version");
-        let rewritten = next_version(&parse("**Refunds.**\n\nBuilt:\n- Refunds and credits list under each invoice.\n").unwrap(), Vec::new(), Some(first.clone()), 30);
+        let rewritten = next_version(&parse("**Refunds.**\n\nBuilt:\n- Refunds and credits list under each invoice.\n").unwrap(), Vec::new(), Vec::new(), Some(first.clone()), 30);
         assert_eq!((rewritten.version, rewritten.changed_at), (2, Some(30)));
         assert_eq!(rewritten.previous.as_deref().map(|before| (before.version, before.built.clone())), Some((1, vec!["Refunds list under each invoice.".to_string()])));
-        let third = next_version(&parse("**Refunds.**\n\nBuilt:\n- Only credits.\n").unwrap(), Vec::new(), Some(rewritten.clone()), 40);
+        let third = next_version(&parse("**Refunds.**\n\nBuilt:\n- Only credits.\n").unwrap(), Vec::new(), Vec::new(), Some(rewritten.clone()), 40);
         assert!(third.previous.as_ref().is_some_and(|before| before.version == 2 && before.previous.is_none()), "one version back, not the whole history");
-        let shown = render(&rewritten, &[]);
+        let shown = render(&rewritten);
         assert!(shown.contains("Changed: version 1 → 2") && shown.contains("- − Built: Refunds list under each invoice.") && shown.contains("- + Built: Refunds and credits list under each invoice.") && shown.contains("- − Decisions: Per invoice"), "{shown}");
         let wired = wire(&rewritten, &[]).unwrap();
         assert_eq!((wired.version, wired.previous.as_ref().map(|before| before.version)), (2, Some(1)));
     }
 
     #[test]
-    fn the_phone_and_the_board_show_who_decided_and_what_became_of_each_noticed_line() {
+    fn the_phone_gets_who_decided_and_what_became_of_each_noticed_line_as_data_and_the_board_shows_only_the_tasks_words() {
         let card = data("Refunds list under each invoice.", &["The README names an old flag (found:f2)", "The VAT test is flaky (found:f3)", "A line not filed"]);
         let item = |id: &str, state: crate::found::State, outcome: &str| crate::found::Item { id: id.to_string(), line: String::new(), repo: "app".to_string(), sources: vec!["billing@app".to_string()], count: 1, first_at: 0, last_at: 0, state, outcome: Some(outcome.to_string()).filter(|said| !said.is_empty()), raised: false };
         let items = [item("f2", crate::found::State::Kept, ""), item("f3", crate::found::State::Started, "started as vat-flaky")];
@@ -687,10 +695,8 @@ mod tests {
         assert_eq!(value["decisions"][0], serde_json::json!({ "text": "Per invoice", "by": "you", "source": "question", "at": 5 }));
         assert_eq!(value["noticed"], serde_json::json!([{ "text": "The README names an old flag", "found": "found:f2", "chosen": "kept" }, { "text": "The VAT test is flaky", "found": "found:f3", "chosen": "task" }, { "text": "A line not filed" }]));
         assert!(kebbie_hub_protocol::Card::read(&serde_json::to_vec(&wired).unwrap()).is_ok(), "the phone takes it");
-        let shown = render(&card, &items);
-        assert!(shown.contains("- Per invoice (you · question)") && shown.contains("(found:f2 · kept in the backlog)") && shown.contains("(found:f3 · started as vat-flaky)") && shown.contains("- A line not filed"), "{shown}");
-        let open = render(&card, &[]);
-        assert!(open.contains("(found:f2 · open under Found by tasks: start it, add it to a task or keep it"), "{open}");
+        let shown = render(&card);
+        assert!(shown.contains("- Per invoice\n") && shown.contains("- The README names an old flag\n- The VAT test is flaky\n- A line not filed") && !shown.contains("(you") && !shown.contains("found:"), "{shown}");
     }
 
     #[test]

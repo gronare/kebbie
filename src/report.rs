@@ -339,14 +339,18 @@ fn take_card(cwd: &Path, file: &Path, state: &Path, address: &str, text: &str, s
     let mut said = String::new();
     if sign_off {
         let parsed = crate::card::parse(&text)?;
-        let (decisions, unbacked) = crate::card::decisions(&parsed.decisions, &crate::card::records(state, address), red);
-        let data = crate::card::next_version(&parsed, decisions, crate::card::load(state, address), now);
+        let crate::card::Taken { decisions, unbacked, left_out } = crate::card::decisions(&parsed.decisions, &crate::card::records(state, address), red);
+        let missing: Vec<String> = left_out.iter().map(|decision| decision.text.clone()).collect();
+        let data = crate::card::next_version(&parsed, decisions, left_out, crate::card::load(state, address), now);
         crate::card::save(state, address, &data)?;
         if data.changed_at == Some(now) {
             said.push_str(&format!(" It replaces your card's version {}; the user sees what changed.", data.version - 1));
         }
         if !unbacked.is_empty() {
-            said.push_str(&format!(" kebbie has no record of anyone but you taking these, so the card shows them as (task): {}. A choice that is the user's is asked with kebbie ask; a question of method goes to the lead.", unbacked.join("; ")));
+            said.push_str(&format!(" kebbie has no record of anyone but you taking these, so it keeps them as yours (task): {}. A choice that is the user's is asked with kebbie ask; a question of method goes to the lead.", unbacked.join("; ")));
+        }
+        if !missing.is_empty() {
+            said.push_str(&format!(" Your card leaves out what these settled: {}. Each the user would weigh is one line under Decisions:, the decision in your own words by the skill kebbie:write-decision-line, never the question and its answer; report ready again with it.", missing.join("; ")));
         }
     } else {
         crate::card::forget(state, address);
@@ -373,7 +377,7 @@ pub fn card_in(state: &Path, address: &str) -> Option<Card> {
     let (first, body) = text.split_once('\n')?;
     let sha = first.strip_prefix("card: ")?.trim().to_string();
     let data = crate::card::load(state, address);
-    let text = data.as_ref().map_or_else(|| body.trim().to_string(), |data| crate::card::render(data, &crate::found::load(state)));
+    let text = data.as_ref().map_or_else(|| body.trim().to_string(), crate::card::render);
     Some(Card { sha, text, file, data })
 }
 

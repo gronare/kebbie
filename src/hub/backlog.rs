@@ -1050,7 +1050,7 @@ mod tests {
         let state = crate::sh::test_dir("hub-found-keep");
         let card = crate::found::file_card(&state, "billing@app", "**Refunds.**\n\nBuilt:\n- x\n\nAlso noticed:\n- The README names an old flag\n", 100).unwrap().text;
         let parsed = crate::card::parse(&card).unwrap();
-        let data = crate::card::next_version(&parsed, Vec::new(), None, 100);
+        let data = crate::card::next_version(&parsed, Vec::new(), Vec::new(), None, 100);
         let key = ItemKey::parse("found:f1").unwrap();
         let never = |_: &str, _: Option<&str>| -> Result<String> { panic!("not started") };
         let no_add = |_: &str, _: &str| -> Result<String> { panic!("not added") };

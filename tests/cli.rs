@@ -2122,7 +2122,7 @@ fn a_ready_report_keeps_the_card_as_data_refuses_a_part_to_confirm_and_a_red_run
     assert!(!confirm.status.success() && stderr(&confirm).contains("\"Confirm:\" asks the user to confirm"), "{}", stderr(&confirm));
     let taken = report(card, &["--red-cause", "the VAT test fails on main too, at tests/vat.rs:12"]);
     assert!(taken.status.success(), "{}", stderr(&taken));
-    assert!(stdout(&taken).contains("the card shows them as (task): Refunds round per invoice, because the accountant books it so"), "a decider kebbie has no record of is the task's: {}", stdout(&taken));
+    assert!(stdout(&taken).contains("it keeps them as yours (task): Refunds round per invoice, because the accountant books it so"), "a decider kebbie has no record of is the task's: {}", stdout(&taken));
     let data: serde_json::Value = serde_json::from_str(&fs::read_to_string(lab.state.join("cards/billing@app.json")).unwrap()).unwrap();
     assert_eq!((data["version"].as_u64(), data["decisions"][0]["by"].as_str(), data["noticed"][0]["found"].as_str()), (Some(1), Some("task"), Some("f1")), "{data}");
     assert_eq!(data["decisions"][1]["text"], "The latest test run stays red: the VAT test fails on main too, at tests/vat.rs:12");

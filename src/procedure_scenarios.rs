@@ -181,7 +181,7 @@ fn the_cards_the_playbook_teaches_are_the_cards_kebbie_takes_and_the_confirm_par
     let example = &example[..example.find("```").unwrap()];
     let parsed = crate::card::parse(example).expect("kebbie takes the playbook's own example");
     assert_eq!((parsed.built.len(), parsed.decisions.len(), parsed.noticed.len()), (1, 2, 1));
-    says(&page, &["kebbie backlog --search", "--red-cause", "a line no record backs shows as `task`", "refuses a card with any part beyond the three"], "ten tasks rewrote their cards and eight went ready over a red test");
+    says(&page, &["kebbie backlog --search", "--red-cause", "A line no record backs shows as `task`", "never pasted in", "refuses a card with any part beyond the three"], "ten tasks rewrote their cards and eight went ready over a red test");
     for (card, situation) in [
         ("**Local clippy now checks with the same Rust as CI.**\n\nBuilt:\n- `rust-toolchain.toml` pins Rust 1.99.1.\n\nConfirm:\n- Upgrading Rust is now a manual one-line change.\n\nSide effect: rustup updated itself.\n", "a Confirm part under Built"),
         ("**The installed app starts without the blink.**\n\nBuilt:\n- **Now:** a new worker leaves the page alone.\n- **Please confirm:** reloading a stale app when it goes out of sight.\n", "a confirm lead-in inside a Built line"),
@@ -189,5 +189,16 @@ fn the_cards_the_playbook_teaches_are_the_cards_kebbie_takes_and_the_confirm_par
     ] {
         assert!(crate::card::parse(card).unwrap_err().contains("asks the user to confirm"), "{situation}");
     }
-    says(&task_role(), &["--red-cause", "/bin/kebbie backlog --search", "stop working around it", "shows as `(task)`"], "the task role carries the card's rules");
+    says(&task_role(), &["--red-cause", "/bin/kebbie backlog --search", "stop working around it", "as `(task)`", "never the question and its answer"], "the task role carries the card's rules");
+}
+
+#[test]
+fn the_push_summary_and_the_decision_lines_are_written_for_a_reader_without_context_in_the_vaults_language() {
+    let summary = file("skills/write-push-summary/SKILL.md");
+    says(&summary, &["no context", "vault's language", "concrete example", "A test is not proof for him", "Leaden kallar tasks vid titeln, inte grennamnet"], "a card read \"Bevis: ett test visar en tasks meddelande nå leaden\" and left the user asking which title, where");
+    let example = &summary[summary.find("```\n**").expect("the skill shows the approved card") + 4..];
+    let parsed = crate::card::parse(&example[..example.find("```").unwrap()]).expect("kebbie takes the skill's example");
+    assert_eq!((parsed.built.len(), parsed.decisions.len()), (1, 1));
+    let decision = file("skills/write-decision-line/SKILL.md");
+    says(&decision, &["would weigh", "mechanics", "the decision it settled", "never the question and his answer pasted in"], "a card listed internal mechanics and pasted the user's answer with the whole English question");
 }
