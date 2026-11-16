@@ -131,6 +131,22 @@ fn output_goes_to_the_master_every_two_seconds_or_once_twelve_kib_wait() {
 }
 
 #[test]
+fn output_heavy_with_control_characters_is_cut_by_its_size_as_json_and_a_final_report_always_goes() {
+    let fits = |log: &str| Payload::JobReport(JobReport { job: cluster::new_id().unwrap(), seq: 7, log: log.into(), end: Some(JobEnd::Failed { reason: "é".repeat(kebbie_hub_protocol::MAX_JOB_REASON_CHARS) }) }).validate().is_ok();
+    let colored = "\u{1b}[31m\u{1b}\u{7}\u{1b}\u{e}\u{1b}\u{7}\u{1b}\u{f}red\r\n".repeat(2_000);
+    let mut batch = Batch::new(0);
+    batch.add(&colored);
+    let first = batch.take(3_000);
+    let rest = batch.rest();
+    assert!(fits(&first) && rest.iter().all(|part| fits(part)), "each part fits a report as the hub counts it");
+    assert_eq!(format!("{first}{}", rest.concat()), colored, "and nothing is lost between them");
+    let too_big = JobReport { job: cluster::new_id().unwrap(), seq: 3, log: "\u{1b}".repeat(kebbie_hub_protocol::MAX_JOB_LOG_BYTES), end: Some(JobEnd::Exited { code: 0, artifacts: Vec::new() }) };
+    assert!(Payload::JobReport(too_big.clone()).validate().is_err());
+    let sent = worker::sendable(too_big);
+    assert!(Payload::JobReport(sent.clone()).validate().is_ok() && sent.end == Some(JobEnd::Exited { code: 0, artifacts: Vec::new() }) && sent.log.contains("did not fit a report"), "a report the hub would refuse still carries its end");
+}
+
+#[test]
 fn a_job_the_inbox_hands_over_again_is_queued_once_and_jobs_wait_in_the_order_they_came() {
     let mut seen = Seen::default();
     let (from, id) = (machine(1), cluster::new_id().unwrap());

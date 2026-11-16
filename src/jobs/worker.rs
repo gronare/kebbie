@@ -8,7 +8,7 @@ use std::sync::{Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use kebbie_hub_api::WorkerOs;
-use kebbie_hub_protocol::{AccountKey, BlobRef, Id, Job, JobEnd, JobReport, MAX_JOB_LOG_BYTES, MAX_JOB_REASON_CHARS, Payload, PublicKeys};
+use kebbie_hub_protocol::{AccountKey, BlobRef, Id, Job, JobEnd, JobReport, MAX_JOB_LOG_BYTES, MAX_JOB_REASON_CHARS, MAX_MACHINE_MESSAGE_BYTES, Payload, PublicKeys};
 use serde::{Deserialize, Serialize};
 
 use super::{bundle, cluster, safe};
@@ -98,12 +98,35 @@ pub fn next_queued(dir: &Path) -> Option<(PathBuf, Queued)> {
     all_queued(dir).into_iter().next()
 }
 
-fn cut(text: &str, max: usize) -> usize {
-    let mut at = max.min(text.len());
-    while !text.is_char_boundary(at) {
-        at -= 1;
+// The hub takes a report of at most 32 KiB as JSON, where a control character costs six bytes, so the log keeps room for the rest of the report, a 500-character reason included.
+const LOG_JSON_BYTES: usize = MAX_MACHINE_MESSAGE_BYTES - 4 * 1024;
+
+fn json_len(character: char) -> usize {
+    match character {
+        '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
+        control if u32::from(control) < 0x20 => 6,
+        other => other.len_utf8(),
     }
-    at
+}
+
+// Where the next report's log ends: at most 12 KiB of output, and at most LOG_JSON_BYTES once encoded.
+fn cut(text: &str) -> usize {
+    let mut encoded = 0;
+    for (at, character) in text.char_indices() {
+        encoded += json_len(character);
+        if at + character.len_utf8() > MAX_JOB_LOG_BYTES || encoded > LOG_JSON_BYTES {
+            return at;
+        }
+    }
+    text.len()
+}
+
+// A report the hub would refuse goes without its log, with a line saying so, so a final report is never lost to its size.
+pub fn sendable(mut report: JobReport) -> JobReport {
+    if Payload::JobReport(report.clone()).validate().is_err() {
+        report.log = format!("[kebbie: {} bytes of output did not fit a report and were left out]\n", report.log.len());
+    }
+    report
 }
 
 // The job's output on its way to the master: sent every 2 s, or once 12 KiB wait, but never faster than once a second.
@@ -137,14 +160,14 @@ impl Batch {
 
     pub fn take(&mut self, now_ms: u64) -> String {
         self.last = now_ms;
-        let at = cut(&self.held, MAX_JOB_LOG_BYTES);
+        let at = cut(&self.held);
         self.held.drain(..at).collect()
     }
 
     pub fn rest(&mut self) -> Vec<String> {
         let mut parts = Vec::new();
         while !self.held.is_empty() {
-            let at = cut(&self.held, MAX_JOB_LOG_BYTES);
+            let at = cut(&self.held);
             parts.push(self.held.drain(..at).collect());
         }
         parts
@@ -368,7 +391,7 @@ pub fn supervise(queued: &Queued, data: &Path, fetch: &dyn Fn(&[BlobRef]) -> Res
             return;
         }
         out.ended = end.is_some();
-        let report = JobReport { job: queued.id.clone(), seq: out.seq, log, end };
+        let report = sendable(JobReport { job: queued.id.clone(), seq: out.seq, log, end });
         out.seq += 1;
         if let Err(error) = post(&report) {
             out.lost.get_or_insert(error);
