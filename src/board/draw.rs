@@ -44,7 +44,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     frame.render_widget(Paragraph::new(line), top);
     let tab_hits: Vec<(Rect, Hit)> = tabs.into_iter().map(|(x, width, page)| (Rect::new(top.x + x, top.y, width, 1), Hit::Tab(page))).collect();
     let (full_hints, short_hints) = match app.page {
-        Page::Work | Page::Backlog => hint_lines(app.ctx(), app.selected_s_opens(), app.lead_chat.is_some()),
+        Page::Work | Page::Backlog => hint_lines(app.ctx(), app.selected_s_opens(), app.lead_chat.is_some(), app.selected_steps()),
         Page::Areas => area_page::Page::hint_lines(),
         Page::Routines => crate::routine_page::Page::hint_lines(),
         Page::Settings => app.settings.hint_lines(),
@@ -87,7 +87,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         frame.render_widget(Paragraph::new(Span::styled(line, style(color))), row);
         tab_hits.push((row, Hit::Key(keys::map().code(act))));
     }
-    tab_hits.extend(hint_hits(&status, bottom, app.ctx(), app.selected_s_opens(), app.lead_chat.is_some()));
+    tab_hits.extend(hint_hits(&status, bottom, app.ctx(), app.selected_s_opens(), app.lead_chat.is_some(), app.selected_steps()));
     frame.render_widget(Paragraph::new(status), bottom);
     let (message_lines, first_message) = messages_lines(app, fold, messages_area.height as usize, messages_area.width as usize);
     let shown_messages = message_lines.len();
@@ -111,8 +111,6 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         frame.render_widget(Paragraph::new(Span::styled(error.clone(), style(RED))).wrap(Wrap { trim: false }), body);
     } else if !app.loaded {
         frame.render_widget(Paragraph::new(Span::styled("looking around…", style(MUTED))), body);
-    } else if matches!(app.mode, Mode::Subtask(_)) {
-        super::subtask_view::draw(frame, app, body);
     } else if app.column == Column::Backlog {
         let (backlog, backlog_selected, backlog_rows) = backlog_lines(app, body.width as usize);
         render_column(frame, body, backlog, backlog_selected, backlog_rows, &mut app.hits);
@@ -124,26 +122,14 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         render_column(frame, work_area, work, work_selected, work_rows, &mut app.hits);
         draw_panel(frame, app, panel_area);
         app.draw_beside(frame, backlog_area);
-        if app.inside_task() {
-            app.dim_tasks(frame, Rect { width: panel_area.right() - work_area.x, ..work_area });
-        }
     } else if body.width >= 86 {
         let [work_area, _, backlog_area] = Layout::horizontal([Constraint::Percentage(54), Constraint::Length(4), Constraint::Min(20)]).areas(body);
         let (work, work_selected, work_rows) = work_lines(app, work_area.width as usize, true, work_area.height as usize);
         render_column(frame, work_area, work, work_selected, work_rows, &mut app.hits);
         app.draw_beside(frame, backlog_area);
-        if app.inside_task() {
-            app.dim_tasks(frame, work_area);
-        }
     } else {
         let (lines, work_selected, rows) = work_lines(app, body.width as usize, true, body.height as usize);
         render_column(frame, body, lines, work_selected, rows, &mut app.hits);
-        if app.inside_task() {
-            app.dim_tasks(frame, body);
-        }
-    }
-    if matches!(app.mode, Mode::Subtasks) && !app.beside.shown {
-        app.draw_inside_window(frame);
     }
 
     let mut modal_hits = Vec::new();
@@ -151,8 +137,8 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         super::item_card::draw_item_card(frame, card);
     }
     match &app.mode {
-        Mode::Normal | Mode::ItemCard(_) | Mode::Subtask(_) => {}
-        Mode::Subtasks => {}
+        Mode::Normal | Mode::ItemCard(_) | Mode::Subtasks => {}
+        Mode::SubtaskCard(_) => super::subtasks::draw(frame, app),
         Mode::Options(index) => modal_hits = draw_options(frame, app, *index),
         Mode::ReviewMenu(menu) => modal_hits = super::send_review::draw_review_menu(frame, menu),
         Mode::Questions(_) => modal_hits = draw_questions(frame, app),

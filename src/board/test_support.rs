@@ -53,6 +53,7 @@ pub(super) fn test_app(tasks: Vec<Item>) -> App {
     app.loaded = true;
     app.graphics = Graphics::Off;
     app.fold = Fold::Hidden;
+    app.subtask_io.count = std::rc::Rc::new(|_, _| None);
     app
 }
 

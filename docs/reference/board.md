@@ -13,7 +13,7 @@ A board you quit in the lead Space starts again the next time you press `prefix+
 | Context line, under it | While the lead's context is 85% full or more: `The lead's context is N% full · L to restart it fresh`. |
 | Hub line, under it | While the hub refuses the board because it has not enabled answering for your account: `This hub has not enabled answering for your account: <link> · H hub`. |
 | Work, left | Tasks from every repo with a worktree pool, grouped, in the order of [`board.groups`](configuration.md). |
-| Card, right | The [card](#the-card-beside-the-tasks) of the task under the cursor, or of the subtask. |
+| Card, right | The [card](#the-card-beside-the-tasks) of the task under the cursor. |
 | Messages, bottom | What sessions tell each other, newest last. |
 
 The status line shows:
@@ -32,7 +32,7 @@ The status line shows:
 | `⇣ updating kebbie · U` | An update whose window you hid runs. |
 | `✓ kebbie updated · U` | The update's summary waits for you. |
 
-In a pane under 86 columns the Work page shows only the tasks, with no card column; `→` opens the task's subtasks and card in a window, and `s` or *Show the card* in the options (`⏎`) opens the card window. The status line keeps only the counts that are not zero, without their words, so the page tabs still fit.
+In a pane under 86 columns the Work page shows only the tasks, with no card column; `→` steps into a task's subtask rows as on a wide board, and `s` or *Show the card* in the options (`⏎`) opens the card window. The status line keeps only the counts that are not zero, without their words, so the page tabs still fit.
 
 The lead line shows while the lead is stale, and says what happens next:
 
@@ -127,13 +127,14 @@ A task row shows its commits, uncommitted and untracked files, and how far it is
 
 #### A task in subtasks
 
-With [`task.steps`](configuration.md) on and subtasks listed, the task's subtasks not pushed yet sit under its row, one line each, with the subtask's number, title and state. A task of a single subtask shows no subtask line: the task's own row says it all.
+With [`task.steps`](configuration.md) on and subtasks listed, the task's subtasks not pushed yet sit under its row, each with its number, title and how many of its files you marked read in the review, and under it, dimmed, its first commit's short sha and subject, with `+N` when it holds more. A task of a single subtask shows no subtask line: the task's own row says it all.
 
 ```
 ◐ Switch the payment provider to Stripe        billing · 1 to accept
 │  ↑ 1 pushed
-│  ● 2 Charge through a PaymentGateway        ready · 2 commits
-│  ◐ 3 Add Stripe as the gateway              in progress · 1 commit
+│  ● 2 Charge through a PaymentGateway              1/3 read
+│      2222222 Charge through a PaymentGateway  +1
+│  ◐ 3 Add Stripe as the gateway                 in progress
 │  ○ 4 Remove the old payment client
 ╰ accept 2 · r review
 ```
@@ -143,24 +144,23 @@ With [`task.steps`](configuration.md) on and subtasks listed, the task's subtask
 | `N to accept`, yellow | On the row, in place of its commit count: N ready subtasks wait for you to accept them. |
 | `↑ N pushed`, muted | N subtasks are on the default branch already. |
 | `○`, muted | Planned. |
-| `◐ … in progress · N commits`, blue | Its Claude is at work on it, with the commits it holds so far; without commits, just `in progress`. Only the last subtask with commits is in progress, and only until the task reports ready. |
-| `● … ready · N commits`, yellow | Its agent ran `kebbie subtasks done` on it, or a later subtask holds commits, or it is the last and the task reported ready: finished, waiting for you to accept it, followed by the task's rules check in short while it is not passed: `· project rules not checked`, `· checking project rules` while the reviewer or the lead checks, `· breaks N project rules` when it found some, `· pushed past the rules check by you` (or `by the lead`) after `kebbie approve`. A passed check adds nothing. |
+| `◐ … in progress`, blue | Its Claude is at work on it. Only the last subtask with commits is in progress, and only until the task reports ready. |
+| `N/M read` | N of the subtask's M files are marked read in the review; it stands in place of the state word once the subtask has commits, and the mark's colour keeps the state. |
+| `● … ready`, yellow | Its agent ran `kebbie subtasks done` on it, or a later subtask holds commits, or it is the last and the task reported ready: finished, waiting for you to accept it, followed by the task's rules check in short while it is not passed: `· project rules not checked`, `· checking project rules` while the reviewer or the lead checks, `· breaks N project rules` when it found some, `· pushed past the rules check by you` (or `by the lead`) after `kebbie approve`. A passed check adds nothing. |
 | `✓ … accepted`, green | You accepted every commit in it. `accepted · waits for <subtask>` when a commit of a subtask you have not accepted lies above one of its own in the push order. |
 | `accept N · r review` | Under the subtasks: the first subtask waiting for you. `r` opens the review, and [`kebbie accept`](commands.md#kebbie-accept-name-sha) accepts it. |
 | `accept subtask N · r review` | With [`task.require_accept`](configuration.md) on, a ready task with a subtask to accept waits under Needs you with this line: it cannot be pushed until subtask N is accepted. |
 
-`↑` `↓` move from task to task and never stop on a subtask row. The subtasks are reached by stepping into the task: `→` (the selected row's last line ends in `→ subtasks`), `S`, or *Its subtasks* in its options (`⏎`). Beside the tasks, the card column then lights in mauve under the task's name, `▸ <title>`, with the subtasks at its top and the cursor on the first that waits for you, the task's card under them; the tasks fade, all but a `▸` on the task you are in. Under 86 columns the same list and card open in a window over the faded board. The keys line at the bottom reads `↑ ↓ j k steps · ⏎ opens subtask N · a accepts it · r reads its diff · esc back to the task`. Inside the task:
+`↑` `↓` move from task to task and never stop on a subtask row; the keys line reads `↑ ↓ task · → subtasks · s card · ⏎ options`. `→` steps into the task's own rows on the board: the cursor goes onto the first subtask that waits for you, marked with the selection's background, and nothing else on the board changes; the card beside the tasks stays the task's. The keys line then reads `↑ ↓ subtask · s card · r review · a accept · ← esc back`. Inside the task:
 
 | Key | Action |
 | --- | --- |
 | `↑` `↓` `j` `k` | The previous or next subtask; the first and last stay where they are. |
-| `⏎` | Open the [subtask view](#the-subtask-view); `esc` there comes back to the list. |
+| `s` | Open the [subtask's card](#a-subtasks-card). |
 | `a` | Accept that subtask, as [`kebbie accept <name> --subtask <id>`](commands.md#kebbie-accept-name-sha) does. On the task's own row, `a` stays [let the lead push it](#on-a-task). |
 | `r` | Open the review on that subtask. A review already open in its Space moves to it. |
-| `pgup` `pgdn` `space` | Scroll the card under the subtasks. |
 | `←` `esc` | Back to the task's row. |
 
-A task of a single subtask has no list: its row says it all.
 
 A subtask to accept leaves the task in the group its phase gives it, under Working while it builds on. The state word always shows: a long title is shortened at a word with `…` to make room, and only when the title would drop below 12 columns does the rules part shorten (`· 2 breaks`, `· checking`, `· not checked`, `· past the rules`) and then go. Without subtasks, the row is as above. See [Work in subtasks](../how-to/work-in-steps.md).
 
@@ -344,7 +344,7 @@ kebbie never posts a reply.
 | --- | --- |
 | `⏎` | Options for the selected task. On the Backlog page, the item's card. |
 | `↑` `↓`, `j` `k` | Move. |
-| `→` | Step into the selected task: its [subtasks](#a-task-in-subtasks), or, for a task without them, its card beside the tasks, where `↑` `↓` `pgup` `pgdn` scroll it. Under 86 columns, without subtasks, the card window. `←` or `esc` back to the tasks. |
+| `→` | Step into the selected task: onto its [subtask rows](#a-task-in-subtasks), or, for a task without them, its card beside the tasks, where `↑` `↓` `pgup` `pgdn` scroll it. `←` or `esc` back to the tasks. |
 | `1`, `2`, `3`, `4`, `,` | The Work page, the [Backlog page](#backlog-page), the Areas page, the Routines page, the [Settings page](#settings-page). |
 | `tab` | Move focus to the lead's chat, showing it first when it is hidden. |
 | `h` | Hide the lead's chat so the board takes the whole width while the chat runs on, or show it again. Only on the board in the lead Space. See [Hiding the chat](../explanation/lead-and-away-mode.md#hiding-the-chat). |
@@ -549,7 +549,7 @@ The right of the Work page shows the card of the task under the cursor, and chan
 ```
 CARD   Push from the board without a popup
 ──────────────────────────────────────────────────
-working · kebbie · 2 commits · 1 of 2 subtasks accepted
+working · kebbie · 2 commits · 3/5 read · 1 of 2 subtasks accepted
 
 BUILT
   A push runs on its own thread; a line at the bottom says each step.
@@ -563,62 +563,58 @@ COMMITS
 
 | Part | Shows |
 | --- | --- |
-| The facts | The task's group, its repo, its commits and, for a task in subtasks, how many are accepted. `no card yet` until it wrote one, `code changed since the card` when its code moved on. |
-| The card's sections | Its [sign-off card](#the-card-window), section by section: BUILT, DECISIONS, ALSO NOTICED and the rest, as `s` and the hub show it. |
+| The facts | The task's group, its repo, its commits, how many of its changed files you marked read in the review, and, for a task in subtasks, how many are accepted. `no card yet` until it wrote one, `code changed since the card` when its code moved on. |
+| The card's sections | Its [sign-off card](#the-card-window), section by section: its headline, BUILT, DECISIONS, ALSO NOTICED and the rest, as the card window shows it. A card's `Changed:` part, what differs from its version before, is left out. |
 | `RECIPE`, `LAST REPORT` | For a task without a card: the recipe it runs and why, and its last report with its age. |
 | `COMMITS` | Each commit's short sha and subject. |
 
-- Inside a task with subtasks, it lists them over the card, the cursor on one; `⏎` opens that subtask in the [subtask view](#the-subtask-view).
 - On a row that is not a task, such as the bugs to send, the Done block or a comment, it says so in one line.
-- `→` or a click focuses it: its heading becomes `▸ <title>` in mauve and the tasks fade. `↑` `↓` `pgup` `pgdn` then scroll it; `←` or `esc` gives the keys back to the tasks.
+- On a task without subtasks, `→` or a click focuses it: `CARD` lights in mauve. `↑` `↓` `pgup` `pgdn` then scroll it; `←` or `esc` gives the keys back to the tasks.
 - `s` opens the card in its window, with its images.
-- Under 86 columns the column is not drawn; `→` opens the task in a window instead.
+- Under 86 columns the column is not drawn; `s` opens the same card in its window.
 
-### The subtask view
+### A subtask's card
 
-Opened by `⏎` in a task's [subtask list](#a-task-in-subtasks), it fills the board:
+Opened by `s` while the cursor is on a [subtask row](#a-task-in-subtasks), in the same window as the task's card:
 
 ```
-Switch the payment provider to Stripe › Subtask 2 of 4
+▸ Switch the payment provider to Stripe › 2 of 4
+ready · 1 commit · 1/2 read · +102 −12
+
 Charge through a PaymentGateway
-ready · 1 commit · 2 files · +102 −12 · 1 of 2 read
+
+WHAT IT DOES
+  Every charge goes through one gateway, so the provider is one class.
 
 COMMITS
   2222222  Charge through a PaymentGateway
 
 FILES
-  ✓ app/gateway.rb        +38    −12
+  ● app/gateway.rb        +38    −12
   ○ app/stripe.rb         +64
-
-BUILT
-  Every charge goes through one gateway, so the provider is one class.
-
-← → subtask 1 or 3 · r reads the diff · a accepts · esc back to the list
 ```
 
 | Part | Shows |
 | --- | --- |
-| The top line | The task's title and which subtask this is, of how many. |
-| The facts | Its state, its commits, its files with the lines added and removed, and how many of the files you marked read in the review. |
-| `OBSTACLE <id>` | First, while an [obstacle](../explanation/obstacles-and-findings.md) raised on this subtask is open: what it is, the investigator's decision and its question to you. `waits for you` while that question is open, and `⏎` then answers it in the questions window. |
+| The title | The task's title and which subtask this is, of how many. |
+| The facts | Its state, its commits, how many of its files you marked read in the review, and the lines added and removed. |
+| `OBSTACLE <id>` | While an [obstacle](../explanation/obstacles-and-findings.md) raised on this subtask is open: what it is, the investigator's decision and its question to you. |
+| `WHAT IT DOES` | What the task wrote in the bodies of the subtask's commit messages, trailers left out. |
 | `COMMITS` | Each commit's short sha and subject. |
-| `FILES` | The subtask's files, from under its first commit to its last, each with its read mark: `✓` read, `○` not. |
-| `BUILT` | What the task wrote in the bodies of the subtask's commit messages, trailers left out. |
+| `FILES` | The subtask's files, from under its first commit to its last, each with its read mark: `●` read, `○` not. |
 
 | Key | Action |
 | --- | --- |
-| `←` `→` | The previous or next subtask. |
 | `↑` `↓`, `j` `k` | Scroll. |
-| `a` | Accept this subtask; the view stays open and shows it accepted. |
 | `r` | Open the review on this subtask. |
-| `⏎` | Answer the obstacle, while it waits for you. |
-| `esc`, `q` | Back to the subtask list, the cursor on the subtask you were on, showing its new state. |
+| `a` | Accept this subtask. |
+| `esc`, `q`, `s` | Back to the subtask's row. |
 
 ### The card window
 
-Opened by `s` on a task with a sign-off card and no open question, in a narrow board and a wide one alike. The title names the task. The first line says whether the card is current at its commit, or written at an earlier one with the code changed since.
+Opened by `s` on a task with a sign-off card and no open question, in a narrow board and a wide one alike. The title names the task, `▸ <title>`, and the window shows the same card as [the column beside the tasks](#the-card-beside-the-tasks): the facts line first, with the read count and whether the code changed since the card, then the card's parts and its commits.
 
-The card's text follows in parts, each under a header on a rule. A paragraph that opens with a short label and a colon, such as `Built:` or `Decisions:`, starts a part of its own headed by that label. The text before the first label is headed `CARD`, and a card with no label is one `CARD` part. `**bold**` shows bold.
+A paragraph that opens with a short label and a colon, such as `Built:` or `Decisions:`, starts a part of its own headed by that label; the text before the first label, the headline, opens the card. `**bold**` shows bold.
 
 The images show one at a time, each as large as its space allows:
 

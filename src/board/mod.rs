@@ -37,7 +37,7 @@ mod send_review;
 mod space;
 mod status_bar;
 mod steps;
-mod subtask_view;
+mod subtasks;
 pub(crate) mod terminal;
 #[cfg(test)]
 mod test_support;
@@ -147,7 +147,7 @@ enum Mode {
     Device { id: String, back: next_window::Window },
     Update,
     AgentUpdates,
-    Subtask(Box<subtask_view::View>),
+    SubtaskCard(Box<subtasks::View>),
     Subtasks,
 }
 
@@ -263,7 +263,8 @@ struct App {
     pushes: Vec<pushing::Pushing>,
     push_outcomes: Vec<(Notice, notices::Subject)>,
     subtask_row: Option<(String, String)>,
-    subtask_io: subtask_view::Io,
+    subtask_io: subtasks::Io,
+    reads: subtasks::Reads,
     beside: beside::Beside,
 }
 
@@ -745,7 +746,7 @@ impl App {
             Mode::Device { id, back } => self.handle_device(id, back, key, act),
             Mode::Update => self.handle_update(key),
             Mode::AgentUpdates => self.handle_agent_updates(key),
-            Mode::Subtask(view) => self.handle_subtask(view, key, act),
+            Mode::SubtaskCard(view) => self.handle_subtask_card(view, key, act),
             Mode::Subtasks => self.handle_subtasks(act, &key),
             Mode::Report { id, shown, scroll, read, .. } => self.confirm_report(id, shown, scroll, read, key, cancels),
             Mode::ReportAll { shown, scroll, read, .. } => self.confirm_report_all(shown, scroll, read, key, cancels),
@@ -986,7 +987,6 @@ impl App {
                         }
                     }
                     Act::Review => self.open_review(&item),
-                    Act::Subtasks => self.open_subtasks(&item),
                     Act::Card => match (item.path.clone(), self.card_of(&item), self.question_of(&item)) {
                         (_, _, Some(at)) => self.open_questions(Some(at)),
                         (Some(path), Some(_), None) => self.mode = Mode::Card { path, name: item.name.clone(), scroll: 0, image: 0 },
@@ -1230,7 +1230,7 @@ impl App {
             agent_offer: None, agent_mode: std::sync::Arc::new(|| config::agent_updates_in(&config::path())), installer: agent_updates::default_install(),
             filter: None, ctrl_c: None, go_again: None, notice: None, lead_chat: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), lead_fresh_starter: std::sync::Arc::new(crate::lead_restart::fresh_now), lead_checker: std::sync::Arc::new(crate::lead::restart_refusal), lead_restarted: std::sync::Arc::default(), lead_context: None, restart_why: String::new(), devices: Vec::new(), subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
             comments: Vec::new(), comment_panel: Default::default(), comment_dir: None, copier: comments::default_copier(), reopener: comments::default_reopener(), pusher: pushing::live_pusher(), pushes: Vec::new(), push_outcomes: Vec::new(),
-            subtask_row: None, subtask_io: Default::default(), beside: Default::default(),
+            subtask_row: None, subtask_io: Default::default(), reads: Default::default(), beside: Default::default(),
         }
     }
 }
@@ -1253,6 +1253,7 @@ pub fn run(overlay: bool) -> Result<String> {
     }
     let (requests, results) = spawn_detailer();
     app.detail_requests = Some(requests);
+    app.reads.spawn();
     app.detail_results = Some(results);
     (app.image_requests, app.image_results) = spawn_decoder().map_or((None, None), |(requests, results)| (Some(requests), Some(results)));
     let height = ratatui::crossterm::terminal::size().map_or(50, |(_, height)| height);
@@ -1374,6 +1375,7 @@ pub fn run(overlay: bool) -> Result<String> {
                 }
             }
             changed |= app.take_images();
+            changed |= app.reads.take();
             app.areas.tick();
             app.routines.tick();
             let mut repos: Vec<PathBuf> = app.tasks.iter().filter_map(|item| item.repo.clone()).chain(app.areas.repos()).collect();
@@ -1490,7 +1492,7 @@ mod tests {
         let mut app = test_app(Vec::new());
         app.handle_key(KeyEvent::from(KeyCode::Char('h')), None);
         assert_eq!(app.notice.as_ref().map(|(text, _)| text.as_str()), Some("h hides the lead's chat only on the board in the lead Space"));
-        assert!(!hint_lines(Ctx::Work, None, false).0.to_string().contains("h chat") && hint_lines(Ctx::Work, None, true).0.to_string().contains("h chat"));
+        assert!(!hint_lines(Ctx::Work, None, false, false).0.to_string().contains("h chat") && hint_lines(Ctx::Work, None, true, false).0.to_string().contains("h chat"));
         assert!(!shown(keys::map(), Ctx::Work, false).iter().any(|(key, _)| key == "h") && shown(keys::map(), Ctx::Work, true).iter().any(|(key, _)| key == "h"));
         assert!(!header(&app, 200).0.to_string().contains("chat hidden"));
         app.lead_chat = Some(true);

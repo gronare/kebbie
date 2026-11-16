@@ -2,9 +2,11 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
 use crate::keys::{self, Act};
+use super::review_data::short;
+use super::subtasks::read_text;
 use crate::status::Item;
 use crate::tasks::{self, Subtask, SubtaskState};
-use super::widgets::{BLUE, GREEN, MAUVE, MUTED, RAISED, RED, SURFACE, TEXT, YELLOW, bold, cut, plural, style, text_width};
+use super::widgets::{BLUE, FAINT, GREEN, MAUVE, MUTED, RAISED, RED, SURFACE, TEXT, YELLOW, bold, cut, plural, style, text_width};
 
 const INDENT: &str = "    ";
 
@@ -16,15 +18,6 @@ pub(super) fn rows_shown(item: &Item) -> bool {
 // The subtask rows the cursor walks through: the open ones, as listed.
 pub(super) fn walked(item: &Item) -> &[Subtask] {
     if rows_shown(item) { &item.subtasks.items } else { &[] }
-}
-
-pub(super) fn subtask_hint(number: usize) -> Line<'static> {
-    let key = |key: String| Span::styled(key, style(MAUVE));
-    let label = |text: &str| Span::styled(text.to_string(), style(MUTED));
-    Line::from(vec![
-        key(keys::map().label(Act::Move)), label(" steps · "), key(keys::map().label(Act::Options)), label(&format!(" opens subtask {number} · ")), key(keys::key(Act::Permit).to_string()), label(" accepts it · "),
-        key(keys::key(Act::Review).to_string()), label(" reads its diff · "), key(keys::map().label(Act::Back)), label(" back to the task"),
-    ])
 }
 
 fn waiting(subtask: &Subtask) -> bool {
@@ -75,25 +68,20 @@ fn rules_forms(item: &Item, state: &SubtaskState) -> Vec<String> {
     }
 }
 
-// The state word, and for an accepted subtask behind one that is not, which number it waits for.
-fn state_word(item: &Item, subtask: &Subtask) -> String {
+// The state word, or in its place the read count once one is read for the subtask, and for an accepted subtask behind one that is not, which number it waits for.
+fn state_word(item: &Item, subtask: &Subtask, read: Option<(usize, usize)>) -> String {
     let waits = subtask.waits_for.as_ref().and_then(|title| item.subtasks.items.iter().find(|other| other.title == *title));
+    let shown = read.map_or_else(|| tasks::subtask_word(&subtask.state).to_string(), read_text);
     match (&subtask.state, waits) {
         (SubtaskState::Planned, _) => String::new(),
-        (SubtaskState::Accepted, Some(other)) => format!("accepted · waits for {}", other.number),
-        (state, _) => tasks::subtask_word(state).to_string(),
+        (SubtaskState::Accepted, Some(other)) => format!("waits for {} · {shown}", other.number),
+        _ => shown,
     }
 }
 
-// What follows the state word, longest first: how many commits the subtask holds, then the rules part; each gives way before the state word does.
+// What follows the state word, longest first: the rules part; it gives way before the state word does.
 fn label_forms(item: &Item, step: &Subtask) -> Vec<String> {
-    let count = match step.commits.len() {
-        0 => None,
-        1 => Some("1 commit".to_string()),
-        many => Some(format!("{many} commits")),
-    };
-    let rules = rules_forms(item, &step.state);
-    rules.into_iter().map(|rules| count.as_ref().map_or(rules.clone(), |count| format!("{count} · {rules}"))).chain(count.clone()).collect()
+    rules_forms(item, &step.state)
 }
 
 // The title whole, or as many whole words as fit with an ellipsis; None when not even one word does.
@@ -128,18 +116,29 @@ fn fitted(title: &str, state: &str, rules: &[String], room: usize) -> (String, S
     (shortened(title, title_room(label)), label.clone())
 }
 
-fn step_line(item: &Item, step: &Subtask, width: usize, on: bool) -> Line<'static> {
+fn step_line(item: &Item, step: &Subtask, width: usize, on: bool, read: Option<(usize, usize)>) -> Line<'static> {
     let number = format!("{} ", step.number);
     let room = width.saturating_sub(INDENT.len() + 2 + number.len());
-    let (title, label) = fitted(&step.title, &state_word(item, step), &label_forms(item, step), room);
+    let (title, label) = fitted(&step.title, &state_word(item, step, read), &label_forms(item, step), room);
     let color = mark_color(&step.state);
     let planned = step.state == SubtaskState::Planned;
     let gap = room.saturating_sub(text_width(&title) + text_width(&label));
-    Line::from(vec![
-        Span::raw(INDENT), Span::styled(tasks::subtask_mark(&step.state), style(color)), Span::raw(" "),
+    let indent = if on { vec![Span::raw("  "), Span::styled("▌ ", style(MAUVE))] } else { vec![Span::raw(INDENT)] };
+    Line::from([indent, vec![
+        Span::styled(tasks::subtask_mark(&step.state), style(color)), Span::raw(" "),
         Span::styled(number, style(MUTED)), Span::styled(title, if on { bold(TEXT) } else { style(if planned { MUTED } else { TEXT }) }),
         Span::raw(" ".repeat(gap)), Span::styled(label, style(color)),
-    ])
+    ]].concat())
+}
+
+// Under a subtask with commits, dimmed: its first commit's short sha and subject, and how many more it holds.
+fn commit_line(step: &Subtask, width: usize) -> Option<Line<'static>> {
+    let first = step.commits.first()?;
+    let lead = INDENT.len() + 2 + step.number.to_string().len() + 1;
+    let more = if step.commits.len() > 1 { format!("  +{}", step.commits.len() - 1) } else { String::new() };
+    let sha = short(&first.sha).to_string();
+    let room = width.saturating_sub(lead + text_width(&sha) + 1 + text_width(&more));
+    Some(Line::from(vec![Span::raw(" ".repeat(lead)), Span::styled(sha, style(FAINT)), Span::raw(" "), Span::styled(cut(&first.subject, room.max(1)), style(MUTED)), Span::styled(more, style(MUTED))]))
 }
 
 // The task's stages under its subtasks, each with where it stands; the pushable run stops at the first not met.
@@ -165,23 +164,32 @@ fn stage_lines(stages: &[kebbie_hub_protocol::Stage], width: usize) -> Vec<Line<
 
 // The line the subtask under the cursor sits on, counted from the first of step_lines.
 pub(super) fn cursor_line(item: &Item, at: usize) -> usize {
-    usize::from(!item.subtasks.pushed.is_empty()) + at
+    usize::from(!item.subtasks.pushed.is_empty()) + item.subtasks.items.iter().take(at).map(|step| 1 + usize::from(!step.commits.is_empty())).sum::<usize>()
 }
 
-pub(super) fn step_lines(item: &Item, highlighted: bool, width: usize, cursor: Option<usize>) -> Vec<Line<'static>> {
+pub(super) fn step_lines(item: &Item, highlighted: bool, width: usize, cursor: Option<usize>, reads: &[Option<(usize, usize)>]) -> Vec<Line<'static>> {
     if !item.subtasks.listed() {
         return Vec::new();
     }
     let mut lines = Vec::new();
+    let mut lit = Vec::new();
     if rows_shown(item) {
         if !item.subtasks.pushed.is_empty() {
             lines.push(Line::from(vec![Span::raw(INDENT), Span::styled(format!("↑ {} pushed", item.subtasks.pushed.len()), style(MUTED))]));
         }
-        lines.extend(item.subtasks.items.iter().enumerate().map(|(at, step)| step_line(item, step, width, cursor == Some(at))));
+        for (at, step) in item.subtasks.items.iter().enumerate() {
+            let on = cursor == Some(at);
+            let read = reads.get(at).copied().flatten();
+            lit.extend(on.then_some(lines.len()));
+            lines.push(step_line(item, step, width, on, read));
+            if let Some(line) = commit_line(step, width) {
+                lit.extend(on.then_some(lines.len()));
+                lines.push(line);
+            }
+        }
     }
     lines.extend(stage_lines(&item.subtasks.stages, width));
-    let on = cursor.filter(|_| rows_shown(item)).map(|at| cursor_line(item, at));
-    lines.into_iter().enumerate().map(|(at, line)| match (on == Some(at), highlighted) {
+    lines.into_iter().enumerate().map(|(at, line)| match (lit.contains(&at), highlighted) {
         (true, _) => line.style(Style::new().bg(RAISED)),
         (false, true) => line.style(Style::new().bg(SURFACE)),
         (false, false) => line,
@@ -253,13 +261,14 @@ pub(crate) mod tests {
         let (rows, buffer) = render(&mut app, 120, 30);
         let screen = rows.join("\n");
         let at = find(&rows, "◐ Switch the payment provider to Stripe")[0].1;
-        let block: Vec<String> = rows[at..at + 6].iter().map(|row| untied(row).to_string()).collect();
+        let block: Vec<String> = rows[at..at + 7].iter().map(|row| untied(row).to_string()).collect();
         assert!(block[0].ends_with("billing · 1 to accept"), "the commits count gives way to what waits for you: {screen}");
         assert_eq!(block[1], "↑ 1 pushed", "{screen}");
-        assert!(block[2].starts_with("● 2 Charge through a PaymentGateway ") && block[2].ends_with(" ready · 1 commit"), "{screen}");
-        assert!(block[3].starts_with("◐ 3 Add Stripe as the gateway ") && block[3].ends_with(" in progress"), "{screen}");
-        assert_eq!(block[4], "○ 4 Remove the old payment client", "a planned step has nothing on the right: {screen}");
-        assert_eq!(block[5], "accept 2 · r review", "{screen}");
+        assert!(block[2].starts_with("● 2 Charge through a PaymentGateway ") && block[2].ends_with(" ready"), "{screen}");
+        assert_eq!(block[3], "2222222 subject of 2222222bbbb", "its first commit under it, dimmed: {screen}");
+        assert!(block[4].starts_with("◐ 3 Add Stripe as the gateway ") && block[4].ends_with(" in progress"), "{screen}");
+        assert_eq!(block[5], "○ 4 Remove the old payment client", "a planned step has nothing on the right: {screen}");
+        assert_eq!(block[6], "accept 2 · r review", "{screen}");
         let column = |row: usize, mark: char| rows[row].chars().position(|character| character == mark).unwrap_or_default();
         assert!(column(at + 1, '↑') == column(at, '◐') + 3 && column(at + 2, '●') == column(at + 1, '↑'), "the steps sit indented under the row: {screen}");
         assert_eq!(column(at + 1, '│'), column(at, '◐'), "on the rule under the status glyph: {screen}");
@@ -267,7 +276,7 @@ pub(crate) mod tests {
         assert_eq!(cell_fg(&rows, &buffer, "1 to accept"), Some(YELLOW));
         assert_eq!(cell_fg(&rows, &buffer, "↑ 1 pushed"), Some(MUTED));
         assert_eq!(cell_fg(&rows, &buffer, "● 2"), Some(YELLOW));
-        assert_eq!(cell_fg(&rows, &buffer, "ready · 1 commit"), Some(YELLOW));
+        assert_eq!(cell_fg(&rows, &buffer, "subject of 2222222bbbb"), Some(MUTED));
         assert!(!screen.contains("rules"), "a check that passed says nothing: {screen}");
         assert_eq!(cell_fg(&rows, &buffer, "◐ 3"), Some(BLUE));
         assert_eq!(cell_fg(&rows, &buffer, "○ 4"), Some(MUTED));
@@ -288,11 +297,10 @@ pub(crate) mod tests {
         let (rows, buffer) = render(&mut app, 120, 30);
         let screen = rows.join("\n");
         let accepted = find(&rows, "✓ 2 Charge through a PaymentGateway")[0].1;
-        assert!(rows[accepted].trim_end().ends_with("accepted · 1 commit"), "{screen}");
+        assert!(rows[accepted].trim_end().ends_with("accepted"), "{screen}");
         assert_eq!(cell_fg(&rows, &buffer, "✓ 2"), Some(GREEN));
-        assert_eq!(cell_fg(&rows, &buffer, "accepted · 1 commit"), Some(GREEN));
         let waiting = find(&rows, "● 3 Add Stripe as the gateway")[0].1;
-        assert!(rows[waiting].trim_end().ends_with("ready · 1 commit"), "no rules approval and nothing checked under Working says only its state: {screen}");
+        assert!(rows[waiting].trim_end().ends_with("ready"), "no rules approval and nothing checked under Working says only its state: {screen}");
         assert!(screen.contains("accept 3 · r review") && screen.contains("1 to accept"), "{screen}");
         let mut all = stripe();
         all.items.truncate(1);
@@ -356,19 +364,22 @@ pub(crate) mod tests {
 
     #[test]
     fn a_long_step_title_gives_way_so_its_state_always_shows() {
-        let mut app = test_app(vec![stepped(long_steps())]);
+        let mut item = stepped(long_steps());
+        item.path = Some(std::path::PathBuf::from("/work/wt1.billing"));
+        let mut app = test_app(vec![item]);
+        app.subtask_io.count = std::rc::Rc::new(|_, step| (!step.commits.is_empty()).then_some((1, 2)));
         app.work_selected = 9;
         let (rows, _) = render(&mut app, 100, 30);
         let lines = step_rows(&rows);
-        assert_eq!(lines, ["● 1 Round VAT once per…         ready · 1 commit", "◐ 2 Round VAT once per invoice and…  in progress", "○ 3 Round VAT once per invoice and rate instead…"], "{}", rows.join("\n"));
+        assert_eq!(lines, ["● 1 Round VAT once per invoice and…     1/2 read", "◐ 2 Round VAT once per invoice and…  in progress", "○ 3 Round VAT once per invoice and rate instead…"], "{}", rows.join("\n"));
         let (rows, _) = render(&mut app, 60, 30);
-        assert_eq!(step_rows(&rows), ["● 1 Round VAT once per invoice…     ready · 1 commit", "◐ 2 Round VAT once per invoice and…      in progress", "○ 3 Round VAT once per invoice and rate instead of…"], "{}", rows.join("\n"));
+        assert_eq!(step_rows(&rows), ["● 1 Round VAT once per invoice and rate…    1/2 read", "◐ 2 Round VAT once per invoice and…      in progress", "○ 3 Round VAT once per invoice and rate instead of…"], "{}", rows.join("\n"));
         for width in [100u16, 80, 60, 45] {
             let (rows, _) = render(&mut app, width, 30);
             let screen = rows.join("\n");
             let lines = step_rows(&rows);
             assert_eq!(lines.len(), 3, "{width}: {screen}");
-            assert!(lines[0].ends_with(" ready · 1 commit") || lines[0].ends_with(" ready"), "{width}: the state word stands, the count gives way first: {screen}");
+            assert!(lines[0].ends_with(" 1/2 read"), "{width}: the read count stands: {screen}");
             assert!(lines[1].ends_with(" in progress"), "{width}: {screen}");
             for line in &lines {
                 let title = line.chars().skip(4).collect::<String>().split("  ").next().unwrap_or_default().to_string();
@@ -432,7 +443,7 @@ pub(crate) mod tests {
         let screen = rows.join("\n");
         assert_eq!(screen.matches("not checked").count(), 1, "{screen}");
         assert!(screen.contains(crate::status::UNCHECKED), "{screen}");
-        assert!(step_rows(&rows).iter().all(|row| row.ends_with("ready · 1 commit")), "{screen}");
+        assert!(step_rows(&rows).iter().all(|row| row.ends_with("ready")), "{screen}");
     }
 
     #[test]

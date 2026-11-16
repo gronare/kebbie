@@ -359,7 +359,8 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
         if let Some(at) = cursor {
             selected_line = lines.len() + cursor_line(item, at);
         }
-        lines.extend(step_lines(item, selected && open && unfold, width, cursor));
+        let reads = app.subtask_reads(item);
+        lines.extend(step_lines(item, selected && open && unfold, width, cursor, &reads));
         if let Some(wanted) = item.wanted(&keys::key(Act::Go).to_string()).or_else(|| item.verdict_wanted()).or_else(|| accept_wanted(item)) {
             lines.extend(wanted_lines(&wanted, PEACH, selected && open && unfold, width));
         } else if let Some(waiting) = item.waiting() {

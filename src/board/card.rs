@@ -4,7 +4,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph};
+use ratatui::widgets::{Block, Clear, Paragraph};
 use ratatui::Frame;
 use ratatui::layout::Size;
 use ratatui_image::picker::ProtocolType;
@@ -12,11 +12,14 @@ use ratatui_image::picker::ProtocolType;
 use crate::keys::{self, Act, Ctx};
 use crate::report;
 use crate::status::Item;
+use super::beside::task_card;
+use super::widgets::cut;
 use super::detail::Detail;
+use super::subtasks::card_window;
 use super::images::{Shown, image_shown, preview_note, render_image};
 use super::link::file_link;
 use super::{App, Column, Hit, Mode};
-use super::widgets::{FAINT, GREEN, MANTLE, MAUVE, MUTED, SURFACE, TEAL, TEXT, YELLOW, bold, centered, fill, fit, plural, section_header, rule, style, text_width};
+use super::widgets::{FAINT, GREEN, MANTLE, MAUVE, MUTED, SURFACE, TEAL, TEXT, YELLOW, bold, fill, fit, plural, section_header, style, text_width};
 
 impl App {
     pub(super) fn card_of(&self, item: &Item) -> Option<std::rc::Rc<Detail>> {
@@ -206,25 +209,6 @@ pub(super) fn rich_wrap(text: &str, width: usize, max_lines: usize, color: Color
     }).collect()
 }
 
-fn section_lines(sections: &[Section], width: usize) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    for section in sections {
-        if !lines.is_empty() {
-            lines.push(Line::default());
-        }
-        let label = section.label.as_deref().map_or_else(|| "CARD".to_string(), str::to_uppercase);
-        lines.push(section_header(&label, Vec::new(), width));
-        for text in &section.lines {
-            if text.is_empty() {
-                lines.push(Line::default());
-            } else {
-                lines.extend(rich_wrap(text, width, usize::MAX, TEXT));
-            }
-        }
-    }
-    lines
-}
-
 pub(super) fn card_hint(opens: &str) -> Line<'static> {
     Line::from(vec![Span::raw("   "), Span::styled("⏎", style(MAUVE)), Span::styled(" options · ", style(MUTED)), Span::styled(keys::key(Act::Card).to_string(), style(MAUVE)), Span::styled(format!(" {opens}"), style(MUTED))]).style(Style::new().bg(SURFACE))
 }
@@ -235,23 +219,15 @@ pub(super) fn draw_card(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit)> {
     let Mode::Card { path, name, scroll, image } = &app.mode else { return Vec::new() };
     let (path, name, scroll, image) = (path.clone(), name.clone(), *scroll, *image);
     let Some(detail) = app.details.get(&path).cloned() else { return Vec::new() };
-    let Some((card, current)) = &detail.card else { return Vec::new() };
-    let full = frame.area();
-    let area = centered(full, (full.width * 92 / 100).max(40), (full.height * 84 / 100).max(12));
-    frame.render_widget(Clear, area);
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(style(MAUVE)).padding(Padding::horizontal(1))
-        .title(Span::styled(format!(" {name} · card "), bold(MAUVE))).style(Style::new().bg(MANTLE));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    let [status, _, body, line, foot] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
-    let sha: String = card.sha.chars().take(7).collect();
-    let head = if *current { Span::styled(format!("✓ current at {sha}"), style(GREEN)) } else { Span::styled(format!("○ written at {sha}, code changed since"), style(YELLOW)) };
-    frame.render_widget(Paragraph::new(Line::from(head)), status);
-    let (sections, images) = card_parts(&card.text);
+    let Some((card, _)) = &detail.card else { return Vec::new() };
+    let item = app.tasks.iter().find(|item| item.path.as_ref() == Some(&path)).cloned();
+    let title = item.as_ref().map_or_else(|| name.clone(), Item::titled);
+    let (body, _, foot) = card_window(frame, format!("▸ {}", cut(&title, 60)));
+    let images = card_parts(&card.text).1;
     let image = image.min(images.len().saturating_sub(1));
-    let wide = inner.width >= WIDE && !images.is_empty();
+    let wide = body.width >= WIDE && !images.is_empty();
     let (text_area, image_area) = if wide {
-        let left = (inner.width * 2 / 5).clamp(58, 64);
+        let left = (body.width * 2 / 5).clamp(58, 64);
         let [text, _, bar, _, pane] = Layout::horizontal([Constraint::Length(left), Constraint::Length(2), Constraint::Length(1), Constraint::Length(2), Constraint::Min(1)]).areas(body);
         frame.render_widget(Paragraph::new((0..bar.height).map(|_| Line::from(Span::styled("│", style(FAINT)))).collect::<Vec<_>>()), bar);
         (text, Some(pane))
@@ -262,11 +238,11 @@ pub(super) fn draw_card(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit)> {
         (text, Some(pane))
     };
     let width = text_area.width as usize;
-    let mut lines = section_lines(&sections, width);
+    let mut lines = task_card(item.as_ref(), Some(&detail), width);
     let mut list = None;
     if wide {
         lines.push(Line::default());
-        lines.push(section_header("IMAGES", Vec::new(), width));
+        lines.push(super::beside::section("IMAGES"));
         list = Some(lines.len());
         let longest = images.iter().map(|shown| shown.name().chars().count()).max().unwrap_or(0);
         for (index, shown) in images.iter().enumerate() {
@@ -298,7 +274,6 @@ pub(super) fn draw_card(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit)> {
         draw_card_image(frame, app, &path.join(&shown.path), shown, (image, images.len()), pane, wide);
     }
     let keys = card_keys(images.len() > 1, !images.is_empty() && app.protocol().is_some(), !images.is_empty() && app.viewer.is_some());
-    frame.render_widget(Paragraph::new(rule(line.width as usize)), line);
     frame.render_widget(Paragraph::new(fit(vec![Span::styled(keys, style(MUTED))], foot.width as usize)), foot);
     hits
 }
@@ -611,7 +586,7 @@ mod tests {
         assert!(matches!(app.mode, Mode::Card { .. }));
         let (rows, _) = render(&mut app, 170, 40);
         let screen = rows.join("\n");
-        assert!(screen.contains("search-filters · card") && screen.contains("○ written at abcdef0, code changed since"), "{screen}");
+        assert!(screen.contains("▸ search-filters") && screen.contains("ready to push · web · 1 commit") && screen.contains("code changed since the card"), "the same state line as the column: {screen}");
         assert!(screen.contains("A third line stays in the window.") && screen.contains("▸ ▣ filters.png  the filters") && screen.contains("  ▣ empty.png    empty"), "with graphics off the images are listed by name: {screen}");
         assert!(screen.contains("← → image · ↑ ↓ scroll · p push · esc close"), "{screen}");
         press(&mut app, key(KeyCode::Down));
@@ -623,7 +598,7 @@ mod tests {
         fresh.handle_normal(key(KeyCode::Char('s')));
         let (rows, _) = render(&mut fresh, 84, 40);
         let screen = rows.join("\n");
-        assert!(screen.contains("✓ current at abcdef0"), "the window shows in a narrow board too");
+        assert!(screen.contains("ready to push · web · 1 commit") && !screen.contains("code changed since"), "the window shows in a narrow board too: {screen}");
         assert!(screen.contains("↑ ↓ scroll · p push · esc close") && !screen.contains("← →"), "one image, nothing to switch: {screen}");
         press(&mut fresh, key(KeyCode::Char('p')));
         assert!(!matches!(fresh.mode, Mode::Card { .. }), "p goes on to push");
@@ -636,11 +611,11 @@ mod tests {
         app.handle_normal(key(KeyCode::Char('s')));
         let (rows, _) = render(&mut app, 160, 48);
         let screen = rows.join("\n");
-        let (card_x, card_y) = find(&rows, "CARD ─")[0];
+        let (card_x, card_y) = find(&rows, "ready to push · web")[0];
         let (image_x, image_y) = find(&rows, "1/2 refund-row-desktop.png  the refund row")[0];
         assert!(card_y == image_y && image_x > card_x + 58, "text on the left, the image's header on the right: {screen}");
         assert_eq!(rows[card_y + 1].matches('│').count(), 3, "a bar between them, inside the window's borders: {screen}");
-        assert!(screen.contains("TO CHECK ─") && screen.contains("PLEASE CONFIRM ─") && screen.contains("IMAGES ─"), "{screen}");
+        assert!(screen.contains("TO CHECK") && screen.contains("PLEASE CONFIRM") && screen.contains("IMAGES"), "{screen}");
         assert!(screen.contains("billing page for every") && !screen.contains("**"), "{screen}");
         assert!(!screen.contains("/tmp/kebbie-shots"), "the path stays behind the link: {screen}");
         press(&mut app, key(KeyCode::Right));
@@ -663,7 +638,7 @@ mod tests {
         app.handle_normal(key(KeyCode::Char('s')));
         let (rows, _) = render(&mut app, 100, 48);
         let screen = rows.join("\n");
-        let (_, card_y) = find(&rows, "CARD ─")[0];
+        let (_, card_y) = find(&rows, "ready to push · web")[0];
         let (_, image_y) = find(&rows, "IMAGE 1/2 refund-row-desktop.png ─")[0];
         assert!(image_y > card_y + 4 && rows[card_y + 1].chars().skip(4).filter(|character| *character == '│').count() == 2, "{screen}");
         assert!(!screen.contains("IMAGES"), "one image at a time, no list: {screen}");

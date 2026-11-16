@@ -11,10 +11,10 @@ use super::card::{card_parts, indented, rich_wrap};
 use super::columns::group_color;
 use super::detail::Detail;
 use super::review_data as data;
-use super::steps::{cursor_line, rows_shown, step_lines, walked};
-use super::subtask_view::{address_of, section};
-use super::widgets::{FAINT, MAUVE, MUTED, SURFACE, TEAL, TEXT, YELLOW, ago, bold, cut, fit, modal, plural, style, wrap};
-use super::{App, Hit, Mode};
+use super::steps::{rows_shown, walked};
+use super::subtasks::{address_of, read_text};
+use super::widgets::{LAVENDER, MAUVE, MUTED, SURFACE, TEAL, TEXT, YELLOW, ago, bold, cut, fit, plural, style, text_width, wrap};
+use super::{App, Hit};
 
 // The card beside the tasks: whether it is drawn, whether it has the keys, and how far it is scrolled.
 #[derive(Default)]
@@ -22,17 +22,18 @@ pub(super) struct Beside {
     pub(super) focused: bool,
     pub(super) shown: bool,
     pub(super) scroll: u16,
-    room: u16,
     subject: String,
 }
 
-fn heading(title: Vec<Span<'static>>, inside: bool, width: usize) -> Vec<Line<'static>> {
-    if inside && !title.is_empty() {
-        let mut spans = vec![Span::styled("▸ ", bold(MAUVE))];
-        spans.extend(title.into_iter().map(|span| Span::styled(span.content, bold(MAUVE))));
-        return vec![fit(spans, width), Line::from(Span::styled("━".repeat(width), style(MAUVE)))];
-    }
-    let mut spans = vec![Span::styled("CARD", bold(if inside { MAUVE } else { MUTED })), Span::raw("   ")];
+// The part of a card the version before it differs in; the card shows what it says now.
+const CHANGED: &str = "Changed";
+
+pub(super) fn section(title: &str) -> Line<'static> {
+    Line::from(Span::styled(title.to_string(), bold(LAVENDER)))
+}
+
+fn heading(title: Vec<Span<'static>>, focused: bool, width: usize) -> Vec<Line<'static>> {
+    let mut spans = vec![Span::styled("CARD", bold(if focused { MAUVE } else { MUTED })), Span::raw("   ")];
     spans.extend(title);
     vec![fit(spans, width), Line::from(Span::styled("─".repeat(width), style(SURFACE)))]
 }
@@ -42,44 +43,42 @@ fn accepted(item: &Item) -> usize {
     steps.pushed.len() + steps.items.iter().filter(|step| matches!(step.state, SubtaskState::Accepted | SubtaskState::Pushed)).count()
 }
 
-fn subtask_list(item: &Item, at: usize, width: usize) -> Vec<Line<'static>> {
-    let mut head = section("SUBTASKS");
-    head.spans.push(Span::styled(format!("  {} of {} accepted", accepted(item), item.subtasks.pushed.len() + item.subtasks.items.len()), style(MUTED)));
-    let mut lines = vec![head];
-    lines.extend(step_lines(item, false, width, Some(at)).into_iter().map(|mut line| {
-        if let Some(first) = line.spans.first_mut() {
-            first.content = first.content.trim_start().to_string().into();
-        }
-        line
-    }));
-    lines
-}
-
 fn body(text: &str, width: usize) -> Vec<Line<'static>> {
     rich_wrap(text, width.saturating_sub(2), usize::MAX, TEXT).into_iter().map(|line| indented(line, 2)).collect()
 }
 
-fn facts(item: &Item, detail: Option<&Detail>) -> Line<'static> {
+fn facts(item: &Item, detail: Option<&Detail>, width: usize) -> Vec<Line<'static>> {
     let group = item.group();
-    let mut spans = vec![Span::styled(group.title().to_lowercase(), style(group_color(group)))];
-    let mut parts = vec![item.place.clone()];
+    let mut chunks = vec![(group.title().to_lowercase(), group_color(group)), (item.place.clone(), MUTED)];
     let commits = detail.map(|detail| detail.commits.len()).or_else(|| item.git.as_ref().map(|git| git.ahead)).unwrap_or(0);
     if commits > 0 {
-        parts.push(plural(commits, "commit"));
+        chunks.push((plural(commits, "commit"), MUTED));
+    }
+    if let Some(read) = item.review {
+        chunks.push((read_text(read), MUTED));
     }
     if rows_shown(item) {
-        parts.push(format!("{} of {} subtasks accepted", accepted(item), item.subtasks.pushed.len() + item.subtasks.items.len()));
+        chunks.push((format!("{} of {} subtasks accepted", accepted(item), item.subtasks.pushed.len() + item.subtasks.items.len()), MUTED));
     }
     match detail.map(|detail| detail.card.as_ref()) {
-        None if item.path.is_some() => parts.push("reading the card…".to_string()),
-        Some(None) => parts.push("no card yet".to_string()),
+        None if item.path.is_some() => chunks.push(("reading the card…".to_string(), MUTED)),
+        Some(None) => chunks.push(("no card yet".to_string(), MUTED)),
         _ => {}
     }
-    spans.push(Span::styled(format!(" · {}", parts.join(" · ")), style(MUTED)));
     if detail.and_then(|detail| detail.card.as_ref()).is_some_and(|(_, current)| !current) {
-        spans.push(Span::styled(" · code changed since the card", style(YELLOW)));
+        chunks.push(("code changed since the card".to_string(), YELLOW));
     }
-    Line::from(spans)
+    let mut lines: Vec<Line<'static>> = vec![Line::default()];
+    for (at, (text, color)) in chunks.into_iter().enumerate() {
+        let line = lines.last_mut().expect("there is always a line");
+        let joint = if at == 0 { "" } else { " · " };
+        if at > 0 && line.width() + joint.len() + text_width(&text) > width {
+            lines.push(Line::from(Span::styled(text, style(color))));
+            continue;
+        }
+        line.spans.extend([Span::styled(joint, style(MUTED)), Span::styled(text, style(color))]);
+    }
+    lines
 }
 
 // What the task has said before its card: the recipe it runs and its last report.
@@ -101,11 +100,12 @@ fn without_card(item: &Item, width: usize) -> Vec<Line<'static>> {
     lines
 }
 
-fn task_lines(item: &Item, detail: Option<&Detail>, width: usize) -> Vec<Line<'static>> {
-    let mut lines = vec![facts(item, detail)];
+// The task's card as both the column beside the tasks and the card window draw it: its state line, its card's parts, its commits.
+pub(super) fn task_card(item: Option<&Item>, detail: Option<&Detail>, width: usize) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = item.map(|item| facts(item, detail, width)).unwrap_or_default();
     match detail.and_then(|detail| detail.card.as_ref()) {
         Some((card, _)) => {
-            for part in card_parts(&card.text).0 {
+            for part in card_parts(&card.text).0.into_iter().filter(|part| part.label.as_deref() != Some(CHANGED)) {
                 lines.push(Line::default());
                 if let Some(label) = &part.label {
                     lines.push(section(&label.to_uppercase()));
@@ -115,7 +115,7 @@ fn task_lines(item: &Item, detail: Option<&Detail>, width: usize) -> Vec<Line<'s
                 }
             }
         }
-        None => lines.extend(without_card(item, width)),
+        None => lines.extend(item.map(|item| without_card(item, width)).unwrap_or_default()),
     }
     let commits = detail.map(|detail| detail.commits.as_slice()).unwrap_or_default();
     if !commits.is_empty() {
@@ -129,29 +129,13 @@ fn task_lines(item: &Item, detail: Option<&Detail>, width: usize) -> Vec<Line<'s
 }
 
 impl App {
-    // Focus is inside the selected task: its subtasks are stepped, or its card is scrolled.
-    pub(super) fn inside_task(&self) -> bool {
-        !self.in_messages && self.column == super::Column::Work && (self.beside.focused || matches!(self.mode, Mode::Subtasks))
-    }
-
-    // → on a task: its subtasks when it has them, else its card, beside the tasks or in a window on a narrow board.
+    // → on a task: onto its subtask rows when it has them, else its card beside the tasks to scroll it.
     pub(super) fn enter_task(&mut self) {
         let Some(item) = self.selected_task() else { return self.focus_beside() };
         if !walked(&item).is_empty() {
-            self.beside.scroll = 0;
             return self.open_subtasks(&item);
         }
-        if self.beside.shown { self.focus_beside() } else { self.act(Act::Card) }
-    }
-
-    // After a step among the subtasks the card scrolls just enough to keep the cursor's row in sight.
-    pub(super) fn follow_cursor(&mut self) {
-        let Some(item) = self.selected_task() else { return };
-        let Some(at) = self.subtask_at(&item) else { return };
-        let row = 1 + cursor_line(&item, at) as u16;
-        let room = self.beside.room.max(1);
-        let scroll = &mut self.beside.scroll;
-        *scroll = (*scroll).min(row).max((row + 1).saturating_sub(room));
+        self.focus_beside();
     }
 
     // ← → from a row under the tasks.
@@ -181,9 +165,9 @@ impl App {
         true
     }
 
-    // The card for what the cursor is on, its title line apart so it stays put while the rest scrolls.
+    // The card for the task the cursor is on, its title line apart so it stays put while the rest scrolls.
     pub(super) fn beside_lines(&mut self, width: usize) -> (Vec<Line<'static>>, Vec<Line<'static>>, String) {
-        let focused = self.inside_task();
+        let focused = self.beside.focused && !self.in_messages;
         let off_tasks = self.offer_panel.focused || self.comment_panel.focused || self.on_parked_line();
         let Some(item) = self.selected_task().filter(|_| !off_tasks) else {
             let hint = "Not a task: move to one to see its card here.".to_string();
@@ -191,25 +175,14 @@ impl App {
         };
         let detail = self.detail(&item);
         let title = vec![Span::styled(item.titled(), bold(TEXT))];
-        if let Some(at) = self.subtask_at(&item).filter(|_| matches!(self.mode, Mode::Subtasks)) {
-            let mut lines = subtask_list(&item, at, width);
-            lines.push(Line::default());
-            lines.extend(task_lines(&item, detail.as_deref(), width));
-            return (heading(title, focused, width), lines, address_of(&item));
-        }
-        (heading(title, focused, width), task_lines(&item, detail.as_deref(), width), address_of(&item))
+        (heading(title, focused, width), task_card(Some(&item), detail.as_deref(), width), address_of(&item))
     }
 
     pub(super) fn draw_beside(&mut self, frame: &mut Frame, area: Rect) {
         let (head, lines, subject) = self.beside_lines(area.width as usize);
         let room = area.height.saturating_sub(head.len() as u16);
-        let new_subject = subject != self.beside.subject;
-        if new_subject {
+        if subject != self.beside.subject {
             (self.beside.subject, self.beside.scroll) = (subject, 0);
-        }
-        if new_subject || room != self.beside.room {
-            self.beside.room = room;
-            self.follow_cursor();
         }
         self.beside.scroll = self.beside.scroll.min(lines.len().saturating_sub(room as usize) as u16);
         let top = Rect { height: (head.len() as u16).min(area.height), ..area };
@@ -218,39 +191,6 @@ impl App {
         frame.render_widget(Paragraph::new(lines).scroll((self.beside.scroll, 0)), rest);
         self.beside.shown = true;
         self.hits.push((area, Hit::Beside));
-    }
-
-    // While focus is inside a task the tasks fade, all but a mark on the one it is inside.
-    pub(super) fn dim_tasks(&self, frame: &mut Frame, area: Rect) {
-        let buffer = frame.buffer_mut();
-        for y in area.top()..area.bottom() {
-            for x in area.left()..area.right() {
-                buffer[(x, y)].set_fg(FAINT).set_bg(ratatui::style::Color::Reset);
-            }
-        }
-        let marked = self.hits.iter().find(|(rect, hit)| *hit == Hit::Task(self.work_selected) && area.intersects(*rect));
-        if let Some((rect, _)) = marked {
-            buffer[(rect.x, rect.y)].set_symbol("▸").set_fg(MAUVE);
-        }
-    }
-
-    // On a narrow board the task's inside is a window: its subtasks with the cursor, its card under them.
-    pub(super) fn draw_inside_window(&mut self, frame: &mut Frame) {
-        let Some(item) = self.selected_task() else { return };
-        let Some(at) = self.subtask_at(&item) else { return };
-        let width = 64usize.min(frame.area().width.saturating_sub(8) as usize);
-        let room = (frame.area().height as usize).saturating_sub(6).max(1);
-        let detail = self.detail(&item);
-        let mut lines = subtask_list(&item, at, width);
-        lines.push(Line::default());
-        lines.extend(task_lines(&item, detail.as_deref(), width));
-        if room as u16 != self.beside.room {
-            self.beside.room = room as u16;
-            self.follow_cursor();
-        }
-        self.beside.scroll = self.beside.scroll.min(lines.len().saturating_sub(room) as u16);
-        let lines = lines.into_iter().skip(self.beside.scroll as usize).take(room).collect();
-        modal(frame, format!("▸ {}", cut(&item.titled(), 48)), lines, width as u16 + 4);
     }
 }
 
@@ -265,6 +205,7 @@ mod tests {
     use crate::board::steps::tests::{holds, stepped, stripe};
     use crate::board::test_support::*;
     use crate::board::widgets::{FAINT, LAVENDER, MAUVE, MUTED};
+    use super::task_card;
     use crate::board::{App, Column, Page};
     use crate::report;
     use crate::report_wire::BugReport;
@@ -328,27 +269,41 @@ mod tests {
     }
 
     #[test]
-    fn inside_a_task_the_column_lists_its_subtasks_over_its_card_and_on_the_issues_row_a_hint() {
+    fn inside_a_task_the_column_stays_its_card_and_on_the_issues_row_a_hint() {
         let mut steps = stripe();
         holds(&mut steps.items[1], &["3333333cccc"], false);
         let mut item = stepped(steps);
         item.path = Some(PathBuf::from("/work/wt1.billing"));
+        item.review = Some((1, 3));
         let mut app = test_app(vec![item]);
-        let (side, _) = card_side(&mut app);
-        assert!(side.join("\n").contains("working · billing · 2 commits · 1 of 4 subtasks accepted") && !side.join("\n").contains("SUBTASKS"), "{}", side.join("\n"));
+        let (before, _) = card_side(&mut app);
+        assert!(before.join("\n").contains("working · billing · 2 commits · 1/3 read") && before.iter().any(|row| row.trim().starts_with("1 of 4 subtasks accepted")), "the state line carries the read count and wraps whole parts: {}", before.join("\n"));
         press(&mut app, key(KeyCode::Right));
         press(&mut app, key(KeyCode::Down));
         let (side, _) = card_side(&mut app);
-        let screen = side.join("\n");
-        let list = side.iter().position(|row| row.trim_start().starts_with("SUBTASKS  1 of 4 accepted")).unwrap_or_else(|| panic!("{screen}"));
-        let facts = side.iter().position(|row| row.contains("working · billing")).unwrap_or_else(|| panic!("{screen}"));
-        assert!(side.iter().any(|row| row.trim() == "▸ Switch the payment provider to Stripe") && list < facts && screen.contains("Add Stripe as the gateway"), "{screen}");
+        assert_eq!(side[..10], before[..10], "stepping the subtasks leaves the card as it is");
         press(&mut app, key(KeyCode::Esc));
         app.offers = vec![Offer { id: "a1b2c3".to_string(), report: BugReport { kind: None, title: "push hid git's error".to_string(), text: String::new(), version: "0.26.0".to_string(), os: "macos".to_string() } }];
         app.focus_offers(0);
         let (side, _) = card_side(&mut app);
         let screen = side.join("\n");
         assert!(screen.contains("Not a task: move to one to see its card here.") && !screen.contains("Stripe"), "no stale card on the issues row: {screen}");
+    }
+
+    #[test]
+    fn the_column_and_the_card_window_draw_the_same_card_without_its_changed_part() {
+        let mut app = carded_app();
+        let card = &mut Rc::get_mut(app.details.get_mut(Path::new("/work/wt2.web")).unwrap()).unwrap().card.as_mut().unwrap().0;
+        card.text = format!("**Filters stay in the URL**\n\nChanged: version 1 → 2\n- − Built: old line\n\n{CARD}");
+        let width = 60;
+        let item = app.tasks[0].clone();
+        let detail = app.details.get(Path::new("/work/wt2.web")).cloned();
+        let lines: Vec<String> = task_card(Some(&item), detail.as_deref(), width).iter().map(|line| line.to_string()).collect();
+        assert!(lines[0].starts_with("ready to push · web · 1 commit") && lines.iter().any(|line| line == "BUILT") && !lines.iter().any(|line| line.contains("CHANGED") || line.contains("old line")), "{lines:#?}");
+        app.handle_normal(key(KeyCode::Char('s')));
+        let (rows, _) = render(&mut app, 100, 40);
+        let screen = rows.join("\n");
+        assert!(screen.contains("▸ search-filters") && screen.contains("ready to push · web · 1 commit") && screen.contains("BUILT") && screen.contains("a1f3c2e  Wire the price filter") && !screen.contains("CHANGED"), "{screen}");
     }
 
     #[test]
@@ -368,10 +323,10 @@ mod tests {
         assert!(heading(&mut app).ends_with("search-filters"));
         press(&mut app, key(KeyCode::Right));
         let (rows, buffer) = render(&mut app, 140, 12);
-        let (x, y) = find(&rows, "▸ search-filters")[0];
-        assert_eq!(buffer[(x as u16, y as u16)].fg, MAUVE, "focused, the column is named after the task and lights");
+        let (x, y) = find(&rows, "CARD   search-filters")[0];
+        assert_eq!(buffer[(x as u16, y as u16)].fg, MAUVE, "focused, the column's name lights");
         let (x, y) = find(&rows, "checkout-copy")[0];
-        assert_eq!(buffer[(x as u16, y as u16)].fg, FAINT, "focused, the tasks fade");
+        assert_ne!(buffer[(x as u16, y as u16)].fg, FAINT, "nothing fades");
         press(&mut app, key(KeyCode::Char('j')));
         render(&mut app, 140, 12);
         assert!(app.beside.scroll == 1 && app.work_selected == 0, "focused, j scrolls the card and leaves the cursor");

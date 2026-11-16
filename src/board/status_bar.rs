@@ -1,3 +1,4 @@
+use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
@@ -12,27 +13,34 @@ fn status_hints(keys: &Hints) -> Line<'static> {
     Line::from(Span::styled(keys.iter().map(|(key, label, _)| format!("{key} {label}")).collect::<Vec<_>>().join(" · "), style(MUTED)))
 }
 
-fn work_hints(ctx: Ctx, opens: Option<&'static str>, lead: bool) -> (Hints, Hints) {
+// On a task with subtask rows the line opens with how to move and step in: ↑ ↓ task · → subtasks · s card · ⏎ options.
+fn work_hints(ctx: Ctx, opens: Option<&'static str>, lead: bool, steps: bool) -> (Hints, Hints) {
     let (mut full, mut short) = keys::map().hints(ctx, lead);
-    if let Some(opens) = opens {
-        let entry = (keys::key(Act::Card).to_string(), opens, keys::map().code(Act::Card));
-        full.insert(1, entry.clone());
-        short.insert(1, entry);
+    let card = (keys::key(Act::Card).to_string(), opens.unwrap_or("card"), keys::map().code(Act::Card));
+    if steps {
+        let lead_in = [("↑ ↓".to_string(), "task", KeyCode::Down), ("→".to_string(), "subtasks", KeyCode::Right), card];
+        for hints in [&mut full, &mut short] {
+            let at = hints.iter().position(|(_, _, code)| *code == keys::map().code(Act::Options)).unwrap_or(0);
+            hints.splice(at..at, lead_in.clone());
+        }
+    } else if opens.is_some() {
+        full.insert(1, card.clone());
+        short.insert(1, card);
     }
     (full, short)
 }
 
-pub(super) fn hint_lines(ctx: Ctx, opens: Option<&'static str>, lead: bool) -> (Line<'static>, Line<'static>) {
-    let (full, short) = work_hints(ctx, opens, lead);
+pub(super) fn hint_lines(ctx: Ctx, opens: Option<&'static str>, lead: bool, steps: bool) -> (Line<'static>, Line<'static>) {
+    let (full, short) = work_hints(ctx, opens, lead, steps);
     (status_hints(&full), status_hints(&short))
 }
 
-pub(super) fn hint_hits(line: &Line, area: Rect, ctx: Ctx, opens: Option<&'static str>, lead: bool) -> Vec<(Rect, Hit)> {
+pub(super) fn hint_hits(line: &Line, area: Rect, ctx: Ctx, opens: Option<&'static str>, lead: bool, steps: bool) -> Vec<(Rect, Hit)> {
     let text = line.to_string();
     let mut hits = Vec::new();
     let update = keys::map().code(Act::Update);
     let update_hints = [(update_hint(), update), (short_update_hint(), update)];
-    for (hint, code) in work_hints(ctx, opens, lead).0.into_iter().map(|(key, label, code)| (format!("{key} {label}"), code)).chain(update_hints) {
+    for (hint, code) in work_hints(ctx, opens, lead, steps).0.into_iter().map(|(key, label, code)| (format!("{key} {label}"), code)).chain(update_hints) {
         let Some(byte) = text.find(&hint) else { continue };
         let x = Span::raw(&text[..byte]).width() as u16;
         let width = Span::raw(hint.as_str()).width() as u16;
