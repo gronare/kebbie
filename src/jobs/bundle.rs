@@ -20,9 +20,13 @@ pub fn join(parts: Vec<Vec<u8>>) -> Vec<u8> {
     parts.concat()
 }
 
-// What the worker lacks of the commit under refname: from base on when the worker has base, else its whole history; nothing when base is the commit itself.
+fn is_ancestor(repo: &Path, commit: &str, of: &str) -> bool {
+    crate::repo::git(repo, &["merge-base", "--is-ancestor", commit, of]).is_ok()
+}
+
+// What the worker lacks of the commit under refname: from base on when the worker has base, else its whole history; nothing when base is the commit or builds on it, as git refuses an empty bundle.
 pub fn create(repo: &Path, refname: &str, commit: &str, base: Option<&str>, scratch: &Path) -> Result<Vec<u8>> {
-    if base == Some(commit) {
+    if base.is_some_and(|base| is_ancestor(repo, commit, base)) {
         return Ok(Vec::new());
     }
     let file = scratch.with_extension("bundle");

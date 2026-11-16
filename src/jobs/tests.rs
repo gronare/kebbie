@@ -234,6 +234,8 @@ fn a_worker_with_no_repo_runs_a_bundle_takes_a_later_one_from_its_base_and_asks_
     assert_eq!((end, log.as_str()), (JobEnd::Exited { code: 0, artifacts: Vec::new() }, "second.txt\ntracked.txt\n"), "the task's folder is reused and holds the new commit alone");
     assert!(bundle::create(&top, &refname(&second), &second, Some(&second), &root.join("same")).unwrap().is_empty(), "a worker that has the commit gets no bundle");
     assert_eq!(run(&queued(&second, Some(&second), "true"), &[]).0, JobEnd::Exited { code: 0, artifacts: Vec::new() });
+    assert!(bundle::create(&top, &refname(&first), &first, Some(&second), &root.join("older")).unwrap().is_empty(), "nor does one that has a later commit than the job's");
+    assert_eq!(run(&queued(&first, Some(&second), "ls"), &[]), (JobEnd::Exited { code: 0, artifacts: Vec::new() }, "tracked.txt\n".to_string()), "and it runs the older commit from its store");
     std::fs::remove_dir_all(data.join("app/.store")).unwrap();
     let (end, log) = run(&queued(&second, Some(&first), "touch ran"), &incremental);
     assert_eq!((end, log.as_str()), (JobEnd::NeedsFull {}, ""), "a base the store lacks asks for the whole history and runs nothing");
