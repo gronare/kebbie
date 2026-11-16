@@ -288,12 +288,72 @@ fn stopped(name: &str, worker: &str) -> String {
     format!("kebbie: stopped following {name}; its commit is gone from the hub and its files from this machine. If {worker} took it already, it runs to its end there, as kebbie has no way to tell a worker to stop a job")
 }
 
+// Where the worker gets the history the job's commit builds on, in the order tried: the commit it took last, origin, and the whole history through the hub.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Source {
+    Known(String),
+    Remote(bundle::Remote),
+    Whole,
+}
+
+impl Source {
+    fn base(&self) -> Option<&str> {
+        match self {
+            Source::Known(base) => Some(base),
+            Source::Remote(remote) => Some(&remote.base),
+            Source::Whole => None,
+        }
+    }
+
+    fn fetch(&self) -> Option<&str> {
+        match self {
+            Source::Remote(remote) => Some(&remote.url),
+            _ => None,
+        }
+    }
+}
+
+pub fn sources(known: Option<String>, remote: Option<bundle::Remote>) -> Vec<Source> {
+    known.map(Source::Known).into_iter().chain(remote.map(Source::Remote)).chain([Source::Whole]).collect()
+}
+
+fn instead(worker: &str, from: &Source, next: &Source) -> String {
+    let why = match from {
+        Source::Remote(remote) => format!("did not fetch the history from {}", remote.url),
+        _ => "lacks the commit this job builds on".to_string(),
+    };
+    let then = match next {
+        Source::Remote(remote) => format!("fetches the history from {}", remote.url),
+        _ => "gets the whole history".to_string(),
+    };
+    format!("kebbie: {worker} {why}, so it {then}\n")
+}
+
+// What a job too big for the hub says, by what was tried: the bundle past origin's commit when there was one, else the whole history.
+pub fn too_big(repo: &str, worker: &str, remote: Option<&bundle::Remote>, past_remote: Option<usize>, whole: usize) -> String {
+    let max = bundle::mib(bundle::MAX_BYTES);
+    match (remote, past_remote) {
+        (Some(remote), Some(size)) => format!("kebbie: what this job holds that {} lacks, uncommitted files included, is {} as a git bundle, and the hub carries at most {max} per job. Push the branch there, so {worker} fetches it from there itself", remote.url, bundle::mib(size)),
+        (Some(remote), None) => format!("kebbie: {worker} did not fetch {repo}'s history from {}, and the whole history is {}, more than the {max} the hub carries per job. If a line above says why, fix that, as by giving git on {worker} access to {} with no prompt; if none does, update kebbie on {worker}", remote.url, bundle::mib(whole), remote.url),
+        (None, _) => format!("kebbie: {repo}'s history is {} as a git bundle, and the hub carries at most {max} per job. A worker fetches the history itself from origin when origin is an https or ssh URL that holds part of this branch: push the branch there, and only what is not pushed goes through the hub", bundle::mib(whole)),
+    }
+}
+
+enum Tried {
+    Followed(Followed),
+    TooBig(usize),
+}
+
 #[allow(clippy::too_many_arguments)]
-fn attempt(hub: &Hub, client: &Client, left: &mut Leftovers, asked: &Asked, worker: &AccountMachine, keys: &kebbie_hub_protocol::PublicKeys, snapshot: &str, commit: &str, task: &str, base: Option<&str>, print: &mut dyn FnMut(&str), pause: &mut dyn FnMut(), now: &dyn Fn() -> u64, stop: &dyn Fn() -> bool) -> Result<Followed> {
+fn attempt(hub: &Hub, client: &Client, left: &mut Leftovers, asked: &Asked, worker: &AccountMachine, keys: &kebbie_hub_protocol::PublicKeys, snapshot: &str, commit: &str, task: &str, source: &Source, print: &mut dyn FnMut(&str), pause: &mut dyn FnMut(), now: &dyn Fn() -> u64, stop: &dyn Fn() -> bool) -> Result<Tried> {
+    let base = source.base();
     let id = cluster::new_id()?;
     left.ids.push(id.clone());
     crate::state::private_dir(&hub.state.join(DIR))?;
     let bytes = bundle::create(asked.top, snapshot, commit, base, &part(hub.state, &id, "scratch"))?;
+    if bytes.len() > bundle::MAX_BYTES {
+        return Ok(Tried::TooBig(bytes.len()));
+    }
     let sleep = |wait| nap(wait, stop);
     let mut calls = bundle::Calls::new(&crate::typing::now_ms, &sleep, stop);
     let mut parts = Vec::new();
@@ -301,11 +361,11 @@ fn attempt(hub: &Hub, client: &Client, left: &mut Leftovers, asked: &Asked, work
     left.blobs.extend(parts.iter().map(|part| part.id.clone()));
     uploaded.map_err(|error| format!("kebbie: the job's commit did not go up to the hub: {error}"))?;
     if stop() {
-        return Ok(Followed::Stopped);
+        return Ok(Tried::Followed(Followed::Stopped));
     }
     let sent = Sent { id: id.clone(), worker: worker.machine.clone(), worker_name: worker.name.clone(), repo: asked.repo.clone(), name: asked.name.clone(), commit: commit.to_string(), base: base.map(str::to_string), blobs: left.blobs.clone(), at: now(), pid: std::process::id() };
     write(&part(hub.state, &id, "sent.json"), &sent)?;
-    let job = Job { repo: token(&asked.repo), name: token(&asked.name), command: super::command_for(asked.def), task: task.to_string(), commit: commit.to_string(), base: base.map(str::to_string), bundle: parts, on: asked.def.on.as_deref().map(token) };
+    let job = Job { repo: token(&asked.repo), name: token(&asked.name), command: super::command_for(asked.def, source.fetch()), task: task.to_string(), commit: commit.to_string(), base: base.map(str::to_string), bundle: parts, on: asked.def.on.as_deref().map(token) };
     let envelope = cluster::seal_to(hub.identity, hub.account, &worker.machine, keys, id.clone(), &Payload::Job(job), now()).map_err(|error| format!("kebbie: the job did not seal: {error}"))?;
     let followed = match cluster::post(client, &envelope) {
         Ok(_) => Ok(follow(hub.state, &sent, print, pause, now, stop)),
@@ -314,7 +374,7 @@ fn attempt(hub: &Hub, client: &Client, left: &mut Leftovers, asked: &Asked, work
         Err(error) => Err(format!("kebbie: the job was not sent: {error}")),
     };
     left.clean_job();
-    followed
+    followed.map(Tried::Followed)
 }
 
 pub fn go(hub: &Hub, asked: &Asked, print: &mut dyn FnMut(&str), pause: &mut dyn FnMut(), now: &dyn Fn() -> u64, stop: &dyn Fn() -> bool) -> Result<String> {
@@ -332,22 +392,37 @@ pub fn go(hub: &Hub, asked: &Asked, print: &mut dyn FnMut(&str), pause: &mut dyn
     let branch = crate::repo::git(asked.top, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
     let task = token(if branch.is_empty() || branch == "HEAD" { "detached" } else { &branch });
     print(&format!("kebbie: {} runs {} for {} on {}\n", worker.name, asked.name, asked.repo, &commit[..12.min(commit.len())]));
-    let mut full = false;
-    let followed = loop {
-        let base = if full { None } else { bases(hub.state).base(&worker.machine, &asked.repo).filter(|base| bundle::has(asked.top, base)).map(str::to_string) };
-        match attempt(hub, &client, &mut left, asked, &worker, &keys, &snapshot, &commit, &task, base.as_deref(), print, pause, now, stop) {
-            Ok(Followed::Ended(JobEnd::NeedsFull {})) if !full => {
-                print(&format!("kebbie: {} lacks the commit this job builds on, so it gets the whole history\n", worker.name));
-                full = true;
+    let known = bases(hub.state).base(&worker.machine, &asked.repo).filter(|base| bundle::has(asked.top, base)).map(str::to_string);
+    let remote = bundle::remote_base(asked.top, &commit);
+    let sources = sources(known, remote.clone());
+    let (mut past_remote, mut whole, mut followed) = (None, 0, Ok(None));
+    for (at, source) in sources.iter().enumerate() {
+        match attempt(hub, &client, &mut left, asked, &worker, &keys, &snapshot, &commit, &task, source, print, pause, now, stop) {
+            Ok(Tried::TooBig(size)) => match source {
+                Source::Remote(_) => past_remote = Some(size),
+                Source::Whole => whole = size,
+                Source::Known(_) => {}
+            },
+            Ok(Tried::Followed(Followed::Ended(JobEnd::NeedsFull {}))) if at + 1 < sources.len() => {
+                past_remote = None;
+                print(&instead(&worker.name, source, &sources[at + 1]));
             }
-            other => break other,
+            other => {
+                followed = other.map(|tried| match tried {
+                    Tried::Followed(followed) => Some(followed),
+                    Tried::TooBig(_) => None,
+                });
+                break;
+            }
         }
-    };
+    }
     left.clean();
     if stop() {
         return Err(stopped(&asked.name, &worker.name));
     }
-    let followed = followed?;
+    let Some(followed) = followed? else {
+        return Err(too_big(&asked.repo, &worker.name, remote.as_ref(), past_remote, whole));
+    };
     if matches!(followed, Followed::Ended(JobEnd::Exited { .. })) {
         record_base(hub.state, asked.top, &worker.machine, &asked.repo, &commit);
     }

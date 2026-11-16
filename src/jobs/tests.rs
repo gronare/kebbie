@@ -84,6 +84,32 @@ fn the_base_a_worker_has_is_kept_per_worker_and_repo() {
 }
 
 #[test]
+fn the_remote_a_worker_fetches_from_rides_in_the_command_without_credentials_and_only_as_a_network_url() {
+    let def = Def { run: "make test".to_string(), on: None, timeout_minutes: Some(5) };
+    let command = command_for(&def, Some("git@github.com:me/app.git"));
+    assert_eq!(command, "# kebbie: timeout_minutes = 5\n# kebbie: fetch = git@github.com:me/app.git\nmake test", "the timeout stays the first line, so an older worker still reads it");
+    assert_eq!(command_of(&command), Command { timeout: Some(5), fetch: Some("git@github.com:me/app.git".to_string()), run: "make test" });
+    assert_eq!(command_of("# kebbie: fetch = /home/me/app\nmake").fetch, None, "a local path on the master means nothing on the worker");
+    for (url, fetched) in [
+        ("https://github.com/me/app.git", Some("https://github.com/me/app.git")),
+        ("https://x-access-token:ghp_secret@github.com/me/app.git", Some("https://github.com/me/app.git")),
+        ("https://ghp_secret@github.com/me/app.git", Some("https://github.com/me/app.git")),
+        ("ssh://git:pw@host:22/app.git", Some("ssh://git@host:22/app.git")),
+        ("ssh://host/app.git", Some("ssh://host/app.git")),
+        ("me@host:repos/app.git", Some("me@host:repos/app.git")),
+        ("/srv/git/app.git", None),
+        ("./app", None),
+        ("file:///srv/git/app.git", None),
+        ("ext::sh -c touch% /tmp/x", None),
+        ("-uhttps://host/app", None),
+        ("https://host/app\ntouch pwned", None),
+        ("", None),
+    ] {
+        assert_eq!(fetchable(url).as_deref(), fetched, "{url}");
+    }
+}
+
+#[test]
 fn a_bundle_goes_up_in_parts_a_blob_holds_and_comes_back_whole() {
     let bundle: Vec<u8> = (0..3 * bundle::PART + 7).map(|index| (index % 251) as u8).collect();
     let parts = bundle::split(&bundle).unwrap();
@@ -91,7 +117,8 @@ fn a_bundle_goes_up_in_parts_a_blob_holds_and_comes_back_whole() {
     assert_eq!(bundle::join(parts.iter().map(|part| part.to_vec()).collect()), bundle);
     assert!(bundle::split(&[]).unwrap().is_empty(), "a worker that has the commit gets no bundle");
     let too_big = vec![0u8; kebbie_hub_protocol::MAX_JOB_BUNDLE_PARTS * bundle::PART + 1];
-    assert!(bundle::split(&too_big).unwrap_err().contains("too big to run as a job"));
+    assert!(bundle::split(&too_big).unwrap_err().ends_with("and a job carries at most 31.9 MiB"));
+    assert_eq!((bundle::mib(45 * 1024 * 1024 + 400 * 1024), bundle::mib(1024)), ("45.3 MiB".to_string(), "0.0 MiB".to_string()));
     assert_eq!(bundle::split(&too_big[1..]).unwrap().len(), kebbie_hub_protocol::MAX_JOB_BUNDLE_PARTS);
 }
 
@@ -303,6 +330,84 @@ fn a_worker_with_no_repo_runs_a_bundle_takes_a_later_one_from_its_base_and_asks_
     let _ = std::fs::remove_dir_all(root);
 }
 
+const ORIGIN: &str = "https://example.invalid/app.git";
+
+// A store whose git reads ORIGIN as the bare repo at path, as a worker's git reaches the real origin.
+fn store_reaching(data: &Path, path: &Path) {
+    let store = data.join("app/.store");
+    std::fs::create_dir_all(&store).unwrap();
+    git(&store, &["init", "--quiet", "--bare"]);
+    git(&store, &["config", &format!("url.{}.insteadOf", path.display()), ORIGIN]);
+}
+
+fn origin_of(top: &Path, root: &Path) -> PathBuf {
+    let origin = root.join("origin.git");
+    git(root, &["init", "--quiet", "--bare", &origin.to_string_lossy()]);
+    git(top, &["push", "--quiet", &origin.to_string_lossy(), "HEAD:refs/heads/main"]);
+    git(top, &["remote", "add", "origin", ORIGIN]);
+    git(top, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    origin
+}
+
+#[test]
+fn a_job_builds_on_the_newest_of_its_commits_that_origin_has() {
+    let root = crate::sh::test_dir("jobs-remote-base");
+    let top = repo(&root);
+    let one = git(&top, &["rev-parse", "HEAD"]);
+    assert_eq!(bundle::remote_base(&top, &one), None, "a repo with no origin has no remote base");
+    git(&top, &["remote", "add", "origin", &root.join("elsewhere").to_string_lossy()]);
+    assert_eq!(bundle::remote_base(&top, &one), None, "nor one whose origin is a path the worker cannot reach");
+    git(&top, &["remote", "set-url", "origin", "https://ghp_secret@example.invalid/app.git"]);
+    assert_eq!(bundle::remote_base(&top, &one), None, "nor one whose origin holds none of the job");
+    git(&top, &["update-ref", "refs/remotes/origin/main", &one]);
+    let remote = |base: &str| Some(bundle::Remote { url: ORIGIN.to_string(), base: base.to_string() });
+    assert_eq!(bundle::remote_base(&top, &one), remote(&one), "a commit origin has is its own base, and the URL goes without its token");
+    std::fs::write(top.join("two.txt"), "two\n").unwrap();
+    commit(&top, "two");
+    let two = git(&top, &["rev-parse", "HEAD"]);
+    std::fs::write(top.join("three.txt"), "three\n").unwrap();
+    commit(&top, "three");
+    let three = git(&top, &["rev-parse", "HEAD"]);
+    assert_eq!(bundle::remote_base(&top, &three), remote(&one));
+    git(&top, &["update-ref", "refs/remotes/origin/billing", &two]);
+    assert_eq!(bundle::remote_base(&top, &three), remote(&two), "the newest commit origin has on any branch");
+    assert_eq!(master::sources(Some(one.clone()), remote(&two)), [master::Source::Known(one.clone()), master::Source::Remote(remote(&two).unwrap()), master::Source::Whole], "the commit the worker took last first, then origin, then the whole history");
+    assert_eq!(master::sources(None, None), [master::Source::Whole]);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_worker_fetches_the_history_from_the_jobs_remote_and_asks_for_all_when_the_fetch_fails() {
+    let root = crate::sh::test_dir("jobs-fetch");
+    let top = repo(&root);
+    let origin = origin_of(&top, &root);
+    let first = git(&top, &["rev-parse", "HEAD"]);
+    std::fs::write(top.join("second.txt"), "two\n").unwrap();
+    commit(&top, "two");
+    let second = git(&top, &["rev-parse", "HEAD"]);
+    git(&top, &["update-ref", &format!("{REF}/x"), &second]);
+    let rest = bundle::create(&top, &format!("{REF}/x"), &second, Some(&first), &root.join("rest")).unwrap();
+    let def = Def { run: "ls".to_string(), on: None, timeout_minutes: None };
+    let queued = Queued { from: machine(1), from_name: "devbox".into(), id: cluster::new_id().unwrap(), job: Job { repo: "app".into(), name: "build".into(), command: command_for(&def, Some(ORIGIN)), task: "billing".into(), commit: second.clone(), base: Some(first.clone()), bundle: vec![kebbie_hub_protocol::BlobRef { id: Id::blob(b"x"), key: "k".repeat(43), media_type: kebbie_hub_protocol::JOB_BUNDLE_MEDIA_TYPE.into(), bytes: 1 }], on: None }, at: 1, seq: 0 };
+    let run = |data: &Path| {
+        let mut said = String::new();
+        let rest = rest.clone();
+        let end = worker::execute(&queued, data, &move |_| Ok(rest.clone()), &mut |log, _| said.push_str(&log), &|| false, &crate::typing::now_ms, worker::Limits::WORKER);
+        (end, said)
+    };
+    let data = root.join("worker");
+    store_reaching(&data, &origin);
+    let (end, log) = run(&data);
+    assert_eq!(end, JobEnd::Exited { code: 0, artifacts: Vec::new() }, "{log}");
+    assert_eq!(log, format!("[kebbie: fetching the history up to {} from {ORIGIN}; only what is new comes on later jobs]\nsecond.txt\ntracked.txt\n", &first[..12]), "the bundle carries only the commit origin lacks");
+    let unreachable = root.join("unreachable");
+    store_reaching(&unreachable, &root.join("missing.git"));
+    let (end, log) = run(&unreachable);
+    assert_eq!(end, JobEnd::NeedsFull {}, "a worker that cannot fetch asks for the whole history");
+    assert!(log.contains(&format!("[kebbie: the fetch from {ORIGIN} failed: ")), "{log}");
+    let _ = std::fs::remove_dir_all(root);
+}
+
 #[test]
 fn a_worker_reports_on_a_job_from_the_bundles_fetch_on_and_on_the_jobs_queued_behind_it() {
     let root = crate::sh::test_dir("jobs-heartbeat");
@@ -378,8 +483,8 @@ fn a_hung_job_is_stopped_at_its_timeout_with_its_process_group_and_a_job_that_le
     let (end, _, _) = run("sleep 30", 60 * second, &|| true);
     assert_eq!(end, JobEnd::Failed { reason: "the worker's kebbie stopped while build ran, so it stopped the job".into() });
     let def = Def { run: "make".to_string(), on: None, timeout_minutes: Some(90) };
-    assert_eq!(timeout_of(&command_for(&def)), (Some(90), "make"), "the job's own timeout goes along in its command");
-    assert_eq!(timeout_of("make"), (None, "make"));
+    assert_eq!(command_of(&command_for(&def, None)), Command { timeout: Some(90), fetch: None, run: "make" }, "the job's own timeout goes along in its command");
+    assert_eq!(command_of("make"), Command { timeout: None, fetch: None, run: "make" });
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -495,6 +600,54 @@ fn a_master_runs_its_worktree_as_it_stands_on_a_worker_of_its_hub_account_end_to
     assert!(printed.contains("lacks the commit this job builds on, so it gets the whole history\n") && printed.ends_with("four\n"), "{printed}");
     assert_eq!(ran.borrow().iter().skip(3).map(|queued| queued.job.base.is_some()).collect::<Vec<_>>(), [true, false], "sent once from the base, then once whole");
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_worker_fetches_a_jobs_history_from_origin_and_gets_it_whole_through_the_hub_when_it_cannot_end_to_end() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let (master, worker) = (Machine::connected(&hub, &mut browser, "devbox"), Machine::connected(&hub, &mut browser, "studio"));
+    worker.work();
+    let root = crate::sh::test_dir("jobs-e2e-origin");
+    let top = repo(&root);
+    let origin = origin_of(&top, &root);
+    let pushed = git(&top, &["rev-parse", "HEAD"]);
+    std::fs::write(top.join("local.txt"), "not pushed\n").unwrap();
+    let ran: RefCell<Vec<Queued>> = RefCell::new(Vec::new());
+    let run = |data: &Path| {
+        let def = Def { run: "cat local.txt".to_string(), on: Some(worker::os()), timeout_minutes: None };
+        let asked = Asked { top: &top, repo: "app".to_string(), name: "build".to_string(), def: &def };
+        let mut printed = String::new();
+        let ended = master::go(&master.hub(), &asked, &mut |text| printed.push_str(text), &mut || {
+            worker_round(&worker, data, &ran);
+            inbox_round(&master.dir);
+        }, &crate::messages::now, &|| false);
+        (ended, printed)
+    };
+    let fetching = root.join("fetching");
+    store_reaching(&fetching, &origin);
+    let (ended, printed) = run(&fetching);
+    assert_eq!(ended, Ok("kebbie: build passed on studio".to_string()), "{printed}");
+    assert!(printed.contains(&format!("fetching the history up to {} from {ORIGIN}", &pushed[..12])) && printed.ends_with("not pushed\n"), "{printed}");
+    let first = ran.borrow()[0].job.clone();
+    assert_eq!((first.base.as_deref(), command_of(&first.command).fetch.as_deref()), (Some(pushed.as_str()), Some(ORIGIN)), "the first job builds on what origin has");
+
+    let cut_off = root.join("cut-off");
+    store_reaching(&cut_off, &root.join("missing.git"));
+    let (ended, printed) = run(&cut_off);
+    assert_eq!(ended, Ok("kebbie: build passed on studio".to_string()), "{printed}");
+    assert!(printed.contains(&format!("kebbie: studio lacks the commit this job builds on, so it fetches the history from {ORIGIN}\n")) && printed.contains(&format!("kebbie: studio did not fetch the history from {ORIGIN}, so it gets the whole history\n")), "{printed}");
+    assert_eq!(ran.borrow().iter().skip(1).map(|queued| (queued.job.base.is_some(), command_of(&queued.job.command).fetch.is_some())).collect::<Vec<_>>(), [(true, false), (true, true), (false, false)], "from the commit it took, then from origin, then whole");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_job_too_big_for_the_hub_says_what_to_do_about_it() {
+    let remote = bundle::Remote { url: ORIGIN.to_string(), base: "a".repeat(40) };
+    let mib = 1024 * 1024;
+    assert_eq!(master::too_big("app", "studio", None, None, 45 * mib), "kebbie: app's history is 45.0 MiB as a git bundle, and the hub carries at most 31.9 MiB per job. A worker fetches the history itself from origin when origin is an https or ssh URL that holds part of this branch: push the branch there, and only what is not pushed goes through the hub");
+    assert!(master::too_big("app", "studio", Some(&remote), None, 45 * mib).starts_with(&format!("kebbie: studio did not fetch app's history from {ORIGIN}, and the whole history is 45.0 MiB")));
+    assert!(master::too_big("app", "studio", Some(&remote), Some(40 * mib), 45 * mib).starts_with(&format!("kebbie: what this job holds that {ORIGIN} lacks, uncommitted files included, is 40.0 MiB")));
 }
 
 #[test]
