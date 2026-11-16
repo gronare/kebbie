@@ -439,14 +439,15 @@ lint = "swiftlint"
 [jobs.build]
 run = "xcodebuild -scheme App -destination 'generic/platform=iOS Simulator' build"
 on = "macos"
+timeout_minutes = 90
 ```
 
 | Form | What it is |
 |---|---|
 | `name = "<command>"` | A job any worker of your hub account runs. |
-| `[jobs.<name>]` with `run` and `on` | `run` is the command. `on` picks the worker: an operating system, `macos` or `linux`, or a machine's name. |
+| `[jobs.<name>]` with `run`, `on` and `timeout_minutes` | `run` is the command. `on` picks the worker: an operating system, `macos` or `linux`, or a machine's name. `timeout_minutes`, a whole number from 1 to 1440, is how long the job may run, 60 unless set. |
 
-The command runs with `sh -c` in the worktree's files on the worker, its stderr in its output. Repo config only.
+The command runs with `sh -c` in the worktree's files on the worker, its stderr in its output. Past its timeout the worker stops it, SIGTERM to its process group and SIGKILL 10 s later, and once the command ends, whatever it left running is stopped too. Repo config only.
 
 ## `[[routines]]`
 

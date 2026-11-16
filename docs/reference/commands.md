@@ -946,11 +946,13 @@ A job is a command another machine of your hub account runs on a worktree as it 
 
 | Command | What it does |
 |---|---|
-| `kebbie job run <name>` | Run the repo's job of that name, from [`[jobs]`](configuration.md#jobs) in its repo config, on a machine of your hub account with [`worker.enabled`](configuration.md#ci-updates-and-the-keeper), on this worktree with its uncommitted and untracked files. It prints the job's output as it comes and exits as the job did: 0 when it exited 0, 1 when it failed, was refused, no worker fits or the worker sent nothing for 10 minutes. Without a name it lists the repo's jobs. |
+| `kebbie job run <name>` | Run the repo's job of that name, from [`[jobs]`](configuration.md#jobs) in its repo config, on a machine of your hub account with [`worker.enabled`](configuration.md#ci-updates-and-the-keeper), on this worktree with its uncommitted and untracked files. It prints the job's output as it comes and exits as the job did: 0 when it exited 0, 1 when it failed, was refused, ran past its timeout, no worker fits, the worker sent nothing for 10 minutes or you pressed Ctrl-C. Without a name it lists the repo's jobs. |
 
 - It needs this machine connected to the hub with its account pinned, and its keeper running: the keeper takes the job's output from the hub.
-- The worker is a machine on your account's signed list whose operating system or name matches the job's `on`, the one the hub heard from last. A report from any other machine is refused.
-- The worktree goes along as a git bundle in the hub's blobs, sealed: the whole history the first time, then what came after the last commit that worker took. The blobs, the snapshot's ref and the job's files go when the command ends.
+- The worker is a machine on your account's signed list whose operating system or name matches the job's `on` and that the hub heard from in the last ten minutes, the one heard from last. A report from any other machine is refused, and a job from a machine the account removed from its list is too.
+- The worktree goes along as a git bundle in the hub's blobs, sealed: the whole history the first time, then what came after the last commit that worker took, and nothing when it has the commit. The blobs, the snapshot's ref and the job's files go however the command ends, Ctrl-C included; those of one killed outright go with the next `kebbie job run`.
+- Ctrl-C stops following the job, not the job: a worker that took it runs it to its end, as kebbie cannot tell a worker to stop a job.
+- The worker reports at least once a minute from the moment it takes the job, and stops it at its `timeout_minutes`, 60 by default: SIGTERM to its process group, SIGKILL 10 s later. A line in the output marks reports that were lost on the way.
 - On the worker, the job runs with `sh -c` in a folder of the task's own under `~/.local/share/kebbie/worker/<repo>/`, with `KEBBIE_JOB`, `KEBBIE_JOB_TASK`, `KEBBIE_JOB_SHA` and `KEBBIE_JOB_MASTER` set, one job at a time.
 - On hub.kebbie.dev, jobs are part of Hub Pro.
 
