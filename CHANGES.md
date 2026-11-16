@@ -14,6 +14,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A subtask row shows how many of its files you read and, under it, its first commit's subject.
 - The card beside the tasks and the card window are one card, with the read count on its first line.
 - n on the board asks only what you want done and in which repo, then starts it as a task named from your first words or adds it to the backlog.
+- kebbie job run builds or tests a task's worktree on another machine of your hub account, as an Xcode build on a Mac, once worker.enabled is on there.
 
 ### Fixed
 - After kebbie update the open board and the keeper move to the new kebbie by themselves, also when herdr installed it in a new folder.

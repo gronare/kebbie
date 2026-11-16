@@ -826,7 +826,7 @@ pub(crate) fn open_hub(configure: impl FnOnce(&mut Config)) -> TestHub {
     open_gated_hub(configure, None)
 }
 
-fn open_gated_hub(configure: impl FnOnce(&mut Config), gate: Option<Box<dyn Plans>>) -> TestHub {
+pub(crate) fn open_gated_hub(configure: impl FnOnce(&mut Config), gate: Option<Box<dyn Plans>>) -> TestHub {
     TestHub::start_gated(
         |config| {
             config.connect_interval = 0;
@@ -864,8 +864,12 @@ pub(crate) fn connected_state(hub: &TestHub, browser: &mut Browser) -> PathBuf {
 }
 
 fn connected_at(hub: &TestHub, url: &str, browser: &mut Browser) -> PathBuf {
+    connected_named(hub, url, browser, "mac")
+}
+
+pub(crate) fn connected_named(hub: &TestHub, url: &str, browser: &mut Browser, name: &str) -> PathBuf {
     let state = crate::sh::test_dir("hub-connected-account");
-    let mut pending = super::connect::start(url, "mac").unwrap();
+    let mut pending = super::connect::start(url, name).unwrap();
     let approval = hub.runtime.block_on(browser.approve_connect(&pending.link(), true)).unwrap();
     let answer = pending.wait(&mut |_| true).unwrap();
     let machine_state = state.clone();

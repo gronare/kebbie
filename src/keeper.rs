@@ -509,6 +509,7 @@ pub fn run() -> Result<String> {
     if let Some(line) = crate::backlog_style::sync_here() {
         log.line(&line);
     }
+    crate::jobs::spawn(&dir);
     let routines = routines();
     let mut tracks = vec![Track::default(); routines.len()];
     let mut ctx = Ctx::default();
@@ -548,8 +549,9 @@ pub fn run() -> Result<String> {
         pause(wait(&routines, &tracks, crate::messages::now()));
     };
     crate::vault_watch::stop(&dir);
-    log.line(&format!("exits: {reason}"));
     let replaced = reason.starts_with("a new kebbie");
+    crate::jobs::stop(replaced);
+    log.line(&format!("exits: {reason}"));
     drop(held);
     if replaced {
         match spawn(&exe, &dir) {

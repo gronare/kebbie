@@ -11,6 +11,7 @@ Where kebbie keeps its config, state and the files it ships, and what each file 
 | Local backlog | `backlog/` next to the machine config, one file per item | follows the machine config |
 | State directory | `~/.local/state/kebbie` | `KEBBIE_STATE_DIR`, `XDG_STATE_HOME` |
 | The lead's working directory | `lead` in the state directory | `KEBBIE_LEAD_DIR` |
+| A worker's job folders | `~/.local/share/kebbie/worker/<repo>/<task>`, with the repo's history in `.store` beside them | none |
 | Install link | `~/.local/share/kebbie/current`, written by herdr's startup | none: kebbie reads it under `~/.local/share` |
 | The binary | `~/.local/share/kebbie/current/target/release/kebbie` | `KEBBIE_BIN` for roles and skills |
 | Sidebar sync state | `~/.local/state/herdr-sync` | `XDG_STATE_HOME` |
@@ -88,6 +89,7 @@ The folder is `0700` and its files `0600`. Each file is replaced whole on write.
 | `push-left/` | Per task, why a push left its line unpushed, for its Needs you row. |
 | `push-tokens/` | Per push, the token the worktree's push block lets through only while kebbie runs that push. |
 | `ci/` | One file per CI watch, `<task>@<repo>.json`. A watch survives board restarts. |
+| `jobs/` | Per job `kebbie job run` sent, by its id: `<id>.sent.json` with the worker it went to and the blobs that carry its commit, `<id>.log` with its output as it comes, `<id>.heard.json` with the last report taken and `<id>.end.json` with how it ended, all removed however the command ends, Ctrl-C included, and those of one killed outright by the next `kebbie job run`. `jobs/bases.json` holds, per worker and repo, the last commit that worker took, which the next job builds on. |
 | `red-ci/` | Per task, `<task>@<repo>.json`: the reason its Claude gave with `kebbie ci outside` and the red runs you dismissed. |
 | `comments/` | One file per comment on a pushed commit, `<id>.json`, with the GitHub comment's id. It survives restarts, and one sent, done or dismissed is removed after 30 days. |
 | `comments/watch/` | One file per pushed commit kebbie checks for comments, `<sha>.json`, removed once `comments.watch_days` run out. |
@@ -199,6 +201,10 @@ A `routines/` file holds when the scheduler first saw the routine, when its last
 | `hub/devices.json` | Each device on your account that sent this machine a command: its name, kind and full key, when it was first and last seen, and whether it waits, is approved or is denied. |
 | `hub/lead-blobs.json` | Each sealed page of the lead's thread on the hub, by its content, and when it was last put there. |
 | `hub/relay.json` | The board's last revision, when it went out, its fingerprint, the last error and whether the hub refused it because it has not enabled answering for your account. |
+| `hub/jobs/machines.json` | The hub's last list of the account's machines, with the list the account signed, which says whose reports this machine takes for five minutes; a job's sender is checked against the hub's list as it is when the job comes. |
+| `hub/jobs/machines.counter` | The highest version of the account's signed list this machine has seen; a list the hub hands over below it is refused. |
+| `hub/jobs/queue/` | On a worker, one file per job waiting its turn, in the order they came, with the number of the next report on it, removed when it has run. |
+| `hub/jobs/seen.json` | On a worker, each job it took in the last two days, by sender and id, so one the hub hands over again runs once. |
 | `hub-dev/` | The same for the dev hub, used instead of `hub/` while [`KEBBIE_HUB_DEV`](environment.md) is set. |
 
 When the machine was connected from its link, `identity.json` also holds the account key it pinned, with the account's id, the key's version, its public keys, their two fingerprints and when it was pinned.

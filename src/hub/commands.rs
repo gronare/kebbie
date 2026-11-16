@@ -456,10 +456,15 @@ pub fn round(dir: &Path, wait: u64, accepts: &[Kind], policy: Policy, hands: &Ha
     let mut bridge = bridge(dir);
     let polling = Client::new(&identity.url, Some(identity.token()), LONG_POLL);
     let inbox: Inbox = polling.get(&format!("/v1/m/inbox?after={}&wait={wait}", bridge.inbox_seq)).map_err(|error| error.to_string())?;
-    for message in inbox.messages.iter().filter(|message| message.envelope.header.kind.is_command()) {
-        let handled = handle(dir, &identity, &account, accepts, policy, &message.envelope, hands, clock())?;
-        applied |= matches!(handled, Handled::Applied(_) | Handled::Later(_));
-        notes.push(note(&message.envelope.header, &handled));
+    for message in &inbox.messages {
+        let kind = message.envelope.header.kind;
+        if kind.is_command() {
+            let handled = handle(dir, &identity, &account, accepts, policy, &message.envelope, hands, clock())?;
+            applied |= matches!(handled, Handled::Applied(_) | Handled::Later(_));
+            notes.push(note(&message.envelope.header, &handled));
+        } else if kind.is_machine_message() {
+            notes.extend(crate::jobs::receive(dir, &identity, &account, &client, &message.envelope, clock()));
+        }
     }
     send_unsent(dir, &client, &identity, &account)?;
     bridge.inbox_seq = inbox.seq;
@@ -604,7 +609,7 @@ fn serve(state: &Path, dir: &Path) {
             if checked.is_none_or(|(_, at)| now.saturating_sub(at) >= IDLE) {
                 checked = Some((commands_on(&identity.url), now));
             }
-            if !checked.is_some_and(|(on, _)| on) {
+            if !checked.is_some_and(|(on, _)| on) && !crate::jobs::wants_inbox(state) {
                 pause(IDLE);
                 continue;
             }

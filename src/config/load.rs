@@ -39,6 +39,10 @@ pub fn keeper_enabled() -> Result<bool> {
     Ok(load_machine(&path())?.keeper.unwrap_or(DEFAULT_KEEPER))
 }
 
+pub fn worker_enabled() -> Result<bool> {
+    Ok(load_machine(&path())?.worker.unwrap_or(false))
+}
+
 pub fn recover_enabled() -> Result<bool> {
     Ok(load_machine(&path())?.recover.unwrap_or(DEFAULT_RECOVER))
 }
