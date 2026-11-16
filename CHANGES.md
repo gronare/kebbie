@@ -10,6 +10,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task's edits no longer wait for its vault note, and kebbie done closes the note whatever it holds: the note is the task's own memory.
 - A ready task's card opens with what changes for you when you push it and what proves it, and a question to you opens with the question.
 - A plan to approve opens with a short brief for you, in your vault's language.
+- A task ready to push keeps its card in your vault, in the Kebbie folder, linked up to its task note and archived with it when the task ends.
 - The board's ↑ ↓ move task to task, and → steps into a task: its subtasks and card light up beside the tasks, which fade so you see where you are, or open in a window on a narrow board.
 
 ### Fixed

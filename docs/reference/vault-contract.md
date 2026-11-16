@@ -40,9 +40,33 @@ kebbie asks this first, at each `kebbie doctor` run and whenever its kept answer
 | `read` | `read <note> --body` | A plan in a vault note shows only from the local index. |
 | `templates` | `template --json --kind task` | Local and vault items are drafted in kebbie's own sections. |
 | `styles` | `style write --kind backlog --file - --version <n>`, the style on stdin | The vault holds no backlog style, and kebbie's bundled default applies. |
-| `write` | `read --json -- <note>`, answering `{"text", "etag"}`, then `write --etag <etag> -- <note>` with the note on stdin, answering `{"path", "etag"}` | An edit from the phone to a vault backlog item is refused. |
+| `write` | `read --json -- <note>`, answering `{"text", "etag"}`, then `write --etag <etag> -- <note>` with the note on stdin, answering `{"path", "etag"}` | An edit from the phone to a vault backlog item is refused, and no task's card is written to `Kebbie/`. |
 
 With `templates`, kebbie asks for the task template at most every six hours and keeps it in `item-template.json` in its state directory. An answer with no sections means the vault has no task template, and is kept as long; an ask that fails is tried again after ten minutes. kebbie drafts a short vault item in its sections, and the phone shows an item's sections in its order. An item is read in whatever shape it was written: its questions are the bullets under its questions heading, `Open questions` or `Öppna frågor`, and it is to write only while it is a draft.
+
+## The card note
+
+A task with a vault note gets its sign-off card in the vault while it stands under Ready to push on the board, one note per task at `Kebbie/<task note>-card.md` (`-card-<repo>.md` for a half whose repo does not start the task note's name):
+
+```markdown
+---
+title: "Export the invoices"
+tags: [kebbie, card]
+status: active
+up: "[[web-export]]"
+kebbie-card: "export@web"
+push: ready
+---
+
+## Built
+…
+```
+
+- The keeper writes it every 30 seconds while the card changed, or an open board does without the keeper; an unchanged card is not written again.
+- A task that leaves Ready to push only has `push` rewritten, `pushed` while its CI runs and `waiting` otherwise; nothing new is written.
+- kebbie rewrites only a note whose `kebbie-card` names the task. Any other note at that path is left as it is, and kebbie says so once in `vault.log`.
+- `kebbie done`, a drop and a reset close the card note with `task close`, which moves it to the archive beside the task note.
+- A failed write is one line in `vault.log`, and in the keeper's `keeper.log`; the task's push waits for nothing.
 
 ## The backlog style
 

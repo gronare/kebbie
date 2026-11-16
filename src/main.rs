@@ -96,6 +96,7 @@ mod update_check;
 mod update_progress;
 mod usage;
 mod vault;
+mod vault_card;
 mod vault_cli;
 mod vault_found;
 mod vault_snapshot;
