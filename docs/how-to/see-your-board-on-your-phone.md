@@ -117,7 +117,7 @@ What reaches a machine is its own choice, set by [`hub.commands`](../reference/c
 
 **Backlog** lists each machine's backlog as its board's Backlog page shows it, with whether an item is to write, drafting or ready and how many of its questions wait on you. Open an item to read it in full. A device that makes changes also:
 
-- **Adds an idea.** Tap **New idea**, describe what you want and pick the machine. It waits in the backlog under its first words until the lead writes it out and gives it a title, your description kept as its source.
+- **Adds an idea.** Tap **New idea**, describe what you want and pick the machine. The machine [`ideas.machine`](../reference/configuration.md#machine) names is picked while it is awake, and an awake one while it sleeps; the line under the machine says why. It waits in the backlog under its first words until the lead writes it out and gives it a title, your description kept as its source.
 - **Answers its open questions.** Write your answers on the item's questions and send them together. They wait with the lead until it folds them into the item, on the phone and on the board's card alike.
 - **Starts the item.** The machine starts it as `g` on the board does: the item is the task's prompt, and the lead picks how the task goes.
 - **Edits the item.** Tap **Edit** on its title or on a section, change it and save. The machine writes it into the item's file or vault note.

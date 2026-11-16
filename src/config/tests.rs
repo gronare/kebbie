@@ -295,7 +295,7 @@ fn a_symlinked_repo_config_loads_and_shows_its_target() {
 #[test]
 fn unknown_keys_are_named_with_the_file_and_ignored_while_bad_values_still_fail() {
     let warned = |text: &str| unknown_in_file(text, "/home/u/.config/kebbie/config.toml", &MACHINE_KEYS);
-    let all = "board, worktree, task, review, investigate, writer, notify, vault, update, restart, keeper, recover, machine, hub, keys, ci, tests, comments, routines, report, issues, lead";
+    let all = "board, worktree, task, review, investigate, writer, ideas, notify, vault, update, restart, keeper, recover, machine, hub, keys, ci, tests, comments, routines, report, issues, lead";
     assert_eq!(warned("colour = 1
 "), [format!("/home/u/.config/kebbie/config.toml: colour: unknown key; known keys here: {all}")]);
     assert_eq!(warned("[backlog]\nsources = []\n"), [format!("/home/u/.config/kebbie/config.toml: backlog: unknown key; known keys here: {all}")]);
@@ -689,7 +689,7 @@ fn sample(entry: &Entry) -> String {
 fn each_keys_scope_is_the_files_that_take_it_and_what_its_text_says() {
     let loaded = Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
     let all = entries(&loaded);
-    assert_eq!(all.len(), 55);
+    assert_eq!(all.len(), 56);
     for entry in all {
         let (section, field) = entry.key.rsplit_once('.').unwrap();
         let text = format!("[{section}]\n{field} = {}\n", sample(&entry));
@@ -954,8 +954,14 @@ fn steps_are_on_until_turned_off_and_a_repo_wins_over_the_machine() {
 }
 
 #[test]
-fn writer_profile_names_a_profile_or_none() {
-    assert_eq!(parse_machine("[writer]\nprofile = \"none\"\n", "config.toml").unwrap().writer_profile.as_deref(), Some("none"));
+fn ideas_machine_names_a_machine_and_writer_profile_a_profile_or_none() {
+    let machine = parse_machine("[ideas]\nmachine = \" devbox \"\n[writer]\nprofile = \"none\"\n", "config.toml").unwrap();
+    assert_eq!((machine.ideas_machine.as_deref(), machine.writer_profile.as_deref()), (Some("devbox"), Some("none")));
+    assert!(parse_machine("[ideas]\nmachine = \"localhost\"\n", "config.toml").unwrap_err().contains("ideas.machine: "));
     assert!(parse_machine("[writer]\nprofile = \"Not A Name\"\n", "config.toml").unwrap_err().contains("writer.profile: "));
-    assert_eq!(settings(&Worktree::default(), &Machine::default()).writer_profile.value, crate::backlog_writer::WRITER);
+    let named = |text: &str| names_itself(&parse_machine(text, "config.toml").unwrap(), "box");
+    assert!(named("[ideas]\nmachine = \"DevBox\"\n[machine]\nname = \"devbox\"\n") && named("[ideas]\nmachine = \"box\"\n"), "the machine it names, by machine.name or the host's name");
+    assert!(!named("[ideas]\nmachine = \"mac\"\n[machine]\nname = \"devbox\"\n") && !named(""), "another machine, or none, is not this one");
+    let unset = settings(&Worktree::default(), &Machine::default());
+    assert_eq!((unset.ideas_machine.value, unset.writer_profile.value.as_str()), (None, crate::backlog_writer::WRITER));
 }

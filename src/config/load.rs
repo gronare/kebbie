@@ -35,6 +35,15 @@ pub fn lead_profile() -> Result<Option<String>> {
     Ok(load_machine(&path())?.lead_profile.filter(|name| name != super::NONE))
 }
 
+// Whether new ideas from your devices go to this machine first: ideas.machine names it.
+pub fn is_idea_machine() -> bool {
+    load_machine(&path()).ok().is_some_and(|machine| names_itself(&machine, &short_hostname()))
+}
+
+pub fn names_itself(machine: &Machine, host: &str) -> bool {
+    machine.ideas_machine.as_deref().is_some_and(|named| named.eq_ignore_ascii_case(machine.machine_name.as_deref().unwrap_or(host)))
+}
+
 pub fn writer_profile() -> String {
     load_machine(&path()).ok().and_then(|machine| machine.writer_profile).unwrap_or_else(|| crate::backlog_writer::WRITER.to_string())
 }

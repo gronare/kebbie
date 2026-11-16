@@ -1019,7 +1019,7 @@ mod tests {
     fn the_leads_new_questions_on_an_item_are_told_once_and_settle_when_answered() {
         let machine = Machine::new();
         let key = item("Projects/retry.md");
-        let board = Board { rev: 0, kebbie: String::new(), away_since: None, checkouts: Vec::new(), routines: Vec::new(), items: Vec::new(), sessions_outside_tasks: 0, next: None, counts: None, later: None, accepts: None, devices: None, backlog: Some(vec![row(&key, "Retry flaky red runs")]), lead: None };
+        let board = Board { rev: 0, kebbie: String::new(), away_since: None, checkouts: Vec::new(), routines: Vec::new(), items: Vec::new(), sessions_outside_tasks: 0, next: None, counts: None, later: None, accepts: None, devices: None, backlog: Some(vec![row(&key, "Retry flaky red runs")]), lead: None, idea_machine: false };
         let one = [body(&key, &[("Which red runs count as flaky?", true, None)])];
         assert!(items_in(&machine.dir, &board, &one).unwrap().is_empty(), "the first look only records what waits");
         let two = [body(&key, &[("Which red runs count as flaky?", true, None), ("How long to wait?", false, None), ("Show a rerun on the row?", true, None)])];
