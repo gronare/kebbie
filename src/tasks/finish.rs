@@ -45,6 +45,9 @@ pub fn reset(cwd: &Path, name: Option<&str>) -> Result<String> {
             None => notice.push_str(&crate::backlog::reset_notice(item)),
         }
     }
+    if let Some(line) = vault.as_ref().and_then(|cli| crate::vault_card::archive(cli, &state, &address)) {
+        shown = shown.detail("card", line);
+    }
     notice.push_str(" Drop any review or recommendation about it.");
     if let Err(error) = messages::to_lead(messages::ToLead::TaskEnded, &notice) {
         eprintln!("Could not tell the lead: {error}");
@@ -147,6 +150,7 @@ pub(super) fn finish(repo: &Path, slot: &Slot, upstream: &str, state: &Path, vau
             eprintln!("Could not tell the lead: {error}");
         }
     }
+    said.extend(vault.and_then(|cli| crate::vault_card::archive(cli, state, &address)));
     let main = upstream.trim_start_matches("origin/");
     let mut closed = Notice::new(Tone::Done, format!("Closed: its work is on {main}")).next(format!("{} is free for the next task.", name_of(&slot.path)));
     for note in said {
@@ -252,7 +256,9 @@ fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str, kind: Option<
     if let Ok(state) = state_dir() {
         let address = peers::address(task, &name_of(&repo));
         forget_address(&state, &address);
-        said = dropped_notes(if notes.is_empty() { None } else { crate::vault_cli::detect() }.as_ref(), &state, task, &address, &notes);
+        let vault = if notes.is_empty() { None } else { crate::vault_cli::detect() };
+        said = dropped_notes(vault.as_ref(), &state, task, &address, &notes);
+        said.extend(vault.as_ref().and_then(|cli| crate::vault_card::archive(cli, &state, &address)));
     }
     forget_session(task, &repo);
     forget_approval(task, &repo);

@@ -15,6 +15,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The card beside the tasks and the card window are one card, with the read count on its first line.
 - n on the board asks only what you want done and in which repo, then starts it as a task named from your first words or adds it to the backlog.
 - kebbie job run builds or tests a task's worktree on another machine of your hub account, as an Xcode build on a Mac, once worker.enabled is on there.
+- A task ready to push keeps its card in your vault, in the Kebbie folder, linked up to its task note and archived with it when the task ends.
 
 ### Fixed
 - After kebbie update the open board and the keeper move to the new kebbie by themselves, also when herdr installed it in a new folder.
