@@ -281,7 +281,7 @@ fn attempt(hub: &Hub, client: &Client, left: &mut Leftovers, asked: &Asked, work
     }
     let sent = Sent { id: id.clone(), worker: worker.machine.clone(), worker_name: worker.name.clone(), repo: asked.repo.clone(), name: asked.name.clone(), commit: commit.to_string(), base: base.map(str::to_string), blobs: left.blobs.clone(), at: now(), pid: std::process::id() };
     write(&part(hub.state, &id, "sent.json"), &sent)?;
-    let job = Job { repo: token(&asked.repo), name: token(&asked.name), command: asked.def.run.clone(), task: task.to_string(), commit: commit.to_string(), base: base.map(str::to_string), bundle: parts, on: asked.def.on.as_deref().map(token) };
+    let job = Job { repo: token(&asked.repo), name: token(&asked.name), command: super::command_for(asked.def), task: task.to_string(), commit: commit.to_string(), base: base.map(str::to_string), bundle: parts, on: asked.def.on.as_deref().map(token) };
     let envelope = cluster::seal_to(hub.identity, hub.account, &worker.machine, keys, id.clone(), &Payload::Job(job), now()).map_err(|error| format!("kebbie: the job did not seal: {error}"))?;
     let followed = match cluster::post(client, &envelope) {
         Ok(_) => Ok(follow(hub.state, &sent, print, pause, now, stop)),

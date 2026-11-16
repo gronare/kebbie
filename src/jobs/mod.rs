@@ -18,11 +18,29 @@ pub use master::run;
 pub use worker::{spawn, stop};
 
 pub const REF: &str = "refs/kebbie/jobs";
+pub const TIMEOUT_MINUTES: u64 = 60;
+const MAX_TIMEOUT_MINUTES: u64 = 1440;
+const TIMEOUT_LINE: &str = "# kebbie: timeout_minutes = ";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Def {
     pub run: String,
     pub on: Option<String>,
+    pub timeout_minutes: Option<u64>,
+}
+
+// The protocol's job has no field for a timeout, so it rides as a first comment line of the command, which a worker that does not know it runs as a comment.
+fn command_for(def: &Def) -> String {
+    def.timeout_minutes.map_or_else(|| def.run.clone(), |minutes| format!("{TIMEOUT_LINE}{minutes}\n{}", def.run))
+}
+
+fn timeout_of(command: &str) -> (Option<u64>, &str) {
+    let Some(rest) = command.strip_prefix(TIMEOUT_LINE) else { return (None, command) };
+    let (value, run) = rest.split_once('\n').unwrap_or((rest, ""));
+    match value.trim().parse::<u64>() {
+        Ok(minutes) => (Some(minutes.clamp(1, MAX_TIMEOUT_MINUTES)), run),
+        Err(_) => (None, command),
+    }
 }
 
 pub fn parse(table: &toml::Table) -> Result<BTreeMap<String, Def>> {
@@ -31,13 +49,14 @@ pub fn parse(table: &toml::Table) -> Result<BTreeMap<String, Def>> {
     jobs.iter().map(|(name, value)| {
         let text = |value: &toml::Value, key: &str| value.as_str().map(str::trim).filter(|text| !text.is_empty()).map(str::to_string).ok_or_else(|| format!("jobs.{key}: must be a non-empty string"));
         let def = match value {
-            toml::Value::String(_) => Def { run: text(value, name)?, on: None },
+            toml::Value::String(_) => Def { run: text(value, name)?, on: None, timeout_minutes: None },
             toml::Value::Table(job) => {
-                if let Some(unknown) = job.keys().find(|key| !["run", "on"].contains(&key.as_str())) {
-                    return Err(format!("jobs.{name}.{unknown}: unknown key; known keys here: run, on"));
+                if let Some(unknown) = job.keys().find(|key| !["run", "on", "timeout_minutes"].contains(&key.as_str())) {
+                    return Err(format!("jobs.{name}.{unknown}: unknown key; known keys here: run, on, timeout_minutes"));
                 }
                 let run = job.get("run").ok_or_else(|| format!("jobs.{name}: needs run, the command the worker runs"))?;
-                Def { run: text(run, &format!("{name}.run"))?, on: job.get("on").map(|on| text(on, &format!("{name}.on"))).transpose()? }
+                let timeout_minutes = job.get("timeout_minutes").map(|value| value.as_integer().and_then(|minutes| u64::try_from(minutes).ok()).filter(|minutes| (1..=MAX_TIMEOUT_MINUTES).contains(minutes)).ok_or_else(|| format!("jobs.{name}.timeout_minutes: must be a whole number of minutes, 1 to {MAX_TIMEOUT_MINUTES}"))).transpose()?;
+                Def { run: text(run, &format!("{name}.run"))?, on: job.get("on").map(|on| text(on, &format!("{name}.on"))).transpose()?, timeout_minutes }
             }
             _ => return Err(format!("jobs.{name}: must be a command, or a table with run and on")),
         };

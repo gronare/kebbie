@@ -181,14 +181,104 @@ fn checkout(data: &Path, queued: &Queued, bundle: &[u8]) -> std::result::Result<
     Ok(Some(work))
 }
 
-fn kill_group(pid: u32) {
+fn signal_group(pid: u32, signal: libc::c_int) {
     if let Ok(pid) = libc::pid_t::try_from(pid) {
         // SAFETY: signals the process group this worker started for the job.
-        unsafe { libc::kill(-pid, libc::SIGTERM) };
+        unsafe { libc::kill(-pid, signal) };
     }
 }
 
-pub fn execute(queued: &Queued, data: &Path, fetch: &dyn Fn(&[BlobRef]) -> Result<Vec<u8>>, send: &mut dyn FnMut(String, Option<JobEnd>), stop: &dyn Fn() -> bool, clock: &dyn Fn() -> u64) -> JobEnd {
+// How long a job may run, how long it gets between SIGTERM and SIGKILL, and how long its output is still read once its command ended.
+#[derive(Clone, Copy, Debug)]
+pub struct Limits {
+    pub timeout: Duration,
+    pub grace: Duration,
+    pub drain: Duration,
+}
+
+impl Limits {
+    pub const WORKER: Limits = Limits { timeout: Duration::from_secs(super::TIMEOUT_MINUTES * 60), grace: Duration::from_secs(10), drain: Duration::from_secs(2) };
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Why {
+    Halted,
+    TimedOut,
+}
+
+fn span(duration: Duration) -> String {
+    match duration.as_secs() {
+        seconds if seconds >= 60 => format!("{} minutes", seconds / 60),
+        seconds => format!("{seconds} s"),
+    }
+}
+
+fn start(queued: &Queued, work: &Path, command: &str) -> std::io::Result<std::process::Child> {
+    let job = &queued.job;
+    Command::new("sh").args(["-c", &format!("exec 2>&1\n{{ {command}\n}}")]).current_dir(work)
+        .envs([("KEBBIE_JOB", job.name.as_str()), ("KEBBIE_JOB_TASK", job.task.as_str()), ("KEBBIE_JOB_SHA", job.commit.as_str()), ("KEBBIE_JOB_MASTER", queued.from_name.as_str())])
+        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).process_group(0).spawn()
+}
+
+fn lines_of(child: &mut std::process::Child) -> mpsc::Receiver<String> {
+    let (lines, read) = mpsc::channel::<String>();
+    if let Some(output) = child.stdout.take() {
+        std::thread::spawn(move || {
+            for line in BufReader::new(output).split(b'\n').map_while(std::result::Result::ok) {
+                if lines.send(format!("{}\n", String::from_utf8_lossy(&line))).is_err() {
+                    return;
+                }
+            }
+        });
+    }
+    read
+}
+
+// Reads the job's output until its command ended and the output closed, or the drain after the command ended ran out, as when something it put in the background holds the output; a stop or the timeout sends SIGTERM to its process group and SIGKILL after the grace.
+fn watch(child: &mut std::process::Child, read: &mpsc::Receiver<String>, batch: &mut Batch, send: &mut dyn FnMut(String, Option<JobEnd>), stop: &dyn Fn() -> bool, clock: &dyn Fn() -> u64, limits: Limits) -> (std::io::Result<std::process::ExitStatus>, Option<Why>, bool) {
+    let ms = |duration: Duration| duration.as_millis() as u64;
+    let started = clock();
+    let (mut why, mut termed, mut killed, mut closed, mut exited) = (None, None::<u64>, false, false, None::<(std::process::ExitStatus, u64)>);
+    loop {
+        if closed {
+            std::thread::sleep(Duration::from_millis(100));
+        } else {
+            match read.recv_timeout(Duration::from_millis(100)) {
+                Ok(text) => batch.add(&text),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => closed = true,
+            }
+        }
+        let now = clock();
+        if exited.is_none() {
+            match child.try_wait() {
+                Ok(Some(status)) => exited = Some((status, now)),
+                Ok(None) => {}
+                Err(error) => return (Err(error), why, killed),
+            }
+        }
+        if let Some((status, at)) = exited && (closed || now.saturating_sub(at) >= ms(limits.drain)) {
+            return (Ok(status), why, killed);
+        }
+        if why.is_none() {
+            why = if stop() { Some(Why::Halted) } else if now.saturating_sub(started) >= ms(limits.timeout) { Some(Why::TimedOut) } else { None };
+        }
+        if why.is_some() && termed.is_none() {
+            signal_group(child.id(), libc::SIGTERM);
+            termed = Some(now);
+        }
+        if let Some(at) = termed && !killed && now.saturating_sub(at) >= ms(limits.grace) {
+            signal_group(child.id(), libc::SIGKILL);
+            killed = true;
+        }
+        if batch.due(now) {
+            let text = batch.take(now);
+            send(text, None);
+        }
+    }
+}
+
+pub fn execute(queued: &Queued, data: &Path, fetch: &dyn Fn(&[BlobRef]) -> Result<Vec<u8>>, send: &mut dyn FnMut(String, Option<JobEnd>), stop: &dyn Fn() -> bool, clock: &dyn Fn() -> u64, limits: Limits) -> JobEnd {
     let end = |send: &mut dyn FnMut(String, Option<JobEnd>), end: JobEnd| {
         send(String::new(), Some(end.clone()));
         end
@@ -205,45 +295,25 @@ pub fn execute(queued: &Queued, data: &Path, fetch: &dyn Fn(&[BlobRef]) -> Resul
         Ok(None) => return end(send, JobEnd::NeedsFull {}),
         Err(error) => return end(send, failed(&error)),
     };
-    let child = Command::new("sh").args(["-c", &format!("exec 2>&1\n{{ {}\n}}", job.command)]).current_dir(&work)
-        .envs([("KEBBIE_JOB", job.name.as_str()), ("KEBBIE_JOB_TASK", job.task.as_str()), ("KEBBIE_JOB_SHA", job.commit.as_str()), ("KEBBIE_JOB_MASTER", queued.from_name.as_str())])
-        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).process_group(0).spawn();
-    let mut child = match child {
+    let (minutes, command) = super::timeout_of(&job.command);
+    let limits = Limits { timeout: minutes.map_or(limits.timeout, |minutes| Duration::from_secs(minutes * 60)), ..limits };
+    let mut child = match start(queued, &work, command) {
         Ok(child) => child,
         Err(error) => return end(send, failed(&format!("the job's command did not start: {error}"))),
     };
-    let (lines, read) = mpsc::channel::<String>();
-    if let Some(output) = child.stdout.take() {
-        std::thread::spawn(move || {
-            for line in BufReader::new(output).split(b'\n').map_while(std::result::Result::ok) {
-                if lines.send(format!("{}\n", String::from_utf8_lossy(&line))).is_err() {
-                    return;
-                }
-            }
-        });
-    }
+    let read = lines_of(&mut child);
     let mut batch = Batch::new(clock());
-    let mut stopped = false;
-    loop {
-        match read.recv_timeout(Duration::from_millis(200)) {
-            Ok(text) => batch.add(&text),
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-        if !stopped && stop() {
-            kill_group(child.id());
-            stopped = true;
-        }
-        if batch.due(clock()) {
-            let text = batch.take(clock());
-            send(text, None);
-        }
+    let (status, why, killed) = watch(&mut child, &read, &mut batch, send, stop, clock, limits);
+    signal_group(child.id(), libc::SIGKILL);
+    while let Ok(text) = read.try_recv() {
+        batch.add(&text);
     }
-    let status = child.wait();
-    let ended = match status {
-        _ if stopped => failed(&format!("the worker's kebbie stopped while {} ran", job.name)),
-        Ok(status) => JobEnd::Exited { code: status.code().unwrap_or_else(|| 128 + status.signal().unwrap_or(0)), artifacts: Vec::new() },
-        Err(error) => failed(&format!("the job's command was lost: {error}")),
+    let how = if killed { format!(", with SIGKILL as it outlasted SIGTERM by {}", span(limits.grace)) } else { String::new() };
+    let ended = match (why, status) {
+        (Some(Why::Halted), _) => failed(&format!("the worker's kebbie stopped while {} ran, so it stopped the job{how}", job.name)),
+        (Some(Why::TimedOut), _) => failed(&format!("{} ran past its timeout of {}, so the worker stopped it{how}", job.name, span(limits.timeout))),
+        (None, Ok(status)) => JobEnd::Exited { code: status.code().unwrap_or_else(|| 128 + status.signal().unwrap_or(0)), artifacts: Vec::new() },
+        (None, Err(error)) => failed(&format!("the job's command was lost: {error}")),
     };
     let mut rest = batch.rest();
     let last = rest.pop().unwrap_or_default();
@@ -290,7 +360,7 @@ struct Outbox {
 
 // Runs the job while a second thread sends an empty report each minute nothing else went, from the bundle's fetch on, and keeps the jobs queued behind it reported on too, so their masters do not give up.
 #[allow(clippy::too_many_arguments)]
-pub fn supervise(queued: &Queued, data: &Path, fetch: &dyn Fn(&[BlobRef]) -> Result<Vec<u8>>, post: &(dyn Fn(&JobReport) -> Result<()> + Sync), beat_queued: &(dyn Fn() + Sync), every: Duration, halted: &(dyn Fn() -> bool + Sync), clock: &(dyn Fn() -> u64 + Sync)) -> (JobEnd, Option<String>) {
+pub fn supervise(queued: &Queued, data: &Path, fetch: &dyn Fn(&[BlobRef]) -> Result<Vec<u8>>, post: &(dyn Fn(&JobReport) -> Result<()> + Sync), beat_queued: &(dyn Fn() + Sync), every: Duration, halted: &(dyn Fn() -> bool + Sync), clock: &(dyn Fn() -> u64 + Sync), limits: Limits) -> (JobEnd, Option<String>) {
     let outbox = Mutex::new(Outbox { seq: queued.seq, last_ms: clock(), lost: None, ended: false });
     let send = |log: String, end: Option<JobEnd>| {
         let mut out = outbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -323,7 +393,7 @@ pub fn supervise(queued: &Queued, data: &Path, fetch: &dyn Fn(&[BlobRef]) -> Res
                 }
             }
         });
-        let end = execute(queued, data, fetch, &mut |log, end| send(log, end), halted, clock);
+        let end = execute(queued, data, fetch, &mut |log, end| send(log, end), halted, clock, limits);
         done.store(true, Ordering::SeqCst);
         end
     });
@@ -357,7 +427,7 @@ pub fn run_one(dir: &Path, identity: &Identity, account: &AccountKey, client: &C
         beat_queued(dir, Some(file), &identity.name, &|waiting, report| cluster::sender(dir, &client, account, &waiting.from, false).and_then(|(keys, _)| deliver(&client, identity, account, &waiting.from, &keys, report, halted)));
     };
     let fetch = |parts: &[BlobRef]| bundle::download(client, &mut bundle::Calls::new(&crate::typing::now_ms, &std::thread::sleep, halted), parts);
-    let (end, lost) = supervise(queued, data, &fetch, &post, &beat_queued, Duration::from_millis(HEARTBEAT_MS), halted, &crate::typing::now_ms);
+    let (end, lost) = supervise(queued, data, &fetch, &post, &beat_queued, Duration::from_millis(HEARTBEAT_MS), halted, &crate::typing::now_ms, Limits::WORKER);
     format!("{said}: {}{}", ended_as(&end), lost.map(|error| format!("; a report did not reach the master: {error}")).unwrap_or_default())
 }
 

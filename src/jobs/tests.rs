@@ -26,11 +26,11 @@ fn row(seed: u8, name: &str, os: Option<&str>, seen: Option<u64>) -> AccountMach
 #[test]
 fn a_repos_jobs_come_from_its_config_on_the_master_as_a_command_or_a_table_that_picks_the_worker() {
     let jobs = |text: &str| parse(&text.parse::<toml::Table>().unwrap());
-    let read = jobs("[jobs]\nlint = \"swiftlint\"\n\n[jobs.build]\nrun = \"xcodebuild -scheme App build\"\non = \"macos\"\n").unwrap();
-    assert_eq!(read.get("lint"), Some(&Def { run: "swiftlint".to_string(), on: None }));
-    assert_eq!(read.get("build"), Some(&Def { run: "xcodebuild -scheme App build".to_string(), on: Some("macos".to_string()) }));
+    let read = jobs("[jobs]\nlint = \"swiftlint\"\n\n[jobs.build]\nrun = \"xcodebuild -scheme App build\"\non = \"macos\"\ntimeout_minutes = 90\n").unwrap();
+    assert_eq!(read.get("lint"), Some(&Def { run: "swiftlint".to_string(), on: None, timeout_minutes: None }));
+    assert_eq!(read.get("build"), Some(&Def { run: "xcodebuild -scheme App build".to_string(), on: Some("macos".to_string()), timeout_minutes: Some(90) }));
     assert!(jobs("[worktree]\ndev_url = \"x\"\n").unwrap().is_empty(), "a repo without jobs has none");
-    for (text, said) in [("jobs = 3\n", "must be a table of jobs"), ("[jobs]\nbuild = \"  \"\n", "jobs.build: must be a non-empty string"), ("[jobs.build]\non = \"macos\"\n", "jobs.build: needs run"), ("[jobs.build]\nrun = \"x\"\nwhere = \"mac\"\n", "jobs.build.where: unknown key"), ("[jobs]\nbuild = 3\n", "must be a command, or a table")] {
+    for (text, said) in [("jobs = 3\n", "must be a table of jobs"), ("[jobs]\nbuild = \"  \"\n", "jobs.build: must be a non-empty string"), ("[jobs.build]\non = \"macos\"\n", "jobs.build: needs run"), ("[jobs.build]\nrun = \"x\"\nwhere = \"mac\"\n", "jobs.build.where: unknown key"), ("[jobs]\nbuild = 3\n", "must be a command, or a table"), ("[jobs.build]\nrun = \"x\"\ntimeout_minutes = 0\n", "jobs.build.timeout_minutes: must be a whole number of minutes, 1 to 1440")] {
         assert!(jobs(text).unwrap_err().contains(said), "{text}");
     }
 }
@@ -245,7 +245,7 @@ fn a_worker_with_no_repo_runs_a_bundle_takes_a_later_one_from_its_base_and_asks_
     let run = |job: &Queued, bundle: &[u8]| {
         let mut said: Vec<(String, Option<JobEnd>)> = Vec::new();
         let bundle = bundle.to_vec();
-        let end = worker::execute(job, &data, &move |_| Ok(bundle.clone()), &mut |log, end| said.push((log, end)), &|| false, &crate::typing::now_ms);
+        let end = worker::execute(job, &data, &move |_| Ok(bundle.clone()), &mut |log, end| said.push((log, end)), &|| false, &crate::typing::now_ms, worker::Limits::WORKER);
         (end, said.into_iter().map(|(log, _)| log).collect::<String>())
     };
     assert!(!data.exists(), "the worker starts with nothing: the master brings the repo");
@@ -269,7 +269,7 @@ fn a_worker_with_no_repo_runs_a_bundle_takes_a_later_one_from_its_base_and_asks_
     assert!(!data.join("app/billing/ran").exists());
     let (end, _) = run(&queued(&second, None, "true"), b"not a bundle");
     assert!(matches!(&end, JobEnd::Failed { reason } if reason.starts_with("the worker could not take the commit")), "{end:?}");
-    let failing = worker::execute(&queued(&second, None, "true"), &data, &|_| Err("the hub answered 404 not-found".to_string()), &mut |_, _| {}, &|| false, &crate::typing::now_ms);
+    let failing = worker::execute(&queued(&second, None, "true"), &data, &|_| Err("the hub answered 404 not-found".to_string()), &mut |_, _| {}, &|| false, &crate::typing::now_ms, worker::Limits::WORKER);
     assert_eq!(failing, JobEnd::Failed { reason: "the worker could not fetch the bundle: the hub answered 404 not-found".into() });
     let _ = std::fs::remove_dir_all(root);
 }
@@ -294,7 +294,7 @@ fn a_worker_reports_on_a_job_from_the_bundles_fetch_on_and_on_the_jobs_queued_be
         Ok(())
     }, &|| {
         beats.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    }, std::time::Duration::from_millis(50), &|| false, &crate::typing::now_ms);
+    }, std::time::Duration::from_millis(50), &|| false, &crate::typing::now_ms, worker::Limits::WORKER);
     let reports = reports.into_inner().unwrap();
     assert_eq!((end, lost), (JobEnd::Exited { code: 0, artifacts: Vec::new() }, None));
     assert!(reports.iter().filter(|report| report.log.is_empty() && report.end.is_none()).count() >= 3, "empty reports go while the bundle comes down: {reports:?}");
@@ -317,6 +317,40 @@ fn a_worker_reports_on_a_job_from_the_bundles_fetch_on_and_on_the_jobs_queued_be
     assert_eq!(posted.borrow().clone(), [("lint".to_string(), 0, "[kebbie: studio took this job; it waits for the job before it to end]\n".to_string()), ("lint".to_string(), 1, String::new())], "only the waiting job, saying once why it waits");
     std::fs::remove_file(running).unwrap();
     assert_eq!(worker::next_queued(&dir).unwrap().1.seq, 2, "its own reports go on from there");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_hung_job_is_stopped_at_its_timeout_with_its_process_group_and_a_job_that_leaves_a_process_behind_ends_with_its_command() {
+    let root = crate::sh::test_dir("jobs-timeout");
+    let (top, data) = (repo(&root), root.join("worker"));
+    let first = git(&top, &["rev-parse", "HEAD"]);
+    git(&top, &["update-ref", &format!("{REF}/x"), &first]);
+    let full = bundle::create(&top, &format!("{REF}/x"), &first, None, &root.join("one")).unwrap();
+    let blob = kebbie_hub_protocol::BlobRef { id: Id::blob(b"x"), key: "k".repeat(43), media_type: kebbie_hub_protocol::JOB_BUNDLE_MEDIA_TYPE.into(), bytes: 1 };
+    let second = std::time::Duration::from_secs(1);
+    let run = |command: &str, timeout: std::time::Duration, stop: &dyn Fn() -> bool| {
+        let queued = Queued { from: machine(1), from_name: "devbox".into(), id: cluster::new_id().unwrap(), job: Job { repo: "app".into(), name: "build".into(), command: command.into(), task: "billing".into(), commit: first.clone(), base: None, bundle: vec![blob.clone()], on: None }, at: 1, seq: 0 };
+        let mut log = String::new();
+        let began = std::time::Instant::now();
+        let end = worker::execute(&queued, &data, &|_| Ok(full.clone()), &mut |text, _| log.push_str(&text), stop, &crate::typing::now_ms, worker::Limits { timeout, grace: second, drain: second });
+        (end, log, began.elapsed())
+    };
+    let (end, log, took) = run("sleep 31 & echo begun", 60 * second, &|| false);
+    assert_eq!((end, log.as_str()), (JobEnd::Exited { code: 0, artifacts: Vec::new() }, "begun\n"));
+    assert!(took < 4 * second, "a process left in the background holding the output does not hold the worker: {took:?}");
+    assert!(std::process::Command::new("pgrep").args(["-fx", "sleep 31"]).output().unwrap().stdout.is_empty(), "and it goes with the job's process group");
+    let (end, log, took) = run("echo begun; sleep 30", second, &|| false);
+    assert_eq!((end, log.as_str()), (JobEnd::Failed { reason: "build ran past its timeout of 1 s, so the worker stopped it".into() }, "begun\n"));
+    assert!(took < 3 * second, "{took:?}");
+    let (end, _, took) = run("trap '' TERM; sleep 30", second, &|| false);
+    assert_eq!(end, JobEnd::Failed { reason: "build ran past its timeout of 1 s, so the worker stopped it, with SIGKILL as it outlasted SIGTERM by 1 s".into() });
+    assert!(took < 4 * second, "{took:?}");
+    let (end, _, _) = run("sleep 30", 60 * second, &|| true);
+    assert_eq!(end, JobEnd::Failed { reason: "the worker's kebbie stopped while build ran, so it stopped the job".into() });
+    let def = Def { run: "make".to_string(), on: None, timeout_minutes: Some(90) };
+    assert_eq!(timeout_of(&command_for(&def)), (Some(90), "make"), "the job's own timeout goes along in its command");
+    assert_eq!(timeout_of("make"), (None, "make"));
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -394,7 +428,7 @@ fn a_master_runs_its_worktree_as_it_stands_on_a_worker_of_its_hub_account_end_to
     std::fs::write(top.join("new.txt"), "untracked\n").unwrap();
     let ran: RefCell<Vec<Queued>> = RefCell::new(Vec::new());
     let run = |command: &str| {
-        let def = Def { run: command.to_string(), on: Some(worker::os()) };
+        let def = Def { run: command.to_string(), on: Some(worker::os()), timeout_minutes: None };
         let asked = Asked { top: &top, repo: "app".to_string(), name: "build".to_string(), def: &def };
         let mut printed = String::new();
         let ended = master::go(&master.hub(), &asked, &mut |text| printed.push_str(text), &mut || {
@@ -447,7 +481,7 @@ fn a_report_from_a_machine_that_is_not_the_jobs_worker_is_refused_end_to_end() {
     cluster::post(&master.client(), &to_stranger).unwrap();
     let root = crate::sh::test_dir("jobs-e2e-forged");
     let (top, data) = (repo(&root), root.join("worker-data"));
-    let def = Def { run: "echo real".to_string(), on: Some("studio".to_string()) };
+    let def = Def { run: "echo real".to_string(), on: Some("studio".to_string()), timeout_minutes: None };
     let asked = Asked { top: &top, repo: "app".to_string(), name: "build".to_string(), def: &def };
     let ran = RefCell::new(Vec::new());
     let forged = RefCell::new(Vec::new());
@@ -524,7 +558,7 @@ fn a_job_run_stopped_with_ctrl_c_leaves_nothing_behind_here_or_on_the_hub() {
     let root = crate::sh::test_dir("jobs-interrupted");
     let top = repo(&root);
     std::fs::write(top.join("new.txt"), "untracked\n").unwrap();
-    let def = Def { run: "true".to_string(), on: None };
+    let def = Def { run: "true".to_string(), on: None, timeout_minutes: None };
     let asked = Asked { top: &top, repo: "app".to_string(), name: "build".to_string(), def: &def };
     let blobs = RefCell::new(Vec::new());
     let interrupted = std::cell::Cell::new(false);
@@ -566,7 +600,7 @@ fn a_hub_whose_plan_has_no_jobs_says_they_are_part_of_hub_pro() {
     worker.work();
     let root = crate::sh::test_dir("jobs-pro");
     let top = repo(&root);
-    let def = Def { run: "true".to_string(), on: None };
+    let def = Def { run: "true".to_string(), on: None, timeout_minutes: None };
     let asked = Asked { top: &top, repo: "app".to_string(), name: "build".to_string(), def: &def };
     let ended = master::go(&master.hub(), &asked, &mut |_| {}, &mut || panic!("nothing to wait for"), &crate::messages::now, &|| false);
     assert_eq!(ended, Err("Running a job on another machine is part of Hub Pro: https://hub.example.com/billing".to_string()));
