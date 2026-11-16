@@ -460,7 +460,7 @@ pub fn stop_for_update(dir: &Path) -> bool {
 }
 
 pub fn start_after_update(dir: &Path, was_running: bool) -> String {
-    let exe = match crate::peers::kebbie_command() {
+    let exe = match crate::peers::installed_command() {
         Ok(exe) => PathBuf::from(exe),
         Err(error) => return format!("keeper: {error}"),
     };

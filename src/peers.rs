@@ -150,6 +150,18 @@ pub fn kebbie_command() -> Result<String> {
     Ok(if stable.canonicalize().ok() == Some(exe.clone()) { stable } else { exe }.to_string_lossy().to_string())
 }
 
+// The kebbie installed now: the link an update moves to herdr's new folder, else this binary when nothing installed it.
+pub fn installed_command() -> Result<String> {
+    match installed_in(Path::new(&std::env::var("HOME").unwrap_or_default())) {
+        Some(stable) => Ok(stable.to_string_lossy().to_string()),
+        None => kebbie_command(),
+    }
+}
+
+pub(crate) fn installed_in(home: &Path) -> Option<PathBuf> {
+    Some(home.join(".local/share/kebbie/current/target/release/kebbie")).filter(|stable| stable.is_file())
+}
+
 pub fn own_exe() -> Result<PathBuf> {
     std::env::current_exe().map(|exe| replaced_binary(&exe)).map_err(|error| error.to_string())
 }

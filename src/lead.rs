@@ -53,7 +53,7 @@ pub fn write_settings(dir: &Path, name: &str, settings: &str) -> Result<PathBuf>
 }
 
 fn executable() -> Result<PathBuf> {
-    crate::peers::kebbie_command().map(PathBuf::from)
+    crate::peers::installed_command().map(PathBuf::from)
 }
 
 // The binary sits in <repo>/target/release, next to roles/.

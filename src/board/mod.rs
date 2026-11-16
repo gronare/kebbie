@@ -1172,7 +1172,7 @@ struct Rebuild {
 
 impl Rebuild {
     fn new() -> Self {
-        let path = peers::own_exe().ok();
+        let path = peers::installed_command().ok().map(PathBuf::from);
         let started = path.as_deref().and_then(built);
         Self { path, started, last: started, checked: Instant::now() }
     }
@@ -1460,6 +1460,30 @@ mod tests {
     use crate::board::options::{backlog_choices, ongoing_choices, task_choices};
     use crate::board::keys_window::shown;
     use crate::board::status_bar::hint_lines;
+
+    #[test]
+    fn a_board_sees_the_kebbie_an_update_installed_in_a_new_folder_as_rebuilt() {
+        let dir = std::env::temp_dir().join(format!("kebbie-board-install-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let home = &dir;
+        let binary = |folder: &str, at: u64| {
+            let file = home.join(folder).join("target/release/kebbie");
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, folder).unwrap();
+            std::fs::File::options().write(true).open(&file).unwrap().set_modified(std::time::UNIX_EPOCH + Duration::from_secs(at)).unwrap();
+        };
+        binary("old", 1_000);
+        binary("new", 2_000);
+        let link = home.join(".local/share/kebbie/current");
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(home.join("old"), &link).unwrap();
+        let installed = crate::peers::installed_in(home).expect("the link names an installed kebbie");
+        let started = built(&installed);
+        assert!(crate::update::relink_current(home, &home.join("new")).unwrap());
+        assert!(built(&installed).is_some() && built(&installed) != started, "the watched path follows the link to the new folder's binary");
+        assert_eq!(crate::peers::installed_in(&home.join("nowhere")), None, "without an install the board watches its own binary");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn the_lead_board_alone_offers_h_and_says_chat_hidden_while_it_is() {
