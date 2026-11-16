@@ -1246,6 +1246,8 @@ pub fn run(overlay: bool) -> Result<String> {
         crate::sh::adopt_children();
     }
     let sources = config::sources()?;
+    // A warning printed to stderr while the board draws lands inside its screen; kebbie doctor shows unknown keys.
+    config::report_unknown_keys_quietly();
     let (snapshots, refresh) = spawn_refresher(std::env::var("HERDR_PANE_ID").ok().filter(|_| !overlay));
     spawn_ci_watcher(refresh.clone());
     let mut app = App::new(sources, backlog::load(), overlay, refresh);
