@@ -39,9 +39,19 @@ kebbie asks this first, at each `kebbie doctor` run and whenever its kept answer
 | `watch` | `watch --json --body [--since <cursor>]`, one long-lived process the keeper runs | The keeper asks for `snapshot` every 20 seconds and reads each changed backlog note with `read`. |
 | `read` | `read <note> --body` | A plan in a vault note shows only from the local index. |
 | `templates` | `template --json --kind task`, and `task check` with no `--need` | Items and task notes use kebbie's own sections, and the edit gate and done check `problem`, `solution` and `decisions`. |
+| `styles` | `style write --kind backlog --file - --version <n>`, the style on stdin | The vault holds no backlog style, and kebbie's bundled default applies. |
 | `write` | `read --json -- <note>`, answering `{"text", "etag"}`, then `write --etag <etag> -- <note>` with the note on stdin, answering `{"path", "etag"}` | An edit from the phone to a vault backlog item is refused. |
 
 With `templates`, kebbie asks for the task template at most every six hours and keeps it in `item-template.json` in its state directory. An answer with no sections means the vault has no task template, and is kept as long; an ask that fails is tried again after ten minutes. Backlog items are read and written by its sections, found under a heading of any level as the vault finds them, the phone shows them in its order, the task's edits wait for its required sections, and so does done.
+
+## The backlog style
+
+kebbie owns how a backlog item reads, and keeps its rules in the vault, where the vault hands them to any agent that files an item there, kebbie's or not. The default ships in kebbie as `styles/backlog.md`, its first line stamping its version as `<!-- style-version: N -->`.
+
+- `kebbie setup`, the end of `kebbie update` and the keeper's start write it to `.vault/styles/backlog.md` with `style write`. A vault holding a newer version refuses it and keeps its own, and kebbie says nothing; any other refusal is one line, in the keeper's in `keeper.log`.
+- kebbie writes nothing else under `.vault/`: never the schema, never a note, never `.vault/styles/backlog.override.md`.
+- Your own rules go in `.vault/styles/backlog.override.md`, edited as a file. It applies in place of the default, and no kebbie writes it.
+- `kebbie backlog template` asks `template --json --kind backlog` for the style that applies, and prints kebbie's bundled default when the vault answers none.
 
 A `write` whose etag no longer matches exits 1 with the line `mindin: the etag <etag> no longer matches <note>; it changed since it was read` on stderr; kebbie tells the phone the note changed and to read it again. Any other failure is reported as it stands.
 

@@ -54,6 +54,12 @@ Background, Goal and Source are required. An item that lacks a heading or leaves
 
 A vault note short of a section of the vault's task template, or with a required one empty, shows as to write too, a note written before the vault had its template among them. The lead leaves such a note as it is until you start it, when its task writes the sections before it changes code, or until you ask for it to be written out. Format: [The local backlog](../reference/files.md#the-local-backlog).
 
+## Change how an item reads
+
+How a written-out item reads is kebbie's backlog style. With the vault, kebbie keeps it in `.vault/styles/backlog.md`, so every agent that files into the vault gets it, also on other machines and in sessions kebbie did not start. `kebbie backlog template` prints the style that applies.
+
+To use your own, write `.vault/styles/backlog.override.md` in the vault, in Obsidian or on disk. It applies in place of kebbie's, and kebbie never writes it. Without the vault, or with one older than styles, kebbie's own applies. See [The backlog style](../reference/vault-contract.md#the-backlog-style).
+
 ## Have an item written out
 
 Select an item marked to write on the Backlog page and press `⏎`: its options open with **Write it out** first and **Open the card** second. The lead writes it out in place by the skill and shows you the written item. From a shell:

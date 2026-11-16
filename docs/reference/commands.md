@@ -573,7 +573,7 @@ The **push order** is the branch's commits not yet on origin's default branch, o
 | `kebbie backlog` | The backlog the board shows. |
 | `kebbie backlog --search "<words>"` | The backlog items and Found by tasks holding every word, from the backlog as kebbie last read it. It changes nothing, and a task runs it before it files what it noticed. |
 | `kebbie backlog add [--priority <p>] [--repo <repo>] "<line>" [-]` | Add a backlog item where new items go. A line alone is a short item the lead writes out in full; with `-`, the written-out item's sections come on stdin. See [Fill the backlog](../how-to/fill-the-backlog.md#add-an-item). |
-| `kebbie backlog template [--local\|--vault] [--json]` | The sections a backlog item is written in where new items go, the required ones marked: the vault's task template, the file [`board.backlog.template`](configuration.md#backlog-sources) names, or kebbie's own. `--local` or `--vault` shows the other place's. |
+| `kebbie backlog template [--local\|--vault] [--json]` | The sections a backlog item is written in where new items go, the required ones marked: the vault's task template, the file [`board.backlog.template`](configuration.md#backlog-sources) names, or kebbie's own. `--local` or `--vault` shows the other place's. After them, how the item reads: the vault's [backlog style](vault-contract.md#the-backlog-style), your override in place of the default, or kebbie's bundled default when the vault gives none. `--json` adds it as `style`, with `from` and `text`. |
 | `kebbie backlog write <ref>` | Send the lead an item marked to write, to write out in place; it shows you the written item, and the item shows `writing…` until its text is complete. `<ref>` is the reference `kebbie backlog` lists: a vault path (with or without `vault:`), `local:<name>`, or `kept:<id>`. An item written out is refused, and so is one being written, until its request is 24 hours old. The same as **Write it out** in the item's options on the [Backlog page](board.md#on-the-backlog-page). |
 
 `kebbie profiles` shows each profile with what it is for, what it is about, and its agent, model, effort, permission mode and skills. Under a profile that runs Codex, a `codex:` line gives the Codex binary, its version and whether kebbie's plugin is installed. A file that does not load is listed as ignored, with the reason. `--json` gives one object per profile, and `{"error": …}` for an ignored file.
@@ -870,6 +870,7 @@ The review lists each write under the tool whose files it changes:
 - `rules/kebbie.rules` holds one `prefix_rule(pattern=[…], decision="allow")` for each of kebbie's task commands, in each form a task calls kebbie by: its full path, `~/.local/bin/kebbie` and `kebbie`.
 - Codex's vault server runs `vault.command` itself. When that is the Claude vault plugin's own command, it takes the plugin's settings with it, its S3 keys named by `env_vars` and never written.
 - Where the vault lives is saved by the vault itself, through `mindin setup`; setup never writes it, and `None` takes only `vault.command` out, leaving the vault as it is.
+- With a vault whose `about` lists `styles`, it writes kebbie's [backlog style](vault-contract.md#the-backlog-style) into the vault and says so in a line before `Setup done`.
 - It always links `~/.local/bin/kebbie` to `~/.local/share/kebbie/current/target/release/kebbie`, and installs the Claude Code plugin from that folder or updates it as `kebbie update` does.
 - herdr's keys go only at the end of its `config.toml`, the rest of the file byte for byte, then `herdr server reload-config`, or a restart when it cannot. A key already bound to something else is left out and named with a free one, such as `the board unbound: prefix+t is new_tab's, prefix+y is free`.
 - How agents update stays `update.agents`'s default; setup does not ask.
@@ -931,6 +932,8 @@ Installs kebbie's Codex plugin in `$CODEX_HOME/plugins/cache/kebbie-tasks/kebbie
 It prints each step as it goes (in a terminal the running one is redrawn with its bar and time). Then it prints what's new and fixed from kebbie's `CHANGES.md`, one or two sentences on the restarts, and the details.
 
 When kebbie's [Codex plugin](#kebbie-setup-codex---yes) is installed, it rewrites the files of it this kebbie writes differently, and its details say `Codex plugin: updated <files>` or `Codex plugin: up to date`. A machine without the plugin gets none, and Codex's `config.toml` and `hooks.json` are never touched. When `$CODEX_HOME/rules/kebbie.rules` is there, it rewrites it with this kebbie's task commands, and its details say `Codex rules: 16 commands, rewrote <file>` or `Codex rules: 16 commands, up to date`; a file with lines kebbie did not write stays, and `default.rules` is never touched.
+
+With a vault whose `about` lists `styles`, it writes this kebbie's [backlog style](vault-contract.md#the-backlog-style) into the vault, and a line says so.
 
 With open [kebbie issues](#kebbie-issues), it looks them up on GitHub through `gh` and leaves each one filed on older code to the keeper to recheck against the new commits.
 

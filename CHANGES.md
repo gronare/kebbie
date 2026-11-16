@@ -6,6 +6,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 
 ### What's new
 
+- kebbie keeps its backlog style in the vault, where every agent that files a backlog item there gets it; your own .vault/styles/backlog.override.md replaces it, and kebbie backlog template shows the one that applies.
 - The board's ↑ ↓ move task to task, and → steps into a task: its subtasks and card light up beside the tasks, which fade so you see where you are, or open in a window on a narrow board.
 
 ### Fixed

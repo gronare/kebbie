@@ -329,4 +329,5 @@ What happened: …
 | `scripts/review.lua` | The review split's diff pane in nvim. |
 | `scripts/check.sh` | What CI checks, run locally before a push: tests, clippy, `cargo audit`, `cargo deny` and a build on the oldest Rust the crate supports. See [Develop kebbie](../how-to/develop-kebbie.md). |
 | `roles/lead.md`, `roles/task.md` | The lead's and a task's role templates. |
+| `styles/backlog.md` | kebbie's default [backlog style](vault-contract.md#the-backlog-style), written into the vault and built into the binary. |
 | `skills/` | The Claude Code plugin's skills. See [Skills](skills.md). |
