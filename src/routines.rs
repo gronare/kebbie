@@ -698,7 +698,7 @@ pub(crate) mod tests {
         let (profile, fell_back) = crate::profiles::for_running_task(&profiles, routine.profile.as_deref(), None, None).unwrap();
         assert_eq!((profile.name.as_str(), fell_back), ("cluster", None));
         for sandboxed in [true, false] {
-            let written: Value = serde_json::from_str(&profile.agent.task_settings("/k", "cluster-health-0108-0600@infra", None, None, &profile, sandboxed)).unwrap();
+            let written: Value = serde_json::from_str(&profile.agent.task_settings("/k", "cluster-health-0108-0600@infra", None, &profile, sandboxed)).unwrap();
             assert_eq!(written["env"]["KUBECONFIG"], "/etc/kebbie/cluster-health.yaml", "sandboxed {sandboxed}");
             assert_eq!(written["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "'/k' hook push-guard --kube", "the guard knows the task has a kubeconfig");
             if sandboxed {

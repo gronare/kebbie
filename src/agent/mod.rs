@@ -121,9 +121,9 @@ impl Agent {
         Agent::ALL.into_iter().find(|agent| herdr_agent["agent"] == agent.kind())
     }
 
-    pub fn task_settings(self, kebbie: &str, address: &str, gate: Option<&str>, dirs: Option<&crate::sandbox::TaskDirs>, profile: &Profile, sandbox: bool) -> String {
+    pub fn task_settings(self, kebbie: &str, address: &str, dirs: Option<&crate::sandbox::TaskDirs>, profile: &Profile, sandbox: bool) -> String {
         match self {
-            Agent::Claude => claude::with_profile(&crate::inbox::with_inbox(&claude::settings(kebbie, address, gate, dirs, sandbox.then_some(&profile.sandbox)), kebbie, address), profile),
+            Agent::Claude => claude::with_profile(&crate::inbox::with_inbox(&claude::settings(kebbie, address, dirs, sandbox.then_some(&profile.sandbox)), kebbie, address), profile),
             Agent::Codex => serde_json::json!({ "agent": "codex" }).to_string(),
         }
     }

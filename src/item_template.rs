@@ -225,6 +225,7 @@ impl Template {
         body
     }
 
+    #[cfg(test)]
     pub fn names(headings: &[String]) -> String {
         let bare: Vec<&str> = headings.iter().map(|heading| heading.trim_start_matches("## ")).collect();
         match bare.as_slice() {
@@ -234,6 +235,7 @@ impl Template {
         }
     }
 
+    #[cfg(test)]
     pub fn required_names(&self) -> String {
         Template::names(&self.required().map(|section| section.heading.clone()).collect::<Vec<_>>())
     }
@@ -387,38 +389,6 @@ pub fn refresh(cli: &Cli, state: &Path, now: u64) -> Result<bool> {
 // The kept answer is read afresh after this process rewrote it, not up to RECHECK later.
 fn forget() {
     *KEPT.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-}
-
-// What a task's note must hold: with the vault's templates, the task template's required sections, which task check reads when no keys are named; else the keys of the notes before templates.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Need {
-    pub keys: Vec<&'static str>,
-    pub named: String,
-}
-
-impl Need {
-    pub fn templated(&self) -> bool {
-        self.keys.is_empty()
-    }
-
-    // The sections a check answered missing, by their headings where the template names them.
-    pub fn shown(&self, missing: &[String]) -> String {
-        let template = for_vault();
-        Template::names(&missing.iter().map(|key| template.heading(key).map_or_else(|| key.clone(), str::to_string)).collect::<Vec<_>>())
-    }
-}
-
-pub fn start_need(templated: bool) -> Need {
-    if templated { Need { keys: Vec::new(), named: for_vault().required_names() } } else { Need { keys: vec!["problem"], named: "Problem".to_string() } }
-}
-
-pub fn done_need(templated: bool) -> Need {
-    if templated { Need { keys: Vec::new(), named: for_vault().required_names() } } else { Need { keys: vec!["solution", "decisions"], named: "solution and decisions".to_string() } }
-}
-
-// For the task's role, when it is written: whether the vault this machine runs states templates, by the verdict kept from its last probe.
-pub fn templated_now() -> bool {
-    crate::vault_cli::cli().is_some_and(|cli| templated(&cli))
 }
 
 // `kebbie backlog template`: the template where new items go, or the one asked for; the vault's is read afresh when kebbie has none kept.

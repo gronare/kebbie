@@ -249,16 +249,13 @@ fn trusted_in(claude: &Value, dir: &Path) -> bool {
     dir.ancestors().any(|folder| folder.to_str().is_some_and(|folder| claude["projects"][folder]["hasTrustDialogAccepted"] == true))
 }
 
-// The deny rules and env rewrite name the rule, the push block holds when they are slipped, and the sandbox keeps the shell from passing as the user; gate is the task's address when kebbie keeps its note, whose Problem its edits then wait for.
-pub(crate) fn settings(kebbie: &str, address: &str, gate: Option<&str>, dirs: Option<&TaskDirs>, sandbox: Option<&Policy>) -> String {
+// The deny rules and env rewrite name the rule, the push block holds when they are slipped, and the sandbox keeps the shell from passing as the user.
+pub(crate) fn settings(kebbie: &str, address: &str, dirs: Option<&TaskDirs>, sandbox: Option<&Policy>) -> String {
     let hook = json!([{ "hooks": [{ "type": "command", "command": format!("{} hook", crate::sh::quote(kebbie)) }] }]);
     let allow = ["peers", "tell", "report", "ask", "subtasks", "steps", "stages", "order", "accepted", "routine ok"].map(|command| format!("Bash({kebbie} {command}:*)"));
     let evidence = json!([{ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("{} hook evidence {}", crate::sh::quote(kebbie), crate::sh::quote(address)) }] }]);
     let push_guard = json!({ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("{} hook push-guard", crate::sh::quote(kebbie)) }] });
     let mut hooks = json!({ "UserPromptSubmit": hook, "Stop": hook, "PreToolUse": [push_guard], "PostToolUse": evidence, "PostToolUseFailure": evidence });
-    if let Some(address) = gate {
-        hooks["PreToolUse"].as_array_mut().expect("the push guard is a PreToolUse list").push(json!({ "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash", "hooks": [{ "type": "command", "command": format!("{} hook gate {}", crate::sh::quote(kebbie), crate::sh::quote(address)), "timeout": 40 }] }));
-    }
     if let Some(dirs) = dirs.filter(|_| sandbox.is_some()) {
         let task = address.rsplit_once('@').map_or(address, |(task, _)| task);
         let files = json!({ "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash", "hooks": [{ "type": "command", "command": format!("{} hook files {} {} {}", crate::sh::quote(kebbie), crate::sh::quote(task), crate::sh::quote(&dirs.worktree.to_string_lossy()), crate::sh::quote(&dirs.tmp.to_string_lossy())) }] });
@@ -659,7 +656,7 @@ mod tests {
     }
 
     fn task_settings(sandbox: Option<&Policy>) -> Value {
-        serde_json::from_str(&settings("/opt/kebbie/kebbie", "billing@app", None, Some(&dirs()), sandbox)).unwrap()
+        serde_json::from_str(&settings("/opt/kebbie/kebbie", "billing@app", Some(&dirs()), sandbox)).unwrap()
     }
 
     fn dirs() -> TaskDirs {
@@ -712,7 +709,7 @@ mod tests {
         let mut compose = task.clone();
         compose.sandbox.excluded = vec!["docker compose *".to_string()];
         for sandbox in [true, false] {
-            let written = |profile: &Profile| serde_json::from_str::<Value>(&super::super::Agent::Claude.task_settings("/k", "billing@app", None, Some(&dirs()), profile, sandbox)).unwrap()["env"].clone();
+            let written = |profile: &Profile| serde_json::from_str::<Value>(&super::super::Agent::Claude.task_settings("/k", "billing@app", Some(&dirs()), profile, sandbox)).unwrap()["env"].clone();
             for (profile, agent) in [(&ops, true), (&deploy, true), (&task, false), (&compose, false)] {
                 let env = written(profile);
                 assert_eq!(env.get("SSH_AUTH_SOCK").is_none(), agent, "sandbox {sandbox}, outside it {:?}: {env}", profile.sandbox.excluded);
@@ -721,7 +718,7 @@ mod tests {
                 }
                 assert_eq!((env["GIT_CONFIG_KEY_6"].as_str(), env["GIT_CONFIG_KEY_7"].as_str(), env["GIT_CONFIG_KEY_0"].as_str()), (Some("credential.helper"), Some("http.extraHeader"), Some("url.kebbie-blocks-push://.pushInsteadOf")), "git's https logins and the push rewrite stay in every profile");
             }
-            let hooks = serde_json::from_str::<Value>(&super::super::Agent::Claude.task_settings("/k", "billing@app", None, Some(&dirs()), &ops, sandbox)).unwrap();
+            let hooks = serde_json::from_str::<Value>(&super::super::Agent::Claude.task_settings("/k", "billing@app", Some(&dirs()), &ops, sandbox)).unwrap();
             assert!(strings(&hooks["permissions"]["deny"]).contains(&"Bash(git push:*)".to_string()), "an ops task's git push is still refused");
         }
     }
@@ -739,7 +736,7 @@ mod tests {
         let task = crate::profiles::built_in(crate::profiles::TASK).unwrap();
         let mut kube = crate::profiles::built_in(crate::profiles::OPS).unwrap();
         kube.sandbox.kubeconfig = Some("/home/ada/.kube/kebbie-ops.yaml".to_string());
-        let written = |profile: &Profile, sandbox: bool| serde_json::from_str::<Value>(&super::super::Agent::Claude.task_settings("/k", "billing@app", None, Some(&dirs()), profile, sandbox)).unwrap();
+        let written = |profile: &Profile, sandbox: bool| serde_json::from_str::<Value>(&super::super::Agent::Claude.task_settings("/k", "billing@app", Some(&dirs()), profile, sandbox)).unwrap();
         for sandbox in [true, false] {
             let plain = written(&task, sandbox);
             assert!(plain["env"].get("KUBECONFIG").is_none() && !strings(&plain["permissions"]["deny"]).iter().any(|rule| rule.contains(".kube")), "a task without one has no cluster: {}", plain["env"]);
@@ -841,11 +838,10 @@ mod tests {
         let entries = written["hooks"]["PreToolUse"].as_array().unwrap();
         let files = entries.iter().find(|entry| entry["matcher"] == "Edit|Write|MultiEdit|NotebookEdit|Bash").unwrap();
         assert_eq!(files["hooks"][0]["command"], "'/opt/kebbie/kebbie' hook files 'billing' '/src/wt1.app' '/tmp/kebbie-501/wt1.app-a1b2c3'", "the task's name finds its halves in other repos");
-        let gated: Value = serde_json::from_str(&settings("/opt/kebbie/kebbie", "billing@app", Some("billing@app"), Some(&dirs()), Some(&Policy::default()))).unwrap();
-        let matchers: Vec<&str> = gated["hooks"]["PreToolUse"].as_array().unwrap().iter().filter_map(|entry| entry["matcher"].as_str()).collect();
-        assert_eq!(matchers, ["Bash", "Edit|Write|MultiEdit|NotebookEdit|Bash", "Edit|Write|MultiEdit|NotebookEdit|Bash"], "the push guard, the vault's gate and the write guard all run");
-        let off: Value = serde_json::from_str(&settings("/opt/kebbie/kebbie", "billing@app", Some("billing@app"), Some(&dirs()), None)).unwrap();
-        assert_eq!(off["hooks"]["PreToolUse"].as_array().unwrap().len(), 2, "the push guard and the vault's gate without the sandbox");
+        let matchers: Vec<&str> = entries.iter().filter_map(|entry| entry["matcher"].as_str()).collect();
+        assert_eq!(matchers, ["Bash", "Edit|Write|MultiEdit|NotebookEdit|Bash"], "the push guard and the write guard run");
+        let off: Value = serde_json::from_str(&settings("/opt/kebbie/kebbie", "billing@app", Some(&dirs()), None)).unwrap();
+        assert_eq!(off["hooks"]["PreToolUse"].as_array().unwrap().len(), 1, "the push guard alone without the sandbox");
     }
 
     #[test]

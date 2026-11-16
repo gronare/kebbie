@@ -323,7 +323,7 @@ fn user_temp() -> Option<PathBuf> {
 
 // A shell command's clear writes, held to the file tools' places plus the machine's temp folders; a shell can always write in ways this does not read.
 pub fn shell_refusal(command: &str, cwd: &Path, dirs: &TaskDirs, claude_home: &Path, temps: &[PathBuf]) -> Option<String> {
-    let written = crate::shell_write::written(command, cwd, crate::shell_write::Writes::Any);
+    let written = crate::shell_write::written(command, cwd);
     written.iter().filter(|target| !shared_temp(target, temps)).find_map(|target| file_refusal(target, dirs, claude_home))
 }
 

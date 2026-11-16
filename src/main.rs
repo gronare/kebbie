@@ -758,7 +758,8 @@ fn run(arguments: &Arguments) -> Result<String> {
                 return Ok(sandbox::file_hook(arguments.positional(2), arguments.positional(3), arguments.positional(4), &input));
             }
             if name == Some("gate") {
-                return Ok(arguments.positional(2).map(|address| task_note::hook(address, &input)).unwrap_or_default());
+                // A task started by an older kebbie still runs this hook until its restart; every edit goes through.
+                return Ok(String::new());
             }
             if name == Some("push-guard") {
                 return Ok(push_guard::hook(&input, kube_guard::Cluster::flagged(arguments.flag("--kube"), arguments.flag("--own-cluster"))));

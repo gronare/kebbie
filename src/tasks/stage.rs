@@ -661,9 +661,9 @@ mod tests {
         let agents: Vec<Value> = (0..slots.len()).map(|at| json!({ "workspace_id": format!("w{at}"), "agent_status": "idle" })).collect();
         let world = World { repos: &repos, workspaces: &workspaces, agents: &agents, log: &[], gh: "false", began: messages::now(), fresh: None };
         let (state, upstream) = (staging.state.clone(), staging.upstream.clone());
-        let mut close = |repo: &Path, task: &str, _| {
-            let slot = find_task(repo, Some(task), repo).map_err(crate::tasks::landed::Refused::Other)?;
-            super::super::finish::finish(repo, &slot, &upstream, &state, None).map_err(crate::tasks::landed::Refused::Other)
+        let mut close = |repo: &Path, task: &str| {
+            let slot = find_task(repo, Some(task), repo)?;
+            super::super::finish::finish(repo, &slot, &upstream, &state, None)
         };
         let notes = pass(&staging.state, &world, &mut close, &mut |_| {});
         assert!(!crate::repo::branch_exists(&staging.dir, "alpha") && !crate::repo::branch_exists(&staging.dir, "beta"), "both closed as landed: {notes:?}");

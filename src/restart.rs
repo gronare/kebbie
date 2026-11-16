@@ -1067,7 +1067,7 @@ mod tests {
         let dir = crate::sh::test_dir("restart-hooks-gone");
         let kebbie = dir.join("kebbie");
         crate::executable::write(&kebbie, "#!/bin/sh\n").unwrap();
-        let written = |program: &str| serde_json::from_str::<Value>(&crate::agent::claude::settings(program, "billing@app", Some("billing@app"), None, None)).unwrap();
+        let written = |program: &str| serde_json::from_str::<Value>(&crate::agent::claude::settings(program, "billing@app", None, None)).unwrap();
         assert!(gone_hooks(&written(&kebbie.to_string_lossy())).is_empty());
         let missing = dir.join("gone/kebbie");
         assert_eq!(gone_hooks(&written(&missing.to_string_lossy())), [missing.to_string_lossy().to_string()], "a kebbie binary that is gone fails its evidence and gate hooks silently");

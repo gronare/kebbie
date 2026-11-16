@@ -587,7 +587,7 @@ fn prepare(place: &Launch, resumed: bool) -> Result<Prepared> {
         crate::sandbox::record_half(&state, task, &dirs)?;
         dirs.halves = crate::sandbox::halves(&state, task, worktree);
     }
-    let written = profile.agent.task_settings(&peers::kebbie_command()?, &address, note.map(|_| address.as_str()), Some(&dirs), profile, shell);
+    let written = profile.agent.task_settings(&peers::kebbie_command()?, &address, Some(&dirs), profile, shell);
     let settings = crate::lead::write_settings(&crate::lead::roles_dir()?, &address, &written)?;
     let added = profiles::role_section(profile)?;
     let (role, text) = peers::role_file(task, &peers::Place { agent: profile.agent, repo, worktree, setup_skill, setup_command, rules_skill, note, profile: &added, sandboxed: shell })?;
@@ -1030,17 +1030,14 @@ mod tests {
     }
 
     #[test]
-    fn edits_are_gated_only_in_a_task_started_with_the_vault_on() {
-        let off: Value = serde_json::from_str(&settings("/bin/kebbie", "billing@app", None, None, None)).unwrap();
-        assert_eq!(off["hooks"]["PreToolUse"].as_array().map(Vec::len), Some(1), "without the vault no edit hook runs, only the push guard");
+    fn a_tasks_edits_wait_for_no_note_and_every_task_records_its_test_runs() {
+        let written: Value = serde_json::from_str(&settings("/bin/kebbie", "billing@app", None, None)).unwrap();
+        assert_eq!(written["hooks"]["PreToolUse"].as_array().map(Vec::len), Some(1), "only the push guard runs before a tool, with the vault or without");
+        assert!(!written.to_string().contains("hook gate"));
         for event in ["PostToolUse", "PostToolUseFailure"] {
-            assert_eq!(off["hooks"][event][0]["matcher"], "Bash");
-            assert_eq!(off["hooks"][event][0]["hooks"][0]["command"], "'/bin/kebbie' hook evidence 'billing@app'", "every task records its test runs, passed and failed");
+            assert_eq!(written["hooks"][event][0]["matcher"], "Bash");
+            assert_eq!(written["hooks"][event][0]["hooks"][0]["command"], "'/bin/kebbie' hook evidence 'billing@app'", "every task records its test runs, passed and failed");
         }
-        let on: Value = serde_json::from_str(&settings("/bin/kebbie", "billing@app", Some("billing@app"), None, None)).unwrap();
-        assert_eq!(on["hooks"]["PreToolUse"][1]["matcher"], "Edit|Write|MultiEdit|NotebookEdit|Bash", "a Bash command that writes a file waits for the Problem too");
-        assert_eq!(on["hooks"]["PreToolUse"][1]["hooks"][0]["command"], "'/bin/kebbie' hook gate 'billing@app'", "the hook is told its task, so it runs no git and no herdr to find it");
-        assert_eq!(on["hooks"]["Stop"], off["hooks"]["Stop"]);
     }
 
     #[test]
@@ -1088,7 +1085,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("kebbie-task-settings-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let kebbie = format!("/Users/someone-with-a-long-name/projects/{}/target/release/kebbie", "nested/".repeat(20));
-        let file = crate::lead::write_settings(&dir, &peers::address("billing", "app"), &settings(&kebbie, "billing@app", None, None, None)).unwrap();
+        let file = crate::lead::write_settings(&dir, &peers::address("billing", "app"), &settings(&kebbie, "billing@app", None, None)).unwrap();
         assert_eq!(file, dir.join("billing@app.settings.json"));
         let args = claude_args(Some("acceptEdits"), &file, &dir.join("billing@app.md"), &Session::New("0b6a".to_string()));
         let line = args.join(" ");
@@ -1096,7 +1093,7 @@ mod tests {
         assert_eq!(args[..2], ["--permission-mode", "acceptEdits"]);
         assert_eq!(args[args.iter().position(|arg| arg == "--settings").unwrap() + 1], file.to_string_lossy());
         let written: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
-        assert_eq!(written, serde_json::from_str::<Value>(&settings(&kebbie, "billing@app", None, None, None)).unwrap());
+        assert_eq!(written, serde_json::from_str::<Value>(&settings(&kebbie, "billing@app", None, None)).unwrap());
         let deny: Vec<&str> = written["permissions"]["deny"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
         for rule in ["Bash(git push:*)".to_string(), format!("Bash({kebbie} approve:*)"), format!("Bash({kebbie} push:*)"), format!("Bash({kebbie} choose:*)"), format!("Bash({kebbie} after:*)"), format!("Bash({kebbie} ci dismiss:*)"), "Bash(herdr pane send-keys:*)".to_string(), "Bash(herdr pane send-text:*)".to_string(), "Bash(herdr pane run:*)".to_string(), "Bash(herdr agent send-keys:*)".to_string(), "Bash(herdr agent prompt:*)".to_string()] {
             assert!(deny.contains(&rule.as_str()), "a task never pushes, approves its own commits, answers a Claude's prompt nor types into a pane: {rule}");
@@ -1275,7 +1272,7 @@ mod tests {
 
     #[test]
     fn a_tasks_settings_deny_push_and_approve_in_every_spelling_claude_code_matches() {
-        let on: Value = serde_json::from_str(&settings("/bin/kebbie", "billing@app", Some("billing@app"), None, None)).unwrap();
+        let on: Value = serde_json::from_str(&settings("/bin/kebbie", "billing@app", None, None)).unwrap();
         let deny: Vec<&str> = on["permissions"]["deny"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
         let user_only: Vec<String> = crate::permit::USER_ONLY.iter().map(|command| format!("Bash(/bin/kebbie {command}:*)")).collect();
         assert_eq!(deny[0], "Bash(git push:*)");
@@ -1292,7 +1289,6 @@ mod tests {
         assert_eq!((on["env"]["GIT_CONFIG_COUNT"].as_str(), on["env"]["GIT_CONFIG_KEY_2"].as_str(), on["env"]["GIT_CONFIG_VALUE_2"].as_str()), (Some("8"), Some("url./.pushInsteadOf"), Some("/")), "a push to a local path, as a test's temp repo, goes through");
         assert_eq!(on["env"]["VAULT_STOP_HOOK_COMMITS"], "off", "the vault plugin's Stop hook never asks a task for the repo log kebbie writes");
         assert!(on["env"].get("VAULT_STOP_HOOK").is_none(), "a task is still asked to save what it was told");
-        assert_eq!(on["hooks"]["PreToolUse"][1]["hooks"][0]["timeout"], 40);
     }
 
     #[test]
@@ -1335,7 +1331,7 @@ mod tests {
     #[test]
     fn a_task_started_in_bypass_permissions_still_never_pushes_nor_approves() {
         let dir = crate::sh::test_dir("task-bypass");
-        let file = crate::lead::write_settings(&dir, "billing@app", &settings("/bin/kebbie", "billing@app", None, None, None)).unwrap();
+        let file = crate::lead::write_settings(&dir, "billing@app", &settings("/bin/kebbie", "billing@app", None, None)).unwrap();
         let args = claude_args(Some(BYPASS), &file, &dir.join("billing@app.md"), &Session::New("0b6a".to_string()));
         assert_eq!(args[..2], ["--permission-mode", "bypassPermissions"]);
         let written: Value = serde_json::from_str(&std::fs::read_to_string(&args[args.iter().position(|arg| arg == "--settings").unwrap() + 1]).unwrap()).unwrap();
@@ -1384,7 +1380,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let kebbie = dir.join("kebbie");
         crate::executable::write(&kebbie, "#!/bin/sh\necho ran \"$@\"\n").unwrap();
-        let written: Value = serde_json::from_str(&settings(&kebbie.to_string_lossy(), "billing@it's", Some("billing@it's"), None, None)).unwrap();
+        let written: Value = serde_json::from_str(&settings(&kebbie.to_string_lossy(), "billing@it's", None, None)).unwrap();
         for command in [&written["hooks"]["Stop"][0]["hooks"][0]["command"], &written["hooks"]["PreToolUse"][0]["hooks"][0]["command"], &written["hooks"]["PostToolUse"][0]["hooks"][0]["command"]] {
             let output = std::process::Command::new("sh").args(["-c", command.as_str().unwrap()]).output().unwrap();
             assert!(output.status.success(), "{command}: {}", String::from_utf8_lossy(&output.stderr));
@@ -1425,13 +1421,13 @@ mod tests {
             name: "designer".to_string(), model: Some("opus".to_string()), effort: Some("high".to_string()), permission_mode: Some("acceptEdits".to_string()),
             deny: vec!["Bash(rm -rf:*)".to_string()], allow: vec!["Bash(npx playwright:*)".to_string()], plugins: vec!["design@claude-plugins".to_string()], ..task.clone()
         };
-        let mut plain: Value = serde_json::from_str(&crate::inbox::with_inbox(&settings("/bin/kebbie", "billing@app", Some("billing@app"), None, None), "/bin/kebbie", "billing@app")).unwrap();
-        let ours: Value = serde_json::from_str(&Agent::Claude.task_settings("/bin/kebbie", "billing@app", Some("billing@app"), None, &task, false)).unwrap();
+        let mut plain: Value = serde_json::from_str(&crate::inbox::with_inbox(&settings("/bin/kebbie", "billing@app", None, None), "/bin/kebbie", "billing@app")).unwrap();
+        let ours: Value = serde_json::from_str(&Agent::Claude.task_settings("/bin/kebbie", "billing@app", None, &task, false)).unwrap();
         assert_eq!(ours["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "'/bin/kebbie' hook push-guard --own-cluster", "an unsandboxed task's kubectl is the user's own");
         plain["hooks"]["PreToolUse"][0]["hooks"][0]["command"] = json!("'/bin/kebbie' hook push-guard --own-cluster");
         assert_eq!(ours, plain, "the built-in task's settings are kebbie's own, nothing else added");
         assert_eq!((&ours["crossSessionInbound"], &ours["hooks"]["SessionStart"][0]["hooks"][0]["command"]), (&json!("accept"), &json!("'/bin/kebbie' hook inbox 'billing@app'")), "a task takes kebbie's messages in its inbox, whatever its permission mode");
-        let written: Value = serde_json::from_str(&Agent::Claude.task_settings("/bin/kebbie", "billing@app", Some("billing@app"), None, &designer, false)).unwrap();
+        let written: Value = serde_json::from_str(&Agent::Claude.task_settings("/bin/kebbie", "billing@app", None, &designer, false)).unwrap();
         let deny = written["permissions"]["deny"].as_array().unwrap();
         let kebbies = plain["permissions"]["deny"].as_array().unwrap();
         assert_eq!(deny[..kebbies.len()], kebbies[..], "kebbie's deny rules stay, first and whole");

@@ -217,12 +217,12 @@ mod tests {
         let lead = include_str!("../roles/lead.md");
         assert!(task.contains("Your shell has no GitHub token or git credential login, and kebbie refuses `git push` from it in every form") && lead.contains("A task's own shell has no GitHub token or git credential login and kebbie refuses `git push` from it in every form"));
         assert!(task.contains("an ops task keeps the user's ssh agent for its ssh to other machines") && lead.contains("an ops task keeping the user's ssh agent for its ssh to other machines"));
-        let settings: Value = serde_json::from_str(&crate::agent::claude::settings("/k", "billing@app", None, None, None)).unwrap();
+        let settings: Value = serde_json::from_str(&crate::agent::claude::settings("/k", "billing@app", None, None)).unwrap();
         assert!(settings["hooks"]["PreToolUse"].as_array().unwrap().iter().any(|entry| entry["matcher"] == "Bash" && entry["hooks"][0]["command"] == "'/k' hook push-guard"), "the guard the roles name runs on every shell command");
         for (name, value) in crate::push_block::NO_LOGINS {
             assert_eq!(settings["env"][name], value, "{name}: the shell has no login");
         }
-        let ops: Value = serde_json::from_str(&crate::agent::Agent::Claude.task_settings("/k", "billing@app", None, None, &crate::profiles::built_in(crate::profiles::OPS).unwrap(), false)).unwrap();
+        let ops: Value = serde_json::from_str(&crate::agent::Agent::Claude.task_settings("/k", "billing@app", None, &crate::profiles::built_in(crate::profiles::OPS).unwrap(), false)).unwrap();
         assert!(ops["env"].get(crate::push_block::SSH_AGENT).is_none() && ops["env"]["GH_TOKEN"] == "" && ops["hooks"]["PreToolUse"][0]["hooks"][0]["command"] == "'/k' hook push-guard --own-cluster", "an unsandboxed ops task keeps the ssh agent, drops the token and meets the guard: {ops}");
     }
 

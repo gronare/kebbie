@@ -13,7 +13,7 @@ use crate::repo::{UNHOOKED, ahead_behind, default_branch, git, git_writing, hidd
 use crate::sh::Result;
 use super::approval::{approved, fingerprint, fingerprint_at, same_code};
 use super::intent::{self, By, Intent, Through, Work};
-use super::finish::{close_task, note_ready};
+use super::finish::close_task;
 use super::{fetch, follow_upstream};
 use super::pool::{Slot, find_task, task_of};
 use super::started::started_file;
@@ -758,7 +758,7 @@ pub(super) fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through
     let Went { sha, keep_open, rest, pushed, note, target, .. } = went;
     let main = main_of(upstream);
     let logged = log.as_ref().map(crate::task_note::logged_text).unwrap_or_default();
-    let told = Landed { pusher, address: &address, target: &target, commits: &pushed, closed: false, note: note.as_deref(), logged: log.as_ref().map(|log| matches!(log, Ok(Some(_)))), waits: false };
+    let told = Landed { pusher, address: &address, target: &target, commits: &pushed, closed: false, note: note.as_deref(), logged: log.as_ref().map(|log| matches!(log, Ok(Some(_)))) };
     let short = &sha[..7.min(sha.len())];
     if matches!(watch, crate::ci::Begin::Watching) {
         crate::ci::arm(state, &address, log.as_ref().map(|log| matches!(log, Ok(Some(_)))));
@@ -807,19 +807,13 @@ pub(super) fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through
                 Err(error) => eprintln!("kebbie could not ask {address} to run its check after the push, so it closes the task without it: {error}"),
             }
         }
-        return Ok(match close_pushed(state, &task, "push", vault.as_ref(), told, |said, commits| close_task(repo, Some(&task), vault.as_ref(), said, Some(commits))) {
-            Close::Waits(waits) => {
-                let waits = Notice::read(&waits, false);
-                let mut notice = said(Notice::new(Tone::You, headline(false)).next(waits.next.unwrap_or_default()).you(waits.you.unwrap_or_default()));
-                notice.details.extend(waits.details.into_iter().filter(|(label, _)| label != "task"));
-                notice.to_string()
-            }
-            Close::Done(Ok(closed)) => {
+        return Ok(match close_pushed(state, "push", told, |commits| close_task(repo, Some(&task), vault.as_ref(), Some(commits))) {
+            Ok(closed) => {
                 let mut notice = said(Notice::new(Tone::Done, format!("{} and closed the task", headline(false))).next(closed.next.unwrap_or_default()));
                 notice.details.extend(closed.details);
                 notice.to_string()
             }
-            Close::Done(Err(error)) => said(Notice::new(Tone::You, format!("{}, but the task did not close", headline(false)))).you("Close it once the reason below is settled.").detail("error", error).to_string(),
+            Err(error) => said(Notice::new(Tone::You, format!("{}, but the task did not close", headline(false)))).you("Close it once the reason below is settled.").detail("error", error).to_string(),
         });
     }
     let named = crate::status::with_titles_in(state, &address);
@@ -934,36 +928,20 @@ fn tell_lead(text: &str) {
 pub fn after_ci(repo: &Path, task: &str, address: &str, told: &crate::ci::Pushed) -> Result<String> {
     let state = state_dir()?;
     let vault = crate::vault_cli::detect();
-    let landed = Landed { pusher: &told.pusher, address, target: &told.target, commits: &told.commits, closed: false, note: told.note.as_deref(), logged: told.logged, waits: false };
-    match close_pushed(&state, task, "ci", vault.as_ref(), landed, |said, commits| close_task(repo, Some(task), vault.as_ref(), said, Some(commits))) {
-        Close::Waits(waits) => Ok(waits),
-        Close::Done(closed) => closed.map(|closed| closed.detail("task", task).to_string()),
-    }
-}
-
-enum Close {
-    Waits(String),
-    Done(Result<Notice>),
+    let landed = Landed { pusher: &told.pusher, address, target: &told.target, commits: &told.commits, closed: false, note: told.note.as_deref(), logged: told.logged };
+    close_pushed(&state, "ci", landed, |commits| close_task(repo, Some(task), vault.as_ref(), Some(commits))).map(|closed| closed.detail("task", task).to_string())
 }
 
 // The lead's notice is named before close runs, since the close forgets the task's title.
-fn close_pushed(state: &Path, task: &str, by: &str, vault: Option<&crate::vault_cli::Cli>, told: Landed, close: impl FnOnce(Option<String>, &str) -> Result<Notice>) -> Close {
+fn close_pushed(state: &Path, by: &str, told: Landed, close: impl FnOnce(&str) -> Result<Notice>) -> Result<Notice> {
     let named = crate::status::with_titles_in(state, told.address);
-    let landed = |closed: bool, waits: bool| Landed { address: &named, closed, waits, ..told };
-    let ready = match note_ready(vault, state, told.address, task) {
-        Ok(ready) => ready,
-        Err(waits) => {
-            crate::phase::record(state, told.address, by, &crate::phase::Event::Closing);
-            tell_lead_pushed(&landed(false, true));
-            return Close::Waits(waits);
-        }
-    };
-    let closed = close(ready, told.commits);
+    let landed = |closed: bool| Landed { address: &named, closed, ..told };
+    let closed = close(told.commits);
     if closed.is_err() {
         crate::phase::record(state, told.address, by, &crate::phase::Event::PushFailed);
     }
-    tell_lead_pushed(&landed(closed.is_ok(), false));
-    Close::Done(closed)
+    tell_lead_pushed(&landed(closed.is_ok()));
+    closed
 }
 
 fn for_whom(pusher: &str) -> String {
@@ -1020,19 +998,14 @@ struct Landed<'a> {
     closed: bool,
     note: Option<&'a str>,
     logged: Option<bool>,
-    waits: bool,
 }
 
 // logged is None without the vault, else whether kebbie wrote the repo's log line itself; with the vault kebbie settles the note. address is named with its title before the close forgets it.
 fn pushed_notice(landed: &Landed) -> String {
-    let Landed { pusher, address, target, commits, closed, note, logged, waits } = *landed;
+    let Landed { pusher, address, target, commits, closed, note, logged } = *landed;
     let count = commits.lines().count();
     let mut text = format!("{}: {} to {target} ({}).", who_pushed(pusher, address), plural(count, "commit"), commits.lines().collect::<Vec<_>>().join("; "));
-    text.push_str(match (closed, waits) {
-        (true, _) => " The task is done and closed.",
-        (false, true) => " The task stays open until its note has what done needs; kebbie asked it to write it.",
-        (false, false) => " The task stays open with the rest of its branch.",
-    });
+    text.push_str(if closed { " The task is done and closed." } else { " The task stays open with the rest of its branch." });
     match logged {
         Some(true) => return text + " kebbie wrote the repo's log line in the vault from these commits.",
         Some(false) => return text + " kebbie could not write the repo's log line: write it in the vault with what landed and these shas.",
@@ -1102,9 +1075,9 @@ mod tests {
     #[test]
     fn after_a_push_the_lead_hears_what_landed_and_is_cued_to_log_it_and_settle_the_note() {
         let commits = "a1b2c3d Add refunds\ne4f5a6b Show refunds on the invoice";
-        let done = pushed_notice(&Landed { pusher: "the lead", address: "billing@app", target: "main", commits, closed: true, note: Some("Projects/billing-refunds.md"), logged: None, waits: false });
+        let done = pushed_notice(&Landed { pusher: "the lead", address: "billing@app", target: "main", commits, closed: true, note: Some("Projects/billing-refunds.md"), logged: None });
         assert_eq!(done, "The lead pushed billing@app: 2 commits to main (a1b2c3d Add refunds; e4f5a6b Show refunds on the invoice). The task is done and closed. Write the repo's log line in the vault with what landed and these shas, and close or update its note Projects/billing-refunds.md.");
-        let open = pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits: "a1b2c3d Add refunds", closed: false, note: None, logged: None, waits: false });
+        let open = pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits: "a1b2c3d Add refunds", closed: false, note: None, logged: None });
         assert!(open.starts_with("The user pushed billing@app: 1 commit to main (a1b2c3d Add refunds). The task stays open"), "{open}");
         assert!(open.ends_with("these shas."), "{open}");
     }
@@ -1112,12 +1085,10 @@ mod tests {
     #[test]
     fn with_the_vault_on_the_lead_hears_kebbie_logged_the_push_and_is_not_asked_to_log_it() {
         let commits = "a1b2c3d Add refunds";
-        let kept = pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits, closed: true, note: Some("Projects/billing.md"), logged: Some(true), waits: false });
+        let kept = pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits, closed: true, note: Some("Projects/billing.md"), logged: Some(true) });
         assert!(kept.contains("kebbie wrote the repo's log line") && !kept.contains("Write the repo's log line"), "{kept}");
         assert!(!kept.contains("area note") && !failed_text(commits).contains("area note"), "kebbie logs the push itself; the notice carries no chore for the lead's area note: {kept}");
-        let waits = pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits, closed: false, note: Some("Projects/billing.md"), logged: Some(true), waits: true });
-        assert!(waits.contains("stays open until its note has what done needs"), "{waits}");
-        let failed = pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits, closed: true, note: Some("Projects/billing.md"), logged: Some(false), waits: false });
+        let failed = pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits, closed: true, note: Some("Projects/billing.md"), logged: Some(false) });
         assert!(failed.contains("kebbie could not write the repo's log line: write it in the vault with what landed and these shas") && !failed.contains("kebbie wrote"), "a log append that failed leaves the line to the lead: {failed}");
     }
 
@@ -1127,27 +1098,27 @@ mod tests {
         crate::status::keep_title(&state, "billing@app", "Refunds on invoices");
         let named = crate::status::with_titles_in(&state, "billing@app");
         crate::status::forget_title(&state, "billing@app");
-        let done = pushed_notice(&Landed { pusher: "the user", address: &named, target: "main", commits: "a1b2c3d Add refunds", closed: true, note: None, logged: Some(true), waits: false });
+        let done = pushed_notice(&Landed { pusher: "the user", address: &named, target: "main", commits: "a1b2c3d Add refunds", closed: true, note: None, logged: Some(true) });
         assert!(done.starts_with("The user pushed Refunds on invoices (billing@app): 1 commit"), "{done}");
         crate::status::keep_title(&state, "billing@app", "Refunds on invoices");
         assert_eq!(crate::status::with_titles_in(&state, &done), done, "a title still kept is not added twice");
         let address = format!("named-{}@app", std::process::id());
         crate::status::keep_title(&state, &address, "Refunds on invoices");
         let handed = std::cell::RefCell::new(None);
-        let closed = close_pushed(&state, "named", "push", None, told(&address), |said, commits| {
+        let closed = close_pushed(&state, "push", told(&address), |commits| {
             crate::status::forget_title(&state, &address);
-            *handed.borrow_mut() = Some((said, commits.to_string()));
+            *handed.borrow_mut() = Some(commits.to_string());
             Ok(Notice::new(Tone::Done, "Closed"))
         });
-        assert!(matches!(closed, Close::Done(Ok(_))));
-        assert_eq!(handed.into_inner(), Some((None, "a1b2c3d Add refunds".to_string())), "the close records the commits the lead hears of");
+        assert!(closed.is_ok());
+        assert_eq!(handed.into_inner().as_deref(), Some("a1b2c3d Add refunds"), "the close records the commits the lead hears of");
         let heard = lead_about(&address);
         assert!(heard.len() == 1 && heard[0].text.starts_with(&format!("The user pushed Refunds on invoices ({address}): 1 commit")) && heard[0].text.contains("The task is done and closed"), "the close forgets the title, so the notice is named before it: {heard:?}");
         std::fs::remove_dir_all(state).unwrap();
     }
 
     fn told(address: &str) -> Landed<'_> {
-        Landed { pusher: "the user", address, target: "main", commits: "a1b2c3d Add refunds", closed: false, note: None, logged: Some(true), waits: false }
+        Landed { pusher: "the user", address, target: "main", commits: "a1b2c3d Add refunds", closed: false, note: None, logged: Some(true) }
     }
 
     fn lead_about(address: &str) -> Vec<messages::Message> {
@@ -1155,31 +1126,26 @@ mod tests {
     }
 
     #[test]
-    fn a_pushed_task_whose_note_lacks_its_solution_is_left_closing_and_one_that_fails_to_close_needs_the_user() {
+    fn a_pushed_task_closes_without_asking_its_note_and_one_that_fails_to_close_needs_the_user() {
         use crate::phase::{Phase, Why};
         let state = crate::sh::test_dir("push-closing");
         let id = std::process::id();
         let (noted, failing) = (format!("noted-{id}@app"), format!("failing-{id}@app"));
-        let fake = crate::vault_cli::fake::Fake::new(&format!("push-closing-{id}"));
-        fake.answer("task-check", r#"{"missing":["solution"]}"#);
         std::fs::create_dir_all(state.join("started")).unwrap();
         std::fs::write(state.join("started").join(&noted), "Projects/app-noted.md").unwrap();
-        let waits = close_pushed(&state, "noted", "ci", Some(&fake.cli), told(&noted), |_, _| panic!("a note that waits is never closed"));
-        assert!(matches!(&waits, Close::Waits(text) if text.contains("its note lacks its solution")));
-        let record = crate::phase::load(&state, &noted).unwrap();
-        assert_eq!((record.phase, record.by.as_str()), (Phase::Closing, "ci"), "it waits for its note, under the source that asked");
-        assert!(lead_about(&noted).iter().any(|message| message.text.contains("stays open until its note has what done needs")));
-        let failed = close_pushed(&state, "failing", "push", None, told(&failing), |_, _| Err("herdr is gone".to_string()));
-        assert!(matches!(failed, Close::Done(Err(error)) if error == "herdr is gone"));
+        let closed = close_pushed(&state, "ci", told(&noted), |_| Ok(Notice::new(Tone::Done, "Closed")));
+        assert!(closed.is_ok(), "a task with a note closes as one without");
+        assert!(lead_about(&noted).iter().any(|message| message.text.contains("The task is done and closed")));
+        let failed = close_pushed(&state, "push", told(&failing), |_| Err("herdr is gone".to_string()));
+        assert!(matches!(failed, Err(error) if error == "herdr is gone"));
         let record = crate::phase::load(&state, &failing).unwrap();
         assert_eq!((record.phase, record.by.as_str()), (Phase::NeedsYou(Why::Failed), "push"));
         assert!(lead_about(&failing).iter().any(|message| message.text.contains("The task stays open with the rest of its branch")));
-        let _ = std::fs::remove_dir_all(&fake.dir);
         std::fs::remove_dir_all(state).unwrap();
     }
 
     fn failed_text(commits: &str) -> String {
-        pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits, closed: true, note: None, logged: Some(false), waits: false })
+        pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits, closed: true, note: None, logged: Some(false) })
     }
 
     fn told_lead(address: &str) -> Vec<messages::Message> {
@@ -1194,7 +1160,7 @@ mod tests {
 
     #[test]
     fn a_push_notice_reaches_the_lead_live_only_when_kebbie_could_not_write_the_log_line() {
-        let landed = |address: &str, logged: Option<bool>| tell_lead_pushed(&Landed { pusher: "the user", address, target: "main", commits: "a1b2c3d Add refunds", closed: true, note: None, logged, waits: false });
+        let landed = |address: &str, logged: Option<bool>| tell_lead_pushed(&Landed { pusher: "the user", address, target: "main", commits: "a1b2c3d Add refunds", closed: true, note: None, logged });
         let id = std::process::id();
         let (wrote, failed, off) = (format!("wrote-{id}@app"), format!("failed-{id}@app"), format!("off-{id}@app"));
         landed(&wrote, Some(true));
@@ -1902,7 +1868,7 @@ mod tests {
         let repos = [dir.clone()];
         let world = World { repos: &repos, workspaces: &[], agents: &[], log: &[], gh: "false", began: 0, fresh: None };
         let told = std::cell::Cell::new(0);
-        pass(&state, &world, &mut |_, _, _| panic!("a task kept open is never closed by the round"), &mut |_| told.set(told.get() + 1));
+        pass(&state, &world, &mut |_, _| panic!("a task kept open is never closed by the round"), &mut |_| told.set(told.get() + 1));
         assert!(branch_exists(&dir, "billing") && told.get() == 0);
         assert_eq!(crate::tasks::landed_mark(&state, &address, &slot.path), None, "no landed line asks the user to close it");
         let idle = Seen { status: Some("idle".to_string()), question: false };
@@ -1948,7 +1914,7 @@ mod tests {
         let workspaces = [serde_json::json!({ "workspace_id": "w1", "worktree": { "checkout_path": slot.path.to_string_lossy() } })];
         let agents = [serde_json::json!({ "workspace_id": "w1", "agent_status": "idle" })];
         let world = World { repos: &repos, workspaces: &workspaces, agents: &agents, log: &[], gh: "false", began: 0, fresh: None };
-        pass(&state, &world, &mut |_, _, _| panic!("a task kept open is never closed by the round"), &mut |_| panic!("nothing to tell"));
+        pass(&state, &world, &mut |_, _| panic!("a task kept open is never closed by the round"), &mut |_| panic!("nothing to tell"));
         assert_eq!(crate::tasks::landed_mark(&state, &address, &slot.path), None, "no landed line");
         crate::tasks::finish::finish(&dir, &slot, &upstream, &state, None).unwrap();
         assert!(!branch_exists(&dir, "billing"), "done closes it when the user chooses");

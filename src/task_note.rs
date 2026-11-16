@@ -1,9 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use crate::hooks::{Answer, Payload};
 use crate::sh::Result;
 use crate::vault::Claim;
-use crate::item_template::Need;
 use crate::vault_cli::{self, Cli, Released};
 
 pub fn open(cli: &Cli, task: &str, worktree: &Path, item: Option<&str>) -> Result<String> {
@@ -40,83 +38,6 @@ pub fn held_elsewhere(state: &Path, task: &str, address: &str, note: &str) -> bo
     halves(state, task, address).iter().any(|half| linked(state, half).as_deref() == Some(note))
 }
 
-fn passed_file(state: &Path, address: &str) -> PathBuf {
-    state.join("vault-gate").join(address)
-}
-
-pub fn forget(state: &Path, address: &str) {
-    let _ = std::fs::remove_file(passed_file(state, address));
-}
-
-#[derive(Debug, PartialEq)]
-pub enum Gate {
-    Allow,
-    Passed,
-    Deny(String),
-    Warn(String),
-}
-
-// What the note needs before code is written once for good, so a pass is kept per note and the vault is asked again only for another note.
-pub fn gate(note: &str, passed: Option<&str>, need: &Need, check: impl FnOnce() -> Result<Vec<String>>) -> Gate {
-    if passed == Some(note) {
-        return Gate::Allow;
-    }
-    match check().map(|missing| missing.into_iter().filter(|key| need.templated() || need.keys.contains(&key.as_str())).collect::<Vec<_>>()) {
-        Ok(missing) if missing.is_empty() => Gate::Passed,
-        Ok(missing) if need.templated() => Gate::Deny(format!(
-            "This task's note {note} lacks its {}, and code waits for them. With the vault MCP tools, write those sections in your own clear words, from the user's prompt and what you read: rewrite the prompt rather than pasting it. Then make this change again.",
-            need.shown(&missing)
-        )),
-        Ok(_) => Gate::Deny(format!(
-            "This task's note {note} has no Problem yet, and code waits for it. With the vault MCP tools, write its Problem section in your own clear words: what is wrong or missing, for whom, and what done looks like, from the user's prompt and what you read. Rewrite the prompt rather than pasting it. Then make this change again."
-        )),
-        Err(error) => Gate::Warn(format!("kebbie could not check {note} in the vault ({error}), so this edit goes through; write its {} when the vault answers again.", need.named)),
-    }
-}
-
-pub fn decide(state: &Path, address: &str, cli: impl FnOnce() -> Option<Cli>) -> Gate {
-    let Some(note) = linked(state, address) else { return Gate::Allow };
-    let passed = std::fs::read_to_string(passed_file(state, address)).ok().map(|text| text.trim().to_string());
-    if passed.as_deref() == Some(note.as_str()) {
-        return Gate::Allow;
-    }
-    let cli = cli();
-    let need = crate::item_template::start_need(cli.as_ref().is_some_and(crate::item_template::templated));
-    let verdict = gate(&note, passed.as_deref(), &need, || cli.ok_or("the vault command is not available".to_string())?.missing(&note, &need.keys));
-    match &verdict {
-        Gate::Passed => {
-            let file = passed_file(state, address);
-            let _ = crate::state::write(&file, &note);
-        }
-        Gate::Warn(text) => vault_cli::warn_log(state, &format!("{address}: {text}")),
-        _ => {}
-    }
-    verdict
-}
-
-pub fn answer(verdict: &Gate) -> String {
-    match verdict {
-        Gate::Allow | Gate::Passed => Answer::Silent,
-        Gate::Deny(reason) => Answer::Deny(reason.clone()),
-        Gate::Warn(text) => Answer::Warn(text.clone()),
-    }
-    .render()
-}
-
-// The PreToolUse hook on a task's edits; the task's settings name its address, so a warm pass reads two files and runs nothing.
-pub fn hook(address: &str, input: &str) -> String {
-    let input = Payload::parse(input);
-    if input.tool_name() == Some("Bash") {
-        let cwd = input.cwd().map(PathBuf::from).or_else(|| std::env::current_dir().ok()).unwrap_or_default();
-        let command = input.command().unwrap_or_default();
-        if !crate::shell_write::writes_into(command, &cwd) {
-            return String::new();
-        }
-    }
-    let Ok(state) = crate::lead::state_dir() else { return String::new() };
-    answer(&decide(&state, address, vault_cli::cli))
-}
-
 pub fn log_line(task: &str, commits: &[(String, String)]) -> String {
     format!("{task}: {}", commits.iter().map(|(_, subject)| subject.as_str()).collect::<Vec<_>>().join("; "))
 }
@@ -142,21 +63,6 @@ pub fn logged_text(logged: &std::result::Result<Option<String>, String>) -> Stri
         Ok(None) => String::new(),
         Err(error) => format!("not written ({error}); write it with the vault's log tool"),
     }
-}
-
-// Ok(None) lets done go on; Ok(Some(..)) is the refusal, said to the user and to the task.
-pub fn waits(cli: &Cli, note: &str, task: &str) -> std::result::Result<Option<(String, String)>, String> {
-    let need = crate::item_template::done_need(crate::item_template::templated(cli));
-    let missing = cli.missing(note, &need.keys)?;
-    if missing.is_empty() {
-        return Ok(None);
-    }
-    let named = if need.templated() { need.shown(&missing) } else { missing.join(" and ") };
-    let user = crate::notice::Notice::new(crate::notice::Tone::You, format!("Not closed yet: its note lacks its {named}"))
-        .next("Its Claude was asked to write them.").you("Close it again once it reports ready.").detail("task", task).detail("note", note).to_string();
-    let what = if need.templated() { "as the vault's task template has them" } else { "what changes from the user's side, and each decision with its reason" };
-    let told = format!("kebbie done waits for your note {note}: write its {named} sections there with the vault MCP tools ({what}), then report ready.");
-    Ok(Some((user, told)))
 }
 
 // Ok(Some(claim)) is another machine's claim, which a start refuses without --anyway; a vault without claims claims nothing.
@@ -243,79 +149,6 @@ mod tests {
     }
 
     #[test]
-    fn with_note_templates_edits_and_done_wait_for_the_templates_required_sections() {
-        let fake = Fake::new("gate-template");
-        let state = fake.state();
-        link(&state, "billing@kebbie", "Projects/kebbie-billing.md");
-        let cli = Cli { capabilities: Some(vec!["tasks".to_string(), "templates".to_string()]), ..fake.cli.clone() };
-        fake.answer("task-check", r#"{"missing":["goal","source"]}"#);
-        let Gate::Deny(reason) = decide(&state, "billing@kebbie", || Some(cli.clone())) else { panic!("an edit before the required sections is blocked") };
-        assert!(reason.contains("lacks its Goal and Source") && !reason.contains("Problem"), "{reason}");
-        assert_eq!(fake.calls()[0], "task check Projects/kebbie-billing.md", "the vault checks its template's required sections when no key is named");
-        let (user, told) = waits(&cli, "Projects/kebbie-billing.md", "billing").unwrap().unwrap();
-        assert!(user.contains("its note lacks its Goal and Source") && told.contains("as the vault's task template has them"), "{user}\n{told}");
-        fake.answer("task-check", r#"{"missing":[]}"#);
-        assert_eq!(decide(&state, "billing@kebbie", || Some(cli.clone())), Gate::Passed);
-        assert_eq!(waits(&cli, "Projects/kebbie-billing.md", "billing").unwrap(), None);
-    }
-
-    #[test]
-    fn edits_wait_for_the_problem_and_pass_once_it_is_written_asking_no_more() {
-        let fake = Fake::new("gate");
-        let state = fake.state();
-        link(&state, "billing@kebbie", "Projects/kebbie-billing.md");
-        fake.answer("task-check", r#"{"missing":["problem","solution","decisions"]}"#);
-        let Gate::Deny(reason) = decide(&state, "billing@kebbie", || Some(fake.cli.clone())) else { panic!("an edit before Problem is blocked") };
-        assert!(reason.contains("Projects/kebbie-billing.md") && reason.contains("vault MCP tools") && reason.contains("Rewrite the prompt rather than pasting it"), "{reason}");
-        assert!(answer(&Gate::Deny(reason)).contains("\"permissionDecision\":\"deny\""));
-        fake.answer("task-check", r#"{"missing":["solution","decisions"]}"#);
-        assert_eq!(decide(&state, "billing@kebbie", || Some(fake.cli.clone())), Gate::Passed);
-        assert_eq!(decide(&state, "billing@kebbie", || Some(fake.cli.clone())), Gate::Allow);
-        assert_eq!(fake.calls().len(), 2, "a pass is kept: {:?}", fake.calls());
-        assert_eq!(fake.calls()[0], "task check Projects/kebbie-billing.md --need problem");
-        link(&state, "billing@kebbie", "Projects/kebbie-other.md");
-        fake.answer("task-check", r#"{"missing":["problem"]}"#);
-        assert!(matches!(decide(&state, "billing@kebbie", || Some(fake.cli.clone())), Gate::Deny(_)), "a pass holds for its own note only");
-    }
-
-    #[test]
-    fn an_edit_goes_through_with_a_warning_when_the_vault_does_not_answer() {
-        let fake = Fake::new("gate-down");
-        let state = fake.state();
-        link(&state, "billing@kebbie", "Projects/kebbie-billing.md");
-        fake.fail("task-check", "uvx: no network");
-        let Gate::Warn(text) = decide(&state, "billing@kebbie", || Some(fake.cli.clone())) else { panic!("a vault that is down never locks the task out") };
-        assert!(text.contains("uvx: no network") && text.contains("goes through"), "{text}");
-        assert!(answer(&Gate::Warn(text)).contains("systemMessage"));
-        assert!(std::fs::read_to_string(state.join("vault.log")).unwrap().contains("billing@kebbie"));
-        assert!(matches!(decide(&state, "billing@kebbie", || None), Gate::Warn(_)), "no vault command at all lets it through too");
-        assert!(!passed_file(&state, "billing@kebbie").exists(), "a warning is no pass");
-    }
-
-    #[test]
-    fn a_warm_pass_answers_without_building_the_vault_command() {
-        let fake = Fake::new("gate-warm");
-        let state = fake.state();
-        link(&state, "billing@kebbie", "Projects/kebbie-billing.md");
-        std::fs::create_dir_all(state.join("vault-gate")).unwrap();
-        std::fs::write(passed_file(&state, "billing@kebbie"), "Projects/kebbie-billing.md").unwrap();
-        assert_eq!(decide(&state, "billing@kebbie", || unreachable!("a kept pass reads no config and runs no vault")), Gate::Allow);
-    }
-
-    #[test]
-    fn the_gate_denies_only_on_the_vaults_own_answer_never_on_its_failure() {
-        let fake = Fake::new("gate-never");
-        let state = fake.state();
-        link(&state, "billing@kebbie", "Projects/kebbie-billing.md");
-        fake.answer("task-check", "not json");
-        assert!(matches!(decide(&state, "billing@kebbie", || Some(fake.cli.clone())), Gate::Warn(_)), "an answer kebbie cannot read lets the edit through");
-        fake.answer("task-check", r#"{"other":1}"#);
-        assert!(matches!(decide(&state, "billing@kebbie", || Some(fake.cli.clone())), Gate::Warn(_)));
-        let slow = Cli::new(vec!["/nonexistent/vault".to_string()]);
-        assert!(matches!(decide(&state, "billing@kebbie", || Some(slow)), Gate::Warn(_)));
-    }
-
-    #[test]
     fn a_started_entry_keeps_the_note_next_to_the_backlog_item_it_came_from() {
         assert_eq!(items("Projects/kebbie-billing.md\nlocal:Fix login\n"), ["Projects/kebbie-billing.md", "local:Fix login"]);
         assert_eq!(note_in("local:Fix login\nProjects/kebbie-billing.md").as_deref(), Some("Projects/kebbie-billing.md"));
@@ -338,16 +171,6 @@ mod tests {
     }
 
     #[test]
-    fn a_task_without_a_vault_note_is_never_gated_and_the_vault_never_asked() {
-        let fake = Fake::new("gate-off");
-        let state = fake.state();
-        assert_eq!(decide(&state, "billing@kebbie", || Some(fake.cli.clone())), Gate::Allow);
-        link(&state, "billing@kebbie", "local:Fix login");
-        assert_eq!(decide(&state, "billing@kebbie", || Some(fake.cli.clone())), Gate::Allow);
-        assert!(fake.calls().is_empty());
-    }
-
-    #[test]
     fn a_push_logs_one_line_of_its_commit_subjects_with_their_shas() {
         let fake = Fake::new("push");
         fake.answer("log-append", r#"{"path":"Log/kebbie-logg.md"}"#);
@@ -360,17 +183,11 @@ mod tests {
     }
 
     #[test]
-    fn done_waits_for_the_solution_and_decisions_and_says_so_to_both() {
+    fn done_closes_the_note_without_checking_its_sections() {
         let fake = Fake::new("done");
-        fake.answer("task-check", r#"{"missing":["decisions"]}"#);
-        let (user, told) = waits(&fake.cli, "Projects/kebbie-billing.md", "billing").unwrap().unwrap();
-        assert!(user.contains("its note lacks its decisions") && user.contains("Close it again once it reports ready"), "{user}");
-        assert!(told.contains("Projects/kebbie-billing.md") && told.contains("decisions sections") && told.contains("report ready"), "{told}");
-        fake.answer("task-check", r#"{"missing":[]}"#);
-        assert_eq!(waits(&fake.cli, "Projects/kebbie-billing.md", "billing").unwrap(), None);
         fake.answer("task-close", r#"{"path":"Archive/kebbie-billing.md"}"#);
         assert_eq!(close(&fake.cli, "Projects/kebbie-billing.md").unwrap(), "Archive/kebbie-billing.md");
-        assert_eq!(fake.calls(), ["task check Projects/kebbie-billing.md --need solution,decisions", "task check Projects/kebbie-billing.md --need solution,decisions", "task close Projects/kebbie-billing.md"]);
+        assert_eq!(fake.calls(), ["task close Projects/kebbie-billing.md"]);
     }
 
     #[test]
@@ -431,9 +248,9 @@ mod tests {
     // KEBBIE_VAULT_E2E=<wrapper> VAULT_PATH=<scratch vault> cargo test -- --ignored real_vault; the wrapper's folder holds wt1.orchard, a worktree of a repo the vault knows.
     #[test]
     #[ignore]
-    fn real_vault_open_gate_log_done_close() {
-        let Some(wrapper) = std::env::var_os("KEBBIE_VAULT_E2E").map(PathBuf::from) else { return };
-        let vault = PathBuf::from(std::env::var("VAULT_PATH").expect("VAULT_PATH names the scratch vault"));
+    fn real_vault_open_log_done_close() {
+        let Some(wrapper) = std::env::var_os("KEBBIE_VAULT_E2E").map(std::path::PathBuf::from) else { return };
+        let vault = std::path::PathBuf::from(std::env::var("VAULT_PATH").expect("VAULT_PATH names the scratch vault"));
         let worktree = wrapper.parent().unwrap().join("wt1.orchard");
         let cli = Cli::new(vec![wrapper.to_string_lossy().to_string()]);
         let state = std::env::temp_dir().join(format!("kebbie-e2e-state-{}", std::process::id()));
@@ -448,26 +265,11 @@ mod tests {
         let file = vault.join(&note);
         let skeleton = std::fs::read_to_string(&file).unwrap();
         eprintln!("{skeleton}");
-        let Gate::Deny(reason) = decide(&state, address, || Some(cli.clone())) else { panic!("an empty Problem denies") };
-        eprintln!("denied: {reason}");
-        let headings: Vec<String> = skeleton.lines().filter(|line| line.starts_with("## ")).map(str::to_string).collect();
-        let problem = headings.first().unwrap().clone();
-        std::fs::write(&file, skeleton.replacen(&format!("{problem}\n"), &format!("{problem}\n\nThe orchard's pruning is untracked.\n"), 1)).unwrap();
-        assert_eq!(decide(&state, address, || Some(cli.clone())), Gate::Passed);
-        assert_eq!(decide(&state, address, || unreachable!()), Gate::Allow);
         let sha = crate::sh::run("git", &["rev-parse", "--short", "HEAD"], Some(&worktree)).unwrap();
         let logged = log_push(&cli, &worktree, "prune", &format!("{sha} Track the pruning")).unwrap().unwrap();
         let log = std::fs::read_to_string(vault.join(&logged)).unwrap();
         eprintln!("logged in {logged}: {}", log.lines().last().unwrap_or_default());
         assert!(log.contains(&sha) && log.contains("prune: Track the pruning"), "{log}");
-        let (user, told) = waits(&cli, &note, "prune").unwrap().expect("done waits for the solution and decisions");
-        eprintln!("done refuses: {user}\ntask told: {told}");
-        let mut text = std::fs::read_to_string(&file).unwrap();
-        for heading in &headings[1..3] {
-            text = text.replacen(&format!("{heading}\n"), &format!("{heading}\n\nFilled.\n"), 1);
-        }
-        std::fs::write(&file, text).unwrap();
-        assert_eq!(waits(&cli, &note, "prune").unwrap(), None);
         let closed = close(&cli, &note).unwrap();
         eprintln!("closed to {closed}");
         assert!(closed.starts_with("Archive/") && vault.join(&closed).exists() && !file.exists());
@@ -481,32 +283,5 @@ mod tests {
         assert_eq!(log_line("billing", &parsed), "billing: Add refunds; Show refunds; twice");
         assert_eq!(log_line("billing", &[]), "billing: ");
         assert_eq!(items("  \n Projects/x.md \n\n local:y \n"), ["Projects/x.md", "local:y"]);
-    }
-
-    #[test]
-    fn the_gate_answers_claude_code_in_its_hook_shapes() {
-        assert_eq!(answer(&Gate::Allow), "");
-        assert_eq!(answer(&Gate::Passed), "");
-        let deny: serde_json::Value = serde_json::from_str(&answer(&Gate::Deny("why".to_string()))).unwrap();
-        assert_eq!(deny["hookSpecificOutput"]["hookEventName"], "PreToolUse");
-        assert_eq!(deny["hookSpecificOutput"]["permissionDecisionReason"], "why");
-        let warn: serde_json::Value = serde_json::from_str(&answer(&Gate::Warn("down".to_string()))).unwrap();
-        assert_eq!(warn["systemMessage"], "down");
-        assert!(warn.get("hookSpecificOutput").is_none(), "a warning never denies");
-    }
-
-    #[test]
-    fn a_pass_recorded_for_another_half_does_not_pass_this_one() {
-        let fake = Fake::new("gate-halves");
-        let state = fake.state();
-        link(&state, "billing@web", "Projects/billing.md");
-        link(&state, "billing@api", "Projects/billing.md");
-        std::fs::create_dir_all(state.join("vault-gate")).unwrap();
-        std::fs::write(passed_file(&state, "billing@web"), "Projects/billing.md").unwrap();
-        fake.answer("task-check", r#"{"missing":["problem"]}"#);
-        assert_eq!(decide(&state, "billing@web", || unreachable!()), Gate::Allow);
-        assert!(matches!(decide(&state, "billing@api", || Some(fake.cli.clone())), Gate::Deny(_)), "each half asks for itself");
-        forget(&state, "billing@web");
-        assert!(matches!(decide(&state, "billing@web", || Some(fake.cli.clone())), Gate::Deny(_)), "a forgotten pass is asked again");
     }
 }

@@ -1411,7 +1411,7 @@ mod tests {
         assert_eq!(hook_in(&state, "billing@app", &Seen::default()), Hook::NeverRan);
         assert_eq!(hook_in(&state, "billing@app", &Seen { at: Some(1), unrecorded: Vec::new() }), Hook::Works);
         fs::create_dir_all(state.join("roles")).unwrap();
-        fs::write(state.join("roles/billing@app.settings.json"), crate::agent::claude::settings("/home/u/.local/share/kebbie/gone/target/release/kebbie", "billing@app", None, None, None)).unwrap();
+        fs::write(state.join("roles/billing@app.settings.json"), crate::agent::claude::settings("/home/u/.local/share/kebbie/gone/target/release/kebbie", "billing@app", None, None)).unwrap();
         assert_eq!(hook_in(&state, "billing@app", &Seen { at: Some(1), unrecorded: Vec::new() }), Hook::Broken, "settings whose hooks run a kebbie binary that is gone");
         fs::remove_dir_all(state).unwrap();
     }

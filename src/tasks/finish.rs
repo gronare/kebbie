@@ -66,30 +66,10 @@ pub fn done(cwd: &Path, name: Option<&str>) -> Result<String> {
     let state = state_dir()?;
     let address = peers::address(&task, &name_of(&repo));
     let vault = crate::task_note::linked(&state, &address).and_then(|_| crate::vault_cli::detect());
-    let said = note_ready(vault.as_ref(), &state, &address, &task)?;
-    close_task(cwd, name, vault.as_ref(), said, None).map(|closed| closed.to_string())
+    close_task(cwd, name, vault.as_ref(), None).map(|closed| closed.to_string())
 }
 
-// Done waits for the task's note to have what done needs (its solution and decisions, or the template's required sections): Err is the refusal, the task told what to write; a vault that does not answer lets done go on, and Ok says so as a detail.
-pub(super) fn note_ready(vault: Option<&crate::vault_cli::Cli>, state: &Path, address: &str, task: &str) -> Result<Option<String>> {
-    note_waits(vault, state, address, task, true)
-}
-
-pub(super) fn note_waits(vault: Option<&crate::vault_cli::Cli>, state: &Path, address: &str, task: &str, tell: bool) -> Result<Option<String>> {
-    let (Some(cli), Some(note)) = (vault, crate::task_note::linked(state, address)) else { return Ok(None) };
-    match crate::task_note::waits(cli, &note, task) {
-        Ok(None) => Ok(None),
-        Ok(Some((user, told))) => {
-            if tell && let Err(error) = messages::notify(address, &told) {
-                eprintln!("Could not tell {address} what its note lacks: {error}");
-            }
-            Err(user)
-        }
-        Err(error) => Ok(Some(format!("{note} could not be checked ({error}), so it closed without that check"))),
-    }
-}
-
-pub(super) fn close_task(cwd: &Path, name: Option<&str>, vault: Option<&crate::vault_cli::Cli>, said: Option<String>, landed: Option<&str>) -> Result<Notice> {
+pub(super) fn close_task(cwd: &Path, name: Option<&str>, vault: Option<&crate::vault_cli::Cli>, landed: Option<&str>) -> Result<Notice> {
     let repo = main_checkout(cwd)?;
     let _closing = Closing::take(&state_dir()?, &peers::address(task_of(&find_task(&repo, name, cwd)?), &name_of(&repo)))?;
     let slot = find_task(&repo, name, cwd)?;
@@ -100,10 +80,7 @@ pub(super) fn close_task(cwd: &Path, name: Option<&str>, vault: Option<&crate::v
     let state = crate::lead::state_dir()?;
     let landed = landed.map(str::to_string).or_else(|| crate::ci::load(&state, &address).map(|watch| watch.pushed.commits).filter(|commits| !commits.is_empty()))
         .or_else(|| git(&slot.path, &["log", "--reverse", "--format=%h %s", &format!("{}..HEAD", crate::repo::tracking(&upstream))]).ok().filter(|commits| !commits.is_empty()));
-    let mut finished = finish(&repo, &slot, &upstream, &crate::lead::state_dir()?, vault)?;
-    if let Some(said) = said {
-        finished = finished.detail("note", said);
-    }
+    let finished = finish(&repo, &slot, &upstream, &crate::lead::state_dir()?, vault)?;
     forget_session(task_of(&slot), &repo);
     forget_approval(task_of(&slot), &repo);
     super::plan::forget(task_of(&slot), &repo);
@@ -338,7 +315,6 @@ pub(super) fn forget_address(state: &Path, address: &str) {
     super::intent::forget_left(state, address);
     crate::phase::forget(state, address);
     crate::typing::forget_unsent(state, address);
-    crate::task_note::forget(state, address);
     crate::recipe::forget_in(state, address);
     crate::decisions::archive(state, address, messages::now());
     super::landed::forget(state, address);
@@ -497,7 +473,7 @@ mod tests {
         assert_eq!(fake.calls(), ["task release Projects/billing.md --machine mac"], "a note another machine took over is not closed under it");
         cleanup(dir, origin, &slot);
         let landed = include_str!("landed.rs");
-        assert!(landed.contains("close_task(repo, Some(task), vault.as_ref(), said, None)"), "a landed task closes through close_task and so clears its claim as done does");
+        assert!(landed.contains("close_task(repo, Some(task), vault.as_ref(), None)"), "a landed task closes through close_task and so clears its claim as done does");
     }
 
     #[test]
@@ -574,7 +550,7 @@ mod tests {
         std::fs::write(plan.join("plan.md"), "1. bill").unwrap();
         assert!(is_clean(&slot.path).unwrap(), "temp files and the plan never show as changes in the worktree");
         let dirs = crate::sandbox::TaskDirs::new(&slot.path, &crate::sandbox::git_dir_of(&slot.path), &tmp);
-        let written: Value = serde_json::from_str(&settings("/bin/kebbie", "billing@app", None, Some(&dirs), None)).unwrap();
+        let written: Value = serde_json::from_str(&settings("/bin/kebbie", "billing@app", Some(&dirs), None)).unwrap();
         for name in TMP_VARS {
             assert_eq!(written["env"][name], json!(tmp.to_string_lossy()), "{name}");
         }

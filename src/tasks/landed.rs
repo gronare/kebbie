@@ -11,7 +11,7 @@ use crate::notice::Notice;
 use crate::peers;
 use crate::repo::{default_branch, git, is_clean, name_of, rebase_in_progress};
 use crate::sh::Result;
-use super::finish::{close_task, missing_from, note_waits};
+use super::finish::{close_task, missing_from};
 use super::intent::{self, Work};
 use super::pool::{Slot, find_task, slots, task_of};
 
@@ -24,7 +24,6 @@ pub(crate) enum Unsure {
     Prompt,
     Question,
     Uncommitted,
-    Note,
 }
 
 impl Unsure {
@@ -34,19 +33,17 @@ impl Unsure {
             Unsure::Prompt => "prompt",
             Unsure::Question => "question",
             Unsure::Uncommitted => "uncommitted",
-            Unsure::Note => "note",
         }
     }
 
     fn of_key(key: &str) -> Option<Unsure> {
-        [Unsure::Turn, Unsure::Prompt, Unsure::Question, Unsure::Uncommitted, Unsure::Note].into_iter().find(|unsure| unsure.key() == key)
+        [Unsure::Turn, Unsure::Prompt, Unsure::Question, Unsure::Uncommitted].into_iter().find(|unsure| unsure.key() == key)
     }
 
     pub(crate) fn said(self, main: &str, done: char) -> String {
         match self {
             Unsure::Turn => format!("landed on {main} · kebbie closes it after this turn"),
             Unsure::Uncommitted => format!("landed on {main}, but its worktree has uncommitted changes or a stash: commit them, or drop it to discard them"),
-            Unsure::Note => format!("landed on {main} · its note waits for what done needs"),
             Unsure::Prompt | Unsure::Question => format!("landed on {main} · {done} closes it"),
         }
     }
@@ -335,12 +332,7 @@ fn status_of(path: &Path, workspaces: &[Value], agents: &[Value]) -> Option<Stri
     agents.iter().find(|agent| agent["workspace_id"].as_str() == Some(workspace))?["agent_status"].as_str().map(str::to_string)
 }
 
-pub(super) enum Refused {
-    Note(String),
-    Other(String),
-}
-
-pub(super) type Close<'a> = &'a mut dyn FnMut(&Path, &str, bool) -> std::result::Result<Notice, Refused>;
+pub(super) type Close<'a> = &'a mut dyn FnMut(&Path, &str) -> Result<Notice>;
 
 pub(super) type Fresh = dyn Fn(&Path) -> Option<String>;
 
@@ -387,10 +379,8 @@ pub(super) fn pass(state: &Path, world: &World, close: Close, tell: &mut dyn FnM
                     if !matches!(now.as_deref(), Some("idle" | "done")) || crate::report::turn_started(&address).is_some_and(|at| at >= world.began) {
                         continue;
                     }
-                    let head = head(&slot.path);
                     let kebbie_pushed = crate::phase::load(state, &address).is_some_and(|record| record.phase == crate::phase::Phase::Closing);
-                    let told = read_mark(state, &address).is_some_and(|(why, seen, _)| why == Unsure::Note && head.as_deref() == Some(seen.as_str()));
-                    match close(repo, task, told) {
+                    match close(repo, task) {
                         Ok(_) => {
                             drop_mark(state, &address);
                             if crate::ci::load(state, &address).is_some_and(|watch| !watch.running()) {
@@ -404,13 +394,7 @@ pub(super) fn pass(state: &Path, world: &World, close: Close, tell: &mut dyn FnM
                             tell(&text);
                             notes.push(format!("landed: {text}"));
                         }
-                        Err(Refused::Note(error)) => {
-                            if let Some(head) = head {
-                                save_mark(state, &address, Unsure::Note, &head);
-                            }
-                            notes.push(format!("landed: {address} waits for its note: {error}"));
-                        }
-                        Err(Refused::Other(error)) => {
+                        Err(error) => {
                             drop_mark(state, &address);
                             if find_task(repo, Some(task), repo).is_ok() {
                                 notes.push(format!("landed: {address} could not be closed: {error}"));
@@ -439,12 +423,11 @@ pub(super) fn pass(state: &Path, world: &World, close: Close, tell: &mut dyn FnM
     notes
 }
 
-fn close_for_real(repo: &Path, task: &str, told: bool) -> std::result::Result<Notice, Refused> {
-    let state = crate::lead::state_dir().map_err(Refused::Other)?;
+fn close_for_real(repo: &Path, task: &str) -> Result<Notice> {
+    let state = crate::lead::state_dir()?;
     let address = peers::address(task, &name_of(repo));
     let vault = crate::task_note::linked(&state, &address).and_then(|_| crate::vault_cli::detect());
-    let said = note_waits(vault.as_ref(), &state, &address, task, !told).map_err(Refused::Note)?;
-    close_task(repo, Some(task), vault.as_ref(), said, None).map_err(Refused::Other)
+    close_task(repo, Some(task), vault.as_ref(), None)
 }
 
 pub fn tick(state: &Path) -> Vec<String> {
@@ -517,11 +500,11 @@ mod tests {
         World { repos, workspaces: &seen.workspaces, agents: &seen.agents, log, gh, began: messages::now(), fresh: None }
     }
 
-    fn closing_by_finish(state: &Path, upstream: &str) -> impl FnMut(&Path, &str, bool) -> std::result::Result<Notice, Refused> {
+    fn closing_by_finish(state: &Path, upstream: &str) -> impl FnMut(&Path, &str) -> Result<Notice> {
         let (state, upstream) = (state.to_path_buf(), upstream.to_string());
-        move |repo: &Path, task: &str, _| {
-            let slot = find_task(repo, Some(task), repo).map_err(Refused::Other)?;
-            finish(repo, &slot, &upstream, &state, None).map_err(Refused::Other)
+        move |repo: &Path, task: &str| {
+            let slot = find_task(repo, Some(task), repo)?;
+            finish(repo, &slot, &upstream, &state, None)
         }
     }
 
@@ -548,7 +531,7 @@ mod tests {
         let address = peers::address("billing", &name_of(&dir));
         git(&slot.path, &["push", "--quiet", "origin", &format!("HEAD:{}", upstream.trim_start_matches("origin/"))]).unwrap();
         git(&dir, &["fetch", "--quiet", "origin"]).unwrap();
-        crate::phase::record(&state, &address, "push", &crate::phase::Event::Closing);
+        crate::phase::record(&state, &address, "push", &crate::phase::Event::Dismissed { kept_open: false });
         let told = RefCell::new(Vec::new());
         let repos = [dir.clone()];
         let seen = herdr(&slot, "idle");
@@ -660,13 +643,13 @@ mod tests {
         let seen = herdr(&slot, "idle");
         let working = |_: &Path| Some("working".to_string());
         let rechecked = World { fresh: Some(&working), ..world(&repos, &seen, &[], "false") };
-        pass(&state, &rechecked, &mut |_, _, _| panic!("its Claude started a turn before the close"), &mut |_| {});
+        pass(&state, &rechecked, &mut |_, _| panic!("its Claude started a turn before the close"), &mut |_| {});
         let address = peers::address("billing", &name_of(&dir));
         let turns = crate::lead::state_dir().unwrap().join("turns");
         std::fs::create_dir_all(&turns).unwrap();
         std::fs::write(turns.join(&address), messages::now().to_string()).unwrap();
         let turned = World { began: messages::now() - 5, ..world(&repos, &seen, &[], "false") };
-        pass(&state, &turned, &mut |_, _, _| panic!("a turn began while the round ran"), &mut |_| {});
+        pass(&state, &turned, &mut |_, _| panic!("a turn began while the round ran"), &mut |_| {});
         let _ = std::fs::remove_file(turns.join(&address));
         assert!(branch_exists(&dir, "billing"));
         cleanup(dir, origin, &slot);
@@ -704,7 +687,7 @@ mod tests {
         }
         let repos = [dir.clone()];
         let away = Seen2 { workspaces: Vec::new(), agents: Vec::new() };
-        pass(&state, &world(&repos, &away, &[], "false"), &mut |_, _, _| panic!("never closed while herdr cannot say what its Claude does"), &mut |_| {});
+        pass(&state, &world(&repos, &away, &[], "false"), &mut |_, _| panic!("never closed while herdr cannot say what its Claude does"), &mut |_| {});
         assert_eq!(mark(&state, &peers::address("billing", &name_of(&dir)), &slot.path), None, "no row text either");
         cleanup(dir, origin, &slot);
     }
@@ -766,33 +749,12 @@ mod tests {
         let repos = [dir.clone()];
         let seen = herdr(&slot, "idle");
         let asks = [report("needs-you")];
-        pass(&state, &world(&repos, &seen, &asks, "false"), &mut |_, _, _| panic!("a task that asks the user is not closed"), &mut |_| {});
+        pass(&state, &world(&repos, &seen, &asks, "false"), &mut |_, _| panic!("a task that asks the user is not closed"), &mut |_| {});
         assert_eq!(mark(&state, &address, &slot.path), Some(Unsure::Question), "the row keeps the ask and offers done");
         let mut answered = report("needs-you");
         answered.at = git(&slot.path, &["log", "-1", "--format=%ct", "HEAD"]).unwrap().parse::<u64>().unwrap() - 60;
         pass(&state, &world(&repos, &seen, &[answered], "false"), &mut closing_by_finish(&state, &upstream), &mut |_| {});
         assert!(!branch_exists(&dir, "billing"), "a needs-you from before the work landed asked for the push the landing was: it closes");
-        cleanup(dir, origin, &slot);
-    }
-
-    #[test]
-    fn a_note_that_waits_is_asked_for_once_per_commit() {
-        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
-        let state = state_of(&dir);
-        on_main(&dir, &slot, &upstream);
-        let repos = [dir.clone()];
-        let seen = herdr(&slot, "idle");
-        let asked = RefCell::new(Vec::new());
-        let mut close = |_: &Path, _: &str, told: bool| { asked.borrow_mut().push(told); Err(Refused::Note("its note lacks its decisions".to_string())) };
-        for _ in 0..3 {
-            pass(&state, &world(&repos, &seen, &[], "false"), &mut close, &mut |_| {});
-        }
-        assert_eq!(asked.borrow().as_slice(), [false, true, true], "the task hears what its note lacks once, not every round");
-        assert_eq!(mark(&state, &peers::address("billing", &name_of(&dir)), &slot.path), Some(Unsure::Note));
-        commit(&slot.path, "e", "fifth");
-        on_main(&dir, &slot, &upstream);
-        pass(&state, &world(&repos, &seen, &[], "false"), &mut close, &mut |_| {});
-        assert_eq!(asked.borrow().last(), Some(&false), "a new commit is asked about again");
         cleanup(dir, origin, &slot);
     }
 
@@ -984,7 +946,7 @@ mod tests {
         let green = fake_gh(&dir, &format!("[{}]", run(&later, "deploy", "success", "push")));
         let repos = [dir.clone()];
         let seen = herdr(&slot, "idle");
-        pass(&state, &world(&repos, &seen, &[], &green), &mut |_, _, _| Err(Refused::Other("no".to_string())), &mut |_| {});
+        pass(&state, &world(&repos, &seen, &[], &green), &mut |_, _| Err("no".to_string()), &mut |_| {});
         assert!(crate::ci::load(&state, &address).is_some(), "the red stays on the row until the task really closes");
         cleanup(dir, origin, &slot);
     }

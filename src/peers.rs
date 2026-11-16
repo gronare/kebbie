@@ -260,46 +260,27 @@ pub fn plan_step(sources: &[crate::config::Source], note: Option<&str>, kebbie: 
 }
 
 // With a vault that has note templates, the note is written to the task template, whose required sections the edits and done wait for.
-pub fn vault_section(note: Option<&str>, kebbie: &str, template: Option<&crate::item_template::Template>) -> String {
+pub fn vault_section(note: Option<&str>, kebbie: &str) -> String {
     let Some(note) = note else { return String::new() };
-    let Some(template) = template else {
-        return format!(
-            "\n\n## Your note in the vault\n\n\
-             This task's note is `{note}` in the vault: kebbie opened it when the task started and keeps it tied to this task. Read and write it with the vault MCP tools.\n\n\
-             1. Before your first change to a file, write the note's Problem section: what is wrong or missing, for whom, and what done looks like, in your own clear words, from the user's prompt and what you read. Rewrite the prompt rather than pasting it: the user writes rough notes, the vault keeps clear ones. Edits, and shell commands that write a file in the worktree, wait until Problem is written.\n\
-             2. Keep its solution section (what changes, from the user's side) and its decisions section (each choice made, with its reason) current as the work goes, in the note's own headings. A `Recipe:` line in your prompt is the lead's choice of how this task is done: write it, with its reason, as the first decision, and each decision kebbie hands you later as it gives it.\n\
-             3. kebbie writes the repo's log line after each push from your commit subjects, so write subjects that read well on their own.\n\n\
-             `{kebbie} done` waits until the solution and decisions are written, then closes the note; a reset puts it back in the backlog."
-        );
-    };
-    let required = template.required_names();
     format!(
         "\n\n## Your note in the vault\n\n\
-         This task's note is `{note}` in the vault: kebbie opened it when the task started and keeps it tied to this task. Read and write it with the vault MCP tools, in the sections of the vault's task template.\n\n\
-         1. Before your first change to a file, write the note's {required}, in your own clear words, from the user's prompt and what you read. Rewrite the prompt rather than pasting it: the user writes rough notes, the vault keeps clear ones. Edits, and shell commands that write a file in the worktree, wait until those sections are written.\n\
-         2. Keep its sections current as the work goes. A `Recipe:` line in your prompt is the lead's choice of how this task is done: write it, with its reason, into the note, and each decision kebbie hands you later as it gives it.\n\
+         This task's note is `{note}` in the vault: kebbie opened it when the task started and keeps it tied to this task. It is your own memory for the task, read and written with the vault MCP tools, in whatever shape serves you.\n\n\
+         1. A short purpose line at its top, what the user can do once the task is done, in your own clear words, helps whoever reads it next. Nothing waits for it.\n\
+         2. Keep in it what you would want back after a restart: research, paths, decisions with their reasons. A `Recipe:` line in your prompt is the lead's choice of how this task is done: note it with its reason, and each decision kebbie hands you later as it gives it.\n\
          3. kebbie writes the repo's log line after each push from your commit subjects, so write subjects that read well on their own.\n\n\
-         `{kebbie} done` waits until the {required} are written, then closes the note; a reset puts it back in the backlog."
+         `{kebbie} done` closes the note; a reset puts it back in the backlog."
     )
 }
 
-pub fn lead_keeps_note(note: Option<&str>, kebbie: &str, template: Option<&crate::item_template::Template>) -> String {
+pub fn lead_keeps_note(note: Option<&str>, kebbie: &str) -> String {
     let Some(note) = note else { return String::new() };
-    let (first, done) = match template {
-        None => ("the note's Problem, then go on: `{kebbie} tell lead \"Write into {note}, Problem: <what is wrong or missing, for whom, and what done looks like>\"`".to_string(), "the note's solution and decisions are written, so send them".to_string()),
-        Some(template) => {
-            let required = template.required_names();
-            (format!("the note's {required}, then go on: `{{kebbie}} tell lead \"Write into {{note}}, <section>: <its text>\"`, one message per section"), format!("the note's {required} are written, so send them"))
-        }
-    };
-    let first = first.replace("{kebbie}", kebbie).replace("{note}", note);
     format!(
         "\n\n## Your note in the vault\n\n\
          This task's note is `{note}` in the vault, and the lead keeps it for you: a Codex session has no vault tools, so don't look for them and don't wait for them.\n\n\
-         1. Before your first change to a file, send the lead {first}, in your own clear words from the user's prompt and what you read. Rewrite the prompt rather than pasting it.\n\
-         2. Send each decision the same way as you make it, `{kebbie} tell lead \"Write into {note}, decision: <the choice>, because <the reason>\"`, and the solution, what changes from the user's side, once it is clear. A `Recipe:` line in your prompt is the lead's choice of how this task is done: send it, with its reason, as the first decision.\n\
+         1. A short purpose line helps whoever reads the note next: send it once it is clear, `{kebbie} tell lead \"Write into {note}: <what the user can do once the task is done>\"`. Nothing waits for it.\n\
+         2. Send each decision the same way as you make it, `{kebbie} tell lead \"Write into {note}, decision: <the choice>, because <the reason>\"`. A `Recipe:` line in your prompt is the lead's choice of how this task is done: send it, with its reason, as the first decision.\n\
          3. kebbie writes the repo's log line after each push from your commit subjects, so write subjects that read well on their own.\n\n\
-         `{kebbie} done` waits until {done} before you report ready."
+         `{kebbie} done` closes the note."
     )
 }
 
@@ -368,11 +349,9 @@ pub fn role_file(task: &str, place: &Place) -> Result<(PathBuf, String)> {
 fn vault_parts(agent: crate::agent::Agent, codex_vault: bool, sources: &[crate::config::Source], note: Option<&str>, kebbie: &str, task: &str, plans: &Path) -> (String, String, bool) {
     if agent == crate::agent::Agent::Codex && !codex_vault {
         let sources: Vec<crate::config::Source> = sources.iter().copied().filter(|source| *source != crate::config::Source::Vault).collect();
-        let template = note.filter(|_| crate::item_template::templated_now()).map(|_| crate::item_template::for_vault());
-        return (plan_step(&sources, None, kebbie, task, plans), lead_keeps_note(note, kebbie, template.as_ref()), false);
+        return (plan_step(&sources, None, kebbie, task, plans), lead_keeps_note(note, kebbie), false);
     }
-    let template = note.filter(|_| crate::item_template::templated_now()).map(|_| crate::item_template::for_vault());
-    (plan_step(sources, note, kebbie, task, plans), vault_section(note, kebbie, template.as_ref()), true)
+    (plan_step(sources, note, kebbie, task, plans), vault_section(note, kebbie), true)
 }
 
 fn role_values(task: &str, place: &Place, peers: &str) -> Result<Vec<(&'static str, String)>> {
@@ -652,12 +631,14 @@ mod tests {
 
     #[test]
     fn the_vault_section_shows_only_for_a_task_with_a_note() {
-        let off = fill(include_str!("../roles/task.md"), &[("vault", &vault_section(None, "/bin/kebbie", None))]);
+        let off = fill(include_str!("../roles/task.md"), &[("vault", &vault_section(None, "/bin/kebbie"))]);
         assert!(!off.contains("vault") && !off.contains("{vault}"), "without the vault plugin no vault concept shows");
-        let on = fill(include_str!("../roles/task.md"), &[("vault", &vault_section(Some("Projects/kebbie-billing.md"), "/bin/kebbie", None))]);
-        for needed in ["## Your note in the vault", "`Projects/kebbie-billing.md`", "write the note's Problem section", "Rewrite the prompt rather than pasting it", "decisions section", "A `Recipe:` line in your prompt is the lead's choice", "`/bin/kebbie done` waits until the solution and decisions are written"] {
+        let on = fill(include_str!("../roles/task.md"), &[("vault", &vault_section(Some("Projects/kebbie-billing.md"), "/bin/kebbie"))]);
+        for needed in ["## Your note in the vault", "`Projects/kebbie-billing.md`", "your own memory for the task", "A short purpose line at its top", "Nothing waits for it", "A `Recipe:` line in your prompt is the lead's choice", "`/bin/kebbie done` closes the note"] {
             assert!(on.contains(needed), "{needed}: {on}");
         }
+        let own = vault_section(Some("Projects/kebbie-billing.md"), "/bin/kebbie") + &lead_keeps_note(Some("Projects/kebbie-billing.md"), "/bin/kebbie");
+        assert!(!own.contains("waits until") && !own.contains("Problem") && !own.contains("template"), "neither edits nor done wait for the note: {own}");
         assert!(on.find("## Your note in the vault").unwrap() < on.find("## Probes").unwrap());
     }
 
@@ -670,15 +651,15 @@ mod tests {
         assert!(!tools, "a Codex session gets no vault MCP tools, so it files what it notices with kebbie backlog add");
         assert!(plan.contains("/bin/kebbie ask --plan /src/app/.git/worktrees/wt1.app/kebbie-plan/plan.md") && !plan.contains("vault"), "{plan}");
         let role = fill(include_str!("../roles/task.md"), &[("vault", &vault)]);
-        for needed in ["## Your note in the vault", "`Projects/kebbie-billing.md` in the vault, and the lead keeps it for you", "don't wait for them", "/bin/kebbie tell lead \"Write into Projects/kebbie-billing.md, Problem: ", "decision: <the choice>, because <the reason>", "A `Recipe:` line in your prompt", "`/bin/kebbie done` waits until the note's solution and decisions are written"] {
+        for needed in ["## Your note in the vault", "`Projects/kebbie-billing.md` in the vault, and the lead keeps it for you", "don't wait for them", "/bin/kebbie tell lead \"Write into Projects/kebbie-billing.md: <what the user can do", "Nothing waits for it", "decision: <the choice>, because <the reason>", "A `Recipe:` line in your prompt", "`/bin/kebbie done` closes the note."] {
             assert!(role.contains(needed), "{needed}: {role}");
         }
         assert!(!role.contains("vault MCP tools") && !role.contains("with the vault tools"), "{role}");
         assert_eq!(vault_parts(Agent::Codex, false, &[], None, "/bin/kebbie", "billing", plans).1, "", "no note, no vault section");
         let (plan, vault, tools) = vault_parts(Agent::Claude, false, &[Source::Vault], Some("Projects/kebbie-billing.md"), "/bin/kebbie", "billing", plans);
-        assert!(tools && plan.contains("--plan vault:Projects/kebbie-billing.md") && vault == vault_section(Some("Projects/kebbie-billing.md"), "/bin/kebbie", None));
+        assert!(tools && plan.contains("--plan vault:Projects/kebbie-billing.md") && vault == vault_section(Some("Projects/kebbie-billing.md"), "/bin/kebbie"));
         let (plan, vault, tools) = vault_parts(Agent::Codex, true, &[Source::Vault], Some("Projects/kebbie-billing.md"), "/bin/kebbie", "billing", plans);
-        assert!(tools && plan.contains("--plan vault:Projects/kebbie-billing.md") && vault == vault_section(Some("Projects/kebbie-billing.md"), "/bin/kebbie", None), "a Codex with the vault server keeps its own note");
+        assert!(tools && plan.contains("--plan vault:Projects/kebbie-billing.md") && vault == vault_section(Some("Projects/kebbie-billing.md"), "/bin/kebbie"), "a Codex with the vault server keeps its own note");
     }
 
     #[test]
@@ -754,17 +735,5 @@ mod tests {
         assert!(resolve("billing@web", "billing@web", &all).is_err(), "a session never resolves to itself");
         assert_eq!(addresses(resolve("billing", "billing@web", &all)), ["billing@api"]);
         assert_eq!(addresses(resolve("billing", "search@api", &all)), ["billing@api", "billing@web"]);
-    }
-
-    #[test]
-    fn with_note_templates_the_task_role_names_the_templates_required_sections() {
-        let template = crate::item_template::Template::builtin();
-        let own = vault_section(Some("Projects/kebbie-billing.md"), "/bin/kebbie", Some(&template));
-        for needed in ["in the sections of the vault's task template", "write the note's Background, Goal and Source", "wait until those sections are written", "`/bin/kebbie done` waits until the Background, Goal and Source are written"] {
-            assert!(own.contains(needed), "{needed}: {own}");
-        }
-        assert!(!own.contains("Problem"), "{own}");
-        let kept = lead_keeps_note(Some("Projects/kebbie-billing.md"), "/bin/kebbie", Some(&template));
-        assert!(kept.contains("send the lead the note's Background, Goal and Source, then go on: `/bin/kebbie tell lead \"Write into Projects/kebbie-billing.md, <section>: <its text>\"`") && kept.contains("waits until the note's Background, Goal and Source are written"), "{kept}");
     }
 }

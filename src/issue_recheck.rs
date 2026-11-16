@@ -646,7 +646,7 @@ mod tests {
             assert!(file(&state, "aaaaaa", "run").exists(), "{caller:?} leaves the record for the keeper's checker");
         }
         assert_eq!(claim(&state, &Caller::Agent, "n0nce", "aaaaaa").unwrap(), ("2222222".to_string(), "0.26.3".to_string()));
-        let settings: serde_json::Value = serde_json::from_str(&crate::agent::claude::settings("/k", "billing@app", None, None, None)).unwrap();
+        let settings: serde_json::Value = serde_json::from_str(&crate::agent::claude::settings("/k", "billing@app", None, None)).unwrap();
         let deny: Vec<&str> = settings["permissions"]["deny"].as_array().unwrap().iter().filter_map(|rule| rule.as_str()).collect();
         assert!(deny.contains(&"Bash(/k issue recheck:*)") && deny.contains(&"Bash(/k review --run:*)"), "{deny:?}");
     }

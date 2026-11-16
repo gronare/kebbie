@@ -147,7 +147,6 @@ pub enum Event<'a> {
     Unstaged { head: Option<&'a str> },
     StageGaveUp,
     KeptOpen { rest: usize, steps_left: bool, clean: bool, head: Option<&'a str> },
-    Closing,
     CiRed { sha: &'a str, pushing: bool },
     CiUnreadable,
     CiUnseen,
@@ -229,7 +228,6 @@ pub fn next(current: Option<&Phase>, event: &Event) -> Option<Phase> {
         Event::KeptOpen { clean: false, .. } => Phase::Working,
         Event::KeptOpen { rest: 0, .. } => Phase::Idle,
         Event::KeptOpen { head, .. } => Phase::Ready { head: head.map(str::to_string) },
-        Event::Closing => Phase::Closing,
         Event::CiRed { pushing: true, .. } => Phase::Pushing { ahead: 0 },
         Event::CiRed { sha, .. } => Phase::CiRed { sha: sha.to_string() },
         Event::CiUnreadable => match current {

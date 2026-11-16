@@ -1674,9 +1674,9 @@ pub(crate) mod tests {
         let mut item = task(Some("idle"), Some("ready"), 0);
         moved(&mut item, &Event::PushOut { sha: "abcdef0" });
         item.ci = None;
-        moved(&mut item, &Event::Closing);
+        moved(&mut item, &Event::Dismissed { kept_open: false });
         for status in [Some("done"), Some("idle"), Some("working")] {
-            assert_eq!(at(&mut item, status), Group::Working, "green, its note being written before kebbie closes it, herdr {status:?}");
+            assert_eq!(at(&mut item, status), Group::Working, "green, while kebbie closes it, herdr {status:?}");
         }
         reported(&mut item, "ready", 90);
         moved(&mut item, &Event::Reported { state: "ready", head: None, committed: false, pushing: false });

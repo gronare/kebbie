@@ -1101,10 +1101,10 @@ mod tests {
         assert!(found.fact.contains("the hooks of billing@app run a kebbie that is gone"), "{}", found.fact);
         assert!(found.fix[0].starts_with("kebbie restart"));
         let roles = crate::sh::test_dir("doctor-gone-hooks");
-        std::fs::write(roles.join("billing@app.settings.json"), crate::agent::claude::settings("/home/u/.local/share/kebbie/gone/target/release/kebbie", "billing@app", None, None, None)).unwrap();
+        std::fs::write(roles.join("billing@app.settings.json"), crate::agent::claude::settings("/home/u/.local/share/kebbie/gone/target/release/kebbie", "billing@app", None, None)).unwrap();
         let kebbie = roles.join("kebbie");
         crate::executable::write(&kebbie, "#!/bin/sh\n").unwrap();
-        std::fs::write(roles.join("search@app.settings.json"), crate::agent::claude::settings(&kebbie.to_string_lossy(), "search@app", None, None, None)).unwrap();
+        std::fs::write(roles.join("search@app.settings.json"), crate::agent::claude::settings(&kebbie.to_string_lossy(), "search@app", None, None)).unwrap();
         let addresses = ["billing@app".to_string(), "search@app".to_string(), "lead".to_string()];
         let gone = sessions_with_gone_hooks(&roles, &addresses);
         assert_eq!(gone, ["billing@app"], "a kebbie that runs, and a session with no settings file, are fine");

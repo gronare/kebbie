@@ -263,7 +263,7 @@ mod tests {
         let mut kube = crate::profiles::built_in(crate::profiles::TASK).unwrap();
         kube.sandbox.kubeconfig = Some("/home/ada/.kube/kebbie-ops.yaml".to_string());
         let guards = |profile: &crate::profiles::Profile, sandboxed: bool| -> Vec<String> {
-            let written: serde_json::Value = serde_json::from_str(&crate::agent::Agent::Claude.task_settings("/k", "billing@app", None, None, profile, sandboxed)).unwrap();
+            let written: serde_json::Value = serde_json::from_str(&crate::agent::Agent::Claude.task_settings("/k", "billing@app", None, profile, sandboxed)).unwrap();
             written["hooks"]["PreToolUse"].as_array().unwrap().iter().filter(|entry| entry["matcher"] == "Bash").map(|entry| entry["hooks"][0]["command"].as_str().unwrap().to_string()).collect()
         };
         let task = crate::profiles::built_in(crate::profiles::TASK).unwrap();

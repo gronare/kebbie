@@ -201,18 +201,6 @@ impl Cli {
         Ok(Opened { path, created: value["created"] == true })
     }
 
-    // No keys asks for the task template's required sections, as a vault with templates checks them.
-    pub fn missing(&self, note: &str, need: &[&str]) -> Result<Vec<String>> {
-        let joined = need.join(",");
-        let mut args = vec!["task", "check", note];
-        if !need.is_empty() {
-            args.extend(["--need", &joined]);
-        }
-        let value = self.call(&args)?;
-        let missing = value["missing"].as_array().ok_or("vault task check: no missing list in its answer")?;
-        Ok(missing.iter().filter_map(Value::as_str).map(str::to_string).collect())
-    }
-
     pub fn close(&self, note: &str) -> Result<String> {
         self.call(&["task", "close", note]).map(|value| field(&value, "path"))
     }
@@ -758,11 +746,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("kebbie-vault-refresh-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let uvx = dir.join("uvx");
-        crate::executable::write(&uvx, "#!/bin/sh\necho \"$@\" >> \"$(dirname \"$0\")/argv.log\"\nif [ \"$1\" = --refresh ]; then echo '{\"missing\":[]}'; else echo 'requirements are unsatisfiable.' >&2; exit 1; fi\n").unwrap();
+        crate::executable::write(&uvx, "#!/bin/sh\necho \"$@\" >> \"$(dirname \"$0\")/argv.log\"\nif [ \"$1\" = --refresh ]; then echo '{\"path\":\"Archive/x.md\"}'; else echo 'requirements are unsatisfiable.' >&2; exit 1; fi\n").unwrap();
         let cli = Cli::new(vec![uvx.to_string_lossy().to_string(), "notes-vault-mcp==9.9.9".to_string()]);
-        assert_eq!(cli.missing("Projects/x.md", &["problem"]), Ok(vec![]));
+        assert_eq!(cli.close("Projects/x.md"), Ok("Archive/x.md".to_string()));
         let calls = std::fs::read_to_string(dir.join("argv.log")).unwrap();
-        assert_eq!(calls.lines().collect::<Vec<_>>(), ["notes-vault-mcp==9.9.9 task check Projects/x.md --need problem", "--refresh notes-vault-mcp==9.9.9 task check Projects/x.md --need problem"]);
+        assert_eq!(calls.lines().collect::<Vec<_>>(), ["notes-vault-mcp==9.9.9 task close Projects/x.md", "--refresh notes-vault-mcp==9.9.9 task close Projects/x.md"]);
         assert_eq!(Cli::new(vec!["/bin/false".to_string()]).refreshed(), None, "only uvx refreshes");
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -838,15 +826,12 @@ mod tests {
     fn each_call_sends_the_interface_arguments_and_reads_the_json_answer() {
         let fake = Fake::new("calls");
         fake.answer("task-open", r#"{"path":"Projects/kebbie-billing.md","created":true,"repo":"kebbie","area":"kebbie"}"#);
-        fake.answer("task-check", r#"{"missing":["solution"]}"#);
         fake.answer("log-append", r#"{"path":"Log/kebbie-logg.md"}"#);
         let opened = fake.cli.open("billing", Path::new("/src/wt1.kebbie"), Some("billing"), Some("Projects/x.md")).unwrap();
         assert_eq!(opened, Opened { path: "Projects/kebbie-billing.md".to_string(), created: true });
-        assert_eq!(fake.cli.missing("Projects/kebbie-billing.md", &["solution", "decisions"]).unwrap(), ["solution"]);
         assert_eq!(fake.cli.log(Path::new("/src/wt1.kebbie"), Some("billing"), "billing: Add refunds", &["a1b2c3d"]).unwrap(), "Log/kebbie-logg.md");
         assert_eq!(fake.calls(), [
             "task open --name billing --cwd /src/wt1.kebbie --branch=billing --note=Projects/x.md",
-            "task check Projects/kebbie-billing.md --need solution,decisions",
             "log append --cwd /src/wt1.kebbie --branch=billing --line=billing: Add refunds --commit a1b2c3d",
         ]);
         fake.fail("task-close", "Traceback\nNoteNotFound: Projects/kebbie-billing.md");

@@ -55,7 +55,6 @@ pub enum Answer {
     Rewrite(Value),
     // The event is echoed as the payload named it, absent or not.
     Context { event: Value, text: String },
-    Warn(String),
     Block(String),
     Text(String),
 }
@@ -71,7 +70,6 @@ impl Answer {
             Answer::Deny(reason) => json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason } }).to_string(),
             Answer::Rewrite(tool_input) => json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse", "updatedInput": tool_input } }).to_string(),
             Answer::Context { event, text } => json!({ "hookSpecificOutput": { "hookEventName": event, "additionalContext": text } }).to_string(),
-            Answer::Warn(text) => json!({ "systemMessage": text }).to_string(),
             Answer::Block(reason) => json!({ "decision": "block", "reason": reason }).to_string(),
             Answer::Text(text) => text.clone(),
         }
@@ -91,7 +89,6 @@ mod tests {
         assert_eq!(Answer::Rewrite(json!({ "command": "git diff --no-ext-diff", "description": "read" })).render(), r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":{"command":"git diff --no-ext-diff","description":"read"}}}"#);
         assert_eq!(Answer::Context { event: json!("PostToolUse"), text: "a\nb".to_string() }.render(), r#"{"hookSpecificOutput":{"additionalContext":"a\nb","hookEventName":"PostToolUse"}}"#);
         assert_eq!(Answer::Context { event: Value::Null, text: "x".to_string() }.render(), r#"{"hookSpecificOutput":{"additionalContext":"x","hookEventName":null}}"#);
-        assert_eq!(Answer::Warn("down".to_string()).render(), r#"{"systemMessage":"down"}"#);
         assert_eq!(Answer::Block("report first".to_string()).render(), r#"{"decision":"block","reason":"report first"}"#);
         assert_eq!(Answer::Text("stale\n".to_string()).render(), "stale\n");
     }
