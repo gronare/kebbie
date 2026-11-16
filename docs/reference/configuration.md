@@ -170,6 +170,19 @@ An assessment with no answer reads as `review not assessed`, a suggestion in eve
 profile = "deep-codex"
 ```
 
+### Writer
+
+| Key | Default | Where | What it does |
+| --- | --- | --- | --- |
+| `writer.profile` | `"writer"` | config.toml only | The profile kebbie's writer runs with when the lead is asked to write out a backlog item; `"none"` has the lead write it in its own chat. |
+
+An idea from your phone, a short item from `kebbie backlog add` or `n`, and **Write it out** go to the writer first. It reads the code, the vault and the web with the investigator's read-only tools and writes the item out apart from the lead's chat, so the lead's context stays clean. The lead then reviews the draft and its open questions and saves it. `writer.profile` names any profile in `~/.config/kebbie/profiles/` or a built-in one, and the writer takes its agent, model and effort. The built-in `writer` is Claude at medium effort. A writer that cannot start or gives no draft leaves the item to the lead.
+
+```toml
+[writer]
+profile = "quick-codex"
+```
+
 ### Machine
 
 | Key | Default | Where | What it does |

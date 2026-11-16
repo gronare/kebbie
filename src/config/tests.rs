@@ -295,7 +295,7 @@ fn a_symlinked_repo_config_loads_and_shows_its_target() {
 #[test]
 fn unknown_keys_are_named_with_the_file_and_ignored_while_bad_values_still_fail() {
     let warned = |text: &str| unknown_in_file(text, "/home/u/.config/kebbie/config.toml", &MACHINE_KEYS);
-    let all = "board, worktree, task, review, investigate, notify, vault, update, restart, keeper, recover, machine, hub, keys, ci, tests, comments, routines, report, issues, lead";
+    let all = "board, worktree, task, review, investigate, writer, notify, vault, update, restart, keeper, recover, machine, hub, keys, ci, tests, comments, routines, report, issues, lead";
     assert_eq!(warned("colour = 1
 "), [format!("/home/u/.config/kebbie/config.toml: colour: unknown key; known keys here: {all}")]);
     assert_eq!(warned("[backlog]\nsources = []\n"), [format!("/home/u/.config/kebbie/config.toml: backlog: unknown key; known keys here: {all}")]);
@@ -689,7 +689,7 @@ fn sample(entry: &Entry) -> String {
 fn each_keys_scope_is_the_files_that_take_it_and_what_its_text_says() {
     let loaded = Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
     let all = entries(&loaded);
-    assert_eq!(all.len(), 54);
+    assert_eq!(all.len(), 55);
     for entry in all {
         let (section, field) = entry.key.rsplit_once('.').unwrap();
         let text = format!("[{section}]\n{field} = {}\n", sample(&entry));
@@ -951,4 +951,11 @@ fn steps_are_on_until_turned_off_and_a_repo_wins_over_the_machine() {
     assert!(parse_repo("[task]\nsteps = \"yes\"\n", "app.toml").unwrap_err().contains("task.steps: must be true or false"));
     let shown = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
     assert!(shown.contains("task.steps = true  (default)\n  Tasks work in subtasks, each a titled part of the work in small commits, listed with kebbie subtasks"), "{shown}");
+}
+
+#[test]
+fn writer_profile_names_a_profile_or_none() {
+    assert_eq!(parse_machine("[writer]\nprofile = \"none\"\n", "config.toml").unwrap().writer_profile.as_deref(), Some("none"));
+    assert!(parse_machine("[writer]\nprofile = \"Not A Name\"\n", "config.toml").unwrap_err().contains("writer.profile: "));
+    assert_eq!(settings(&Worktree::default(), &Machine::default()).writer_profile.value, crate::backlog_writer::WRITER);
 }

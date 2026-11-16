@@ -1,0 +1,225 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
+
+use crate::permit::Caller;
+use crate::sh::Result;
+use crate::trusted_spawn::{self, Queue};
+
+pub const WRITER: &str = "writer";
+pub const EVERY: u64 = crate::rules_check::EVERY;
+const TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const QUEUE: Queue = Queue { dir, args: &["backlog", "--write-run"], is_ours: is_writer };
+
+fn dir(state: &Path) -> PathBuf {
+    state.join("write-out")
+}
+
+pub fn is_writer(args: &str) -> bool {
+    args.contains(" backlog --write-run") && args.split_whitespace().any(|word| Path::new(word).file_name().is_some_and(|name| name.to_string_lossy().starts_with("kebbie")))
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct Ask {
+    request: String,
+    cwd: PathBuf,
+}
+
+// One request is written once at a time, whoever asks for it again meanwhile.
+fn key_of(request: &str) -> String {
+    trusted_spawn::digest(request)[..16].to_string()
+}
+
+// writer.profile names any profile, whose agent, model and effort the writer takes; the built-in writer is Claude at medium effort.
+pub fn profile(dir: &Path, name: &str) -> Result<crate::profiles::Profile> {
+    if name == WRITER && !dir.join(format!("{WRITER}.toml")).is_file() {
+        let base = crate::profiles::built_in(crate::profiles::TASK).ok_or("the built-in task profile is missing")?;
+        return Ok(crate::profiles::Profile { name: WRITER.to_string(), about: "kebbie's writer".to_string(), fits: "writing out backlog items for the lead".to_string(), effort: Some("medium".to_string()), ..base });
+    }
+    crate::profiles::load_in(dir, name).map_err(|error| format!("writer.profile: {error}"))
+}
+
+pub fn review_text(request: &str, draft: &Path, profile: &str) -> String {
+    format!("kebbie's writer ({profile}) wrote out the backlog item of this request for you to review, in {}. Do not research it again: read the draft, add what you know from your conversation with the user, take out an open question the code or the notes settle and keep each one only the user can answer, then save it as the request says and show the user the written item.\n\nThe request:\n\n{request}", draft.display())
+}
+
+pub fn fallback_text(request: &str, why: &str) -> String {
+    format!("kebbie's writer could not write out this backlog item ({why}), so write it out yourself.\n\n{request}")
+}
+
+pub fn brief(request: &str, kebbie: &str) -> String {
+    format!(
+        "The lead was asked to write out a backlog item, and you write it in its place by the instructions in your system prompt, as kebbie's writer. The request the lead got:\n\n{request}\n\n\
+         kebbie is {kebbie}: `{kebbie} backlog template` prints the style, `{kebbie} backlog` lists the backlog and `{kebbie} areas` the repos with their paths. \
+         Read the item where it is filed, the code, the vault and the web as it needs. Save nothing and mark nothing: answer with the written item alone, `# <title>` on its first line and its body after it."
+    )
+}
+
+// The written item from the writer's answer: from its title line on, without a code fence around it.
+pub fn draft_of(answer: &str) -> Option<String> {
+    let lines: Vec<&str> = answer.lines().collect();
+    let start = lines.iter().position(|line| line.trim_start().starts_with("# "))?;
+    let mut kept: Vec<&str> = lines[start..].to_vec();
+    while kept.last().is_some_and(|line| line.trim().is_empty() || line.trim().starts_with("```")) {
+        kept.pop();
+    }
+    Some(kept.join("\n").trim().to_string())
+}
+
+fn cwd() -> PathBuf {
+    crate::lead::lead_dir().unwrap_or_else(|_| PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".to_string())))
+}
+
+// A request to write out an item goes to the writer, or to the lead at once when writer.profile is none or the writer cannot start; your own or the lead's request starts it now, anyone else's waits for the keeper.
+pub fn hand(state: &Path, request: &str, caller: &Caller, tell: &dyn Fn(&str) -> Result<()>) -> Result<()> {
+    let now = matches!(caller, Caller::User | Caller::Lead);
+    let start = |key: &str, ask: &Ask| -> Result<()> {
+        let payload = serde_json::to_string(ask).map_err(|error| error.to_string())?;
+        QUEUE.start_now(state, key, &ask.cwd, &payload, &crate::peers::own_exe()?, &trusted_spawn::reviewer_env(std::env::vars()), &log(state, key))
+    };
+    hand_with(state, request, &crate::config::writer_profile(), now, &cwd(), &start, tell)
+}
+
+fn hand_with(state: &Path, request: &str, profile: &str, now: bool, cwd: &Path, start: &dyn Fn(&str, &Ask) -> Result<()>, tell: &dyn Fn(&str) -> Result<()>) -> Result<()> {
+    if profile == crate::config::NONE {
+        return tell(request);
+    }
+    let key = key_of(request);
+    if QUEUE.asked(state, &key).is_some() {
+        return Ok(());
+    }
+    let ask = Ask { request: request.to_string(), cwd: cwd.to_path_buf() };
+    let started = if now { start(&key, &ask) } else { serde_json::to_string(&ask).map_err(|error| error.to_string()).and_then(|payload| QUEUE.want(state, &key, cwd, &payload)) };
+    started.or_else(|error| tell(&fallback_text(request, &format!("it could not start: {error}"))))
+}
+
+fn log(state: &Path, key: &str) -> PathBuf {
+    QUEUE.file(state, key, "log")
+}
+
+fn keys(state: &Path, kind: &str) -> Vec<String> {
+    let suffix = format!(".{kind}");
+    fs::read_dir(dir(state)).into_iter().flatten().flatten().filter_map(|entry| entry.file_name().to_string_lossy().strip_suffix(&suffix).map(str::to_string)).collect()
+}
+
+fn tell_lead(text: &str) -> Result<()> {
+    crate::messages::to_lead(crate::messages::ToLead::BacklogItem, text)
+}
+
+fn request_of(payload: &str) -> String {
+    serde_json::from_str::<Ask>(payload).map(|ask| ask.request).unwrap_or_default()
+}
+
+pub fn tick(state: &Path) -> Vec<String> {
+    let mut notes: Vec<String> = QUEUE.dead(state).into_iter().map(|(key, ask)| {
+        QUEUE.done(state, &key);
+        let _ = tell_lead(&fallback_text(&request_of(&ask.payload), "it stopped without a draft"));
+        format!("writer: {key} stopped without a draft; the lead writes it out")
+    }).collect();
+    let env = trusted_spawn::reviewer_env(std::env::vars());
+    for key in keys(state, "wanted") {
+        if QUEUE.pid(state, &key).is_some() {
+            continue;
+        }
+        let Some(ask) = QUEUE.wanted(state, &key) else { continue };
+        QUEUE.unwant(state, &key);
+        let started = crate::peers::own_exe().and_then(|kebbie| QUEUE.start_now(state, &key, &ask.worktree, &ask.payload, &kebbie, &env, &log(state, &key)));
+        notes.push(match started {
+            Ok(()) => format!("writer: writing out {key}"),
+            Err(error) => {
+                let _ = tell_lead(&fallback_text(&request_of(&ask.payload), &format!("it could not start: {error}")));
+                format!("writer: {key} could not start ({error})")
+            }
+        });
+    }
+    notes
+}
+
+// The background half, kebbie backlog --write-run: only the keeper's own start with its nonce writes anything.
+pub fn run() -> Result<String> {
+    let presented = trusted_spawn::presented();
+    let state = crate::lead::state_dir()?;
+    let digest = trusted_spawn::digest(&presented);
+    let key = keys(&state, "run").into_iter().find(|key| fs::read_to_string(QUEUE.file(&state, key, "run")).ok().and_then(|record| record.lines().next().map(|hash| hash.trim() == digest)).unwrap_or(false));
+    let Some(payload) = key.as_deref().and_then(|key| QUEUE.take(&state, key, &presented, &crate::permit::caller())) else {
+        return Err("This writer was not started by kebbie's keeper, so it writes nothing.".to_string());
+    };
+    let key = key.unwrap_or_default();
+    let ask: Ask = serde_json::from_str(&payload).map_err(|error| format!("the writer's request does not read: {error}"))?;
+    let name = crate::config::writer_profile();
+    let written = write(&key, &ask, &name).and_then(|answer| draft_of(&answer).ok_or_else(|| "its answer has no `# <title>` line".to_string()));
+    QUEUE.done(&state, &key);
+    match written {
+        Ok(draft) => {
+            let file = dir(&state).join(format!("{key}.md"));
+            crate::state::write(&file, draft + "\n")?;
+            let _ = fs::remove_file(log(&state, &key));
+            tell_lead(&review_text(&ask.request, &file, &name))?;
+            Ok(format!("The lead reviews the draft in {}", file.display()))
+        }
+        Err(why) => {
+            tell_lead(&fallback_text(&ask.request, &why))?;
+            Err(why)
+        }
+    }
+}
+
+fn write(key: &str, ask: &Ask, name: &str) -> Result<String> {
+    let profile = profile(&crate::profiles::dir(), name)?;
+    let kebbie = crate::peers::kebbie_command()?;
+    let skill = crate::lead::install_root()?.join("skills/write-backlog-item/SKILL.md");
+    let roles = crate::lead::roles_dir()?;
+    let prompt = roles.join(format!("backlog-{key}.write.md"));
+    let text = fs::read_to_string(&skill).map_err(|error| format!("{}: {error}", skill.display()))?;
+    crate::state::write(&prompt, text.trim_end().to_string() + &crate::profiles::role_section(&profile)?)?;
+    trusted_spawn::ask_helper(&profile, &prompt, &roles.join(format!("backlog-{key}.write.answer")), &ask.cwd, &brief(&ask.request, &kebbie), &kebbie, TIMEOUT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    #[test]
+    fn a_request_goes_to_the_writer_once_and_to_the_lead_when_the_writer_is_off_or_cannot_start() {
+        let state = crate::sh::test_dir("writer-hand");
+        let (told, started) = (RefCell::new(Vec::new()), RefCell::new(Vec::new()));
+        let tell = |text: &str| -> Result<()> { told.borrow_mut().push(text.to_string()); Ok(()) };
+        let start = |key: &str, ask: &Ask| -> Result<()> { started.borrow_mut().push((key.to_string(), ask.request.clone())); Ok(()) };
+        hand_with(&state, "Write out \"Retry\"", crate::config::NONE, true, &state, &start, &tell).unwrap();
+        assert_eq!((told.borrow().as_slice(), started.borrow().len()), (["Write out \"Retry\"".to_string()].as_slice(), 0), "none has the lead write it");
+        hand_with(&state, "Write out \"Retry\"", WRITER, false, &state, &start, &tell).unwrap();
+        assert!(QUEUE.wanted(&state, &key_of("Write out \"Retry\"")).is_some(), "a phone's request waits for the keeper");
+        hand_with(&state, "Write out \"Retry\"", WRITER, true, &state, &start, &tell).unwrap();
+        assert_eq!((told.borrow().len(), started.borrow().len()), (1, 0), "a request already with the writer is not started twice");
+        hand_with(&state, "Write out \"Faster board\"", WRITER, true, &state, &start, &tell).unwrap();
+        assert_eq!(started.borrow()[0].1, "Write out \"Faster board\"");
+        let refuse = |_: &str, _: &Ask| -> Result<()> { Err("no claude".to_string()) };
+        hand_with(&state, "Write out \"Docs\"", WRITER, true, &state, &refuse, &tell).unwrap();
+        assert_eq!(told.borrow()[1], fallback_text("Write out \"Docs\"", "it could not start: no claude"), "the lead writes it when the writer cannot start");
+    }
+
+    #[test]
+    fn the_draft_is_the_written_item_from_its_title_on() {
+        assert_eq!(draft_of("I read the code.\n\n```markdown\n# Retry flaky runs\n\n## Goal\n\nRerun once.\n```\n").as_deref(), Some("# Retry flaky runs\n\n## Goal\n\nRerun once."));
+        assert_eq!(draft_of("No item here."), None);
+    }
+
+    #[test]
+    fn the_lead_reviews_the_draft_and_saves_it_as_the_request_says() {
+        let text = review_text("The user asks you to write out \"Retry\".", Path::new("/s/write-out/ab.md"), WRITER);
+        assert!(text.starts_with("kebbie's writer (writer) wrote out the backlog item of this request for you to review, in /s/write-out/ab.md.") && text.contains("keep each one only the user can answer") && text.ends_with("The request:\n\nThe user asks you to write out \"Retry\"."), "{text}");
+        assert!(brief("Write out \"Retry\"", "/k").contains("Save nothing and mark nothing"));
+    }
+
+    #[test]
+    fn the_built_in_writer_is_claude_at_medium_effort_and_another_profile_is_read_from_its_file() {
+        let dir = crate::sh::test_dir("writer-profile");
+        let built = profile(&dir, WRITER).unwrap();
+        assert_eq!((built.agent, built.effort.as_deref()), (crate::agent::Agent::Claude, Some("medium")));
+        assert!(profile(&dir, "gone").unwrap_err().starts_with("writer.profile: "));
+        assert!(is_writer("/home/u/.local/bin/kebbie -C /x backlog --write-run") && !is_writer("kebbie backlog write x"));
+    }
+}

@@ -404,12 +404,15 @@ pub struct Shelf<'a> {
     pub dir: &'a Path,
     pub state: &'a Path,
     pub tell: &'a dyn Fn(&str) -> Result<()>,
+    pub write: &'a dyn Fn(&str) -> Result<()>,
 }
 
 // Files one item where new items go: an item file without the vault, the lead's to file with it. A quick one-liner goes to the lead to write out.
 pub fn file_item(sources: &[Source], filing: &Filing, from_lead: bool) -> Result<String> {
     let (dir, state) = (dir(), crate::lead::state_dir()?);
-    file_item_on(&Shelf { dir: &dir, state: &state, tell: &|text| crate::messages::to_lead(crate::messages::ToLead::BacklogItem, text) }, sources, filing, from_lead)
+    let caller = crate::permit::caller();
+    let write = |text: &str| crate::backlog_writer::hand(&state, text, &caller, &tell_lead);
+    file_item_on(&Shelf { dir: &dir, state: &state, tell: &tell_lead, write: &write }, sources, filing, from_lead)
 }
 
 pub fn file_item_on(shelf: &Shelf, sources: &[Source], filing: &Filing, from_lead: bool) -> Result<String> {
@@ -423,7 +426,7 @@ pub fn file_item_on(shelf: &Shelf, sources: &[Source], filing: &Filing, from_lea
                     mark_told(shelf.state, shelf.dir, std::slice::from_ref(&item.stem));
                     shown = shown.next(format!("Write it out now with the skill {SKILL}, in that file."));
                 } else {
-                    if (shelf.tell)(&lead_text(filing, &item.priority, &format!("in its file {}", path.display()))).is_ok() {
+                    if (shelf.write)(&lead_text(filing, &item.priority, &format!("in its file {}", path.display()))).is_ok() {
                         mark_told(shelf.state, shelf.dir, std::slice::from_ref(&item.stem));
                     }
                     shown = shown.next("The lead writes it out; it waits for the lead when none runs.");
@@ -443,7 +446,7 @@ pub fn file_item_on(shelf: &Shelf, sources: &[Source], filing: &Filing, from_lea
             } else {
                 format!("{} filed a written-out backlog item; file it as a task note in the vault's backlog as it stands (title \"{}\", priority {}, repo {}). {filed}\n\n{}", filing.by, item.title, item.priority, if item.repo.is_empty() { "not given" } else { &item.repo }, item.body)
             };
-            if let Err(error) = (shelf.tell)(&text) {
+            if let Err(error) = (if item.to_write() { shelf.write } else { shelf.tell })(&text) {
                 let _ = crate::backlog_kept::release(shelf.state, &id);
                 return Err(error);
             }
@@ -520,7 +523,12 @@ pub fn write_out_cli(named: &str) -> Result<String> {
     let Some(entry) = entry_named(&backlog.entries, named) else {
         return Notice::new(Tone::You, format!("Not sent: no backlog item \"{named}\"")).you("kebbie backlog lists each item with its reference.").err();
     };
-    write_out(&crate::lead::state_dir()?, entry, &caller_name(), &dir(), crate::messages::now(), &|text| crate::messages::to_lead(crate::messages::ToLead::BacklogItem, text))
+    let (state, caller) = (crate::lead::state_dir()?, crate::permit::caller());
+    write_out(&state, entry, &caller_name(), &dir(), crate::messages::now(), &|text| crate::backlog_writer::hand(&state, text, &caller, &tell_lead))
+}
+
+pub fn tell_lead(text: &str) -> Result<()> {
+    crate::messages::to_lead(crate::messages::ToLead::BacklogItem, text)
 }
 
 fn caller_name() -> String {

@@ -1,6 +1,6 @@
 ---
 name: write-backlog-item
-description: How to write a kebbie backlog item a human scans in seconds, by the backlog style kebbie keeps in the vault. Use when you file anything in the backlog (an idea the user brings, something a task defers), when kebbie tells you a short item waits to be written out or `kebbie backlog` marks one `to write`, and when the user answers an item's open question.
+description: How to write a kebbie backlog item a human scans in seconds, by the backlog style kebbie keeps in the vault. Use when you file anything in the backlog (an idea the user brings, something a task defers), when kebbie tells you a short item waits to be written out, hands you a writer's draft to review, runs you as its writer, or `kebbie backlog` marks one `to write`, and when the user answers an item's open question.
 ---
 
 # Write a backlog item
@@ -31,6 +31,12 @@ Working detail (research, paths, commits, history, reasoning) goes in your own v
 
    Done when `kebbie backlog` lists it with the state its questions give it.
 5. **Show it.** As the lead, put the written item in your reply, its open questions last; say so in a line when it waited for you. A task lists it under Also noticed.
+
+## As kebbie's writer, and the lead's review
+
+When kebbie runs you as its writer, the lead was asked to write the item out and you do it in its place: search, research and write as above, but save nothing and mark nothing, and answer with the written item alone, `# <title>` first and its body after it. The lead never saw your research, so put what you found in the item or under its open questions.
+
+When kebbie hands the lead a writer's draft, the lead reviews it instead of researching again: it adds what it knows from its conversation with the user, takes out an open question the code or the notes settle, keeps each one only the user can answer, then saves and shows it as steps 4 and 5 say.
 
 ## Answers to open questions
 

@@ -35,6 +35,10 @@ pub fn lead_profile() -> Result<Option<String>> {
     Ok(load_machine(&path())?.lead_profile.filter(|name| name != super::NONE))
 }
 
+pub fn writer_profile() -> String {
+    load_machine(&path()).ok().and_then(|machine| machine.writer_profile).unwrap_or_else(|| crate::backlog_writer::WRITER.to_string())
+}
+
 pub fn keeper_enabled() -> Result<bool> {
     Ok(load_machine(&path())?.keeper.unwrap_or(DEFAULT_KEEPER))
 }

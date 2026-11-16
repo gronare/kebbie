@@ -32,6 +32,10 @@ Do this right after naming the machine when setting kebbie up, and whenever `keb
 
 When the user wants the lead to stop proposing kebbie issues, write `propose = false` under `[issues]` in config.toml; `propose = true`, or no key, has it propose one at most per turn and save it on the user's yes. Tell the user it takes effect when the lead next restarts, with `L` on the board. Done when `kebbie config` shows `issues.propose` as the user chose.
 
+## Change who writes backlog items out
+
+When the user wants another agent or model to write out backlog items, write `profile = "<profile>"` under `[writer]` in config.toml, or `"none"` to have the lead write them in its own chat. Done when `kebbie config` shows `writer.profile` as the user chose.
+
 ## Change a setting
 
 1. Run `kebbie config --repo <main checkout>` and find the key. Done when you know the key, its value in effect and the file it comes from.

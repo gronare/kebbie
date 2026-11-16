@@ -452,7 +452,7 @@ pub(crate) fn reviewer_args(reviewer: &super::Reviewer) -> Vec<String> {
 }
 
 const INVESTIGATOR_ALLOWED: [&str; 10] = ["Read", "Grep", "Glob", "WebSearch", "WebFetch", "mcp__plugin_vault_vault", "Bash(git log:*)", "Bash(git diff:*)", "Bash(git show:*)", "Bash(git grep:*)"];
-const INVESTIGATOR_KEBBIE: [&str; 9] = ["status", "messages", "obstacles", "subtasks", "steps", "backlog", "found", "peers", "docs"];
+const INVESTIGATOR_KEBBIE: [&str; 10] = ["status", "messages", "obstacles", "subtasks", "steps", "backlog", "found", "peers", "docs", "areas"];
 
 // The investigator runs with the user's own settings, plugins and MCP servers, as every agent here does: the code, the vault and the web, and kebbie's reading commands.
 pub(crate) fn investigator_args(reviewer: &super::Reviewer, kebbie: &str) -> Vec<String> {

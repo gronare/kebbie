@@ -23,9 +23,9 @@ pub(super) fn warn_once<T>(value: T, unknown: &[String]) -> T {
     value
 }
 
-pub(super) const MACHINE_KEYS: [&str; 21] = ["board", "worktree", "task", "review", "investigate", "notify", "vault", "update", "restart", "keeper", "recover", "machine", "hub", "keys", "ci", "tests", "comments", "routines", "report", "issues", "lead"];
+pub(super) const MACHINE_KEYS: [&str; 22] = ["board", "worktree", "task", "review", "investigate", "writer", "notify", "vault", "update", "restart", "keeper", "recover", "machine", "hub", "keys", "ci", "tests", "comments", "routines", "report", "issues", "lead"];
 pub(super) const REPO_KEYS: [&str; 10] = ["actions", "worktree", "task", "review", "investigate", "ci", "tests", "comments", "docs", "routines"];
-const SECTION_KEYS: [(&str, &[&str]); 21] = [
+const SECTION_KEYS: [(&str, &[&str]); 22] = [
     ("board", &["groups", "backlog"]),
     ("board.backlog", &["sources", "ongoing", "template"]),
     ("update", &["channel", "agents"]),
@@ -41,6 +41,7 @@ const SECTION_KEYS: [(&str, &[&str]); 21] = [
     ("task", &["rules_skill", "test_commands", "also_noticed", "permission_mode", "profile", "sandbox", "steps", "require_accept"]),
     ("review", &["model", "auto", "profile", "second"]),
     ("investigate", &["profile"]),
+    ("writer", &["profile"]),
     ("notify", &["command"]),
     ("vault", &["command"]),
     ("ci", &["watch", "deploy"]),
