@@ -24,8 +24,17 @@ fn waiting(subtask: &Subtask) -> bool {
     subtask.state == SubtaskState::Ready
 }
 
-pub(super) fn to_accept(item: &Item) -> usize {
-    item.subtasks.items.iter().filter(|subtask| waiting(subtask)).count()
+// Accepting a ready subtask means something when task.require_accept holds the push for it, or when the task is still building a later subtask, so the push can take this one ahead; otherwise the push takes what is committed and `a` only marks it read.
+pub(super) fn accept_matters(item: &Item, subtask: &Subtask) -> bool {
+    item.to_accept.is_some() || (!item.reported_ready() && item.subtasks.items.iter().skip_while(|other| other.id != subtask.id).skip(1).any(|later| matches!(later.state, SubtaskState::Planned | SubtaskState::InProgress)))
+}
+
+pub(super) fn accept_count(item: &Item) -> usize {
+    to_accept(item).count()
+}
+
+fn to_accept(item: &Item) -> impl Iterator<Item = &Subtask> {
+    item.subtasks.items.iter().filter(|subtask| waiting(subtask) && accept_matters(item, subtask))
 }
 
 // The commits of the pushable run at the top of the push order, which a push may take while the task keeps working.
@@ -34,13 +43,13 @@ pub(super) fn accepted_run(item: &Item) -> usize {
 }
 
 pub(super) fn to_accept_note(item: &Item) -> Option<String> {
-    let count = item.to_accept.as_ref().map_or_else(|| to_accept(item), |waits| waits.count);
-    (count > 0).then(|| format!("{count} to accept"))
+    let count = item.to_accept.as_ref().map_or_else(|| accept_count(item), |waits| waits.count);
+    (count > 0).then(|| format!("{} to accept", plural(count, "subtask")))
 }
 
 pub(super) fn accept_wanted(item: &Item) -> Option<String> {
-    let subtask = item.subtasks.items.iter().find(|subtask| waiting(subtask))?;
-    Some(format!("accept {} · {} review", subtask.number, keys::key(Act::Review)))
+    let subtask = to_accept(item).next()?;
+    Some(format!("accept “{}” · {} review", subtask.title, keys::key(Act::Review)))
 }
 
 pub(super) fn mark_color(state: &SubtaskState) -> Color {
@@ -260,20 +269,20 @@ pub(crate) mod tests {
         app.work_selected = 9;
         let (rows, buffer) = render(&mut app, 120, 30);
         let screen = rows.join("\n");
-        let at = find(&rows, "◐ Switch the payment provider to Stripe")[0].1;
+        let at = find(&rows, "◐ Switch the payment provider")[0].1;
         let block: Vec<String> = rows[at..at + 7].iter().map(|row| untied(row).to_string()).collect();
-        assert!(block[0].ends_with("billing · 1 to accept"), "the commits count gives way to what waits for you: {screen}");
+        assert!(block[0].ends_with("billing · 1 subtask to accept"), "the commits count gives way to what waits for you: {screen}");
         assert_eq!(block[1], "↑ 1 pushed", "{screen}");
         assert!(block[2].starts_with("● 2 Charge through a PaymentGateway ") && block[2].ends_with(" ready"), "{screen}");
         assert_eq!(block[3], "2222222 subject of 2222222bbbb", "its first commit under it, dimmed: {screen}");
         assert!(block[4].starts_with("◐ 3 Add Stripe as the gateway ") && block[4].ends_with(" in progress"), "{screen}");
         assert_eq!(block[5], "○ 4 Remove the old payment client", "a planned step has nothing on the right: {screen}");
-        assert_eq!(block[6], "accept 2 · r review", "{screen}");
+        assert_eq!(block[6], "accept “Charge through a PaymentGateway” · r review", "named by its title: {screen}");
         let column = |row: usize, mark: char| rows[row].chars().position(|character| character == mark).unwrap_or_default();
         assert!(column(at + 1, '↑') == column(at, '◐') + 3 && column(at + 2, '●') == column(at + 1, '↑'), "the steps sit indented under the row: {screen}");
         assert_eq!(column(at + 1, '│'), column(at, '◐'), "on the rule under the status glyph: {screen}");
         assert!(find(&rows, "WORKING")[0].1 < at && !screen.contains("NEEDS YOU"), "a step to accept leaves the task under Working: {screen}");
-        assert_eq!(cell_fg(&rows, &buffer, "1 to accept"), Some(YELLOW));
+        assert_eq!(cell_fg(&rows, &buffer, "1 subtask to accept"), Some(YELLOW));
         assert_eq!(cell_fg(&rows, &buffer, "↑ 1 pushed"), Some(MUTED));
         assert_eq!(cell_fg(&rows, &buffer, "● 2"), Some(YELLOW));
         assert_eq!(cell_fg(&rows, &buffer, "subject of 2222222bbbb"), Some(MUTED));
@@ -301,7 +310,7 @@ pub(crate) mod tests {
         assert_eq!(cell_fg(&rows, &buffer, "✓ 2"), Some(GREEN));
         let waiting = find(&rows, "● 3 Add Stripe as the gateway")[0].1;
         assert!(rows[waiting].trim_end().ends_with("ready"), "no rules approval and nothing checked under Working says only its state: {screen}");
-        assert!(screen.contains("accept 3 · r review") && screen.contains("1 to accept"), "{screen}");
+        assert!(screen.contains("accept “Add Stripe as the gateway” · r review") && screen.contains("1 subtask to accept"), "named by its title, while a later subtask is still being built: {screen}");
         let mut all = stripe();
         all.items.truncate(1);
         holds(&mut all.items[0], &["2222222bbbb"], true);
@@ -314,13 +323,23 @@ pub(crate) mod tests {
 
     #[test]
     fn a_ready_task_with_a_step_to_accept_waits_under_needs_you_only_while_accepting_is_required() {
-        let mut item = stepped(stripe());
+        let mut steps = stripe();
+        holds(&mut steps.items[1], &["3333333cccc"], false);
+        holds(&mut steps.items[2], &["4444444dddd"], false);
+        let mut item = stepped(steps);
         crate::status::tests::in_phase(&mut item, Phase::Ready { head: None });
         let mut app = test_app(vec![item.clone()]);
         app.work_selected = 9;
         let (rows, _) = render(&mut app, 120, 30);
         let screen = rows.join("\n");
-        assert!(screen.contains("READY TO PUSH") && !screen.contains("NEEDS YOU") && screen.contains("accept 2 · r review"), "accepting is optional without task.require_accept: {screen}");
+        let at = find(&rows, "Switch the payment provider to Stripe")[0].1;
+        assert!(screen.contains("READY TO PUSH") && !screen.contains("NEEDS YOU") && !screen.contains("accept") && rows[at].trim_end().ends_with("2 commits"), "every subtask ready and no task.require_accept: the push takes them all, so nothing asks to accept: {screen}");
+        let mut planned = stepped(stripe());
+        crate::status::tests::in_phase(&mut planned, Phase::Ready { head: None });
+        let mut app = test_app(vec![planned]);
+        app.work_selected = 9;
+        let (rows, _) = render(&mut app, 120, 30);
+        assert!(!rows.join("\n").contains("accept"), "a task reported ready is pushed whole, a subtask it never marked done with it: {}", rows.join("\n"));
         item.to_accept = Some(crate::status::tests::waiting_to_accept(2, 1));
         let mut app = test_app(vec![item]);
         app.work_selected = 9;
@@ -328,7 +347,7 @@ pub(crate) mod tests {
         let screen = rows.join("\n");
         let at = find(&rows, "Switch the payment provider to Stripe")[0].1;
         assert!(find(&rows, "NEEDS YOU")[0].1 < at && !screen.contains("READY TO PUSH"), "{screen}");
-        assert!(rows[at].trim_end().ends_with(" 1 to accept") && screen.contains("accept subtask 2 · r review"), "{screen}");
+        assert!(rows[at].trim_end().ends_with(" 1 subtask to accept") && screen.contains("accept “Step 2” · r review"), "{screen}");
     }
 
     #[test]

@@ -608,6 +608,11 @@ impl Item {
         self.report.as_ref()?.next_for_you().map(str::to_string)
     }
 
+    // A task that reported ready is pushed whole, so without task.require_accept nothing in it waits on accepting.
+    pub fn reported_ready(&self) -> bool {
+        matches!(self.phase(), Some(Phase::Ready { .. } | Phase::Staged { .. }))
+    }
+
     // With task.require_accept on, a ready task waits on you to accept its next step before it can be pushed.
     pub fn accept_waits(&self) -> Option<&tasks::Unaccepted> {
         self.to_accept.as_ref().filter(|_| matches!(self.phase(), Some(Phase::Ready { .. } | Phase::Staged { .. })))
@@ -699,7 +704,7 @@ impl Item {
             parts.push(plural(git.ahead, "commit"));
         }
         if let Some(waits) = self.accept_waits() {
-            parts.push(format!("{} to accept", waits.count));
+            parts.push(format!("{} to accept", plural(waits.count, "subtask")));
         }
         if git.uncommitted > 0 {
             parts.push(plural(git.uncommitted, "uncommitted file"));
@@ -1685,7 +1690,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn waiting_to_accept(step: usize, count: usize) -> tasks::Unaccepted {
-        tasks::Unaccepted { count, number: step, subtask: Some(format!("s{step}")), sha: "abc1234".to_string(), next: format!("accept subtask {step}") }
+        tasks::Unaccepted { count, number: step, subtask: Some(format!("s{step}")), sha: "abc1234".to_string(), next: format!("accept “Step {step}”") }
     }
 
     #[test]
@@ -1695,9 +1700,9 @@ pub(crate) mod tests {
         let before = (item.group(), item.next_for_you().map(str::to_string), item.wanted("enter"), item.summary());
         assert_eq!(before.0, Group::ReadyToPush, "without task.require_accept nothing waits on accepting");
         item.to_accept = Some(waiting_to_accept(2, 2));
-        assert_eq!((item.group(), item.next_for_you(), item.urgency()), (Group::NeedsYou, Some("accept subtask 2"), 1));
-        assert_eq!(item.wanted("enter"), Some(format!("accept subtask 2 · {} review", crate::keys::key(crate::keys::Act::Review))));
-        assert!(item.summary().contains("3 commits · 2 to accept"), "{}", item.summary());
+        assert_eq!((item.group(), item.next_for_you(), item.urgency()), (Group::NeedsYou, Some("accept “Step 2”"), 1));
+        assert_eq!(item.wanted("enter"), Some(format!("accept “Step 2” · {} review", crate::keys::key(crate::keys::Act::Review))));
+        assert!(item.summary().contains("3 commits · 2 subtasks to accept"), "{}", item.summary());
         in_phase(&mut item, Phase::Pushing { ahead: 0 });
         assert_eq!((item.group(), item.next_for_you()), (Group::ReadyToPush, None), "a push already in line keeps its place");
         in_phase(&mut item, Phase::Working);

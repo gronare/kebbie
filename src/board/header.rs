@@ -18,7 +18,7 @@ fn pills(app: &App, compact: bool) -> Vec<Span<'static>> {
     let (needs, working, review, ready) = (count(Group::NeedsYou) + app.devices.len(), count(Group::Working), count(Group::InReview), count(Group::ReadyToPush));
     let ci = count(Group::CiRunning);
     let questions = app.questions.len();
-    let accept: usize = app.tasks.iter().map(super::steps::to_accept).sum();
+    let accept: usize = app.tasks.iter().map(super::steps::accept_count).sum();
     let mut spans = vec![Span::styled("kebbie", bold(MAUVE)), Span::raw(if compact { "  " } else { "   " })];
     if compact {
         let offers = super::bug_report::indicator(&app.offers, true);

@@ -490,7 +490,7 @@ pub(crate) mod tests {
         let items = [ready("card-component", "web", 300), held];
         let next = of(&items);
         assert_eq!(next.rows.iter().map(|row| (row.name.as_str(), row.part)).collect::<Vec<_>>(), [("billing", Part::Stopped), ("card-component", Part::Push)]);
-        assert_eq!((next.rows[0].said.as_str(), next.rows[0].icon), ("accept subtask 2", '!'));
+        assert_eq!((next.rows[0].said.as_str(), next.rows[0].icon), ("accept “Step 2”", '!'));
         assert_eq!(next.pushes().len(), 1, "push in order leaves it out");
     }
 

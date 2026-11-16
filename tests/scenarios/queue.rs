@@ -92,10 +92,10 @@ fn with_require_accept_a_push_takes_only_accepted_subtasks_and_the_task_waits_on
     lab.ok(&["-C", slot, "report", "--state", "ready", "--next", "push", "refunds done"]);
     let item = lab.item("billing");
     assert_eq!(item["group"], "NEEDS YOU", "{item}");
-    assert!(item["summary"].as_str().unwrap().contains("2 to accept"), "{item}");
+    assert!(item["summary"].as_str().unwrap().contains("2 subtasks to accept"), "{item}");
     let next = lab.ok(&["next"]);
     let row = next.lines().find(|line| line.contains(" billing ")).unwrap_or_else(|| panic!("{next}"));
-    assert!(!row.contains('↑') && row.contains("accept subtask 1"), "it is stopped on you, not to push: {next}");
+    assert!(!row.contains('↑') && row.contains("accept “Add refunds”"), "it is stopped on you, not to push: {next}");
 
     let held = lab.run_as_user(&["-C", lab.app(), "push", "billing"]);
     assert!(!held.status.success() && stderr(&held).contains("Not pushed: subtask 1 is not accepted"), "{}\n{}", stdout(&held), stderr(&held));

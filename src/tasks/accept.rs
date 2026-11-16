@@ -182,10 +182,14 @@ pub fn unaccepted(commits: &[(String, bool)], take: usize, subtasks: &super::pla
     let owner = |at: usize, sha: &str| subtasks.holding(sha).map_or((listed + at + 1, None), |subtask| (subtask.number, Some(subtask.id.clone())));
     let (at, (sha, _)) = commits.iter().take(take).enumerate().find(|(_, (_, accepted))| !accepted)?;
     let (number, subtask) = owner(at, sha);
+    let title = subtasks.holding(sha).map(|held| held.title.clone());
     let mut waiting: Vec<usize> = commits.iter().enumerate().filter(|(_, (_, accepted))| !accepted).map(|(at, (sha, _))| owner(at, sha).0).collect();
     waiting.sort_unstable();
     waiting.dedup();
-    let next = if subtask.is_some() { format!("accept subtask {number}") } else { format!("accept commit {}", &sha[..7.min(sha.len())]) };
+    let next = match &title {
+        Some(title) => format!("accept “{title}”"),
+        None => format!("accept commit {}", &sha[..7.min(sha.len())]),
+    };
     Some(Unaccepted { count: waiting.len(), number, subtask, sha: sha.clone(), next })
 }
 
@@ -434,7 +438,7 @@ mod tests {
         assert_eq!(unaccepted(&commits(&[true, false]), 1, &none), None, "a push of the first commit takes only accepted ones");
         assert_eq!(unaccepted(&commits(&[true, true]), 2, &none), None);
         let listed = Subtasks { pushed: vec![held("model", 1, State::Pushed, &[])], items: vec![held("command", 2, State::Ready, &["c0", "c2"]), held("docs", 3, State::InProgress, &["c1"])], ..Subtasks::default() };
-        assert_eq!(unaccepted(&commits(&[false, false, false]), 3, &listed).map(|first| (first.number, first.subtask, first.count, first.next)), Some((2, Some("command".to_string()), 2, "accept subtask 2".to_string())), "a subtask's commits apart from each other wait as one subtask");
+        assert_eq!(unaccepted(&commits(&[false, false, false]), 3, &listed).map(|first| (first.number, first.subtask, first.count, first.next)), Some((2, Some("command".to_string()), 2, "accept “command”".to_string())), "a subtask's commits apart from each other wait as one subtask");
         assert_eq!(unaccepted(&commits(&[true, true, true, false]), 4, &listed).map(|first| first.number), Some(7), "an unlisted commit counts on from the listed subtasks");
     }
 

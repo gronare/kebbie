@@ -150,11 +150,13 @@ fn key(text: String) -> Span<'static> {
 }
 
 // The keys line under the board while a subtask row is highlighted.
-pub(super) fn inside_hint() -> Line<'static> {
-    Line::from(vec![
-        key("↑ ↓".to_string()), label(" subtask · "), key(keys::key(Act::Card).to_string()), label(" card · "), key(keys::key(Act::Review).to_string()), label(" review · "),
-        key(keys::key(Act::Permit).to_string()), label(" accept · "), key("← esc".to_string()), label(" back"),
-    ])
+pub(super) fn inside_hint(accept: bool) -> Line<'static> {
+    let mut spans = vec![key("↑ ↓".to_string()), label(" subtask · "), key(keys::key(Act::Card).to_string()), label(" card · "), key(keys::key(Act::Review).to_string()), label(" review · ")];
+    if accept {
+        spans.extend([key(keys::key(Act::Permit).to_string()), label(" accept · ")]);
+    }
+    spans.extend([key("← esc".to_string()), label(" back")]);
+    Line::from(spans)
 }
 
 pub(super) fn read_text((read, total): (usize, usize)) -> String {
@@ -264,7 +266,8 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     let lines = subtask_card(&steps[at], &view.loaded, body.width as usize);
     let scroll = view.scroll.min(lines.len().saturating_sub(body.height as usize) as u16);
     frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), body);
-    let keys = format!("↑ ↓ scroll · {} review · {} accept · {} close", keys::key(Act::Review), keys::key(Act::Permit), keys::map().label(Act::Back));
+    let accept = if super::steps::accept_matters(item, &steps[at]) { format!(" · {} accept", keys::key(Act::Permit)) } else { String::new() };
+    let keys = format!("↑ ↓ scroll · {} review{accept} · {} close", keys::key(Act::Review), keys::map().label(Act::Back));
     frame.render_widget(Paragraph::new(fit(vec![Span::styled(keys, style(MUTED))], foot.width as usize)), foot);
     if let Mode::SubtaskCard(view) = &mut app.mode {
         view.scroll = scroll;
@@ -283,7 +286,7 @@ impl App {
     // Inside a task the keys at the bottom are the subtask's.
     pub(super) fn subtask_keys(&self) -> Option<Line<'static>> {
         let item = self.selected_task()?;
-        self.subtask_at(&item).map(|_| inside_hint())
+        self.subtask_at(&item).map(|at| inside_hint(super::steps::accept_matters(&item, &walked(&item)[at])))
     }
 
     // The task under the cursor has subtask rows to step into, and the cursor is on the task itself.
@@ -462,7 +465,7 @@ mod tests {
         let mut app = test_app(vec![worked(stepped(only))]);
         let (_, shown) = screen(&mut app);
         assert!(!shown.contains("1 Charge through a PaymentGateway"), "{shown}");
-        assert!(shown.contains("Switch the payment provider to Stripe") && shown.contains("1 to accept"), "the row and what waits stay: {shown}");
+        assert!(shown.contains("Switch the payment provider to Stripe") && !shown.contains("to accept"), "the row stays, and a lone subtask has nothing for accepting to put ahead: {shown}");
         key(&mut app, KeyCode::Right);
         assert!(app.subtask_row.is_none() && !matches!(app.mode, Mode::Subtasks), "no row to step into");
         let mut two = stripe();
