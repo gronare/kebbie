@@ -45,11 +45,12 @@ pub struct Calls<'a> {
     pace: Pace,
     clock: &'a dyn Fn() -> u64,
     sleep: &'a dyn Fn(Duration),
+    stop: &'a dyn Fn() -> bool,
 }
 
 impl<'a> Calls<'a> {
-    pub fn new(clock: &'a dyn Fn() -> u64, sleep: &'a dyn Fn(Duration)) -> Calls<'a> {
-        Calls { pace: Pace::new(clock()), clock, sleep }
+    pub fn new(clock: &'a dyn Fn() -> u64, sleep: &'a dyn Fn(Duration), stop: &'a dyn Fn() -> bool) -> Calls<'a> {
+        Calls { pace: Pace::new(clock()), clock, sleep, stop }
     }
 
     pub fn call<T>(&mut self, once: &mut dyn FnMut() -> std::result::Result<T, HubError>) -> std::result::Result<T, HubError> {
@@ -58,6 +59,9 @@ impl<'a> Calls<'a> {
             let wait = self.pace.next((self.clock)());
             if wait > 0 {
                 (self.sleep)(Duration::from_millis(wait));
+            }
+            if (self.stop)() {
+                return Err(HubError::Transport("kebbie was stopped".to_string()));
             }
             match once() {
                 Err(error) if !error.is_final() && tried + 1 < TRIES => {
@@ -103,15 +107,15 @@ pub fn create(repo: &Path, refname: &str, commit: &str, base: Option<&str>, scra
 
 pub type Put<'a> = dyn Fn(&str, &[u8]) -> std::result::Result<(), HubError> + 'a;
 
-pub fn upload(bundle: &[u8], calls: &mut Calls, put: &Put) -> std::result::Result<Vec<BlobRef>, String> {
-    let mut parts = Vec::new();
+// Each part is in uploaded once the hub has it, so a job that fails half way up still deletes the parts that went.
+pub fn upload(bundle: &[u8], calls: &mut Calls, put: &Put, uploaded: &mut Vec<BlobRef>) -> std::result::Result<(), String> {
     for chunk in split(bundle)? {
         let (blob, ciphertext) = seal_blob(chunk, JOB_BUNDLE_MEDIA_TYPE);
         let path = format!("/v1/m/blobs/{}", blob.id);
         calls.call(&mut || put(&path, &ciphertext)).map_err(|error| hub_said(&error))?;
-        parts.push(blob);
+        uploaded.push(blob);
     }
-    Ok(parts)
+    Ok(())
 }
 
 fn hub_said(error: &HubError) -> String {

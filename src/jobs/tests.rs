@@ -98,14 +98,17 @@ fn blob_calls_keep_to_half_the_hubs_rate_limit_and_wait_out_a_busy_hub() {
         if puts.get() <= 2 { Err(crate::hub::http::HubError::Status { status: 429, code: "rate-limited".into() }) } else { Ok(()) }
     };
     let bundle = vec![7u8; 2 * bundle::PART + 1];
-    let parts = bundle::upload(&bundle, &mut bundle::Calls::new(&|| 0, &sleep), &busy_twice).unwrap();
+    let mut parts = Vec::new();
+    bundle::upload(&bundle, &mut bundle::Calls::new(&|| 0, &sleep, &|| false), &busy_twice, &mut parts).unwrap();
     assert_eq!((parts.len(), puts.get(), slept.borrow().clone()), (3, 5, vec![1, 2]), "a 429 is waited out and tried again");
     puts.set(0);
-    let refused = bundle::upload(&bundle, &mut bundle::Calls::new(&|| 0, &sleep), &|_, _| {
+    let mut parts = Vec::new();
+    let refused = bundle::upload(&bundle, &mut bundle::Calls::new(&|| 0, &sleep, &|| false), &|_, _| {
         puts.set(puts.get() + 1);
-        Err(crate::hub::http::HubError::Status { status: 413, code: "blob-quota".into() })
-    });
-    assert!(refused.unwrap_err().contains("quota is full") && puts.get() == 1, "a refusal that would repeat is not tried again");
+        if puts.get() == 1 { Ok(()) } else { Err(crate::hub::http::HubError::Status { status: 413, code: "blob-quota".into() }) }
+    }, &mut parts);
+    assert!(refused.unwrap_err().contains("quota is full") && puts.get() == 2, "a refusal that would repeat is not tried again");
+    assert_eq!(parts.len(), 1, "the part that went up before the refusal is known, so it is deleted");
 }
 
 #[test]
@@ -148,7 +151,7 @@ fn a_job_the_inbox_hands_over_again_is_queued_once_and_jobs_wait_in_the_order_th
 }
 
 fn sent(worker: Id) -> Sent {
-    Sent { id: cluster::new_id().unwrap(), worker, worker_name: "studio".into(), repo: "app".into(), name: "build".into(), commit: "a".repeat(40), base: None, blobs: Vec::new(), at: 100 }
+    Sent { id: cluster::new_id().unwrap(), worker, worker_name: "studio".into(), repo: "app".into(), name: "build".into(), commit: "a".repeat(40), base: None, blobs: Vec::new(), at: 100, pid: std::process::id() }
 }
 
 #[test]
@@ -168,7 +171,7 @@ fn only_the_jobs_own_worker_reports_on_it_and_each_report_counts_once() {
     assert!(master::report(&state, &machine(2), &report(1, "linking\n", Some(JobEnd::Exited { code: 65, artifacts: Vec::new() })), 113).unwrap().contains("ended"));
     assert!(master::report(&state, &machine(2), &JobReport { job: cluster::new_id().unwrap(), seq: 0, log: String::new(), end: None }, 114).unwrap().contains("no job this machine runs has that id"));
     let mut printed = String::new();
-    let followed = master::follow(&state, &job, &mut |text| printed.push_str(text), &mut || {}, &|| 120);
+    let followed = master::follow(&state, &job, &mut |text| printed.push_str(text), &mut || {}, &|| 120, &|| false);
     assert!(matches!(followed, Followed::Ended(JobEnd::Exited { code: 65, .. })) && printed == "compiling\nlinking\n");
     let _ = std::fs::remove_dir_all(state);
 }
@@ -187,7 +190,7 @@ fn a_worker_that_sends_nothing_for_ten_minutes_is_given_up_on_while_one_that_rep
         if pauses <= 4 {
             master::report(&state, &machine(2), &JobReport { job: job.id.clone(), seq: pauses, log: String::new(), end: None }, clock.get());
         }
-    }, &|| clock.get());
+    }, &|| clock.get(), &|| false);
     assert!(matches!(followed, Followed::Silent));
     assert_eq!((pauses, clock.get()), (7, 2_200), "twenty minutes of reports are waited for, then ten silent ones end it");
     let _ = std::fs::remove_dir_all(state);
@@ -351,7 +354,7 @@ fn a_master_runs_its_worktree_as_it_stands_on_a_worker_of_its_hub_account_end_to
         let ended = master::go(&master.hub(), &asked, &mut |text| printed.push_str(text), &mut || {
             worker_round(&worker, &data, &ran);
             inbox_round(&master.dir);
-        }, &crate::messages::now);
+        }, &crate::messages::now, &|| false);
         (ended, printed)
     };
     let (ended, printed) = run("cat tracked.txt new.txt; echo $KEBBIE_JOB $KEBBIE_JOB_TASK $KEBBIE_JOB_MASTER");
@@ -414,7 +417,7 @@ fn a_report_from_a_machine_that_is_not_the_jobs_worker_is_refused_end_to_end() {
         }
         worker_round(&worker, &data, &ran);
         inbox_round(&master.dir);
-    }, &crate::messages::now);
+    }, &crate::messages::now, &|| false);
     assert_eq!(ended, Ok("kebbie: build passed on studio".to_string()), "{printed}");
     assert!(printed.ends_with("real\n") && !printed.contains("forged"), "{printed}");
     assert!(forged.borrow().iter().any(|note| note.starts_with("jobs: refused a report on build from") && note.contains("the job went to studio")), "{:?}", forged.borrow());
@@ -462,6 +465,53 @@ fn a_machine_the_account_removed_sends_no_more_jobs_and_a_list_older_than_one_se
     assert!(cluster::sender(&worker.dir, &worker.client(), &worker.account, &from, false).unwrap_err().contains("is not on the account's signed list"), "and so is a cache rolled back to it");
 }
 
+fn job_files(state: &Path) -> Vec<String> {
+    std::fs::read_dir(state.join("jobs")).unwrap().flatten().map(|entry| entry.file_name().to_string_lossy().to_string()).filter(|name| name.starts_with("cmd_")).collect()
+}
+
+#[test]
+fn a_job_run_stopped_with_ctrl_c_leaves_nothing_behind_here_or_on_the_hub() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let (master, worker) = (Machine::connected(&hub, &mut browser, "devbox"), Machine::connected(&hub, &mut browser, "studio"));
+    worker.work();
+    let root = crate::sh::test_dir("jobs-interrupted");
+    let top = repo(&root);
+    std::fs::write(top.join("new.txt"), "untracked\n").unwrap();
+    let def = Def { run: "true".to_string(), on: None };
+    let asked = Asked { top: &top, repo: "app".to_string(), name: "build".to_string(), def: &def };
+    let blobs = RefCell::new(Vec::new());
+    let interrupted = std::cell::Cell::new(false);
+    let ended = master::go(&master.hub(), &asked, &mut |_| {}, &mut || {
+        let sent: Sent = std::fs::read_dir(master.state.join("jobs")).unwrap().flatten().find(|entry| entry.file_name().to_string_lossy().ends_with(".sent.json")).map(|entry| serde_json::from_str(&std::fs::read_to_string(entry.path()).unwrap()).unwrap()).unwrap();
+        blobs.borrow_mut().extend(sent.blobs);
+        assert!(master::waiting(&master.state), "the keeper polls while kebbie job run follows the job");
+        interrupted.set(true);
+    }, &crate::messages::now, &|| interrupted.get());
+    assert!(ended.unwrap_err().starts_with("kebbie: stopped following build; its commit is gone from the hub"));
+    assert!(!blobs.borrow().is_empty() && blobs.borrow().iter().all(|blob| master.client().get_bytes(&format!("/v1/m/blobs/{blob}")).is_err()), "the job's blobs are deleted");
+    assert!(git(&top, &["for-each-ref", REF]).is_empty() && job_files(&master.state).is_empty() && !master::waiting(&master.state), "and its ref and files, so the keeper stops polling");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_job_whose_kebbie_job_run_was_killed_outright_is_swept_by_the_next_one() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let master = Machine::connected(&hub, &mut browser, "devbox");
+    let mut parts = Vec::new();
+    bundle::upload(b"a bundle", &mut bundle::Calls::new(&|| 0, &|_| {}, &|| false), &|path, body| master.client().put_bytes(path, body), &mut parts).unwrap();
+    let mut gone = std::process::Command::new("true").spawn().unwrap();
+    gone.wait().unwrap();
+    let left = Sent { blobs: parts.iter().map(|part| part.id.clone()).collect(), pid: gone.id(), ..sent(machine(2)) };
+    std::fs::create_dir_all(master.state.join("jobs")).unwrap();
+    std::fs::write(master::part(&master.state, &left.id, "sent.json"), serde_json::to_string(&left).unwrap()).unwrap();
+    std::fs::write(master::part(&master.state, &left.id, "log"), "half\n").unwrap();
+    assert!(!master::waiting(&master.state), "the keeper does not poll for a job run that is gone");
+    master::sweep(&master.state, &master.client());
+    assert!(job_files(&master.state).is_empty() && master.client().get_bytes(&format!("/v1/m/blobs/{}", left.blobs[0])).is_err());
+}
+
 #[test]
 fn a_hub_whose_plan_has_no_jobs_says_they_are_part_of_hub_pro() {
     let hub = open_gated_hub(|_| {}, Some(Box::new(|_: &kebbie_hub::store::Store, _: &str, gated: Gated| match gated { Gated::Command(Kind::Job) => Err(Refusal { url: Some("https://hub.example.com/billing".to_string()), pro: true }), _ => Ok(()) })));
@@ -472,7 +522,7 @@ fn a_hub_whose_plan_has_no_jobs_says_they_are_part_of_hub_pro() {
     let top = repo(&root);
     let def = Def { run: "true".to_string(), on: None };
     let asked = Asked { top: &top, repo: "app".to_string(), name: "build".to_string(), def: &def };
-    let ended = master::go(&master.hub(), &asked, &mut |_| {}, &mut || panic!("nothing to wait for"), &crate::messages::now);
+    let ended = master::go(&master.hub(), &asked, &mut |_| {}, &mut || panic!("nothing to wait for"), &crate::messages::now, &|| false);
     assert_eq!(ended, Err("Running a job on another machine is part of Hub Pro: https://hub.example.com/billing".to_string()));
     assert!(git(&top, &["for-each-ref", REF]).is_empty(), "the snapshot's ref goes with the refusal too");
     let _ = std::fs::remove_dir_all(root);
