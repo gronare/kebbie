@@ -140,9 +140,9 @@ fn step_line(item: &Item, step: &Subtask, width: usize, on: bool, read: Option<(
     ]].concat())
 }
 
-// Under a subtask with commits, dimmed: its first commit's short sha and subject, and how many more it holds.
+// Under a subtask with commits, dimmed: its first commit's short sha and subject, and how many more it holds; none when the subject says what the title says.
 fn commit_line(step: &Subtask, width: usize) -> Option<Line<'static>> {
-    let first = step.commits.first()?;
+    let first = step.commits.first().filter(|first| !crate::card::similar(&first.subject, &step.title))?;
     let lead = INDENT.len() + 2 + step.number.to_string().len() + 1;
     let more = if step.commits.len() > 1 { format!("  +{}", step.commits.len() - 1) } else { String::new() };
     let sha = short(&first.sha).to_string();
@@ -173,7 +173,7 @@ fn stage_lines(stages: &[kebbie_hub_protocol::Stage], width: usize) -> Vec<Line<
 
 // The line the subtask under the cursor sits on, counted from the first of step_lines.
 pub(super) fn cursor_line(item: &Item, at: usize) -> usize {
-    usize::from(!item.subtasks.pushed.is_empty()) + item.subtasks.items.iter().take(at).map(|step| 1 + usize::from(!step.commits.is_empty())).sum::<usize>()
+    usize::from(!item.subtasks.pushed.is_empty()) + item.subtasks.items.iter().take(at).map(|step| 1 + usize::from(commit_line(step, 80).is_some())).sum::<usize>()
 }
 
 pub(super) fn step_lines(item: &Item, highlighted: bool, width: usize, cursor: Option<usize>, reads: &[Option<(usize, usize)>]) -> Vec<Line<'static>> {
@@ -348,6 +348,20 @@ pub(crate) mod tests {
         let at = find(&rows, "Switch the payment provider to Stripe")[0].1;
         assert!(find(&rows, "NEEDS YOU")[0].1 < at && !screen.contains("READY TO PUSH"), "{screen}");
         assert!(rows[at].trim_end().ends_with(" 1 subtask to accept") && screen.contains("accept “Step 2” · r review"), "{screen}");
+    }
+
+    #[test]
+    fn a_commit_subject_that_says_what_its_subtask_title_says_shows_once() {
+        let mut steps = stripe();
+        steps.items[0].commits[0].subject = "Charge every order through the PaymentGateway".to_string();
+        holds(&mut steps.items[1], &["3333333cccc"], false);
+        let mut app = test_app(vec![stepped(steps)]);
+        app.work_selected = 9;
+        let (rows, _) = render(&mut app, 120, 30);
+        let screen = rows.join("\n");
+        assert!(!screen.contains("2222222") && screen.contains("3333333 subject of 3333333cccc"), "the same words twice show once, other words stay: {screen}");
+        let item = app.tasks[0].clone();
+        assert_eq!(cursor_line(&item, 2), 1 + 1 + 2, "the cursor counts the line that is not there");
     }
 
     #[test]

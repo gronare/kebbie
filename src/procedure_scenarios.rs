@@ -201,4 +201,5 @@ fn the_push_summary_and_the_decision_lines_are_written_for_a_reader_without_cont
     assert_eq!((parsed.built.len(), parsed.decisions.len()), (1, 1));
     let decision = file("skills/write-decision-line/SKILL.md");
     says(&decision, &["would weigh", "mechanics", "the decision it settled", "never the question and his answer pasted in"], "a card listed internal mechanics and pasted the user's answer with the whole English question");
+    says(&crate::peers::steps_section(true, "/bin/kebbie"), &["vault's language", "never by a file, a path or a word from the code", "do not repeat the title"], "subtask titles read \"Roles/lead.md task titles\"");
 }

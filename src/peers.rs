@@ -340,6 +340,7 @@ pub fn steps_section(on: bool, kebbie: &str) -> String {
     }
     format!(
         "## Subtasks\n\nBefore your first line of code, list your subtasks with `{kebbie} subtasks \"<subtask>\" \"<subtask>\" …`: this task's work as titled subtasks in the order they must go out, preparatory ones first and a migration as a subtask of its own; put `--` before the titles when one starts with `-`. \
+         The user scans these titles on the board: name each subtask in the vault's language, as you write your card, by the change the user gets, as he would say it (\"Diskvarningen syns på boardet\"), never by a file, a path or a word from the code (\"Roles/lead.md task titles\" tells him nothing); its commit subjects say how the code changes, so they do not repeat the title. \
          A subtask is a slice of the work, one sub-problem or one part of it, holding one or more small commits, each deployable on its own: make the change easy, then make the easy change. `{kebbie} subtasks` shows each with its id in brackets, its state and its commits. \
          Your commits go to the first subtask not done, or to the one you named with `{kebbie} subtasks on <id>`. When a subtask's slice is finished, run `{kebbie} subtasks done <id>`: it is ready for the user. \
          A subtask's commits need not lie together in the branch: a commit keeps its subtask through a rebase, a reword or a reorder. \
