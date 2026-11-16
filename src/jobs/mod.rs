@@ -21,6 +21,7 @@ pub const REF: &str = "refs/kebbie/jobs";
 pub const TIMEOUT_MINUTES: u64 = 60;
 const MAX_TIMEOUT_MINUTES: u64 = 1440;
 const TIMEOUT_LINE: &str = "# kebbie: timeout_minutes = ";
+const FETCH_LINE: &str = "# kebbie: fetch = ";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Def {
@@ -29,18 +30,58 @@ pub struct Def {
     pub timeout_minutes: Option<u64>,
 }
 
-// The protocol's job has no field for a timeout, so it rides as a first comment line of the command, which a worker that does not know it runs as a comment.
-fn command_for(def: &Def) -> String {
-    def.timeout_minutes.map_or_else(|| def.run.clone(), |minutes| format!("{TIMEOUT_LINE}{minutes}\n{}", def.run))
+// The protocol's job has no field for a timeout or a remote, so each rides as a comment line ahead of the command, which a worker that does not know it runs as a comment.
+fn command_for(def: &Def, fetch: Option<&str>) -> String {
+    let timeout = def.timeout_minutes.map(|minutes| format!("{TIMEOUT_LINE}{minutes}\n")).unwrap_or_default();
+    let fetch = fetch.map(|url| format!("{FETCH_LINE}{url}\n")).unwrap_or_default();
+    format!("{timeout}{fetch}{}", def.run)
 }
 
-fn timeout_of(command: &str) -> (Option<u64>, &str) {
-    let Some(rest) = command.strip_prefix(TIMEOUT_LINE) else { return (None, command) };
-    let (value, run) = rest.split_once('\n').unwrap_or((rest, ""));
-    match value.trim().parse::<u64>() {
-        Ok(minutes) => (Some(minutes.clamp(1, MAX_TIMEOUT_MINUTES)), run),
-        Err(_) => (None, command),
+#[derive(Debug, PartialEq)]
+pub struct Command<'a> {
+    pub timeout: Option<u64>,
+    pub fetch: Option<String>,
+    pub run: &'a str,
+}
+
+fn command_of(command: &str) -> Command<'_> {
+    let mut read = Command { timeout: None, fetch: None, run: command };
+    loop {
+        let (line, rest) = read.run.split_once('\n').unwrap_or((read.run, ""));
+        if let Some(minutes) = line.strip_prefix(TIMEOUT_LINE).and_then(|value| value.trim().parse::<u64>().ok()) {
+            read.timeout = Some(minutes.clamp(1, MAX_TIMEOUT_MINUTES));
+        } else if let Some(url) = line.strip_prefix(FETCH_LINE).and_then(fetchable) {
+            read.fetch = Some(url);
+        } else {
+            return read;
+        }
+        read.run = rest;
     }
+}
+
+// A remote URL a worker can fetch from on its own: a network URL with no password or token in it, never a local path, an option or anything that would break its comment line.
+pub fn fetchable(url: &str) -> Option<String> {
+    let url = url.trim();
+    if url.is_empty() || url.starts_with('-') || url.chars().any(|character| character.is_whitespace() || character.is_control()) {
+        return None;
+    }
+    let Some((scheme, rest)) = url.split_once("://") else {
+        let (host, _) = url.split_once(':')?;
+        return (!host.is_empty() && !host.contains('/')).then(|| url.to_string());
+    };
+    let scheme = scheme.to_ascii_lowercase();
+    let web = matches!(scheme.as_str(), "https" | "http");
+    if !web && !matches!(scheme.as_str(), "ssh" | "git" | "git+ssh" | "ssh+git") {
+        return None;
+    }
+    let (authority, path) = rest.split_once('/').map_or((rest, ""), |(authority, path)| (authority, path));
+    let host = match authority.rsplit_once('@') {
+        Some((_, host)) if web => host.to_string(),
+        Some((user, host)) => format!("{}@{host}", user.split(':').next().unwrap_or_default()),
+        None => authority.to_string(),
+    };
+    let bare = host.rsplit('@').next().unwrap_or_default();
+    (!bare.is_empty()).then(|| format!("{scheme}://{host}/{path}"))
 }
 
 pub fn parse(table: &toml::Table) -> Result<BTreeMap<String, Def>> {

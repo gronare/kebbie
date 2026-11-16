@@ -54,7 +54,7 @@ The job runs on the worktree as it stands, uncommitted and untracked files inclu
 
 Ctrl-C stops `kebbie job run` and removes the job's commit from the hub and its files from this machine; a second Ctrl-C quits at once. A worker cannot be told to stop a job, so one that took the job already runs it to its end. A worker that has not fetched the commit yet finds it gone and runs nothing, unless the job needed no commit sent.
 
-The first job a worker runs for a repo carries the commit's whole history; later ones carry only what came after the last commit it took, and nothing when it has the commit already. On the worker, each task has its own folder under `~/.local/share/kebbie/worker/<repo>/`, checked out fresh for each job with its ignored files, such as build caches, kept. Once the job's command ends, whatever it left running in the background is stopped.
+When the repo's `origin` is an https or ssh URL that holds part of the branch, the worker fetches the history up to the newest commit `origin` has from there itself, with its own git credentials, and only the commits and changes after it go through the hub. The worker fetches each repo once into `~/.local/share/kebbie/worker/<repo>/`; later jobs carry only what came after the last commit it took, and nothing when it has the commit already. Without such an `origin`, or when the worker cannot fetch from it, the first job carries the commit's whole history through the hub. On the worker, each task has its own folder under `~/.local/share/kebbie/worker/<repo>/`, checked out fresh for each job with its ignored files, such as build caches, kept. Once the job's command ends, whatever it left running in the background is stopped.
 
 ## What can go wrong
 
@@ -64,7 +64,8 @@ The first job a worker runs for a repo carries the commit's whole history; later
 - `Running a job on another machine is part of Hub Pro`: your plan on the hub has no jobs.
 - `sent nothing on build for 10 minutes`: the worker went away, as when it went to sleep. From the moment it takes a job, a worker reports at least once a minute: while the job waits behind another, while its commit comes down and while it runs, however quiet it is. A job that waits behind another says so in its output.
 - `[kebbie: 2 reports from studio were lost here, and the output they held with them]` in the output: the worker could not deliver those reports to the hub, and the job went on.
-- `this repo is too big to run as a job for now`: a job carries at most 32 MiB of git history. After the first job only what is new goes, but the first one has to fit.
+- `[kebbie: the fetch from https://github.com/you/app.git failed: ...]` and `studio did not fetch the history from ...`: git on the worker could not reach `origin` without a prompt. The job goes on with the whole history through the hub. Give the worker access with an ssh key or a credential helper, as `git clone` there would need.
+- `app's history is 45.0 MiB as a git bundle, and the hub carries at most 31.9 MiB per job`: push the branch to an `origin` the worker can fetch from, so only what is not pushed goes through the hub. The line says which of the cases above held.
 - `build ran past its timeout of 60 minutes, so the worker stopped it`: the job hung or needs a longer `timeout_minutes`. The worker sends its process group SIGTERM, then SIGKILL 10 s later if it is still there, and the line says so. To stop a hung job sooner, stop the keeper on the worker, `kebbie keeper --stop`: the job is stopped the same way and the master hears why.
 
 See [`kebbie job run`](../reference/commands.md#jobs-on-another-machine) and [`[jobs]`](../reference/configuration.md#jobs).

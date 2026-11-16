@@ -186,11 +186,11 @@ fn failed(text: &str) -> JobEnd {
 }
 
 // The job's commit in a folder of the task's own, reused and cleaned per job; None when the store lacks the base the bundle builds on.
-fn checkout(data: &Path, queued: &Queued, bundle: &[u8]) -> std::result::Result<Option<PathBuf>, String> {
+fn checkout(data: &Path, queued: &Queued, bundle: &[u8], remote: Option<&str>, say: &mut dyn FnMut(String)) -> std::result::Result<Option<PathBuf>, String> {
     let job = &queued.job;
     let repo = data.join(safe(&job.repo));
     let keep = format!("refs/kebbie/from/{}", queued.from);
-    if bundle::store(&repo.join(".store"), bundle, &job.commit, job.base.as_deref(), &keep).map_err(|error| format!("the worker could not take the commit: {error}"))? == bundle::Stored::NeedsFull {
+    if bundle::store(&repo.join(".store"), bundle, &job.commit, job.base.as_deref(), &keep, remote, say).map_err(|error| format!("the worker could not take the commit: {error}"))? == bundle::Stored::NeedsFull {
         return Ok(None);
     }
     let store = repo.join(".store");
@@ -313,14 +313,15 @@ pub fn execute(queued: &Queued, data: &Path, fetch: &dyn Fn(&[BlobRef]) -> Resul
             Err(error) => return end(send, failed(&format!("the worker could not fetch the bundle: {error}"))),
         }
     };
-    let work = match checkout(data, queued, &bundle) {
+    let command = super::command_of(&job.command);
+    let checked = checkout(data, queued, &bundle, command.fetch.as_deref(), &mut |text| send(text, None));
+    let work = match checked {
         Ok(Some(work)) => work,
         Ok(None) => return end(send, JobEnd::NeedsFull {}),
         Err(error) => return end(send, failed(&error)),
     };
-    let (minutes, command) = super::timeout_of(&job.command);
-    let limits = Limits { timeout: minutes.map_or(limits.timeout, |minutes| Duration::from_secs(minutes * 60)), ..limits };
-    let mut child = match start(queued, &work, command) {
+    let limits = Limits { timeout: command.timeout.map_or(limits.timeout, |minutes| Duration::from_secs(minutes * 60)), ..limits };
+    let mut child = match start(queued, &work, command.run) {
         Ok(child) => child,
         Err(error) => return end(send, failed(&format!("the job's command did not start: {error}"))),
     };

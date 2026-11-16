@@ -3,11 +3,13 @@ use std::time::Duration;
 
 use kebbie_hub_protocol::{BLOB_OVERHEAD, BlobRef, JOB_BUNDLE_MEDIA_TYPE, MAX_BLOB_BYTES, MAX_JOB_BUNDLE_PARTS, open_blob, seal_blob};
 
+use super::fetchable;
 use crate::hub::http::{Client, HubError};
 use crate::sh::Result;
 
 pub const PART: usize = MAX_BLOB_BYTES - BLOB_OVERHEAD;
 const INCOMING: &str = "refs/kebbie/incoming";
+const FROM_REMOTE: &str = "refs/kebbie/origin";
 const BURST: f64 = 30.0;
 const PER_SECOND: f64 = 1.0;
 const TRIES: u32 = 6;
@@ -74,12 +76,18 @@ impl<'a> Calls<'a> {
     }
 }
 
+pub const MAX_BYTES: usize = MAX_JOB_BUNDLE_PARTS * PART;
+
+pub fn mib(bytes: usize) -> String {
+    let tenths = bytes * 10 / (1024 * 1024);
+    format!("{}.{} MiB", tenths / 10, tenths % 10)
+}
+
 pub fn split(bundle: &[u8]) -> Result<Vec<&[u8]>> {
-    let parts: Vec<&[u8]> = bundle.chunks(PART).collect();
-    if parts.len() > MAX_JOB_BUNDLE_PARTS {
-        return Err(format!("the commit's history is {} MiB as a git bundle, and a job carries at most {} MiB: this repo is too big to run as a job for now", bundle.len() / (1024 * 1024), MAX_JOB_BUNDLE_PARTS * PART / (1024 * 1024)));
+    if bundle.len() > MAX_BYTES {
+        return Err(format!("the job's commit is {} as a git bundle, and a job carries at most {}", mib(bundle.len()), mib(MAX_BYTES)));
     }
-    Ok(parts)
+    Ok(bundle.chunks(PART).collect())
 }
 
 pub fn join(parts: Vec<Vec<u8>>) -> Vec<u8> {
@@ -145,14 +153,53 @@ pub enum Stored {
     NeedsFull,
 }
 
-// The bundle's commits in the repo's bare store, kept under keep so the next incremental bundle finds its base; a base the store lacks asks the master for the whole history.
-pub fn store(store: &Path, bundle: &[u8], commit: &str, base: Option<&str>, keep: &str) -> Result<Stored> {
+// Where a worker fetches the bulk of a job's history itself: origin's URL and the newest commit of the job that origin has, as its remote-tracking branches last saw it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Remote {
+    pub url: String,
+    pub base: String,
+}
+
+pub fn remote_base(repo: &Path, commit: &str) -> Option<Remote> {
+    let url = fetchable(&crate::repo::git(repo, &["remote", "get-url", "origin"]).ok()?)?;
+    let walked = crate::repo::git(repo, &["rev-list", "--boundary", commit, "--not", "--remotes=origin"]).ok()?;
+    if walked.is_empty() {
+        return Some(Remote { url, base: commit.to_string() });
+    }
+    let edges: Vec<&str> = walked.lines().filter_map(|line| line.strip_prefix('-')).collect();
+    if edges.is_empty() {
+        return None;
+    }
+    let mut args = vec!["log", "--no-walk", "--format=%H"];
+    args.extend(&edges);
+    let newest = crate::repo::git(repo, &args).ok()?.lines().next()?.to_string();
+    Some(Remote { url, base: newest })
+}
+
+// Fetches every branch of the remote into the store, with the worker's own credentials and never a prompt.
+fn fetch_remote(store: &Path, url: &str) -> Result<()> {
+    let output = crate::sh::git_command().current_dir(store).args(["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", url, &format!("+refs/heads/*:{FROM_REMOTE}/*")])
+        .env("GIT_TERMINAL_PROMPT", "0").stdin(std::process::Stdio::null()).output().map_err(|error| format!("git fetch: {error}"))?;
+    if output.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&output.stderr).trim().to_string()) }
+}
+
+// The bundle's commits in the repo's bare store, kept under keep so the next incremental bundle finds its base; a base the store lacks is fetched from the job's remote when it names one, and else asks the master for the whole history.
+pub fn store(store: &Path, bundle: &[u8], commit: &str, base: Option<&str>, keep: &str, remote: Option<&str>, say: &mut dyn FnMut(String)) -> Result<Stored> {
     if !store.join("HEAD").is_file() {
         std::fs::create_dir_all(store).map_err(|error| format!("{}: {error}", store.display()))?;
         crate::repo::git(store, &["init", "--quiet", "--bare"])?;
     }
-    if base.is_some_and(|base| !has(store, base)) {
-        return Ok(Stored::NeedsFull);
+    if let Some(base) = base.filter(|base| !has(store, base)) {
+        let Some(url) = remote else { return Ok(Stored::NeedsFull) };
+        say(format!("[kebbie: fetching the history up to {} from {url}; only what is new comes on later jobs]\n", &base[..12.min(base.len())]));
+        if let Err(error) = fetch_remote(store, url) {
+            say(format!("[kebbie: the fetch from {url} failed: {error}]\n"));
+            return Ok(Stored::NeedsFull);
+        }
+        if !has(store, base) {
+            say(format!("[kebbie: {url} does not hold {base}]\n"));
+            return Ok(Stored::NeedsFull);
+        }
     }
     if !bundle.is_empty() {
         let file = store.join(format!("kebbie-job-{}.bundle", std::process::id()));
