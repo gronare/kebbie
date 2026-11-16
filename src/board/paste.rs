@@ -40,6 +40,10 @@ impl App {
                 buffer.push_str(&text);
                 None
             }
+            Mode::NewTask(new) if new.choice.is_none() => {
+                new.text.push_str(&text);
+                None
+            }
             Mode::ItemCard(card) if card.typing.is_some() => {
                 card.typing.get_or_insert_default().push_str(&text);
                 None
@@ -125,9 +129,14 @@ mod tests {
         assert!(matches!(&app.mode, Mode::Filter { buffer } if buffer == "one"));
         assert!(app.filter.as_ref().is_some_and(|(column, text)| *column == Column::Work && text == "one"), "the pasted filter filters at once");
 
-        app.mode = Mode::Input { purpose: Purpose::TaskPrompt("billing".to_string()), label: String::new(), buffer: "see ".to_string() };
+        app.mode = Mode::Input { purpose: Purpose::Message("w1:p1".to_string(), "billing".to_string()), label: String::new(), buffer: "see ".to_string() };
         assert_eq!(app.take_paste(DROPPED.to_string()), None);
         assert!(matches!(&app.mode, Mode::Input { buffer, .. } if *buffer == format!("see {DROPPED}")));
+
+        app.mode = Mode::Normal;
+        app.open_new_task();
+        assert_eq!(app.take_paste("fix the\nwarning".to_string()), None);
+        assert!(matches!(&app.mode, Mode::NewTask(new) if new.text == "fix the\nwarning"), "the new-task box takes a paste, lines and all");
     }
 
     #[test]

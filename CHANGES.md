@@ -13,6 +13,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The board's ↑ ↓ move task to task, and → steps onto the task's own subtask rows, where r opens the review on one and a accepts it; s there opens that subtask's card with its commits and files read or not.
 - A subtask row shows how many of its files you read and, under it, its first commit's subject.
 - The card beside the tasks and the card window are one card, with the read count on its first line.
+- n on the board asks only what you want done and in which repo, then starts it as a task named from your first words or adds it to the backlog.
 
 ### Fixed
 - After kebbie update the open board and the keeper move to the new kebbie by themselves, also when herdr installed it in a new folder.

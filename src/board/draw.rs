@@ -139,6 +139,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     match &app.mode {
         Mode::Normal | Mode::ItemCard(_) | Mode::Subtasks => {}
         Mode::SubtaskCard(_) => super::subtasks::draw(frame, app),
+        Mode::NewTask(new) => super::new_task::draw(frame, new),
         Mode::Options(index) => modal_hits = draw_options(frame, app, *index),
         Mode::ReviewMenu(menu) => modal_hits = super::send_review::draw_review_menu(frame, menu),
         Mode::Questions(_) => modal_hits = draw_questions(frame, app),

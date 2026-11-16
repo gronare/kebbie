@@ -17,8 +17,6 @@ use super::terminal::outside;
 use super::widgets::{MAUVE, MUTED, TEXT, modal, style};
 
 pub(super) enum Purpose {
-    TaskName,
-    TaskPrompt(String),
     Message(String, String),
     BacklogName(Entry),
     ClaimedName(Entry),
@@ -54,7 +52,7 @@ impl App {
             return self.show(Err(error));
         }
         match purpose {
-            Purpose::TaskName | Purpose::BacklogName(_) | Purpose::ClaimedName(_) | Purpose::BacklogLaterName(_) | Purpose::BacklogLaterAt(..) | Purpose::StartAt(_) | Purpose::BacklogItem if text.is_empty() => {}
+            Purpose::BacklogName(_) | Purpose::ClaimedName(_) | Purpose::BacklogLaterName(_) | Purpose::BacklogLaterAt(..) | Purpose::StartAt(_) | Purpose::BacklogItem if text.is_empty() => {}
             Purpose::StartAt(name) => self.in_background(format!("Setting when {name} starts…"), move || tasks::start_at(&name, &text)),
             Purpose::BacklogLaterName(entry) => {
                 self.mode = Mode::Input { purpose: Purpose::BacklogLaterAt(entry, text), label: START_AT_LABEL.to_string(), buffer: String::new() };
@@ -84,16 +82,6 @@ impl App {
             Purpose::BacklogName(entry) | Purpose::ClaimedName(entry) | Purpose::BacklogLaterAt(entry, _) if entry.area.is_empty() => {
                 self.subject = Some(super::notices::Subject::plain("start"));
                 self.show(Notice::new(Tone::You, "Not started: kebbie cannot tell which repo it is in").you("Name the repo the work happens in: its folder name as repo in the item's header, or as the area of its note.").detail("item", &entry.title).ok());
-            }
-            Purpose::TaskName => {
-                let label = "What should Claude do? (optional)".to_string();
-                self.mode = Mode::Input { purpose: Purpose::TaskPrompt(text), label, buffer: String::new() };
-            }
-            Purpose::TaskPrompt(name) => {
-                let repo = self.any_repo();
-                let prompt = (!text.is_empty()).then_some(text);
-                self.subject = Some(super::notices::Subject { kind: "start".to_string(), title: name.clone(), task: false });
-                self.show(start_in_background(&repo, &name, prompt.as_deref(), &StartWith::default()));
             }
             Purpose::BacklogName(_) | Purpose::ClaimedName(_) | Purpose::BacklogLaterAt(..) => {
                 let (entry, name, at, anyway) = match purpose {
