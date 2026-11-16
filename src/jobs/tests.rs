@@ -112,7 +112,7 @@ fn blob_calls_keep_to_half_the_hubs_rate_limit_and_wait_out_a_busy_hub() {
 }
 
 #[test]
-fn output_goes_to_the_master_every_two_seconds_or_once_twelve_kib_wait_and_a_silent_job_still_says_it_runs() {
+fn output_goes_to_the_master_every_two_seconds_or_once_twelve_kib_wait() {
     let mut batch = Batch::new(0);
     assert!(!batch.due(10_000), "nothing to send yet");
     batch.add("compiling\n");
@@ -123,7 +123,7 @@ fn output_goes_to_the_master_every_two_seconds_or_once_twelve_kib_wait_and_a_sil
     let first = batch.take(3_000);
     assert!(first.len() <= kebbie_hub_protocol::MAX_JOB_LOG_BYTES && first.len() > kebbie_hub_protocol::MAX_JOB_LOG_BYTES - 2 && first.chars().all(|character| character == 'é'), "cut at a character, never inside one");
     assert_eq!(batch.rest().concat().chars().count() + first.chars().count(), 7_000);
-    assert!(!batch.due(62_999) && batch.due(63_000) && batch.take(63_000).is_empty(), "a minute of silence sends an empty report");
+    assert!(!batch.due(63_000), "an empty batch is never due: the heartbeat is the supervisor's");
     batch.add(&"x".repeat(300 * 1024));
     let rest = batch.rest();
     assert!(rest[0].starts_with("[kebbie: ") && rest.concat().len() < 260 * 1024, "the oldest output goes once too much waits");
@@ -241,7 +241,7 @@ fn a_worker_with_no_repo_runs_a_bundle_takes_a_later_one_from_its_base_and_asks_
     };
     let first = git(&top, &["rev-parse", "HEAD"]);
     let full = bundle::create(&top, &refname(&first), &first, None, &root.join("one")).unwrap();
-    let queued = |commit: &str, base: Option<&str>, command: &str| Queued { from: machine(1), from_name: "devbox".into(), id: cluster::new_id().unwrap(), job: Job { repo: "app".into(), name: "build".into(), command: command.into(), task: "billing".into(), commit: commit.into(), base: base.map(str::to_string), bundle: vec![kebbie_hub_protocol::BlobRef { id: Id::blob(b"x"), key: "k".repeat(43), media_type: kebbie_hub_protocol::JOB_BUNDLE_MEDIA_TYPE.into(), bytes: 1 }], on: None }, at: 1 };
+    let queued = |commit: &str, base: Option<&str>, command: &str| Queued { from: machine(1), from_name: "devbox".into(), id: cluster::new_id().unwrap(), job: Job { repo: "app".into(), name: "build".into(), command: command.into(), task: "billing".into(), commit: commit.into(), base: base.map(str::to_string), bundle: vec![kebbie_hub_protocol::BlobRef { id: Id::blob(b"x"), key: "k".repeat(43), media_type: kebbie_hub_protocol::JOB_BUNDLE_MEDIA_TYPE.into(), bytes: 1 }], on: None }, at: 1, seq: 0 };
     let run = |job: &Queued, bundle: &[u8]| {
         let mut said: Vec<(String, Option<JobEnd>)> = Vec::new();
         let bundle = bundle.to_vec();
@@ -271,6 +271,52 @@ fn a_worker_with_no_repo_runs_a_bundle_takes_a_later_one_from_its_base_and_asks_
     assert!(matches!(&end, JobEnd::Failed { reason } if reason.starts_with("the worker could not take the commit")), "{end:?}");
     let failing = worker::execute(&queued(&second, None, "true"), &data, &|_| Err("the hub answered 404 not-found".to_string()), &mut |_, _| {}, &|| false, &crate::typing::now_ms);
     assert_eq!(failing, JobEnd::Failed { reason: "the worker could not fetch the bundle: the hub answered 404 not-found".into() });
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_worker_reports_on_a_job_from_the_bundles_fetch_on_and_on_the_jobs_queued_behind_it() {
+    let root = crate::sh::test_dir("jobs-heartbeat");
+    let (top, data) = (repo(&root), root.join("worker"));
+    let first = git(&top, &["rev-parse", "HEAD"]);
+    git(&top, &["update-ref", &format!("{REF}/x"), &first]);
+    let full = bundle::create(&top, &format!("{REF}/x"), &first, None, &root.join("one")).unwrap();
+    let blob = kebbie_hub_protocol::BlobRef { id: Id::blob(b"x"), key: "k".repeat(43), media_type: kebbie_hub_protocol::JOB_BUNDLE_MEDIA_TYPE.into(), bytes: 1 };
+    let queued = Queued { from: machine(1), from_name: "devbox".into(), id: cluster::new_id().unwrap(), job: Job { repo: "app".into(), name: "build".into(), command: "echo done".into(), task: "billing".into(), commit: first.clone(), base: None, bundle: vec![blob], on: None }, at: 1, seq: 4 };
+    let reports = std::sync::Mutex::new(Vec::<JobReport>::new());
+    let beats = std::sync::atomic::AtomicUsize::new(0);
+    let slow_fetch = |_: &[kebbie_hub_protocol::BlobRef]| {
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        Ok(full.clone())
+    };
+    let (end, lost) = worker::supervise(&queued, &data, &slow_fetch, &|report| {
+        reports.lock().unwrap().push(report.clone());
+        Ok(())
+    }, &|| {
+        beats.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }, std::time::Duration::from_millis(50), &|| false, &crate::typing::now_ms);
+    let reports = reports.into_inner().unwrap();
+    assert_eq!((end, lost), (JobEnd::Exited { code: 0, artifacts: Vec::new() }, None));
+    assert!(reports.iter().filter(|report| report.log.is_empty() && report.end.is_none()).count() >= 3, "empty reports go while the bundle comes down: {reports:?}");
+    assert_eq!(reports.iter().map(|report| report.seq).collect::<Vec<_>>(), (4..4 + reports.len() as u32).collect::<Vec<_>>(), "numbered on from the reports it had while queued");
+    assert!(reports.last().unwrap().end.is_some() && reports.iter().filter(|report| report.end.is_some()).count() == 1, "nothing goes after the end");
+    assert!(beats.load(std::sync::atomic::Ordering::SeqCst) >= 3, "and the jobs queued behind it are reported on meanwhile");
+
+    let dir = root.join("queue");
+    let job = |name: &str| Job { repo: "app".into(), name: name.into(), command: "true".into(), task: "billing".into(), commit: first.clone(), base: None, bundle: Vec::new(), on: None };
+    worker::take(&dir, &machine(1), "devbox", &cluster::new_id().unwrap(), job("build"), 10);
+    worker::take(&dir, &machine(1), "devbox", &cluster::new_id().unwrap(), job("lint"), 11);
+    let (running, _) = worker::next_queued(&dir).unwrap();
+    let posted = RefCell::new(Vec::new());
+    let post = |waiting: &Queued, report: &JobReport| {
+        posted.borrow_mut().push((waiting.job.name.clone(), report.seq, report.log.clone()));
+        Ok(())
+    };
+    worker::beat_queued(&dir, Some(&running), "studio", &post);
+    worker::beat_queued(&dir, Some(&running), "studio", &post);
+    assert_eq!(posted.borrow().clone(), [("lint".to_string(), 0, "[kebbie: studio took this job; it waits for the job before it to end]\n".to_string()), ("lint".to_string(), 1, String::new())], "only the waiting job, saying once why it waits");
+    std::fs::remove_file(running).unwrap();
+    assert_eq!(worker::next_queued(&dir).unwrap().1.seq, 2, "its own reports go on from there");
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -330,7 +376,7 @@ impl Machine {
 fn worker_round(worker: &Machine, data: &Path, seen: &RefCell<Vec<Queued>>) {
     inbox_round(&worker.dir);
     if let Some((file, queued)) = worker::next_queued(&worker.dir) {
-        worker::run_one(&worker.dir, &worker.identity, &worker.account, &worker.client(), data, &queued, &|| false);
+        worker::run_one(&worker.dir, &worker.identity, &worker.account, &worker.client(), data, &file, &queued, &|| false);
         std::fs::remove_file(file).unwrap();
         seen.borrow_mut().push(queued);
     }

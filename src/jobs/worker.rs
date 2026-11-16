@@ -34,6 +34,8 @@ pub struct Queued {
     pub id: Id,
     pub job: Job,
     pub at: u64,
+    #[serde(default)]
+    pub seq: u32,
 }
 
 // The jobs this worker took, by sender and id, so one the inbox hands over again is never queued twice.
@@ -68,7 +70,7 @@ pub fn take(dir: &Path, from: &Id, from_name: &str, id: &Id, job: Job, now: u64)
     if !seen.first(from, id, now) {
         return Some(format!("jobs: {said} came again; it is queued or ran already"));
     }
-    let queued = Queued { from: from.clone(), from_name: from_name.to_string(), id: id.clone(), job, at: now };
+    let queued = Queued { from: from.clone(), from_name: from_name.to_string(), id: id.clone(), job, at: now, seq: 0 };
     seen.queued += 1;
     let file = dir.join(QUEUE).join(format!("{:020}-{id}.json", seen.queued));
     let written = serde_json::to_string(&queued).map_err(|error| error.to_string()).and_then(|text| crate::state::write(&file, text));
@@ -80,16 +82,20 @@ pub fn take(dir: &Path, from: &Id, from_name: &str, id: &Id, job: Job, now: u64)
     })
 }
 
-pub fn next_queued(dir: &Path) -> Option<(PathBuf, Queued)> {
+fn all_queued(dir: &Path) -> Vec<(PathBuf, Queued)> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir.join(QUEUE)).into_iter().flatten().flatten().map(|entry| entry.path()).filter(|path| path.extension().is_some_and(|extension| extension == "json")).collect();
     files.sort();
-    files.into_iter().find_map(|file| match std::fs::read_to_string(&file).ok().and_then(|text| serde_json::from_str::<Queued>(&text).ok()) {
+    files.into_iter().filter_map(|file| match std::fs::read_to_string(&file).ok().and_then(|text| serde_json::from_str::<Queued>(&text).ok()) {
         Some(queued) => Some((file, queued)),
         None => {
             let _ = std::fs::remove_file(&file);
             None
         }
-    })
+    }).collect()
+}
+
+pub fn next_queued(dir: &Path) -> Option<(PathBuf, Queued)> {
+    all_queued(dir).into_iter().next()
 }
 
 fn cut(text: &str, max: usize) -> usize {
@@ -100,7 +106,7 @@ fn cut(text: &str, max: usize) -> usize {
     at
 }
 
-// The job's output on its way to the master: sent every 2 s, or once 12 KiB wait, but never faster than once a second, and an empty report each minute of silence so the master knows the job still runs.
+// The job's output on its way to the master: sent every 2 s, or once 12 KiB wait, but never faster than once a second.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Batch {
     held: String,
@@ -126,7 +132,7 @@ impl Batch {
 
     pub fn due(&self, now_ms: u64) -> bool {
         let waited = now_ms.saturating_sub(self.last);
-        (!self.held.is_empty() && (waited >= EVERY_MS || (self.held.len() >= MAX_JOB_LOG_BYTES && waited >= FULL_GAP_MS))) || waited >= HEARTBEAT_MS
+        !self.held.is_empty() && (waited >= EVERY_MS || (self.held.len() >= MAX_JOB_LOG_BYTES && waited >= FULL_GAP_MS))
     }
 
     pub fn take(&mut self, now_ms: u64) -> String {
@@ -248,7 +254,7 @@ pub fn execute(queued: &Queued, data: &Path, fetch: &dyn Fn(&[BlobRef]) -> Resul
     ended
 }
 
-fn deliver(client: &Client, identity: &Identity, account: &AccountKey, to: &Id, keys: &PublicKeys, report: &JobReport, halted: &dyn Fn() -> bool) -> Result<()> {
+fn deliver(client: &Client, identity: &Identity, account: &AccountKey, to: &Id, keys: &PublicKeys, report: &JobReport, halted: &(dyn Fn() -> bool + Sync)) -> Result<()> {
     let mut last = String::new();
     for attempt in 0..5u32 {
         let envelope = cluster::seal_to(identity, account, to, keys, cluster::new_id()?, &Payload::JobReport(report.clone()), crate::messages::now())?;
@@ -274,28 +280,90 @@ fn ended_as(end: &JobEnd) -> String {
     }
 }
 
-pub fn run_one(dir: &Path, identity: &Identity, account: &AccountKey, client: &Client, data: &Path, queued: &Queued, halted: &dyn Fn() -> bool) -> String {
+// The reports on one job, numbered on from the ones it had while queued, and when the last one went.
+struct Outbox {
+    seq: u32,
+    last_ms: u64,
+    lost: Option<String>,
+    ended: bool,
+}
+
+// Runs the job while a second thread sends an empty report each minute nothing else went, from the bundle's fetch on, and keeps the jobs queued behind it reported on too, so their masters do not give up.
+#[allow(clippy::too_many_arguments)]
+pub fn supervise(queued: &Queued, data: &Path, fetch: &dyn Fn(&[BlobRef]) -> Result<Vec<u8>>, post: &(dyn Fn(&JobReport) -> Result<()> + Sync), beat_queued: &(dyn Fn() + Sync), every: Duration, halted: &(dyn Fn() -> bool + Sync), clock: &(dyn Fn() -> u64 + Sync)) -> (JobEnd, Option<String>) {
+    let outbox = Mutex::new(Outbox { seq: queued.seq, last_ms: clock(), lost: None, ended: false });
+    let send = |log: String, end: Option<JobEnd>| {
+        let mut out = outbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if out.ended {
+            return;
+        }
+        out.ended = end.is_some();
+        let report = JobReport { job: queued.id.clone(), seq: out.seq, log, end };
+        out.seq += 1;
+        if let Err(error) = post(&report) {
+            out.lost.get_or_insert(error);
+        }
+        out.last_ms = clock();
+    };
+    let done = AtomicBool::new(false);
+    let end = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let every_ms = every.as_millis() as u64;
+            let mut queue_beat = clock();
+            while !done.load(Ordering::SeqCst) {
+                std::thread::sleep(every.min(Duration::from_millis(200)));
+                let now = clock();
+                let last = outbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).last_ms;
+                if !done.load(Ordering::SeqCst) && now.saturating_sub(last) >= every_ms {
+                    send(String::new(), None);
+                }
+                if now.saturating_sub(queue_beat) >= every_ms {
+                    beat_queued();
+                    queue_beat = now;
+                }
+            }
+        });
+        let end = execute(queued, data, fetch, &mut |log, end| send(log, end), halted, clock);
+        done.store(true, Ordering::SeqCst);
+        end
+    });
+    (end, outbox.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner).lost)
+}
+
+// An empty report on each job waiting behind the one that runs, the first saying it waits, each numbered on in its queue file so the job's own reports follow on.
+pub fn beat_queued(dir: &Path, running: Option<&Path>, me: &str, post: &dyn Fn(&Queued, &JobReport) -> Result<()>) {
+    for (file, mut queued) in all_queued(dir).into_iter().filter(|(file, _)| Some(file.as_path()) != running) {
+        let log = if queued.seq == 0 { format!("[kebbie: {me} took this job; it waits for the job before it to end]\n") } else { String::new() };
+        if post(&queued, &JobReport { job: queued.id.clone(), seq: queued.seq, log, end: None }).is_ok() {
+            queued.seq += 1;
+            if let Ok(text) = serde_json::to_string(&queued) {
+                let _ = crate::state::write(&file, text);
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run_one(dir: &Path, identity: &Identity, account: &AccountKey, client: &Client, data: &Path, file: &Path, queued: &Queued, halted: &(dyn Fn() -> bool + Sync)) -> String {
     let said = format!("jobs: {} for {} ({}) from {}", queued.job.name, queued.job.repo, queued.job.task, queued.from_name);
     let keys = match cluster::sender(dir, client, account, &queued.from, false) {
         Ok((keys, _)) => keys,
         Err(error) => return format!("{said} did not run, as no report could go back: {error}"),
     };
-    let mut seq = 0u32;
-    let mut lost: Option<String> = None;
-    let mut send = |log: String, end: Option<JobEnd>| {
-        let report = JobReport { job: queued.id.clone(), seq, log, end };
-        seq += 1;
-        if let Err(error) = deliver(client, identity, account, &queued.from, &keys, &report, halted) {
-            lost.get_or_insert(error);
-        }
+    let posting = Mutex::new(Client::new(&identity.url, Some(identity.token()), CALL));
+    let post = |report: &JobReport| deliver(&posting.lock().unwrap_or_else(std::sync::PoisonError::into_inner), identity, account, &queued.from, &keys, report, halted);
+    let beat_queued = || {
+        let client = posting.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        beat_queued(dir, Some(file), &identity.name, &|waiting, report| cluster::sender(dir, &client, account, &waiting.from, false).and_then(|(keys, _)| deliver(&client, identity, account, &waiting.from, &keys, report, halted)));
     };
-    let end = execute(queued, data, &|parts| bundle::download(client, &mut bundle::Calls::new(&crate::typing::now_ms, &std::thread::sleep, halted), parts), &mut send, halted, &crate::typing::now_ms);
+    let fetch = |parts: &[BlobRef]| bundle::download(client, &mut bundle::Calls::new(&crate::typing::now_ms, &std::thread::sleep, halted), parts);
+    let (end, lost) = supervise(queued, data, &fetch, &post, &beat_queued, Duration::from_millis(HEARTBEAT_MS), halted, &crate::typing::now_ms);
     format!("{said}: {}{}", ended_as(&end), lost.map(|error| format!("; a report did not reach the master: {error}")).unwrap_or_default())
 }
 
 pub fn refuse(dir: &Path, identity: &Identity, account: &AccountKey, client: &Client, queued: &Queued, why: &str) -> String {
     let said = format!("jobs: refused {} for {} from {}: {why}", queued.job.name, queued.job.repo, queued.from_name);
-    let report = JobReport { job: queued.id.clone(), seq: 0, log: String::new(), end: Some(JobEnd::Refused { reason: reason(why) }) };
+    let report = JobReport { job: queued.id.clone(), seq: queued.seq, log: String::new(), end: Some(JobEnd::Refused { reason: reason(why) }) };
     match cluster::sender(dir, client, account, &queued.from, false).and_then(|(keys, _)| deliver(client, identity, account, &queued.from, &keys, &report, &|| true)) {
         Ok(()) => said,
         Err(error) => format!("{said}; the refusal did not reach the master: {error}"),
@@ -360,7 +428,7 @@ fn serve(state: &Path) {
                 Err(error) => log(&format!("jobs: the hub did not take worker.enabled = {enabled}: {error}")),
             }
             if let Some((file, queued)) = next_queued(&dir) {
-                let note = if enabled { run_one(&dir, &identity, &account, &client, &super::data_dir(), &queued, &halted) } else { refuse(&dir, &identity, &account, &client, &queued, &format!("{} runs no jobs: worker.enabled is off there", identity.name)) };
+                let note = if enabled { run_one(&dir, &identity, &account, &client, &super::data_dir(), &file, &queued, &halted) } else { refuse(&dir, &identity, &account, &client, &queued, &format!("{} runs no jobs: worker.enabled is off there", identity.name)) };
                 let _ = std::fs::remove_file(file);
                 log(&note);
             }
