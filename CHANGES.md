@@ -9,6 +9,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The board's ↑ ↓ move task to task, and → steps into a task: its subtasks and card light up beside the tasks, which fade so you see where you are, or open in a window on a narrow board.
 
 ### Fixed
+- After kebbie update the open board and the keeper move to the new kebbie by themselves, also when herdr installed it in a new folder.
 - In a narrow board pane the Work page shows only the tasks, and the card opens in its window from s or ⏎, as before the card column.
 - Answers to a backlog item's questions from your phone reach the lead together, and a reworded question no longer turns an answer away.
 - The questions window sends no answer you did not pick, and approving a plan waits for you to press y, so stray Enters or arrow keys can no longer approve a plan.
