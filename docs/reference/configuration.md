@@ -190,7 +190,7 @@ profile = "quick-codex"
 | `machine.name` | the host's short name | config.toml only | The machine's one name, on your phone through the hub and on the vault notes it claims. |
 | `notify.command` | none | config.toml only | The shell command kebbie runs when something needs you. Unset sends nothing. See [Notify command](#notify-command). |
 | `lead.profile` | none | config.toml only | The Claude [profile](#profiles) whose model and effort the lead runs with. Unset, the lead runs on the model your Claude Code settings name. |
-| `ideas.machine` | none | config.toml only | The `machine.name` of the machine new ideas from your phone go to. See below. |
+| `hub.ideas_machine` | none | config.toml only | The `machine.name` of the machine new ideas from your phone go to. See below. |
 | `vault.command` | none | config.toml only | The vault command kebbie runs for task notes, log lines and the board's snapshot, before its own arguments, such as `"uvx mindin"`. |
 | `hub.url` | the kebbie hub, `https://hub.kebbie.dev` | config.toml only | The [kebbie hub](../how-to/see-your-board-on-your-phone.md) `kebbie hub connect` and the board's `H` window connect this machine to. |
 | `hub.commands` | all eight kinds | config.toml only | What this machine takes from your devices through the hub: a list of `"answer"`, `"push"`, `"prompt"`, `"idea"`, `"start"`, `"edit"`, `"review"` and `"lead"`. See [Answer and push from your phone](../how-to/see-your-board-on-your-phone.md#answer-and-push-from-your-phone). |
@@ -206,7 +206,7 @@ profile = "quick-codex"
 - A task started from a vault note, or one kebbie opens a note for, writes this name and the task's into the note's `kebbie` frontmatter key. kebbie on another machine sharing the vault shows the note as `working on <name> · <task>` and asks before starting it.
 - Give each machine its own stable name, such as `"mac"` and `"devbox"`.
 
-`ideas.machine`: one machine takes the ideas you add on your phone.
+`hub.ideas_machine`: one machine takes the ideas you add on your phone.
 
 - The machine it names says so on its board, and the phone's **New idea** picks it while it is awake, and an awake machine while it sleeps. The line under the machine says why: `ideas machine`, or `ideas machine is asleep, sent to devbox`.
 - Your own pick in the phone wins.
@@ -214,8 +214,8 @@ profile = "quick-codex"
 - Set it on the machine it names, or the same value on every machine.
 
 ```toml
-[ideas]
-machine = "devbox"
+[hub]
+ideas_machine = "devbox"
 ```
 
 `lead.profile`: the lead runs another model than your other Claude sessions. See [Run the lead on another model](../how-to/give-tasks-a-profile.md#run-the-lead-on-another-model).

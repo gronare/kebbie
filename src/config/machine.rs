@@ -189,9 +189,9 @@ fn writer_profile(table: &Table) -> Result<Option<String>> {
 }
 
 fn ideas_machine(table: &Table) -> Result<Option<String>> {
-    let Some(ideas) = subtable(table, "ideas", "ideas")? else { return Ok(None) };
-    let Some(value) = ideas.get("machine") else { return Ok(None) };
-    valid_machine_name(value.as_str().ok_or("ideas.machine: must be a string")?).map(Some).map_err(|error| error.replacen("machine.name", "ideas.machine", 1))
+    let Some(hub) = subtable(table, "hub", "hub")? else { return Ok(None) };
+    let Some(value) = hub.get("ideas_machine") else { return Ok(None) };
+    valid_machine_name(value.as_str().ok_or("hub.ideas_machine: must be a string")?).map(Some).map_err(|error| error.replacen("machine.name", "hub.ideas_machine", 1))
 }
 
 fn enabled_in(table: &Table, name: &str) -> Result<Option<bool>> {

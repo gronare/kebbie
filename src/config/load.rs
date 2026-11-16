@@ -35,7 +35,7 @@ pub fn lead_profile() -> Result<Option<String>> {
     Ok(load_machine(&path())?.lead_profile.filter(|name| name != super::NONE))
 }
 
-// Whether new ideas from your devices go to this machine first: ideas.machine names it.
+// Whether new ideas from your devices go to this machine first: hub.ideas_machine names it.
 pub fn is_idea_machine() -> bool {
     load_machine(&path()).ok().is_some_and(|machine| names_itself(&machine, &short_hostname()))
 }
