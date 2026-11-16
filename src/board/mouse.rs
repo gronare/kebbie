@@ -137,6 +137,7 @@ impl App {
                             self.run_choice(chosen);
                         }
                     }
+                    (Some(Hit::Choice(index)), Mode::SubtaskOptions(_)) => self.handle_subtask_options(index, keys::map().act(self.ctx(), &KeyEvent::from(KeyCode::Enter)), KeyEvent::from(KeyCode::Enter)),
                     (Some(Hit::Choice(index)), Mode::Park { address, name, .. }) => {
                         let (address, name) = (address.clone(), name.clone());
                         self.mode = Mode::Normal;
@@ -169,6 +170,7 @@ impl App {
                     (Some(Hit::CardImage(index)), Mode::Card { image, .. }) => *image = index,
                     (Some(Hit::Question(index)), Mode::Questions(window)) => window.select(&self.questions, index),
                     (Some(Hit::Answer(index)), Mode::Questions(window)) => window.click(&self.questions, index),
+                    (None, Mode::SubtaskOptions(_)) => self.mode = Mode::Subtasks,
                     (None, Mode::Options(_) | Mode::ReviewMenu(_) | Mode::RestartLead(_) | Mode::FixedOptions(_) | Mode::Park { .. } | Mode::Message(_) | Mode::Help(_)) => self.mode = Mode::Normal,
                     (None, Mode::Update) => {
                         self.mode = Mode::Normal;

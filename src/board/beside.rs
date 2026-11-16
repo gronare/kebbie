@@ -23,6 +23,7 @@ pub(super) struct Beside {
     pub(super) shown: bool,
     pub(super) scroll: u16,
     subject: String,
+    subtask: Option<(String, super::subtasks::Loaded)>,
 }
 
 // The part of a card the version before it differs in; the card shows what it says now.
@@ -173,6 +174,18 @@ impl App {
             let hint = "Not a task: move to one to see its card here.".to_string();
             return (heading(Vec::new(), focused, width), wrap(&hint, width, 3).into_iter().map(|text| Line::from(Span::styled(text, style(MUTED)))).collect(), "none".to_string());
         };
+        if let Some(at) = self.subtask_at(&item) {
+            let step = walked(&item)[at].clone();
+            let subject = format!("{}#{}#{}", address_of(&item), step.id, step.head().unwrap_or_default());
+            let loaded = match self.beside.subtask.take() {
+                Some((seen, loaded)) if seen == subject => loaded,
+                _ => item.path.as_ref().map(|path| (self.subtask_io.load)(path, &address_of(&item), &step)).unwrap_or_default(),
+            };
+            let lines = super::subtasks::subtask_card(&step, &loaded, width);
+            self.beside.subtask = Some((subject.clone(), loaded));
+            let title = vec![Span::styled(format!("{} › {} of {}", item.titled(), step.number, item.subtasks.pushed.len() + item.subtasks.items.len()), bold(TEXT))];
+            return (heading(title, focused, width), lines, subject);
+        }
         let detail = self.detail(&item);
         let title = vec![Span::styled(item.titled(), bold(TEXT))];
         (heading(title, focused, width), task_card(Some(&item), detail.as_deref(), width), address_of(&item))
@@ -269,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn inside_a_task_the_column_stays_its_card_and_on_the_issues_row_a_hint() {
+    fn inside_a_task_the_column_is_the_subtasks_card_and_on_the_issues_row_a_hint() {
         let mut steps = stripe();
         holds(&mut steps.items[1], &["3333333cccc"], false);
         let mut item = stepped(steps);
@@ -281,8 +294,11 @@ mod tests {
         press(&mut app, key(KeyCode::Right));
         press(&mut app, key(KeyCode::Down));
         let (side, _) = card_side(&mut app);
-        assert_eq!(side[..10], before[..10], "stepping the subtasks leaves the card as it is");
+        let shown = side.join("\n");
+        assert!(shown.contains("› 3 of 4") && shown.contains("Add Stripe as the gateway") && !shown.contains("1 of 4 subtasks accepted"), "the highlighted subtask's card stands beside the tasks: {shown}");
         press(&mut app, key(KeyCode::Esc));
+        let (side, _) = card_side(&mut app);
+        assert_eq!(side[..10], before[..10], "back on the task, its own card");
         app.offers = vec![Offer { id: "a1b2c3".to_string(), report: BugReport { kind: None, title: "push hid git's error".to_string(), text: String::new(), version: "0.26.0".to_string(), os: "macos".to_string() } }];
         app.focus_offers(0);
         let (side, _) = card_side(&mut app);

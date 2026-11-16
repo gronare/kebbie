@@ -151,12 +151,46 @@ fn key(text: String) -> Span<'static> {
 
 // The keys line under the board while a subtask row is highlighted.
 pub(super) fn inside_hint(accept: bool) -> Line<'static> {
-    let mut spans = vec![key("↑ ↓".to_string()), label(" subtask · "), key(keys::key(Act::Card).to_string()), label(" card · "), key(keys::key(Act::Review).to_string()), label(" review · ")];
+    let mut spans = vec![key("↑ ↓".to_string()), label(" subtask · "), key("⏎".to_string()), label(" options · "), key(keys::key(Act::Card).to_string()), label(" card · "), key(keys::key(Act::Review).to_string()), label(" review · ")];
     if accept {
         spans.extend([key(keys::key(Act::Permit).to_string()), label(" accept · ")]);
     }
     spans.extend([key("← esc".to_string()), label(" back")]);
     Line::from(spans)
+}
+
+// The keys under a task's subtask rows while one is highlighted, in place of the task's own key line.
+pub(super) fn row_hint(accept: bool) -> Line<'static> {
+    let mut spans = vec![Span::raw("   "), key("⏎".to_string()), label(" options · "), key(keys::key(Act::Card).to_string()), label(" card · "), key(keys::key(Act::Review).to_string()), label(" review · ")];
+    if accept {
+        spans.extend([key(keys::key(Act::Permit).to_string()), label(" accept · ")]);
+    }
+    spans.extend([key("←".to_string()), label(" back")]);
+    Line::from(spans).style(Style::new().bg(super::widgets::SURFACE))
+}
+
+// What ⏎ offers on a highlighted subtask, in the task menu's shape.
+pub(super) fn subtask_choices(item: &Item, step: &Subtask) -> Vec<super::widgets::Choice> {
+    use super::widgets::choice;
+    let mut choices = vec![
+        choice(Act::Card, "Show the card", "what it does, its commits and its files, ← → the other subtasks"),
+        choice(Act::Review, "Open the review", "its diff in the review split next to its Claude"),
+    ];
+    choices.push(choice(Act::Chat, "Message its Claude", "send it a line without leaving"));
+    if super::steps::accept_matters(item, step) && step.state == SubtaskState::Ready {
+        choices.push(choice(Act::Permit, "Accept", "mark it reviewed, so a push can take it ahead of the subtasks still being built"));
+    }
+    choices
+}
+
+pub(super) fn draw_options(frame: &mut Frame, app: &App, index: usize) -> Vec<(Rect, super::Hit)> {
+    let Some(item) = app.selected_task() else { return Vec::new() };
+    let Some(at) = app.subtask_at(&item) else { return Vec::new() };
+    let step = &walked(&item)[at];
+    let group = |act: Option<Act>| if matches!(act, Some(Act::Permit)) { "SUBTASK" } else { "SESSION" };
+    let (lines, rows) = super::widgets::menu_lines(&subtask_choices(&item, step), index, 48, |_| false, group);
+    let area = super::widgets::modal(frame, format!("{} {}", step.number, step.title.chars().take(42).collect::<String>()), lines, 52);
+    rows.into_iter().enumerate().map(|(choice, line)| (Rect::new(area.x, area.y + 1 + line as u16, area.width, 1), super::Hit::Choice(choice))).filter(|(rect, _)| rect.y < area.bottom().saturating_sub(1)).collect()
 }
 
 pub(super) fn read_text((read, total): (usize, usize)) -> String {
@@ -267,7 +301,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     let scroll = view.scroll.min(lines.len().saturating_sub(body.height as usize) as u16);
     frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), body);
     let accept = if super::steps::accept_matters(item, &steps[at]) { format!(" · {} accept", keys::key(Act::Permit)) } else { String::new() };
-    let keys = format!("↑ ↓ scroll · {} review{accept} · {} close", keys::key(Act::Review), keys::map().label(Act::Back));
+    let keys = format!("← → subtask · ↑ ↓ scroll · {} review{accept} · {} close", keys::key(Act::Review), keys::map().label(Act::Back));
     frame.render_widget(Paragraph::new(fit(vec![Span::styled(keys, style(MUTED))], foot.width as usize)), foot);
     if let Mode::SubtaskCard(view) = &mut app.mode {
         view.scroll = scroll;
@@ -279,7 +313,7 @@ impl App {
     pub(super) fn subtask_at(&self, item: &Item) -> Option<usize> {
         let (address, id) = self.subtask_row.as_ref()?;
         let selected = self.selected_task()?;
-        (matches!(self.mode, Mode::Subtasks) && self.column == Column::Work && address_of(&selected) == *address && address_of(item) == *address).then_some(())?;
+        (matches!(self.mode, Mode::Subtasks | Mode::SubtaskOptions(_)) && self.column == Column::Work && address_of(&selected) == *address && address_of(item) == *address).then_some(())?;
         walked(item).iter().position(|step| step.id == *id)
     }
 
@@ -341,6 +375,7 @@ impl App {
                 self.put_cursor(&item, &steps[to]);
             }
             Some(Act::Card) => self.open_subtask(&item, &steps[at]),
+            Some(Act::Options) => self.mode = Mode::SubtaskOptions(0),
             Some(Act::Permit) => self.accept_subtask(&item, &steps[at], Mode::Subtasks),
             Some(Act::Review) => self.open_review_at(&item, Some(steps[at].number)),
             Some(Act::Back | Act::Close) => self.leave_subtasks(),
@@ -371,13 +406,54 @@ impl App {
         }
     }
 
-    // The subtask's card window: r reads its diff, a accepts it, esc goes back to its row.
+    // The subtask's menu: a choice's key or ⏎ on it runs it on that subtask, esc goes back to its row.
+    pub(super) fn handle_subtask_options(&mut self, index: usize, act: Option<Act>, key: KeyEvent) {
+        let Some(item) = self.selected_task() else { return self.leave_subtasks() };
+        self.mode = Mode::Subtasks;
+        let Some(at) = self.subtask_at(&item) else { return self.leave_subtasks() };
+        let step = walked(&item)[at].clone();
+        let choices = subtask_choices(&item, &step);
+        let typed = match key.code {
+            KeyCode::Char(character) if character != ' ' => choices.iter().find(|choice| choice.key == character),
+            _ => None,
+        };
+        let chosen = match (typed, act) {
+            (Some(chosen), _) => chosen.act,
+            (None, Some(Act::Options)) => choices.get(index).and_then(|choice| choice.act),
+            (None, Some(Act::Move)) => {
+                let to = if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) { index.saturating_sub(1) } else { (index + 1).min(choices.len().saturating_sub(1)) };
+                return self.mode = Mode::SubtaskOptions(to);
+            }
+            (None, Some(Act::Back | Act::Close)) => return,
+            _ => return self.mode = Mode::SubtaskOptions(index),
+        };
+        match chosen {
+            Some(Act::Card) => self.open_subtask(&item, &step),
+            Some(Act::Review) => self.open_review_at(&item, Some(step.number)),
+            Some(Act::Permit) => self.accept_subtask(&item, &step, Mode::Subtasks),
+            Some(Act::Chat) => {
+                self.leave_subtasks();
+                self.act(Act::Chat);
+            }
+            _ => {}
+        }
+    }
+
+    // The subtask's card window: ← → the task's other subtasks, r reads its diff, a accepts it, esc goes back to its row.
     pub(super) fn handle_subtask_card(&mut self, mut view: Box<View>, key: KeyEvent, act: Option<Act>) {
         let Some(item) = self.tasks.iter().find(|item| address_of(item) == view.address).cloned() else { return self.leave_subtasks() };
         let steps = walked(&item).to_vec();
         let Some(at) = steps.iter().position(|step| step.id == view.id) else { return self.leave_subtasks() };
         match act {
             Some(Act::Back | Act::Close | Act::Card) => self.mode = Mode::Subtasks,
+            Some(Act::Switch) => {
+                let to = if key.code == KeyCode::Left { at.saturating_sub(1) } else { (at + 1).min(steps.len() - 1) };
+                self.put_cursor(&item, &steps[to]);
+                if to == at {
+                    return self.mode = Mode::SubtaskCard(view);
+                }
+                self.open_subtask(&item, &steps[to]);
+            }
             Some(Act::Move) => {
                 view.scroll = if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) { view.scroll.saturating_sub(1) } else { view.scroll.saturating_add(1) };
                 self.mode = Mode::SubtaskCard(view);
@@ -498,8 +574,9 @@ mod tests {
         assert!(row.contains("▌│▌ ● 2 Charge"), "a mark beside the highlighted subtask: {shown}");
         let (task_x, task_y) = find(&rows, "search")[0];
         assert_ne!(buffer[(task_x as u16, task_y as u16)].fg, crate::board::widgets::FAINT, "nothing fades: {shown}");
-        assert!(rows.iter().any(|row| row.contains("CARD") && row.contains("Switch the payment provider")) && !shown.contains("SUBTASKS"), "the column stays the task's card: {shown}");
-        assert!(shown.contains("↑ ↓ subtask · s card · r review · a accept · ← esc back"), "{shown}");
+        assert!(rows.iter().any(|row| row.contains("CARD   Switch the payment provider to Stripe ›")) && rows.iter().any(|row| row.contains("WHAT IT DOES")) && !shown.contains("SUBTASKS"), "the column is the subtask's card: {shown}");
+        assert!(shown.contains("↑ ↓ subtask · ⏎ options · s card · r review · a accept · ← esc back"), "{shown}");
+        assert!(rows.iter().any(|row| row.contains("╰ ⏎ options · s card · r review · a accept · ← back")), "the task's key line under its rows gives the subtask's keys: {shown}");
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Char('j'));
         key(&mut app, KeyCode::Down);
@@ -524,16 +601,57 @@ mod tests {
     }
 
     #[test]
-    fn enter_inside_a_task_opens_no_review_and_the_options_have_no_subtask_entry() {
-        let (mut app, _) = two_tasks();
+    fn enter_inside_a_task_opens_the_subtasks_own_options_and_the_tasks_have_no_subtask_entry() {
+        let (mut app, accepted) = two_tasks();
         key(&mut app, KeyCode::Enter);
         assert!(app.choices().iter().all(|choice| choice.label != "Its subtasks"), "no subtask entry in the options");
         key(&mut app, KeyCode::Esc);
         key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Enter);
-        assert!(matches!(app.mode, Mode::Subtasks), "⏎ does nothing inside");
+        assert!(matches!(app.mode, Mode::SubtaskOptions(0)), "⏎ opens the subtask's options");
+        let (_, shown) = screen(&mut app);
+        for line in ["╭ 3 Add Stripe as the gateway", "│ SESSION", "▸ Show the card", "Open the review", "Message its Claude", "│ SUBTASK", "Accept"] {
+            assert!(shown.contains(line), "{line}: {shown}");
+        }
+        let keys: Vec<char> = subtask_choices(&app.tasks[0], &walked(&app.tasks[0])[1]).iter().map(|choice| choice.key).collect();
+        assert_eq!(keys, ['s', 'r', 'c', 'a'], "the keys the subtask's rows already take");
+        key(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Subtasks) && app.subtask_row.clone().unwrap().1 == "s3", "esc closes the menu on its row");
+        key(&mut app, KeyCode::Enter);
+        key(&mut app, KeyCode::Char('a'));
+        assert_eq!(accepted.borrow().as_slice(), ["/work/wt1.billing stripe s3"]);
+        key(&mut app, KeyCode::Enter);
+        key(&mut app, KeyCode::Char('s'));
+        assert!(matches!(&app.mode, Mode::SubtaskCard(view) if view.id == "s3"), "s in the menu opens its card");
+        key(&mut app, KeyCode::Esc);
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Enter);
+        assert!(app.choices().is_empty() || !matches!(app.mode, Mode::Options(_)), "the task's own menu stays shut");
+        let (_, shown) = screen(&mut app);
+        assert!(!shown.contains("│ SUBTASK"), "a subtask that is not ready has nothing to accept: {shown}");
+        key(&mut app, KeyCode::Esc);
         key(&mut app, KeyCode::Char('S'));
         assert!(matches!(app.mode, Mode::Subtasks), "S is no key");
+    }
+
+    #[test]
+    fn left_and_right_in_a_subtasks_card_step_to_the_tasks_other_subtasks_and_the_board_follows() {
+        let (mut app, _) = two_tasks();
+        key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Char('s'));
+        assert!(screen(&mut app).1.contains("› 2 of 4"), "{}", screen(&mut app).1);
+        key(&mut app, KeyCode::Right);
+        let (_, shown) = screen(&mut app);
+        assert!(shown.contains("▸ Switch the payment provider to Stripe › 3 of 4") && shown.contains("Add Stripe as the gateway keeps the charge in one place.") && shown.contains("← → subtask"), "{shown}");
+        assert!(matches!(&app.mode, Mode::SubtaskCard(view) if view.id == "s3") && app.subtask_row.clone().unwrap().1 == "s3", "the window stays open and the row under it follows");
+        key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Right);
+        assert!(screen(&mut app).1.contains("› 4 of 4"), "the last stays the last");
+        key(&mut app, KeyCode::Left);
+        assert!(screen(&mut app).1.contains("› 3 of 4"));
+        key(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Subtasks) && app.subtask_row.clone().unwrap().1 == "s3", "esc leaves the cursor where the window was");
     }
 
     #[test]

@@ -117,6 +117,7 @@ enum Column {
 enum Mode {
     Normal,
     Options(usize),
+    SubtaskOptions(usize),
     ReviewMenu(Box<send_review::ReviewMenu>),
     Input { purpose: Purpose, label: String, buffer: String },
     Message(String),
@@ -752,6 +753,7 @@ impl App {
             Mode::SubtaskCard(view) => self.handle_subtask_card(view, key, act),
             Mode::NewTask(new) => self.handle_new_task(new, key),
             Mode::Subtasks => self.handle_subtasks(act, &key),
+            Mode::SubtaskOptions(index) => self.handle_subtask_options(index, act, key),
             Mode::Report { id, shown, scroll, read, .. } => self.confirm_report(id, shown, scroll, read, key, cancels),
             Mode::ReportAll { shown, scroll, read, .. } => self.confirm_report_all(shown, scroll, read, key, cancels),
             Mode::NoteCard { key: note, scroll, .. } => self.handle_note_card(note, scroll, key, cancels),
