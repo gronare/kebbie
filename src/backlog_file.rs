@@ -12,6 +12,7 @@ pub const SKILL: &str = "kebbie:write-backlog-item";
 const DRAFT: &str = "draft";
 const DRAFTING: &str = "drafting";
 const TO_WRITE: &str = "To write: the lead writes this item out with the skill kebbie:write-backlog-item.";
+const VAULT_DRAFT: &str = "_A draft from the backlog: write this note out before the work starts._";
 const OLD_FILE: &str = "backlog.md";
 
 pub fn dir() -> PathBuf {
@@ -62,11 +63,16 @@ pub struct Shape {
     pub writing: Option<u64>,
 }
 
-// An item short of a heading or of a required section's text is to write; the lead marks one drafting while it writes it out; a blocking question keeps it drafting.
+// A draft: kebbie's or the vault's draft text, or no more than one line of text, whatever the item's shape.
+pub fn is_draft(body: &str) -> bool {
+    body.contains(TO_WRITE) || body.contains(VAULT_DRAFT) || body.lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with('#')).count() <= 1
+}
+
+// A draft is to write; the lead marks one drafting while it writes it out; a blocking question keeps it drafting.
 pub fn state_of(drafting: bool, short: bool, body: &str, template: &Template) -> State {
     if drafting {
         State::Drafting
-    } else if short || !template.missing(body).is_empty() {
+    } else if short || is_draft(body) {
         State::ToWrite
     } else if template.questions_in(body).iter().any(|question| question.blocks) {
         State::Drafting
@@ -83,7 +89,7 @@ pub fn shape_of(state: State, body: &str, answered: &[String], filed: &str, temp
 
 impl Item {
     pub fn to_write(&self) -> bool {
-        self.status == DRAFT || !crate::item_template::local().missing(&self.body).is_empty()
+        self.status == DRAFT || is_draft(&self.body)
     }
 
     pub fn state(&self) -> State {
@@ -268,13 +274,7 @@ pub fn item_from_with(filing: &Filing, filed: &str, template: &Template) -> Resu
     }
     let repo = Some(filing.repo.trim()).filter(|repo| !repo.is_empty()).unwrap_or(&area).to_string();
     let (status, body) = match filing.body.map(str::trim).filter(|body| !body.is_empty()) {
-        Some(body) => {
-            let missing = template.missing(body);
-            if !missing.is_empty() {
-                return Notice::new(Tone::You, "Not added: the item is not written out").you(format!("Write it with the skill {SKILL}: it needs {}; kebbie backlog template prints the sections.", missing.join(", "))).err();
-            }
-            ("backlog".to_string(), body.to_string())
-        }
+        Some(body) => ("backlog".to_string(), body.to_string()),
         None => (DRAFT.to_string(), draft_body(filing.by, filed, filing.line, filing.words, template)),
     };
     Ok(Item { stem: String::new(), title, priority, repo, status, filed: filed.to_string(), body })
@@ -565,7 +565,7 @@ mod tests {
         assert_eq!((item.title.as_str(), item.priority.as_str(), item.repo.as_str(), item.to_write()), ("Fix login", "high", "app", true));
         let template = Template::builtin();
         assert!(template.sections.iter().all(|section| template.has(&item.body, &section.key)), "{}", item.body);
-        assert_eq!(template.missing(&item.body), ["## Goal"], "a draft's goal waits for the lead");
+        assert!(is_draft(&item.body), "kebbie's draft text marks it");
         assert!(template.text(&item.body, "background").contains("To write: the lead writes this item out") && template.text(&item.body, "source").contains("The user, 2026-11-12: \"Fix login — the session drops on reload (app)\""), "{}", item.body);
         let entry = item.entry(crate::backlog::epoch_day("2026-11-14").unwrap());
         assert_eq!((entry.summary.as_str(), entry.shape.state), ("", Some(State::ToWrite)), "a draft has no goal to show yet");
@@ -586,13 +586,14 @@ mod tests {
     }
 
     #[test]
-    fn a_written_body_needs_every_section_and_files_as_backlog() {
+    fn a_written_body_of_any_shape_files_as_backlog() {
         let body = written();
         let item = item_from(&Filing { body: Some(&body), ..quick("Fix login", "low") }, "2026-11-12").unwrap();
         assert!(!item.to_write() && item.status == "backlog");
         assert_eq!(item.entry(0).summary, "Some Goal.", "the board shows the goal");
-        let short = item_from(&Filing { body: Some("## Background\n\nIt broke.\n"), ..quick("Fix login", "") }, "2026-11-12").unwrap_err();
-        assert!(short.contains("not written out") && short.contains("## Goal") && short.contains("## Source") && !short.contains("## Background,"), "{short}");
+        let styled = item_from(&Filing { body: Some(STYLED), ..quick("Keep the session on reload", "") }, "2026-11-12").unwrap();
+        assert!(!styled.to_write() && styled.status == "backlog", "no template section is required");
+        assert_eq!(styled.entry(0).summary, "Signed-in users stay signed in after a reload.", "the board shows the purpose line");
         assert!(item_from(&quick("Fix", "soon"), "2026-11-12").unwrap_err().contains("\"soon\" is not a priority"));
         assert!(item_from(&quick("  ", ""), "2026-11-12").unwrap_err().contains("needs a title"));
     }
@@ -602,12 +603,10 @@ mod tests {
         let template = Template::parse(r#"{"sections":[{"key":"problem","heading":"Problem","required":true},{"key":"risks","heading":"Risks"}],"questions":"risks"}"#).unwrap();
         let draft = item_from_with(&quick("Fix login", ""), "2026-11-12", &template).unwrap();
         assert_eq!(draft.body, "## Problem\n\nTo write: the lead writes this item out with the skill kebbie:write-backlog-item.\n\nThe user, 2026-11-12: \"Fix login\"\n\n## Risks\n\n", "the line is kept in the first section when the template has no Source");
-        let short = item_from_with(&Filing { body: Some("## Problem\n\n## Risks\n\n- [ ] Which?\n"), ..quick("Fix login", "") }, "2026-11-12", &template).unwrap_err();
-        assert!(short.contains("## Problem") && !short.contains("## Risks"), "an empty required section: {short}");
         let body = "## Problem\n\nIt broke.\n\n## Risks\n\n- [ ] Which?\n";
         assert!(item_from_with(&Filing { body: Some(body), ..quick("Fix login", "") }, "2026-11-12", &template).is_ok());
         assert_eq!(state_of(false, false, body, &template), State::Drafting, "a blocking question under the template's questions section");
-        assert_eq!(state_of(false, false, body, &Template::builtin()), State::ToWrite, "the same body misses kebbie's own sections");
+        assert_eq!(state_of(false, false, body, &Template::builtin()), State::Ready, "kebbie's own reads no questions under Risks, and misses no section");
     }
 
     #[test]
@@ -626,7 +625,23 @@ mod tests {
         assert_eq!((terse.title.as_str(), terse.state()), ("Fix login", State::ToWrite));
         assert_eq!(parse("fix-the-login", "\n").map(|item| item.title), Some("fix the login".to_string()), "an empty file is named by its file");
         let sections_missing = parse("x", "+++\ntitle = \"X\"\nstatus = \"backlog\"\n+++\n\n## Background\n\nIt broke.\n").unwrap();
-        assert_eq!(sections_missing.state(), State::ToWrite, "an item edited down to fewer sections is written out again");
+        assert_eq!(sections_missing.state(), State::ToWrite, "one line of text is still a draft");
+    }
+
+    const STYLED: &str = "Signed-in users stay signed in after a reload.\n\n## Plan\n\n- **Keep the session** in the keychain.\n- **Read it back** on start.\n\n## Open questions\n\n- [ ] Keep sessions across machines?\n- Which test covers it\n\n## Left out\n\nSign-out on other devices.\n";
+
+    #[test]
+    fn an_item_in_any_shape_is_read_by_its_questions_and_a_draft_by_its_text() {
+        let builtin = Template::builtin();
+        assert_eq!(state_of(false, false, STYLED, &builtin), State::Drafting, "a blocking question under Open questions keeps it drafting");
+        assert_eq!(state_of(false, false, &STYLED.replace("- [ ] ", "- "), &builtin), State::Ready);
+        let swedish = "Användare förblir inloggade.\n\n## Öppna frågor\n\n- [ ] Över maskiner?\n";
+        assert_eq!(builtin.questions_in(swedish).len(), 1, "a Swedish vault's heading is read too");
+        assert_eq!(state_of(false, false, swedish, &builtin), State::Drafting);
+        let vault_draft = "## Background\n\n_A draft from the backlog: write this note out before the work starts._\n\n## Source\n\nThe user, 2026-11-12.\n";
+        assert_eq!(state_of(false, false, vault_draft, &builtin), State::ToWrite, "the vault's draft text");
+        assert_eq!(state_of(false, false, "Fix login\n", &builtin), State::ToWrite, "a line alone");
+        assert_eq!(state_of(false, false, &written(), &builtin), State::Ready, "an item in kebbie's own sections reads as before");
     }
 
     #[test]

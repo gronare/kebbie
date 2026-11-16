@@ -246,7 +246,7 @@ pub fn settle(state: &Path, item: &str, body: &str, template: &Template) -> Vec<
 
 // The same for the whole backlog, given each item's body and template; an item not listed, or one read without its template's questions heading (half written as it was read), keeps its answers. Every answer still with the lead comes back.
 pub fn settle_all(state: &Path, bodies: &[(&str, &str, &Template)]) -> Vec<Answer> {
-    let open: Vec<(&str, Vec<Question>)> = bodies.iter().filter(|(_, body, template)| template.questions.as_deref().is_some_and(|key| template.has(body, key))).map(|(item, body, template)| (*item, template.questions_in(body))).collect();
+    let open: Vec<(&str, Vec<Question>)> = bodies.iter().filter(|(_, body, template)| template.has_questions(body)).map(|(item, body, template)| (*item, template.questions_in(body))).collect();
     let still_open = |answer: &Answer| open.iter().find(|(item, _)| *item == answer.item).is_none_or(|(_, questions)| match &answer.against {
         Some(against) => questions_hash(questions.iter().map(|question| question.text.as_str())) == *against,
         None => questions.iter().any(|question| question.text == answer.question),
@@ -360,7 +360,8 @@ mod tests {
         let state = crate::sh::test_dir("backlog-answers-template");
         let template = Template::parse(r#"{"sections":[{"key":"problem","heading":"Problem","required":true},{"key":"risks","heading":"Risks"}],"questions":"risks"}"#).unwrap();
         answer(&state, Answer { item: "Projects/x.md".to_string(), question: "Which job?".to_string(), answer: "e2e".to_string(), at: 1, ..Answer::default() }).unwrap();
-        assert_eq!(settle(&state, "Projects/x.md", "## Problem\n\nIt broke.\n\n## Open questions\n\n", &template).len(), 1, "no Risks heading yet: half written");
+        assert_eq!(settle(&state, "Projects/x.md", "## Problem\n\nIt broke.\n", &template).len(), 1, "no questions heading yet: half written");
+        assert_eq!(settle(&state, "Projects/x.md", "It broke.\n\n## Open questions\n\n- [ ] Which job?\n", &template).len(), 1, "an item in another shape keeps its questions under Open questions");
         assert_eq!(settle(&state, "Projects/x.md", "## Problem\n\nIt broke.\n\n## Risks\n\n- [ ] Which job?\n", &template).len(), 1);
         assert!(settle(&state, "Projects/x.md", "## Problem\n\nIt broke.\n\n## Risks\n\n", &template).is_empty(), "under Risks and gone: folded in");
         let _ = std::fs::remove_dir_all(state);

@@ -13,6 +13,8 @@ const FILE: &str = "item-template.json";
 const VAULT_TTL: u64 = 6 * 60 * 60;
 const RETRY: u64 = 10 * 60;
 const RECHECK: Duration = Duration::from_secs(2);
+// Where an item's questions sit when the body lacks its template's questions heading; a Swedish vault names it Öppna frågor.
+const QUESTION_HEADINGS: [&str; 2] = ["Open questions", "Öppna frågor"];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Section {
@@ -150,17 +152,22 @@ impl Template {
         self.heading(key).and_then(|heading| range(body, heading)).map_or(String::new(), |(start, end)| body[start..end].trim().to_string())
     }
 
+    #[cfg(test)]
     pub fn has(&self, body: &str, key: &str) -> bool {
         self.heading(key).is_some_and(|heading| range(body, heading).is_some())
     }
 
-    // Each heading the body lacks, and each required section it leaves empty, as `## Heading`.
-    pub fn missing(&self, body: &str) -> Vec<String> {
-        self.sections.iter().filter(|section| !self.has(body, &section.key) || (section.required && self.text(body, &section.key).is_empty())).map(|section| format!("## {}", section.heading)).collect()
+    // The questions under the template's own questions heading, else under a fixed one, so an item in any shape keeps its questions.
+    fn questions_range(&self, body: &str) -> Option<(usize, usize)> {
+        self.questions.as_deref().and_then(|key| self.heading(key)).into_iter().chain(QUESTION_HEADINGS).find_map(|heading| range(body, heading))
+    }
+
+    pub fn has_questions(&self, body: &str) -> bool {
+        self.questions_range(body).is_some()
     }
 
     pub fn questions_in(&self, body: &str) -> Vec<Question> {
-        self.questions.as_deref().map_or_else(Vec::new, |key| self.text(body, key).lines().filter_map(question_of).collect())
+        self.questions_range(body).map_or_else(Vec::new, |(start, end)| body[start..end].lines().filter_map(question_of).collect())
     }
 
     // A section's text as the phone shows and edits it; the questions section without its questions, which go apart.
@@ -197,10 +204,11 @@ impl Template {
         self.heading("goal").map(|_| "goal").or_else(|| self.required().next().map(|section| section.key.as_str()))
     }
 
-    // The line the board shows for a ready item: the goal's first, else the background's, else the first section's.
+    // The line the board shows for a ready item: the goal's first, else the background's, else the first section's, else the body's first line of text.
     pub fn first_line(&self, body: &str) -> String {
         let keys = self.goal_key().into_iter().chain(["background"]).map(str::to_string).chain(self.sections.first().map(|section| section.key.clone()));
-        keys.filter_map(|key| self.shown(body, &key).lines().map(str::trim).find(|line| !line.is_empty()).map(str::to_string)).next().unwrap_or_default()
+        keys.filter_map(|key| self.shown(body, &key).lines().map(str::trim).find(|line| !line.is_empty()).map(str::to_string)).next()
+            .or_else(|| body.lines().map(str::trim).find(|line| !line.is_empty() && heading_of(line).is_none()).map(str::to_string)).unwrap_or_default()
     }
 
     pub fn skeleton(&self) -> String {
@@ -457,8 +465,6 @@ mod tests {
         assert_eq!(template.text(BODY, "scope"), "");
         assert_eq!(template.text("## goal\n\nlower case\n", "goal"), "lower case", "headings match whatever their case");
         assert_eq!(template.text("## Goal\n\nOne\n### Detail\n\nTwo\n## Source\n", "goal"), "One\n### Detail\n\nTwo", "a deeper heading stays inside");
-        assert!(template.missing(BODY).is_empty());
-        assert_eq!(template.missing("## Background\n\nx\n\n## Goal\n\n## Source\n\ny\n"), ["## Goal", "## What we know", "## Open questions", "## Out of scope"], "an empty required section and each absent heading");
     }
 
     #[test]
@@ -572,7 +578,7 @@ mod tests {
         let template = Template::builtin();
         assert_eq!(template.text("# Goal\n\nTop.\n\n## Detail\n\nMore.\n\n# Source\n\nx\n", "goal"), "Top.\n\n## Detail\n\nMore.");
         assert_eq!(template.text("### goal\n\nDeep.\n## Source\n", "goal"), "Deep.");
-        assert!(template.missing("# Background\n\nb\n\n### Goal\n\ng\n\n## What we know\n\n## Open questions\n\n## Out of scope\n\n#### Source\n\ns\n").is_empty());
+        assert!(["background", "goal", "source"].iter().all(|key| template.has("# Background\n\nb\n\n### Goal\n\ng\n\n#### Source\n\ns\n", key)));
     }
 
     #[test]

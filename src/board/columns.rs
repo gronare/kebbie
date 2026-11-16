@@ -800,7 +800,7 @@ mod tests {
     }
 
     #[test]
-    fn a_vault_note_short_of_its_template_shows_to_write_and_a_written_one_does_not() {
+    fn a_vault_note_that_is_a_draft_shows_to_write_and_a_written_one_in_any_shape_does_not() {
         use crate::backlog_file::State;
         let state = crate::sh::test_dir("board-vault-to-write");
         let written = "## Background\n\nB.\n\n## Goal\n\nThe phone app runs native.\n\n## What we know\n\nK.\n\n## Open questions\n\n## Out of scope\n\nO.\n\n## Source\n\nS.\n";
@@ -813,17 +813,14 @@ mod tests {
         let builtin = crate::item_template::Template::builtin();
         crate::backlog::shape_all(&mut items, &Default::default(), None, &state, &crate::backlog::Templates { local: builtin.clone(), vault: builtin });
         let shaped: Vec<crate::backlog::Entry> = items.into_iter().map(|(entry, _)| entry).collect();
-        assert_eq!(shaped.iter().map(|entry| entry.shape.state).collect::<Vec<_>>(), [Some(State::Ready), Some(State::ToWrite), Some(State::ToWrite), None], "a note with no copy yet is read, never judged to write");
+        assert_eq!(shaped.iter().map(|entry| entry.shape.state).collect::<Vec<_>>(), [Some(State::Ready), Some(State::ToWrite), Some(State::Ready), None], "one line is a draft, a written note with an empty section is not, and a note with no copy yet is read, never judged to write");
         let mut app = test_app(Vec::new());
         app.backlog.entries = shaped;
         app.column = Column::Backlog;
         let screen = render(&mut app, 124, 30).0.join("\n");
-        for (title, state) in [("Old idea", "to write · 25 d"), ("Empty goal", "to write · 25 d")] {
-            let line = screen.lines().find(|line| line.contains(title)).unwrap_or_default();
-            assert!(line.contains(state), "{title}: {screen}");
-        }
-        let line = screen.lines().find(|line| line.contains("Native app")).unwrap_or_default();
-        assert!(!line.contains("to write"), "{screen}");
+        let line = |title: &str| screen.lines().find(|line| line.contains(title)).unwrap_or_default().to_string();
+        assert!(line("Old idea").contains("to write · 25 d"), "{screen}");
+        assert!(!line("Native app").contains("to write") && !line("Empty goal").contains("to write"), "{screen}");
         let _ = std::fs::remove_dir_all(state);
     }
 

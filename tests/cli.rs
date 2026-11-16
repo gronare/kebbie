@@ -522,10 +522,11 @@ fn the_local_backlog_holds_one_file_per_item_next_to_the_machine_config() {
     let written = lab.run_with_stdin(&["backlog", "add", "--repo", "app", "Keep sessions", "-"], body);
     assert!(written.status.success(), "{}", stderr(&written));
     assert!(fs::read_to_string(lab.root.join("backlog/keep-sessions.md")).unwrap().contains("status = \"backlog\"\n"));
-    let half = lab.run_with_stdin(&["backlog", "add", "Half", "-"], "## Background\n\nOnly this.\n");
-    assert!(!half.status.success() && stderr(&half).contains("not written out"), "{}", stderr(&half));
+    let styled = lab.run_with_stdin(&["backlog", "add", "--repo", "app", "Styled", "-"], "Stay signed in.\n\n## Plan\n\n- **Keep the session** in the keychain.\n\n## Left out\n\nSSO.\n");
+    assert!(styled.status.success(), "an item in any shape files: {}", stderr(&styled));
     let shown = stdout(&lab.run(&["backlog"]));
     assert!(shown.contains("Fix login  (local:fix-login · app)  to write") && shown.contains("Keep sessions  (local:keep-sessions · app)  drafting"), "{shown}");
+    assert!(shown.lines().any(|line| line.contains("Styled  (local:styled · app)") && !line.contains("to write")), "{shown}");
 }
 
 #[test]
