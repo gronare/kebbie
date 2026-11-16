@@ -674,7 +674,7 @@ mod tests {
         item.recipe = None;
         let mut app = test_app(vec![item]);
         let (rows, _) = render(&mut app, 120, 30);
-        assert!(!above_card(&render(&mut app, 84, 30).0).join("\n").contains("recipe:"), "a task started by hand without a recipe shows none: {}", rows.join("\n"));
+        assert!(!render(&mut app, 84, 30).0.join("\n").contains("recipe:"), "a task started by hand without a recipe shows none: {}", rows.join("\n"));
     }
 
     #[test]

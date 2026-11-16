@@ -9,6 +9,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The board's ↑ ↓ move task to task, and S lists a task's subtasks to step through inside it.
 
 ### Fixed
+- In a narrow board pane the Work page shows only the tasks, and the card opens in its window from s or ⏎, as before the card column.
 - Answers to a backlog item's questions from your phone reach the lead together, and a reworded question no longer turns an answer away.
 - The questions window sends no answer you did not pick, and approving a plan waits for you to press y, so stray Enters or arrow keys can no longer approve a plan.
 - A task's note line and the Backlog's ongoing notes stay on the board when one refresh cannot read the vault.

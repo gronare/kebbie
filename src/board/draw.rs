@@ -106,6 +106,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         }
     }
 
+    app.beside.shown = false;
     if let Some(error) = &app.error {
         frame.render_widget(Paragraph::new(Span::styled(error.clone(), style(RED))).wrap(Wrap { trim: false }), body);
     } else if !app.loaded {
@@ -129,11 +130,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         render_column(frame, work_area, work, work_selected, work_rows, &mut app.hits);
         app.draw_beside(frame, backlog_area);
     } else {
-        let width = body.width as usize;
-        let (mut lines, work_selected, rows) = work_lines(app, width, true, body.height as usize);
-        let (head, card, _) = app.beside_lines(width);
-        lines.push(Line::default());
-        lines.extend(head.into_iter().chain(card));
+        let (lines, work_selected, rows) = work_lines(app, body.width as usize, true, body.height as usize);
         render_column(frame, body, lines, work_selected, rows, &mut app.hits);
     }
 
@@ -243,6 +240,7 @@ mod tests {
     use crate::messages;
     use crate::board::message_log::Fold;
     use crate::board::{Column, Mode};
+    use ratatui::crossterm::event::KeyCode;
 
     #[test]
     fn at_170_columns_the_selected_task_has_a_detail_panel_between_work_and_its_card_and_its_link_only_there() {
@@ -265,18 +263,20 @@ mod tests {
     }
 
     #[test]
-    fn below_86_columns_the_card_sits_under_work_and_the_details_unfold_under_the_selected_row() {
+    fn below_86_columns_work_stands_alone_and_the_card_opens_only_as_a_window() {
         let mut app = test_app(vec![served("search-filters"), crate::status::tests::task(Some("working"), None, 0)]);
         with_detail(&mut app);
         let (rows, _) = render(&mut app, 84, 50);
         let screen = rows.join("\n");
         let (_, work_y) = find(&rows, "WORK")[0];
-        let (_, backlog_y) = find(&rows, "CARD")[0];
         let (_, row_y) = find(&rows, "▌○ search-filters")[0];
         let (_, url_y) = find(&rows, "https://wt2.web.test")[0];
-        assert!(work_y < row_y && row_y < url_y && url_y < backlog_y, "{screen}");
+        assert!(work_y < row_y && row_y < url_y, "{screen}");
+        assert!(find(&rows, "CARD").is_empty(), "no card under the tasks: {screen}");
         assert!(!screen.contains("a1f3c2e Wire"), "the panel's commit line stays in the wide panel: {screen}");
         assert!(rows[row_y].trim_end().ends_with('●'), "{}", rows[row_y]);
+        press(&mut app, key(KeyCode::Right));
+        assert!(!app.beside.focused, "→ focuses no card that is not on screen");
     }
 
     #[test]

@@ -119,10 +119,6 @@ pub(super) fn assert_whole_link(buffer: &ratatui::buffer::Buffer, url: &str, row
 }
 
 // The rows above the card a narrow board stacks under the tasks.
-pub(super) fn above_card(rows: &[String]) -> Vec<String> {
-    rows.iter().take_while(|row| !row.trim_start().starts_with("CARD ")).cloned().collect()
-}
-
 pub(super) fn find(rows: &[String], text: &str) -> Vec<(usize, usize)> {
     rows.iter().enumerate().filter_map(|(y, row)| row.find(text).map(|byte| (row[..byte].chars().count(), y))).collect()
 }

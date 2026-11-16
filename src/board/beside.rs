@@ -30,6 +30,7 @@ type Answer = (Key, Option<String>, Loaded);
 #[derive(Default)]
 pub(super) struct Beside {
     pub(super) focused: bool,
+    pub(super) shown: bool,
     pub(super) scroll: u16,
     subject: String,
     loads: HashMap<Key, (Option<String>, Loaded)>,
@@ -148,12 +149,15 @@ fn task_lines(item: &Item, detail: Option<&Detail>, width: usize) -> Vec<Line<'s
 impl App {
     // ← → from a row under the tasks or from the tasks themselves.
     pub(super) fn focus_beside(&mut self) {
+        if !self.beside.shown {
+            return;
+        }
         (self.offer_panel.focused, self.offer_panel.on_fixed, self.comment_panel.focused, self.column, self.beside.focused) = (false, false, false, super::Column::Work, true);
     }
 
     // The keys the focused card takes: it scrolls, and ← → or esc hand the keys back to the tasks.
     pub(super) fn beside_key(&mut self, key: &KeyEvent) -> bool {
-        if !self.beside.focused || self.column != super::Column::Work {
+        if !self.beside.focused || !self.beside.shown || self.column != super::Column::Work {
             return false;
         }
         let scroll = &mut self.beside.scroll;
@@ -221,6 +225,7 @@ impl App {
         let rest = Rect { y: area.y + top.height, height: room, ..area };
         frame.render_widget(Paragraph::new(head), top);
         frame.render_widget(Paragraph::new(lines).scroll((self.beside.scroll, 0)), rest);
+        self.beside.shown = true;
         self.hits.push((area, Hit::Beside));
     }
 }

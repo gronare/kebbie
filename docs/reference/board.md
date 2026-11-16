@@ -32,7 +32,7 @@ The status line shows:
 | `⇣ updating kebbie · U` | An update whose window you hid runs. |
 | `✓ kebbie updated · U` | The update's summary waits for you. |
 
-In a narrow pane the card sits under the tasks, and the status line keeps only the counts that are not zero, without their words, so the page tabs still fit.
+In a pane under 86 columns the Work page shows only the tasks, with no card column; `s` or *Show the card* in the options (`⏎`) opens the card in its window. The status line keeps only the counts that are not zero, without their words, so the page tabs still fit.
 
 The lead line shows while the lead is stale, and says what happens next:
 
@@ -571,6 +571,7 @@ COMMITS
 - On a row that is not a task, such as the bugs to send, the Done block or a comment, it says so in one line.
 - `→` or a click focuses it, and `↑` `↓` `pgup` `pgdn` then scroll it; `←` or `esc` gives the keys back to the tasks.
 - `s` opens the card in its window, with its images.
+- Under 86 columns the column is not drawn, and `→` stays on the tasks.
 
 ### The subtask view
 
