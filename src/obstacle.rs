@@ -655,30 +655,7 @@ fn investigate(state: &Path, repo: &Path, worktree: &Path, address: &str, obstac
     let text = fs::read_to_string(&skill).map_err(|error| format!("{}: {error}", skill.display()))?;
     crate::state::write(&prompt, text.trim_end().to_string() + &role)?;
     let answer_file = roles.join(format!("{address}.investigate.answer"));
-    let _ = fs::remove_file(&answer_file);
-    let agent = profile.agent;
-    let reader = crate::agent::Reviewer { model: profile.model.as_deref(), effort: profile.effort.as_deref(), settings: &prompt, prompt: &prompt, rules: None, docs: None, answer: &answer_file };
-    let (program, args) = agent.investigator_command(&reader, &kebbie);
-    let bin = match agent {
-        crate::agent::Agent::Codex => trusted_spawn::codex_from_keeper()?,
-        crate::agent::Agent::Claude => trusted_spawn::claude_from_keeper()?,
-    };
-    let input = agent.reviewer_input(&prompt, &input)?;
-    let mut command = std::process::Command::new(&bin);
-    command.args(&args).current_dir(worktree).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
-    use std::os::unix::process::CommandExt;
-    command.process_group(0);
-    let mut child = command.spawn().map_err(|error| format!("{program}: {error}"))?;
-    use std::io::Write;
-    child.stdin.take().ok_or(format!("{program} has no stdin"))?.write_all(input.as_bytes()).map_err(|error| error.to_string())?;
-    let output = crate::review::wait_within(child, TIMEOUT).map_err(|error| format!("{program} {error}"))?;
-    if !output.status.success() {
-        return Err(format!("{program} stopped with {}: {}", output.status, String::from_utf8_lossy(&output.stderr).trim()));
-    }
-    if agent == crate::agent::Agent::Codex {
-        return fs::read_to_string(&answer_file).map_err(|error| format!("codex left no answer in {}: {error}", answer_file.display()));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    trusted_spawn::ask_helper(&profile, &prompt, &answer_file, worktree, &input, &kebbie, TIMEOUT)
 }
 
 pub fn brief(state: &Path, address: &str, worktree: &Path, obstacle: &Obstacle, kebbie: &str) -> String {

@@ -250,6 +250,32 @@ impl Queue {
     }
 }
 
+// A helper the keeper started (the investigator, the writer) runs the profile's agent with the investigator's tools in cwd; its answer is Claude's output or Codex's last message.
+pub fn ask_helper(profile: &crate::profiles::Profile, prompt: &Path, answer: &Path, cwd: &Path, brief: &str, kebbie: &str, timeout: std::time::Duration) -> Result<String> {
+    let _ = fs::remove_file(answer);
+    let agent = profile.agent;
+    let reader = crate::agent::Reviewer { model: profile.model.as_deref(), effort: profile.effort.as_deref(), settings: prompt, prompt, rules: None, docs: None, answer };
+    let (program, args) = agent.investigator_command(&reader, kebbie);
+    let bin = match agent {
+        crate::agent::Agent::Codex => codex_from_keeper()?,
+        crate::agent::Agent::Claude => claude_from_keeper()?,
+    };
+    let input = agent.reviewer_input(prompt, brief)?;
+    let mut command = Command::new(&bin);
+    command.args(&args).current_dir(cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
+    let mut child = command.spawn().map_err(|error| format!("{program}: {error}"))?;
+    use std::io::Write;
+    child.stdin.take().ok_or(format!("{program} has no stdin"))?.write_all(input.as_bytes()).map_err(|error| error.to_string())?;
+    let output = crate::review::wait_within(child, timeout).map_err(|error| format!("{program} {error}"))?;
+    if !output.status.success() {
+        return Err(format!("{program} stopped with {}: {}", output.status, String::from_utf8_lossy(&output.stderr).trim()));
+    }
+    if agent == crate::agent::Agent::Codex {
+        return fs::read_to_string(answer).map_err(|error| format!("codex left no answer in {}: {error}", answer.display()));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 #[cfg(not(test))]
 fn spawn(command: Command, nonce: &str) -> Result<u32> {
     spawn_now(command, nonce)
