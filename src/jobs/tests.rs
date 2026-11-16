@@ -184,11 +184,13 @@ fn only_the_jobs_own_worker_reports_on_it_and_each_report_counts_once() {
     assert!(!master::part(&state, &job.id, "end.json").exists() && log() == "compiling\n", "another machine's report ends nothing and prints nothing");
     assert_eq!(master::report(&state, &machine(2), &report(0, "compiling\n", None), 112), None);
     assert_eq!(log(), "compiling\n", "a report handed over again is not printed twice");
-    assert!(master::report(&state, &machine(2), &report(1, "linking\n", Some(JobEnd::Exited { code: 65, artifacts: Vec::new() })), 113).unwrap().contains("ended"));
+    assert_eq!(master::report(&state, &machine(2), &report(3, "linking\n", None), 113), None);
+    assert_eq!(log(), "compiling\n[kebbie: 2 reports from studio were lost here, and the output they held with them]\nlinking\n", "a report that never came shows where it is missing");
+    assert!(master::report(&state, &machine(2), &report(4, "", Some(JobEnd::Exited { code: 65, artifacts: Vec::new() })), 113).unwrap().contains("ended"));
     assert!(master::report(&state, &machine(2), &JobReport { job: cluster::new_id().unwrap(), seq: 0, log: String::new(), end: None }, 114).unwrap().contains("no job this machine runs has that id"));
     let mut printed = String::new();
     let followed = master::follow(&state, &job, &mut |text| printed.push_str(text), &mut || {}, &|| 120, &|| false);
-    assert!(matches!(followed, Followed::Ended(JobEnd::Exited { code: 65, .. })) && printed == "compiling\nlinking\n");
+    assert!(matches!(followed, Followed::Ended(JobEnd::Exited { code: 65, .. })) && printed == log());
     let _ = std::fs::remove_dir_all(state);
 }
 

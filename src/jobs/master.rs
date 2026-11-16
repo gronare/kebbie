@@ -66,6 +66,14 @@ pub fn waiting(state: &Path) -> bool {
     all_sent(state).iter().any(|sent| alive(sent.pid))
 }
 
+fn gap(lost: u32, worker: &str) -> String {
+    match lost {
+        0 => String::new(),
+        1 => format!("[kebbie: a report from {worker} was lost here, and the output it held with it]\n"),
+        lost => format!("[kebbie: {lost} reports from {worker} were lost here, and the output they held with them]\n"),
+    }
+}
+
 pub fn report(state: &Path, from: &Id, report: &JobReport, now: u64) -> Option<String> {
     let Some(sent) = read::<Sent>(&part(state, &report.job, "sent.json")) else {
         return Some(format!("jobs: dropped a report from {from} on {}: no job this machine runs has that id", report.job));
@@ -79,8 +87,9 @@ pub fn report(state: &Path, from: &Id, report: &JobReport, now: u64) -> Option<S
     if report.seq < heard.next {
         return None;
     }
-    if !report.log.is_empty() {
-        let appended = crate::state::append_to(&part(state, &sent.id, "log")).and_then(|mut log| log.write_all(report.log.as_bytes()));
+    let text = format!("{}{}", gap(report.seq - heard.next, &sent.worker_name), report.log);
+    if !text.is_empty() {
+        let appended = crate::state::append_to(&part(state, &sent.id, "log")).and_then(|mut log| log.write_all(text.as_bytes()));
         if let Err(error) = appended {
             return Some(format!("jobs: the output of {} was not kept: {error}", sent.name));
         }
