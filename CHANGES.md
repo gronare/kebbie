@@ -5,6 +5,12 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+
+### Fixed
+
+## 0.40.0
+
+### What's new
 - The board stays usable while anything runs: a task's row says what runs and a toast says when it is done.
 - kebbie job run builds or tests a task's worktree on another machine of your hub account, such as an Xcode build on a Mac.
 - kebbie job run takes a repo too big for the hub once its branch is on origin.
