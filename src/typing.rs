@@ -437,7 +437,7 @@ pub(crate) fn submit_start(input: &mut dyn InputBox, typed: Typed) -> Result<Sub
         if matches!(input.read(), Draft::Typed(text) if holds(&text, &typed.text)) {
             typed.seen = true;
         } else if input.now().saturating_sub(typed.at_ms) >= PASTE_WAIT_MS {
-            return Err(format!("its input box did not show the prompt kebbie pasted within {} s", PASTE_WAIT_MS / 1000));
+            return Ok(Submitted::Busy(format!("did not show the prompt kebbie pasted within {} s", PASTE_WAIT_MS / 1000)));
         } else {
             input.pause(LOOK_MS);
         }
@@ -910,7 +910,7 @@ mod tests {
         assert!(taken(Agent::Codex, Some(&legacy), &Draft::Empty, text, at, false), "the rollout says it whatever the box shows");
     }
 
-    // A Claude in a pane, as a start meets it: its box unreadable while it draws its banner, a paste shown as Claude shows it, and Enter dropped this many times.
+    // A Claude in a pane, as a start meets it: its box unreadable while it draws its banner, a paste shown as Claude shows it or swallowed, and Enter dropped this many times.
     struct Claude {
         now: u64,
         drawn_at: u64,
@@ -920,11 +920,12 @@ mod tests {
         pastes: Vec<String>,
         enters: Vec<u64>,
         sent: bool,
+        swallows: bool,
     }
 
     impl Claude {
         fn new(drawn_at: u64, drops: usize, shows: fn(&str) -> String) -> Claude {
-            Claude { now: 0, drawn_at, held: None, drops, shows, pastes: Vec::new(), enters: Vec::new(), sent: false }
+            Claude { now: 0, drawn_at, held: None, drops, shows, pastes: Vec::new(), enters: Vec::new(), sent: false, swallows: false }
         }
     }
 
@@ -947,7 +948,7 @@ mod tests {
         fn paste(&mut self, text: &str) -> Result<()> {
             assert!(self.now >= self.drawn_at, "pasted before the box was drawn");
             self.pastes.push(text.to_string());
-            self.held = Some(text.to_string());
+            self.held = (!self.swallows).then(|| text.to_string());
             Ok(())
         }
         fn enter(&mut self) -> Result<()> {
@@ -1007,6 +1008,14 @@ mod tests {
         let body = &source[source.find("pub(crate) fn submit_start(").unwrap()..];
         let body = &body[..body.find("\n}\n").unwrap()];
         assert!(body.contains("input.paste(") && !body.contains("prompt_agent"), "herdr's agent prompt sends Enter 300 ms after the text, which a starting Claude can lose");
+    }
+
+    #[test]
+    fn a_resumed_claude_that_goes_busy_on_an_inbox_message_and_loses_the_paste_is_busy_so_its_prompt_is_held() {
+        let mut resumed = Claude::new(0, 0, scrolled);
+        resumed.swallows = true;
+        assert_eq!(submit_start(&mut resumed, typed_for(QUEUED_PROMPT)), Ok(Submitted::Busy(format!("did not show the prompt kebbie pasted within {} s", PASTE_WAIT_MS / 1000))), "the 8f8dea4 release smoke's restart lost its prompt here");
+        assert!(resumed.enters.is_empty() && resumed.now >= PASTE_WAIT_MS, "nothing is sent into a box that never showed the paste");
     }
 
     #[test]

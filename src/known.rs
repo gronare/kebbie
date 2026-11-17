@@ -197,11 +197,28 @@ fn save_in(dir: &Path, address: &str, record: &Record) -> Result<()> {
 
 // kebbie started or resumed a session with this role; a resumed one is told, once it is free, what its new role brings.
 pub fn began(address: &str, role: &str, resumed: bool) {
+    if let Some(notice) = began_untold(address, role, resumed) {
+        tell_resumed(address, &notice);
+    }
+}
+
+// As began, but the resumed session's notice is returned for the caller to hold once its own prompt is in, as a notice delivered first makes Claude busy and loses the prompt pasted after it.
+pub fn began_untold(address: &str, role: &str, resumed: bool) -> Option<String> {
+    let mut notice = None;
     let done = crate::lead::roles_dir().and_then(|dir| began_in(&dir, address, &snapshot(role), resumed, &mut |text| {
-        if address == LEAD_LABEL { messages::to_lead(messages::ToLead::Notice, text) } else { messages::hold_for(FROM, address, text, None, Some(messages::NOTICE_KIND)) }
+        notice = Some(text.to_string());
+        Ok(())
     }));
     if let Err(error) = done {
         eprintln!("Could not record which kebbie {address} runs: {error}");
+    }
+    notice
+}
+
+pub fn tell_resumed(address: &str, notice: &str) {
+    let held = if address == LEAD_LABEL { messages::to_lead(messages::ToLead::Notice, notice) } else { messages::hold_for(FROM, address, notice, None, Some(messages::NOTICE_KIND)) };
+    if let Err(error) = held {
+        eprintln!("Could not hold what kebbie tells {address} on its resume: {error}");
     }
 }
 

@@ -502,7 +502,7 @@ fn launch_new(repo: &Path, task: &str, slot: &Slot, address: &str, place: Launch
     name_agent_tab(&agent_pane, task);
     let configured = configured_mode(repo)?;
     let configured = profile.permission_mode.clone().or(configured);
-    let (agent_name, started) = launch(&Launch { note: note.as_deref(), mode: chosen_mode(mode, None, configured.as_deref()), ..place }, &agent_pane, Session::New(new_session_id()?))?;
+    let (agent_name, started, _) = launch(&Launch { note: note.as_deref(), mode: chosen_mode(mode, None, configured.as_deref()), ..place }, &agent_pane, Session::New(new_session_id()?))?;
     let prompted = match &started {
         Ok(started) => send_prompt(profile.agent.name(), started, prompt, |text| crate::typing::prompt_into_empty(&agent_name, text, address), |text| messages::hold_prompt(address, text))
             .map_err(|error| unprompted(profile.agent.name(), "Started", task, &slot.path, &error)),
@@ -565,9 +565,11 @@ pub(crate) struct Prepared {
     pub sandboxed: bool,
     pub git_dir: PathBuf,
     pub tmp: PathBuf,
+    pub notice: Option<String>,
 }
 
 // Every agent kebbie starts or resumes for a task runs with these two files, written afresh: a session without them never reports.
+// A resumed task's notice comes back in Prepared, for the start to hold once its prompt is in.
 fn prepare(place: &Launch, resumed: bool) -> Result<Prepared> {
     let Launch { repo, task, profile, setup_skill, setup_command, rules_skill, ref worktree, vault, note, .. } = *place;
     crate::push_block::warn_if_off(crate::push_block::install(worktree, &state_dir()?)?);
@@ -591,8 +593,8 @@ fn prepare(place: &Launch, resumed: bool) -> Result<Prepared> {
     let settings = crate::lead::write_settings(&crate::lead::roles_dir()?, &address, &written)?;
     let added = profiles::role_section(profile)?;
     let (role, text) = peers::role_file(task, &peers::Place { agent: profile.agent, repo, worktree, setup_skill, setup_command, rules_skill, note, profile: &added, sandboxed: shell })?;
-    crate::known::began(&address, &text, resumed);
-    Ok(Prepared { settings, role, sandboxed: shell, git_dir, tmp })
+    let notice = crate::known::began_untold(&address, &text, resumed);
+    Ok(Prepared { settings, role, sandboxed: shell, git_dir, tmp, notice })
 }
 
 pub(crate) fn task_at(cwd: &Path) -> Option<(PathBuf, Slot)> {
@@ -624,17 +626,25 @@ fn running_task<T>(cwd: &Path, then: impl FnOnce(&Launch) -> Result<T>) -> Resul
 }
 
 pub(crate) fn task_role(cwd: &Path) -> Result<Option<(PathBuf, PathBuf)>> {
-    running_task(cwd, |place| prepare(place, true).map(|prepared| (prepared.settings, prepared.role)))
+    running_task(cwd, |place| prepared_told(place).map(|prepared| (prepared.settings, prepared.role)))
 }
 
 // A task's Codex resumes with the arguments a start of the task has now, so its profile, sandbox and plugin are kebbie's of today, never an older kebbie's flags.
 pub(crate) fn codex_resume_args(cwd: &Path, session: &str) -> Result<Option<Vec<String>>> {
     running_task(cwd, |place| {
         let profile = profile_to_start(place.profile, place.task)?;
-        let prepared = prepare(place, true)?;
+        let prepared = prepared_told(place)?;
         let place = Launch { profile: &profile, worktree: place.worktree.clone(), ..*place };
         Ok(task_args(&place, &prepared, &codex_session(profile.agent), &codex_roots(profile.agent), &Session::Resume(session.to_string())))
     })
+}
+
+fn prepared_told(place: &Launch) -> Result<Prepared> {
+    let prepared = prepare(place, true)?;
+    if let Some(notice) = &prepared.notice {
+        crate::known::tell_resumed(&peers::address(place.task, &name_of(place.repo)), notice);
+    }
+    Ok(prepared)
 }
 
 fn profile_to_start(profile: &Profile, task: &str) -> Result<Profile> {
@@ -670,7 +680,7 @@ pub(crate) fn task_role_now(cwd: &Path) -> Result<Option<(PathBuf, String)>> {
 }
 
 // Starts the task's agent in the pane with its role and settings; the outer error is setup, the inner one is the agent not starting.
-fn launch(place: &Launch, pane: &str, session: Session) -> Result<(String, Result<Started>)> {
+fn launch(place: &Launch, pane: &str, session: Session) -> Result<(String, Result<Started>, Option<String>)> {
     let Launch { repo, task, mode, profile, .. } = *place;
     let moved = profile_to_start(profile, task)?;
     let profile = &moved;
@@ -693,7 +703,7 @@ fn launch(place: &Launch, pane: &str, session: Session) -> Result<(String, Resul
         let record = Record { session: id, mode, profile: Some(profile.name.clone()), agent: Some(agent.key().to_string()), awaits_prompt: agent == Agent::Codex, rollout: None };
         crate::state::write(&session_file(task, repo)?, record_text(&record))?;
     }
-    Ok((agent_name, started))
+    Ok((agent_name, started, prepared.notice))
 }
 
 fn codex_session(agent: Agent) -> crate::agent::codex_setup::Session {
@@ -785,13 +795,16 @@ fn restart(place: &Launch, slot: &Slot, focus: bool, given: Option<&str>) -> Res
         Session::New(_) => true,
     };
     let prompt = prompt_for(&session, given, stored, unheard);
-    let (agent_name, started) = launch(&place, &pane, session)?;
+    let (agent_name, started, notice) = launch(&place, &pane, session)?;
     let address = peers::address(task, &name_of(place.repo));
     let prompted = match &started {
         Ok(started) => send_prompt(agent.name(), started, prompt.as_deref(), |text| crate::typing::prompt_into_empty(&agent_name, text, &address), |text| messages::hold_prompt(&address, text))
             .map_err(|error| unprompted(agent.name(), "Restarted", task, &slot.path, &error)),
         Err(_) => Ok(Asks::default()),
     };
+    if let Some(notice) = &notice {
+        crate::known::tell_resumed(&address, notice);
+    }
     if focus {
         herdr::focus_workspace(&space.workspace_id)?;
     }
@@ -1015,7 +1028,7 @@ mod tests {
     fn a_restarted_codex_task_resumes_with_the_args_a_start_of_it_has_now() {
         let coder = Profile { name: "coder".to_string(), agent: Agent::Codex, model: Some("gpt-6.1-sol".to_string()), effort: Some("high".to_string()), ..profiles::built_in(profiles::TASK).unwrap() };
         let place = |profile| Launch { repo: Path::new("/src/app"), task: "hub-leave-message", mode: None, profile, setup_skill: "", setup_command: None, rules_skill: "", worktree: PathBuf::from("/src/wt1.app"), vault: false, note: None };
-        let prepared = Prepared { settings: PathBuf::from("/s/roles/hub-leave-message@app.settings.json"), role: PathBuf::from("/s/roles/hub-leave-message@app.md"), sandboxed: true, git_dir: PathBuf::from("/src/app/.git/worktrees/wt1.app"), tmp: PathBuf::from("/tmp/kebbie-501/wt1.app-a1b2c3") };
+        let prepared = Prepared { settings: PathBuf::from("/s/roles/hub-leave-message@app.settings.json"), role: PathBuf::from("/s/roles/hub-leave-message@app.md"), sandboxed: true, git_dir: PathBuf::from("/src/app/.git/worktrees/wt1.app"), tmp: PathBuf::from("/tmp/kebbie-501/wt1.app-a1b2c3"), notice: None };
         let codex = crate::agent::codex_setup::Session::default();
         let fresh = task_args(&place(&coder), &prepared, &codex, &[], &Session::New("x".to_string()));
         let resumed = task_args(&place(&coder), &prepared, &codex, &[], &Session::Resume("019b3136".to_string()));
@@ -1026,7 +1039,7 @@ mod tests {
         assert!(resumed.windows(2).any(|pair| pair == ["--model", "gpt-6.2"]) && !resumed.iter().any(|arg| arg == "gpt-6.1-sol"), "a profile changed since the start is the one the restart runs: {resumed:?}");
         let source = include_str!("launch.rs");
         let body = |name: &str| { let start = source.find(&format!("\nfn {name}(")).or_else(|| source.find(&format!("\npub(crate) fn {name}("))).unwrap(); &source[start..start + source[start..].find("\n}\n").unwrap()] };
-        assert!(body("launch").contains("task_args(") && body("codex_resume_args").contains("task_args(") && body("codex_resume_args").contains("prepare(place, true)") && body("codex_resume_args").contains("profile_to_start("), "a restart and a start build a task's Codex arguments the same way");
+        assert!(body("launch").contains("task_args(") && body("codex_resume_args").contains("task_args(") && body("codex_resume_args").contains("prepared_told(place)") && body("codex_resume_args").contains("profile_to_start("), "a restart and a start build a task's Codex arguments the same way");
     }
 
     #[test]
@@ -1070,6 +1083,19 @@ mod tests {
         let launch = &launch[..launch.find("\n}\n").unwrap()];
         assert!(launch.find("drop_held_prompts(").unwrap() < launch.find("agent.start(").unwrap(), "a prompt held for an earlier start is dropped before a new one decides its own");
         assert!(launch.contains("if let Err(error) = messages::drop_held_prompts("), "a busy message log never stops a start");
+    }
+
+    #[test]
+    fn a_restart_holds_its_resume_notice_only_after_its_prompt_is_in_or_held_and_a_busy_box_holds_the_prompt() {
+        let source = include_str!("launch.rs");
+        let body = |name: &str| { let start = source.find(&format!("\nfn {name}(")).unwrap(); &source[start..start + source[start..].find("\n}\n").unwrap()] };
+        assert!(body("prepare").contains("began_untold(") && !body("prepare").contains("known::began("), "a notice held at the start reaches the resumed Claude first and makes it busy as the prompt is pasted");
+        let restart = body("restart");
+        assert!(restart.find("send_prompt(").unwrap() < restart.find("tell_resumed(").unwrap(), "the 8f8dea4 release smoke lost its restart prompt to the resume notice");
+        let held = std::cell::RefCell::new(Vec::new());
+        let busy = send_prompt("Claude", &Started::Ready, Some("Report ready again"), |_| Ok(Some(Unsent::Busy("did not show the prompt kebbie pasted within 5 s".to_string()))), |text| { held.borrow_mut().push(text.to_string()); Ok(()) }).unwrap();
+        assert_eq!(held.into_inner(), ["Report ready again"], "a prompt the box never showed is held, never dropped");
+        assert_eq!(busy.next.as_deref(), Some("Claude's input box did not show the prompt kebbie pasted within 5 s, so kebbie holds the task's prompt and types it in once the box is empty, while the keeper or an open board runs."));
     }
 
     #[test]
