@@ -265,6 +265,8 @@ struct App {
     jobs: Vec<jobs::Job>,
     outcomes: Vec<(Mode, Option<notices::Subject>)>,
     dropper: jobs::Dropper,
+    lead_teller: LeadTeller,
+    telling_drafts: std::sync::Arc<std::sync::atomic::AtomicBool>,
     subtask_row: Option<(String, String)>,
     subtask_io: subtasks::Io,
     reads: subtasks::Reads,
@@ -273,6 +275,8 @@ struct App {
 }
 
 type Updater = std::sync::Arc<dyn Fn() -> Result<String> + Send + Sync>;
+
+type LeadTeller = std::sync::Arc<dyn Fn(&str) -> Result<()> + Send + Sync>;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum BacklogRow {
@@ -485,11 +489,6 @@ impl App {
         self.selected_task().and_then(|item| item.repo)
             .or_else(|| self.checkouts.first().and_then(|checkout| self.repo_named(&checkout.name)))
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
-    }
-
-    fn lead_pane(&self) -> Option<String> {
-        herdr::agents().ok()?.into_iter().find(|agent| agent["name"] == "lead")
-            .and_then(|agent| agent["pane_id"].as_str().map(str::to_string))
     }
 
     // Pages switch only when nothing is open on either.
@@ -867,7 +866,8 @@ impl App {
             Act::Refresh => self.refresh_backlog(),
             Act::Away => {
                 self.subject = Some(notices::Subject::plain("away"));
-                self.show(permit::away(Some(if permit::away_since().is_some() { "off" } else { "on" })));
+                let turn = if permit::away_since().is_some() { "off" } else { "on" };
+                self.in_background(format!("Telling the lead you are {}", if turn == "on" { "away" } else { "back" }), move || permit::away(Some(turn)));
             }
             Act::Update => self.start_update(),
             Act::RestartLead => self.restart_lead(),
@@ -884,14 +884,16 @@ impl App {
     }
 
     fn refresh_backlog(&mut self) {
-        let prompt = backlog::refresh_prompt(&self.sources).map_err(|why| Notice::new(Tone::NotNow, "Nothing for the lead to refresh").detail("why", why).to_string());
-        let result = prompt.and_then(|prompt| match self.lead_pane() {
+        self.subject = Some(notices::Subject::plain("backlog"));
+        let prompt = match backlog::refresh_prompt(&self.sources) {
+            Ok(prompt) => prompt,
+            Err(why) => return self.show(Notice::new(Tone::NotNow, "Nothing for the lead to refresh").detail("why", why).err()),
+        };
+        self.in_background("Asking the lead to refresh the backlog".to_string(), move || match lead_pane() {
             Some(pane) => crate::typing::prompt(&pane, &prompt, "the lead").map(|_| Notice::new(Tone::Moving, "The lead refreshes the backlog").next("It updates here when it is saved.").to_string())
                 .map_err(|refused| Notice::new(Tone::NotNow, format!("Nothing was typed: the lead {}", refused.reason())).next("Ask again once it is clear.").to_string()),
             None => Notice::new(Tone::NotNow, "No lead is running").next("prefix+space starts it.").err(),
         });
-        self.subject = Some(notices::Subject::plain("backlog"));
-        self.show(result);
     }
 
     fn act(&mut self, act: Act) {
@@ -1052,7 +1054,8 @@ impl App {
                     }
                     Act::Permit if item.is_task() => {
                         self.about("permission", &item.name);
-                        self.show(permit::toggle_task(&peers::address(&item.name, &item.place)));
+                        let address = peers::address(&item.name, &item.place);
+                        self.task_in_background(&item.name, item.path.as_deref(), "changing its permission", format!("Changing the lead's permission for {}", item.name), move || permit::toggle_task(&address));
                     }
                     Act::SendReview if item.path.is_some() => {
                         self.about("review", &item.name);
@@ -1233,7 +1236,7 @@ impl App {
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel).map(|outcome| outcome.details.join("\n"))), update: None, progress_file: None, recheck: None, stale: Vec::new(), stale_at: 0, restart_after_update: false,
             agent_offer: None, agent_mode: std::sync::Arc::new(|| config::agent_updates_in(&config::path())), installer: agent_updates::default_install(),
             filter: None, ctrl_c: None, go_again: None, notice: None, lead_chat: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), lead_fresh_starter: std::sync::Arc::new(crate::lead_restart::fresh_now), lead_checker: std::sync::Arc::new(crate::lead::restart_refusal), lead_restarted: std::sync::Arc::default(), lead_context: None, restart_why: String::new(), devices: Vec::new(), subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
-            comments: Vec::new(), comment_panel: Default::default(), comment_dir: None, copier: comments::default_copier(), reopener: comments::default_reopener(), pusher: jobs::live_pusher(), jobs: Vec::new(), outcomes: Vec::new(), dropper: jobs::live_dropper(),
+            comments: Vec::new(), comment_panel: Default::default(), comment_dir: None, copier: comments::default_copier(), reopener: comments::default_reopener(), pusher: jobs::live_pusher(), jobs: Vec::new(), outcomes: Vec::new(), dropper: jobs::live_dropper(), lead_teller: std::sync::Arc::new(crate::backlog_file::tell_lead), telling_drafts: Default::default(),
             subtask_row: None, subtask_io: Default::default(), reads: Default::default(), new_io: Default::default(), beside: Default::default(),
         }
     }
@@ -1339,7 +1342,7 @@ pub fn run(overlay: bool) -> Result<String> {
                             card.reload(&state);
                         }
                         if app.sources.contains(&Source::Local) {
-                            crate::backlog_file::tell_new_drafts();
+                            app.tell_new_drafts();
                         }
                         let kept = app.selected_message().filter(|_| app.message_back > 0).map(|message| message.id.clone());
                         app.messages = snapshot.messages;
@@ -1437,6 +1440,11 @@ pub fn run(overlay: bool) -> Result<String> {
     })();
     restore_terminal();
     result.map(|_| String::new())
+}
+
+fn lead_pane() -> Option<String> {
+    herdr::agents().ok()?.into_iter().find(|agent| agent["name"] == "lead")
+        .and_then(|agent| agent["pane_id"].as_str().map(str::to_string))
 }
 
 fn act_kind(act: Act) -> &'static str {

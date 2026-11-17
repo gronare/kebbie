@@ -64,24 +64,18 @@ impl App {
                 self.task_in_background(&text.clone(), None, "starting", format!("Starting {text}"), move || crate::found::start(&crate::lead::state_dir()?, &crate::permit::Caller::User, &id, Some(&text)));
             }
             Purpose::FoundAdd(id) => {
-                let result = crate::lead::state_dir().and_then(|state| crate::found::add(&state, &crate::permit::Caller::User, &id, &text));
                 self.subject = Some(super::notices::Subject::plain("backlog"));
-                if result.is_ok() {
-                    self.found.retain(|item| item.id != id);
-                }
-                self.show(result);
+                self.found.retain(|item| item.id != id);
+                self.in_background(format!("Telling {text} about it"), move || crate::lead::state_dir().and_then(|state| crate::found::add(&state, &crate::permit::Caller::User, &id, &text)));
             }
             Purpose::BacklogItem => {
                 let label = "Priority: urgent, high, medium or low (empty for none)".to_string();
                 self.mode = Mode::Input { purpose: Purpose::BacklogPriority(text), label, buffer: String::new() };
             }
             Purpose::BacklogPriority(item) => {
-                let result = crate::backlog_file::file_item(&self.sources, &crate::backlog_file::Filing { priority: &text, repo: "", line: &item, words: None, body: None, by: "The user" }, false);
                 self.subject = Some(super::notices::Subject::plain("backlog"));
-                if result.is_ok() {
-                    self.backlog = backlog::load();
-                }
-                self.show(result);
+                let sources = self.sources.clone();
+                self.in_background("Adding it to the backlog".to_string(), move || crate::backlog_file::file_item(&sources, &crate::backlog_file::Filing { priority: &text, repo: "", line: &item, words: None, body: None, by: "The user" }, false));
             }
             Purpose::BacklogName(entry) | Purpose::ClaimedName(entry) | Purpose::BacklogLaterAt(entry, _) if entry.area.is_empty() => {
                 self.subject = Some(super::notices::Subject::plain("start"));

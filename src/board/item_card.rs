@@ -379,10 +379,18 @@ impl App {
             KeyCode::Esc => {}
             KeyCode::Enter if typed.trim().is_empty() => card.typing = Some(typed),
             KeyCode::Enter => {
-                let sent = crate::lead::state_dir().and_then(|state| send_answer(&state, &mut card, typed.trim(), &mut |text| crate::messages::to_lead(crate::messages::ToLead::BacklogItem, text)));
+                let mut told = None;
+                let sent = crate::lead::state_dir().and_then(|state| send_answer(&state, &mut card, typed.trim(), &mut |text| {
+                    told = Some(text.to_string());
+                    Ok(())
+                }));
+                self.subject = Some(super::notices::Subject::plain("backlog"));
                 if let Err(error) = sent {
-                    self.subject = Some(super::notices::Subject::plain("backlog"));
                     return self.show(Err(error));
+                }
+                if let Some(text) = told {
+                    let tell = self.lead_teller.clone();
+                    self.in_background("Telling the lead your answer".to_string(), move || tell(&text).map(|_| String::new()));
                 }
             }
             KeyCode::Backspace => {
@@ -403,12 +411,12 @@ impl App {
     // Write it out, in the item's options: the lead hears it, and the row shows writing… from now, without waiting for the next read of the backlog.
     pub(super) fn write_out(&mut self, entry: &Entry) {
         let now = crate::messages::now();
-        let result = crate::lead::state_dir().and_then(|state| crate::backlog_file::write_out(&state, entry, "The user", &crate::backlog_file::dir(), now, &|text| crate::backlog_writer::hand(&state, text, &crate::permit::Caller::User, &crate::backlog_file::tell_lead)));
-        if result.is_ok() && let Some(shown) = self.backlog.entries.iter_mut().find(|shown| shown.source == entry.source && shown.reference == entry.reference) {
+        if let Some(shown) = self.backlog.entries.iter_mut().find(|shown| shown.source == entry.source && shown.reference == entry.reference) {
             (shown.shape.state, shown.shape.writing) = (Some(State::Drafting), Some(now));
         }
         self.subject = Some(super::notices::Subject::plain("backlog"));
-        self.show(result);
+        let entry = entry.clone();
+        self.in_background(format!("Asking the lead to write out {}", entry.title), move || crate::lead::state_dir().and_then(|state| crate::backlog_file::write_out(&state, &entry, "The user", &crate::backlog_file::dir(), now, &|text| crate::backlog_writer::hand(&state, text, &crate::permit::Caller::User, &crate::backlog_file::tell_lead))));
     }
 
     // The note a merged row went into, as the backlog lists it, else by its path alone.
@@ -539,6 +547,37 @@ mod tests {
     }
 
     #[test]
+    fn an_answer_goes_to_the_lead_from_a_thread_while_the_card_and_the_board_keep_taking_keys() {
+        use std::sync::{Arc, Mutex};
+        let mut app = test_app(vec![served("billing"), served("search")]);
+        let (go, wait) = std::sync::mpsc::channel::<()>();
+        let wait = Arc::new(Mutex::new(wait));
+        let told = Arc::new(Mutex::new(Vec::new()));
+        let seen = told.clone();
+        app.lead_teller = Arc::new(move |text| {
+            let _ = wait.lock().unwrap().recv();
+            seen.lock().unwrap().push(text.to_string());
+            Ok(())
+        });
+        let mut shown = card("Projects/answer-thread.md");
+        shown.typing = Some("Only the e2e job.".to_string());
+        app.mode = Mode::ItemCard(Box::new(shown));
+        press(&mut app, key(KeyCode::Enter));
+        let Mode::ItemCard(open) = &app.mode else { panic!("the card stays open while the lead is told") };
+        assert!(open.pick == 1 && open.typing.is_none(), "the card moves on to the next question at once");
+        press(&mut app, key(KeyCode::Esc));
+        assert!(matches!(app.mode, Mode::Normal), "esc closes the card while the lead is told");
+        let before = app.work_selected;
+        press(&mut app, key(KeyCode::Char('j')));
+        assert_ne!(app.work_selected, before, "j moves while the lead is told");
+        assert!(told.lock().unwrap().is_empty());
+        go.send(()).unwrap();
+        settle_jobs(&mut app);
+        assert!(told.lock().unwrap()[0].contains("Answer: \"Only the e2e job.\""), "{:?}", told.lock().unwrap());
+        assert!(matches!(app.mode, Mode::Normal) && app.toast.is_none(), "a told answer says nothing more");
+    }
+
+    #[test]
     fn g_on_an_item_with_questions_waiting_is_refused_once_and_starts_on_g_again() {
         let mut app = test_app(Vec::new());
         app.column = super::super::Column::Backlog;
@@ -577,6 +616,7 @@ mod tests {
             press(&mut app, key(KeyCode::Char(character)));
         }
         press(&mut app, key(KeyCode::Enter));
+        settle_jobs(&mut app);
         let toast = app.toast.as_ref().map(|toast| toast.notice.clone()).unwrap();
         assert_eq!((toast.headline.as_str(), toast.next.as_deref()), ("Sent to the lead", Some("It writes the item out and files it in the vault. Its row waits here until the note replaces it.")));
         let state = crate::lead::state_dir().unwrap();

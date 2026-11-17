@@ -273,16 +273,15 @@ impl App {
 
     fn reopen_comment(&mut self, comment: &Comment, words: Option<&str>) {
         let Some(state) = self.comment_state() else { return };
-        let running = |name: &str| crate::tasks::find_task(&comment.repo, Some(name), &comment.repo).is_ok();
-        let decided = comments::reopen(comment, words, &crate::messages::load(), &running);
-        let result = decided.and_then(|reopen| {
-            let said = (self.reopener)(&reopen)?;
-            comments::mark_reopened(&state, comment.id, &reopen, words, &crate::repo::name_of(&comment.repo))?;
-            Ok(said)
-        });
+        let (comment, words, reopener) = (comment.clone(), words.map(str::to_string), self.reopener.clone());
         self.subject = Some(super::notices::Subject::plain("comment"));
-        self.reload_comments();
-        self.show(result);
+        self.in_background(format!("Sending {}'s comment on", comment.author), move || {
+            let running = |name: &str| crate::tasks::find_task(&comment.repo, Some(name), &comment.repo).is_ok();
+            let reopen = comments::reopen(&comment, words.as_deref(), &crate::messages::load(), &running)?;
+            let said = reopener(&reopen)?;
+            comments::mark_reopened(&state, comment.id, &reopen, words.as_deref(), &crate::repo::name_of(&comment.repo))?;
+            Ok(said)
+        }).then(App::reload_comments);
     }
 
     fn open_on_github(&mut self, comment: &Comment) {
@@ -674,6 +673,7 @@ mod tests {
         });
         app.mode = Mode::Comment { id: 1, scroll: 0, nudged: false };
         press(&mut app, key(KeyCode::Char('1')));
+        settle_jobs(&mut app);
         let reopened = asked.lock().unwrap().clone();
         assert!(matches!(&reopened[..], [Reopen::Start { name, prompt, .. }] if name == "refunds-in-part-followup" && prompt.contains("Addresses johan's comment on 3f2a9c1.")), "the task that pushed has ended, so a follow-up starts: {reopened:?}");
         let card = comments::load(&state, 1).unwrap();

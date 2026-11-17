@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Style;
@@ -16,8 +16,8 @@ use super::input::{StartWith, start_in_background};
 use super::widgets::{MAUVE, MUTED, RED, SURFACE, TEAL, TEXT, modal, style, wrap};
 use super::{App, Mode};
 
-pub(super) type Start = Rc<dyn Fn(&Path, &str, &str) -> Result<String>>;
-pub(super) type File = Rc<dyn Fn(&[Source], &str, &str) -> Result<String>>;
+pub(super) type Start = Arc<dyn Fn(&Path, &str, &str) -> Result<String> + Send + Sync>;
+pub(super) type File = Arc<dyn Fn(&[Source], &str, &str) -> Result<String> + Send + Sync>;
 
 // How a new task starts and how its description is filed, apart so tests start nothing.
 pub(super) struct Io {
@@ -27,7 +27,7 @@ pub(super) struct Io {
 
 impl Default for Io {
     fn default() -> Self {
-        Io { start: Rc::new(start), file: Rc::new(file) }
+        Io { start: Arc::new(start), file: Arc::new(file) }
     }
 }
 
@@ -177,37 +177,33 @@ impl App {
     fn do_new_task(&mut self, mut new: Box<NewTask>, choice: Choice) {
         let Some(repo) = new.repos.get(new.repo).cloned() else { return };
         let text = new.text.trim().to_string();
-        let (result, subject) = match choice {
+        let job = match choice {
             Choice::Start => {
                 let tasks: Vec<String> = self.tasks.iter().filter(|item| item.repo.as_ref() == Some(&repo)).map(|item| item.name.clone()).collect();
                 let name = task_name(&text, |name| tasks.iter().any(|task| task == name) || branch_exists(&repo, name));
-                ((self.new_io.start)(&repo, &name, &text), super::notices::Subject { kind: "start".to_string(), title: name, task: false })
+                self.subject = Some(super::notices::Subject { kind: "start".to_string(), title: name.clone(), task: false });
+                let (start, started) = (self.new_io.start.clone(), name.clone());
+                self.task_in_background(&name, None, "starting", format!("Starting {name}"), move || start(&repo, &started, &text))
             }
             Choice::Backlog => {
-                let result = (self.new_io.file)(&self.sources, &name_of(&repo), &text);
-                if result.is_ok() {
-                    self.backlog = crate::backlog::load();
-                }
-                (result, super::notices::Subject::plain("backlog"))
+                self.subject = Some(super::notices::Subject::plain("backlog"));
+                let (file, sources) = (self.new_io.file.clone(), self.sources.clone());
+                Some(self.in_background(format!("Adding it to {}'s backlog", name_of(&repo)), move || file(&sources, &name_of(&repo), &text)))
             }
         };
-        match result {
-            Ok(said) => {
-                self.subject = Some(subject);
-                self.show(Ok(said));
-            }
-            Err(error) => {
+        if let Some(job) = job {
+            job.ask_again(move |error| {
                 new.choice = Some(choice);
-                new.failed = Some(crate::notice::Notice::read(&error, true).to_string());
-                self.mode = Mode::NewTask(new);
-            }
+                new.failed = Some(crate::notice::Notice::read(error, true).to_string());
+                Some(Mode::NewTask(new))
+            });
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
+    use std::sync::Mutex;
 
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -220,16 +216,16 @@ mod tests {
         }
     }
 
-    fn recorded(app: &mut App) -> Rc<RefCell<Vec<String>>> {
-        let seen = Rc::new(RefCell::new(Vec::new()));
+    fn recorded(app: &mut App) -> Arc<Mutex<Vec<String>>> {
+        let seen = Arc::new(Mutex::new(Vec::new()));
         let (started, filed) = (seen.clone(), seen.clone());
         app.new_io = Io {
-            start: Rc::new(move |repo, name, text| {
-                started.borrow_mut().push(format!("start {} {name} {text}", repo.display()));
+            start: Arc::new(move |repo, name, text| {
+                started.lock().unwrap().push(format!("start {} {name} {text}", repo.display()));
                 crate::notice::Notice::new(crate::notice::Tone::Done, "Started").ok()
             }),
-            file: Rc::new(move |_, repo, text| {
-                filed.borrow_mut().push(format!("file {repo} {text}"));
+            file: Arc::new(move |_, repo, text| {
+                filed.lock().unwrap().push(format!("file {repo} {text}"));
                 crate::notice::Notice::new(crate::notice::Tone::Done, "Added").ok()
             }),
         };
@@ -275,7 +271,8 @@ mod tests {
         assert!(matches!(&app.mode, Mode::NewTask(new) if new.choice.is_none() && new.text == "Fix the disk warning on the board"), "esc goes back to the text");
         press(&mut app, key(KeyCode::Enter));
         press(&mut app, key(KeyCode::Char('s')));
-        assert_eq!(seen.borrow().as_slice(), ["start /nowhere/kebbie fix-disk-warning-board Fix the disk warning on the board"]);
+        settle_jobs(&mut app);
+        assert_eq!(seen.lock().unwrap().as_slice(), ["start /nowhere/kebbie fix-disk-warning-board Fix the disk warning on the board"]);
     }
 
     #[test]
@@ -291,11 +288,12 @@ mod tests {
         press(&mut app, key(KeyCode::Enter));
         press(&mut app, key(KeyCode::Right));
         press(&mut app, key(KeyCode::Enter));
-        assert_eq!(seen.borrow().as_slice(), ["file kebbie-hub Rerun a flaky test once"]);
+        settle_jobs(&mut app);
+        assert_eq!(seen.lock().unwrap().as_slice(), ["file kebbie-hub Rerun a flaky test once"]);
     }
 
     fn failing(app: &mut App) {
-        app.new_io = Io { start: Rc::new(|_, _, _| Err("kebbie start: no such repo".to_string())), file: Rc::new(|_, _, _| Err("the backlog file is read-only".to_string())) };
+        app.new_io = Io { start: Arc::new(|_, _, _| Err("kebbie start: no such repo".to_string())), file: Arc::new(|_, _, _| Err("the backlog file is read-only".to_string())) };
     }
 
     #[test]
@@ -307,7 +305,8 @@ mod tests {
             typed(&mut app, "Fix the disk warning");
             press(&mut app, key(KeyCode::Enter));
             press(&mut app, key(KeyCode::Char(letter)));
-            assert!(matches!(&app.mode, Mode::NewTask(new) if new.text == "Fix the disk warning" && new.choice == Some(choice)), "{letter}: the dialog stays");
+            settle_jobs(&mut app);
+            assert!(matches!(&app.mode, Mode::NewTask(new) if new.text == "Fix the disk warning" && new.choice == Some(choice)), "{letter}: the dialog comes back");
             assert!(render(&mut app, 100, 30).0.join("\n").contains(said), "{letter}: the error shows in the dialog");
             press(&mut app, key(KeyCode::Esc));
             assert!(matches!(&app.mode, Mode::NewTask(new) if new.choice.is_none() && new.text == "Fix the disk warning"), "{letter}: esc goes back to the text");
@@ -326,9 +325,10 @@ mod tests {
         assert!(screen.contains("s Start now") && !screen.contains("backlog") && screen.contains("⏎ / s start · esc back to the text"), "{screen}");
         press(&mut app, key(KeyCode::Char('b')));
         press(&mut app, key(KeyCode::Right));
-        assert!(matches!(&app.mode, Mode::NewTask(new) if new.choice == Some(Choice::Start)) && seen.borrow().is_empty(), "b and → do nothing");
+        assert!(matches!(&app.mode, Mode::NewTask(new) if new.choice == Some(Choice::Start)) && seen.lock().unwrap().is_empty(), "b and → do nothing");
         press(&mut app, key(KeyCode::Enter));
-        assert_eq!(seen.borrow().len(), 1);
+        settle_jobs(&mut app);
+        assert_eq!(seen.lock().unwrap().len(), 1);
     }
 
     #[test]

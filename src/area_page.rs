@@ -522,16 +522,21 @@ impl Page {
     }
 
     fn refresh_backlog(&mut self, area: &Area) {
-        let vault = self.sources.contains(&Source::Vault);
-        let result = backlog::refresh_prompt(&self.sources).and_then(|prompt| match lead_pane() {
-            Some(pane) if vault => crate::typing::prompt(&pane, &format!("{prompt} Then check that the vault backlog for [[{}]] is current: close what is done, park what is stale.", area.stem), "the lead")
-                .map(|_| format!("Asked the lead to refresh the backlog and [[{}]]'s notes; this page catches up once the vault index does.", area.stem)).map_err(|refused| format!("Nothing was typed: the lead {}; ask again once it is clear.", refused.reason())),
-            Some(pane) => crate::typing::prompt(&pane, &prompt, "the lead").map(|_| "Asked the lead to refresh the backlog; the board's Backlog tab updates when it is saved.".to_string()).map_err(|refused| format!("Nothing was typed: the lead {}; ask again once it is clear.", refused.reason())),
-            None => Err("No lead is running; prefix+space starts it.".to_string()),
-        });
-        self.show(result);
+        let (vault, sources, stem) = (self.sources.contains(&Source::Vault), self.sources.clone(), area.stem.clone());
+        self.runs.start("Asking the lead to refresh the backlog".to_string(), move || After::Show(refresh_by_lead(&sources, vault, &stem), None));
     }
+}
 
+fn refresh_by_lead(sources: &[Source], vault: bool, stem: &str) -> Result<String> {
+    backlog::refresh_prompt(sources).and_then(|prompt| match lead_pane() {
+        Some(pane) if vault => crate::typing::prompt(&pane, &format!("{prompt} Then check that the vault backlog for [[{stem}]] is current: close what is done, park what is stale."), "the lead")
+            .map(|_| format!("Asked the lead to refresh the backlog and [[{stem}]]'s notes; this page catches up once the vault index does.")).map_err(|refused| format!("Nothing was typed: the lead {}; ask again once it is clear.", refused.reason())),
+        Some(pane) => crate::typing::prompt(&pane, &prompt, "the lead").map(|_| "Asked the lead to refresh the backlog; the board's Backlog tab updates when it is saved.".to_string()).map_err(|refused| format!("Nothing was typed: the lead {}; ask again once it is clear.", refused.reason())),
+        None => Err("No lead is running; prefix+space starts it.".to_string()),
+    })
+}
+
+impl Page {
     // Asks each of the action's questions in turn, prefilled from a previous action's answers, or the next patch for a version.
     fn begin(&mut self, area: &Area, action: Action, carried: Answers) {
         self.ask(area.stem.clone(), action, Vec::new(), carried);

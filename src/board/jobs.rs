@@ -33,6 +33,8 @@ pub(super) fn live_dropper() -> Dropper {
 // A window a failed job opens in place of its notice, such as the forced drop to confirm.
 type AskAgain = Box<dyn FnOnce(&str) -> Option<Mode>>;
 
+type After = Box<dyn FnOnce(&mut App)>;
+
 // The step a job is at: the task it works on now and what it does there.
 type Step = Arc<Mutex<Option<(String, String)>>>;
 
@@ -47,11 +49,17 @@ pub(super) struct Job {
     subject: Option<Subject>,
     result: Receiver<Result<String>>,
     ask_again: Option<AskAgain>,
+    after: Option<After>,
 }
 
 impl Job {
     pub(super) fn ask_again(&mut self, ask: impl FnOnce(&str) -> Option<Mode> + 'static) {
         self.ask_again = Some(Box::new(ask));
+    }
+
+    // What the board reads again once the job is done, before its outcome shows.
+    pub(super) fn then(&mut self, after: impl FnOnce(&mut App) + 'static) {
+        self.after = Some(Box::new(after));
     }
 
     fn step(&self) -> Option<(String, String)> {
@@ -83,9 +91,9 @@ impl App {
     }
 
     // Work for no one task, such as the lead's restart or a device's answer; its outcome names what self.subject says.
-    pub(super) fn in_background(&mut self, label: String, work: impl FnOnce() -> Result<String> + Send + 'static) {
+    pub(super) fn in_background(&mut self, label: String, work: impl FnOnce() -> Result<String> + Send + 'static) -> &mut Job {
         let subject = self.subject.take();
-        self.start_job(Vec::new(), label, "working", subject, Step::default(), work);
+        self.start_job(Vec::new(), label, "working", subject, Step::default(), work)
     }
 
     // Work on one task; a task the board already works on takes no second job until the first is done.
@@ -104,9 +112,21 @@ impl App {
             let _ = sender.send(work());
         });
         let label = label.trim_end_matches('…').to_string();
-        self.jobs.push(Job { tasks, label, doing: doing.to_string(), step, subject, result, ask_again: None });
+        self.jobs.push(Job { tasks, label, doing: doing.to_string(), step, subject, result, ask_again: None, after: None });
         let _ = self.refresh.send(());
         self.jobs.last_mut().expect("just pushed")
+    }
+
+    // The lead hears of new drafts from a thread, one telling at a time, as the snapshot that finds them comes every few seconds.
+    pub(super) fn tell_new_drafts(&self) {
+        if self.telling_drafts.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        let telling = self.telling_drafts.clone();
+        thread::spawn(move || {
+            crate::backlog_file::tell_new_drafts();
+            telling.store(false, std::sync::atomic::Ordering::SeqCst);
+        });
     }
 
     // What the board is doing to the task now, if anything.
@@ -135,6 +155,9 @@ impl App {
                 Ok(result) => {
                     let mut job = self.jobs.remove(at);
                     self.drop_restarted_lead();
+                    if let Some(after) = job.after.take() {
+                        after(self);
+                    }
                     if let (Err(error), Some(ask)) = (&result, job.ask_again.take())
                         && let Some(window) = ask(error)
                     {
