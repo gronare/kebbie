@@ -23,6 +23,9 @@ use crate::vault_found::{Found, Origin};
 
 pub const MINDIN_INSTALL: &str = "curl -fsSL https://mindin.dev/install.sh | sh";
 
+// Without --no-setup the installer asks where the vault lives itself, and then kebbie's own mindin setup asks again.
+const MINDIN_INSTALL_ONLY: &str = "curl -fsSL https://mindin.dev/install.sh | sh -s -- --no-setup";
+
 // The hosted mindin service's address; while it is None, Hosted mindin shows as coming soon and cannot be chosen.
 pub const HOSTED_VAULT: Option<&str> = None;
 
@@ -950,7 +953,7 @@ impl Guide {
         let config = self.codex_home_shown("config.toml");
         let claude = Path::new(&self.facts.claude_bin).file_name().map_or(self.facts.claude_bin.clone(), |name| name.to_string_lossy().to_string());
         self.plan().iter().filter_map(|row| match &row.act {
-            Act::InstallMindin => Some(format!("{MINDIN_INSTALL} first, in this terminal")),
+            Act::InstallMindin => Some(format!("{MINDIN_INSTALL_ONLY} first, in this terminal")),
             Act::VaultSetup(command, flags) => Some(format!("{} in this terminal{}", setup_script(&shown_command(command), flags), self.setup_asks())),
             Act::Rules(text) => Some(format!("writes {}, {} lines", self.codex_home_shown(codex_setup::RULES_FILE), text.lines().count())),
             Act::CodexVault(command) if self.codex_server_placed(command) == Placed::Differs => Some(format!("replaces [mcp_servers.vault] in {config}; the rest of the file stays as it is")),
@@ -1057,7 +1060,7 @@ fn installed_mindin(env: &Env) -> Option<PathBuf> {
 }
 
 fn install_mindin(env: &Env, hooks: &mut dyn Hooks) -> (Outcome, Option<Vec<String>>) {
-    if let Err(error) = hooks.outside(MINDIN_INSTALL) {
+    if let Err(error) = hooks.outside(MINDIN_INSTALL_ONLY) {
         return (Outcome::new("failed", format!("mindin's installer stopped: {error}")), None);
     }
     match installed_mindin(env) {
@@ -1576,6 +1579,10 @@ impl Guide {
     }
 }
 
+fn running(script: &str) -> String {
+    format!("\n  \x1b[2m→ {script}\x1b[0m\n")
+}
+
 struct Screen<'a> {
     terminal: &'a mut ratatui::DefaultTerminal,
     guide: &'a mut Guide,
@@ -1590,7 +1597,7 @@ impl Hooks for Screen<'_> {
 
     fn outside(&mut self, script: &str) -> Result<()> {
         crate::board::terminal::outside(self.terminal, || {
-            println!("\nkebbie setup runs: {script}\n");
+            println!("{}", running(script));
             crate::sh::run_visibly("sh", &["-c", script], None)
         })
     }
@@ -2066,8 +2073,9 @@ mod tests {
         let mut fake = Fake { installs: Some(lab.machine.home.join(".local/bin")), ..Fake::new() };
         let done = apply(&vault, &lab.env(), &mut fake);
         let mindin = lab.machine.home.join(".local/bin/mindin").display().to_string();
-        assert_eq!(fake.ran, [MINDIN_INSTALL.to_string(), format!("{mindin} setup --server https://notes.example.org")], "the installer, then mindin's setup, each outside the guide's screen");
+        assert_eq!(fake.ran, ["curl -fsSL https://mindin.dev/install.sh | sh -s -- --no-setup".to_string(), format!("{mindin} setup --server https://notes.example.org")], "the installer asks nothing, then mindin's setup asks once, each outside the guide's screen");
         assert!(done.iter().all(|(_, outcome)| outcome.verb != "failed"), "{done:?}");
+        assert_eq!(running(&fake.ran[1]), format!("\n  \x1b[2m→ {mindin} setup --server https://notes.example.org\x1b[0m\n"), "the line before a step outside sits indented and dim, as the installers' own do");
         assert_eq!(lab.config(), format!("[vault]\ncommand = \"{mindin}\"\n"));
         assert!(lab.codex_config().starts_with("# mine\nmodel_reasoning_effort = \"high\"\n") && lab.codex_config().contains(&format!("command = \"{mindin}\"")), "{}", lab.codex_config());
     }
@@ -2144,7 +2152,7 @@ mod tests {
         let rows = plan(&guide);
         assert_eq!(rows[..2], ["mindin to do install mindin, which then runs the vault".to_string(), "mindin to do setup your own server https://vault.example.com".to_string()], "the install and the setup come first, as the rest points at them");
         assert!(rows.contains(&"kebbie to do vault vault.command = the mindin it installs".to_string()) && rows.contains(&"Claude Code to do vault the vault plugin vault@gronare".to_string()), "{rows:?}");
-        assert!(screen(&guide).contains(&format!("runs: {MINDIN_INSTALL} first, in this terminal")), "{}", screen(&guide));
+        assert!(screen(&guide).contains(&format!("runs: {MINDIN_INSTALL_ONLY} first, in this terminal")), "{}", screen(&guide));
         let vault: Vec<Planned> = guide.plan().into_iter().filter(|row| row.group == MINDIN || row.step == "vault").collect();
         let none = apply(&vault, &lab.env(), &mut Fake::new());
         assert!(none[0].1.verb == "failed" && none[1].1.verb == "skipped" && none[2].1.detail.contains("mindin is not installed"), "an installer that leaves no mindin runs no setup and points nothing at it: {none:?}");

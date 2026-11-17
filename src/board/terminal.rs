@@ -1,6 +1,7 @@
 use std::io::Write;
 
 use ratatui::crossterm::event::{DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange, EnableMouseCapture};
+use ratatui::crossterm::cursor::Show;
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{Clear, ClearType, EnterAlternateScreen};
 use ratatui::backend::{Backend, CrosstermBackend};
@@ -14,8 +15,9 @@ fn modes_on(out: &mut impl Write) {
     let _ = execute!(out, EnableMouseCapture, EnableBracketedPaste, EnableFocusChange);
 }
 
+// The board hides the cursor and ratatui::restore never shows it again, so a shell or prompt after the board would type blind.
 fn modes_off(out: &mut impl Write) {
-    let _ = execute!(out, DisableMouseCapture, DisableBracketedPaste, DisableFocusChange);
+    let _ = execute!(out, DisableMouseCapture, DisableBracketedPaste, DisableFocusChange, Show);
 }
 
 pub fn init_terminal() -> DefaultTerminal {
@@ -187,6 +189,7 @@ mod tests {
         let (on, off) = (String::from_utf8(on).unwrap(), String::from_utf8(off).unwrap());
         assert!(on.contains("\x1b[?2004h") && on.contains("\x1b[?1000h"), "{on:?}");
         assert!(off.contains("\x1b[?2004l") && off.contains("\x1b[?1000l"), "{off:?}");
+        assert!(off.contains("\x1b[?25h"), "a step outside the board, and the shell after it, gets its cursor back: {off:?}");
         let source = include_str!("terminal.rs");
         let restore = &source[source.find("pub fn restore_terminal").unwrap()..];
         assert!(restore[..restore.find('}').unwrap()].contains("modes_off("));

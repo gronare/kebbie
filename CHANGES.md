@@ -26,6 +26,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Answers to a backlog item's questions from your phone reach the lead together.
 - Stray Enters or arrow keys in the questions window can no longer approve a plan or send an answer.
 - A task's note line and the Backlog's notes stay on the board when one refresh cannot read the vault.
+- kebbie setup asks where the vault lives once, and the cursor shows while mindin runs.
 
 ## 0.39.1
 
