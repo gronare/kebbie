@@ -252,6 +252,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
 dependencies = [
  "axum-core",
+ "base64 0.22.1",
  "bytes",
  "form_urlencoded",
  "futures-util",
@@ -270,8 +271,10 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "serde_urlencoded",
+ "sha1",
  "sync_wrapper",
  "tokio",
+ "tokio-tungstenite",
  "tower",
  "tower-layer",
  "tower-service",
@@ -1844,15 +1847,17 @@ dependencies = [
  "toml",
  "toml_edit",
  "tui-markdown",
+ "tungstenite",
  "unicode-width",
  "ureq",
+ "webpki-roots",
  "yaml-rust2",
 ]
 
 [[package]]
 name = "kebbie-hub"
 version = "0.1.0"
-source = "git+https://github.com/gronare/kebbie-hub?rev=783bf2c19a8443543ce6a99f33fb56a49deaf932#783bf2c19a8443543ce6a99f33fb56a49deaf932"
+source = "git+https://github.com/gronare/kebbie-hub?rev=951d03c46f6c8e86ae79eae38cf8c790ba4c8652#951d03c46f6c8e86ae79eae38cf8c790ba4c8652"
 dependencies = [
  "aes-gcm",
  "axum",
@@ -1885,7 +1890,7 @@ dependencies = [
 [[package]]
 name = "kebbie-hub-api"
 version = "0.1.0"
-source = "git+https://github.com/gronare/kebbie-hub?rev=783bf2c19a8443543ce6a99f33fb56a49deaf932#783bf2c19a8443543ce6a99f33fb56a49deaf932"
+source = "git+https://github.com/gronare/kebbie-hub?rev=951d03c46f6c8e86ae79eae38cf8c790ba4c8652#951d03c46f6c8e86ae79eae38cf8c790ba4c8652"
 dependencies = [
  "base64 0.23.1",
  "kebbie-hub-protocol",
@@ -1896,7 +1901,7 @@ dependencies = [
 [[package]]
 name = "kebbie-hub-fakes"
 version = "0.1.0"
-source = "git+https://github.com/gronare/kebbie-hub?rev=783bf2c19a8443543ce6a99f33fb56a49deaf932#783bf2c19a8443543ce6a99f33fb56a49deaf932"
+source = "git+https://github.com/gronare/kebbie-hub?rev=951d03c46f6c8e86ae79eae38cf8c790ba4c8652#951d03c46f6c8e86ae79eae38cf8c790ba4c8652"
 dependencies = [
  "aes-gcm",
  "base64 0.23.1",
@@ -1919,7 +1924,7 @@ dependencies = [
 [[package]]
 name = "kebbie-hub-protocol"
 version = "0.1.0"
-source = "git+https://github.com/gronare/kebbie-hub?rev=783bf2c19a8443543ce6a99f33fb56a49deaf932#783bf2c19a8443543ce6a99f33fb56a49deaf932"
+source = "git+https://github.com/gronare/kebbie-hub?rev=951d03c46f6c8e86ae79eae38cf8c790ba4c8652#951d03c46f6c8e86ae79eae38cf8c790ba4c8652"
 dependencies = [
  "aes-gcm",
  "base64 0.23.1",
@@ -3440,6 +3445,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1"
+version = "0.10.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.2.17",
+ "digest 0.10.7",
+]
+
+[[package]]
 name = "sha1_smol"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3928,6 +3944,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-tungstenite"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f72a05e828585856dacd553fba484c242c46e391fb0e58917c942ee9202915c"
+dependencies = [
+ "futures-util",
+ "log",
+ "tokio",
+ "tungstenite",
+]
+
+[[package]]
 name = "tokio-util"
 version = "0.7.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4084,6 +4112,22 @@ dependencies = [
  "pulldown-cmark",
  "ratatui-core",
  "tracing",
+]
+
+[[package]]
+name = "tungstenite"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c01152af293afb9c7c2a57e4b559c5620b421f6d133261c60dd2d0cdb38e6b8"
+dependencies = [
+ "bytes",
+ "data-encoding",
+ "http",
+ "httparse",
+ "log",
+ "rand 0.9.5",
+ "sha1",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

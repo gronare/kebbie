@@ -1,6 +1,6 @@
 use std::io::{ErrorKind, Read, Write};
 use std::net::TcpStream;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rustls::{ClientConnection, ServerConnection, StreamOwned};
 use serde::{Deserialize, Serialize};
@@ -8,21 +8,52 @@ use serde::{Deserialize, Serialize};
 pub const MAX_FRAME: usize = 1024 * 1024;
 pub const CHUNK: usize = 256 * 1024;
 
-// A byte stream a link runs over, which can wait a bounded time for the next bytes.
-pub trait Pipe: Read + Write + Send {
+// How often a side that has nothing to say sends a beat, and how long the other waits without a word before it gives the link up.
+pub const BEAT: Duration = Duration::from_secs(10);
+pub const SILENT: Duration = Duration::from_secs(45);
+
+// A byte stream that can wait a bounded time for the next bytes: a TCP socket, a TLS stream on one, or a WebSocket through the hub.
+pub trait Timed {
     fn wait_at_most(&self, wait: Option<Duration>) -> std::io::Result<()>;
 }
 
-impl Pipe for StreamOwned<ClientConnection, TcpStream> {
+impl Timed for TcpStream {
     fn wait_at_most(&self, wait: Option<Duration>) -> std::io::Result<()> {
-        self.sock.set_read_timeout(wait)
+        self.set_read_timeout(wait)
     }
 }
 
-impl Pipe for StreamOwned<ServerConnection, TcpStream> {
+impl<T: Timed + Read + Write> Timed for StreamOwned<ClientConnection, T> {
     fn wait_at_most(&self, wait: Option<Duration>) -> std::io::Result<()> {
-        self.sock.set_read_timeout(wait)
+        self.sock.wait_at_most(wait)
     }
+}
+
+impl<T: Timed + Read + Write> Timed for StreamOwned<ServerConnection, T> {
+    fn wait_at_most(&self, wait: Option<Duration>) -> std::io::Result<()> {
+        self.sock.wait_at_most(wait)
+    }
+}
+
+pub trait Pipe: Read + Write + Timed + Send {}
+
+impl<T: Read + Write + Timed + Send> Pipe for T {}
+
+// TCP keepalive after 15 s of quiet, every 5 s, given up after 3 unanswered, so a direct link to a machine that went away ends in about half a minute.
+pub fn keep_alive(tcp: &TcpStream) {
+    use std::os::fd::AsRawFd;
+    let fd = tcp.as_raw_fd();
+    let set = |level: libc::c_int, name: libc::c_int, value: libc::c_int| {
+        // SAFETY: fd is the open socket of tcp, and value lives for the call.
+        unsafe { libc::setsockopt(fd, level, name, (&raw const value).cast(), std::mem::size_of::<libc::c_int>() as libc::socklen_t) };
+    };
+    set(libc::SOL_SOCKET, libc::SO_KEEPALIVE, 1);
+    #[cfg(target_os = "linux")]
+    set(libc::IPPROTO_TCP, libc::TCP_KEEPIDLE, 15);
+    #[cfg(target_os = "macos")]
+    set(libc::IPPROTO_TCP, libc::TCP_KEEPALIVE, 15);
+    set(libc::IPPROTO_TCP, libc::TCP_KEEPINTVL, 5);
+    set(libc::IPPROTO_TCP, libc::TCP_KEEPCNT, 3);
 }
 
 // What the machine asking says it wants.
@@ -70,6 +101,7 @@ pub enum Frame {
     Data(Vec<u8>),
     End,
     Signal(i32),
+    Beat,
 }
 
 impl Frame {
@@ -82,6 +114,7 @@ impl Frame {
             Frame::Data(bytes) => (5, bytes.clone()),
             Frame::End => (6, Vec::new()),
             Frame::Signal(signal) => (7, signal.to_be_bytes().to_vec()),
+            Frame::Beat => (8, Vec::new()),
         };
         if body.len() > MAX_FRAME {
             return Err(std::io::Error::new(ErrorKind::InvalidInput, "a frame past 1 MiB"));
@@ -116,6 +149,7 @@ impl Frame {
             5 => Frame::Data(body),
             6 => Frame::End,
             7 => Frame::Signal(i32::from_be_bytes(body.try_into().map_err(|_| bad("a signal is four bytes"))?)),
+            8 => Frame::Beat,
             _ => return Err(bad("the peer sent a frame of a kind this kebbie does not know")),
         };
         Ok(Some(frame))
@@ -129,29 +163,49 @@ fn json<T: Serialize>(value: &T) -> std::io::Result<Vec<u8>> {
 pub struct Link {
     pipe: Box<dyn Pipe>,
     held: Vec<u8>,
+    heard: Instant,
+    said: Instant,
+    pub beat: Duration,
+    pub silent: Duration,
 }
 
 impl Link {
     pub fn new(pipe: Box<dyn Pipe>) -> Link {
-        Link { pipe, held: Vec::new() }
+        Link { pipe, held: Vec::new(), heard: Instant::now(), said: Instant::now(), beat: BEAT, silent: SILENT }
     }
 
     pub fn send(&mut self, frame: &Frame) -> std::io::Result<()> {
         self.pipe.write_all(&frame.encode()?)?;
-        self.pipe.flush()
+        self.pipe.flush()?;
+        self.said = Instant::now();
+        Ok(())
     }
 
-    // The next frame, None when wait ran out first; the peer closing is an error.
+    pub fn beat_if_due(&mut self) -> std::io::Result<()> {
+        if self.said.elapsed() >= self.beat { self.send(&Frame::Beat) } else { Ok(()) }
+    }
+
+    // Whether the other side has said nothing, not even a beat, for longer than it may.
+    pub fn gone_quiet(&self) -> bool {
+        self.heard.elapsed() >= self.silent
+    }
+
+    // The next frame, None when wait ran out first or only a beat came; the peer closing is an error.
     pub fn recv(&mut self, wait: Option<Duration>) -> std::io::Result<Option<Frame>> {
         let mut buffer = [0u8; 64 * 1024];
         loop {
-            if let Some(frame) = Frame::decode(&mut self.held)? {
-                return Ok(Some(frame));
+            match Frame::decode(&mut self.held)? {
+                Some(Frame::Beat) => return Ok(None),
+                Some(frame) => return Ok(Some(frame)),
+                None => {}
             }
             self.pipe.wait_at_most(wait)?;
             match self.pipe.read(&mut buffer) {
                 Ok(0) => return Err(std::io::Error::new(ErrorKind::UnexpectedEof, "the other machine closed the link")),
-                Ok(read) => self.held.extend_from_slice(&buffer[..read]),
+                Ok(read) => {
+                    self.heard = Instant::now();
+                    self.held.extend_from_slice(&buffer[..read]);
+                }
                 Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => return Ok(None),
                 Err(error) if error.kind() == ErrorKind::Interrupted => {}
                 Err(error) => return Err(error),
@@ -159,7 +213,16 @@ impl Link {
         }
     }
 
-    pub fn expect(&mut self, wait: Duration) -> std::io::Result<Frame> {
-        self.recv(Some(wait))?.ok_or_else(|| std::io::Error::new(ErrorKind::TimedOut, format!("the other machine said nothing for {} s", wait.as_secs())))
+    // The next frame, beating meanwhile; an error once the other side has gone quiet.
+    pub fn expect(&mut self) -> std::io::Result<Frame> {
+        loop {
+            if let Some(frame) = self.recv(Some(Duration::from_millis(500)))? {
+                return Ok(frame);
+            }
+            if self.gone_quiet() {
+                return Err(std::io::Error::new(ErrorKind::TimedOut, format!("the other machine sent nothing for {} s", self.silent.as_secs())));
+            }
+            self.beat_if_due()?;
+        }
     }
 }

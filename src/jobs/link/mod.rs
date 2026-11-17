@@ -13,6 +13,7 @@ use crate::hub::identity;
 
 pub mod addresses;
 mod client;
+pub mod relay;
 pub mod serve;
 pub mod tls;
 pub mod wire;
@@ -77,6 +78,7 @@ fn serve(state: &Path) {
     let log = |text: &str| crate::keeper::log_line(state, text);
     let mut listeners = Listening { on: BTreeMap::new() };
     let (mut told, mut looked) = (None::<(Addresses, u64, Instant)>, None::<(bool, Instant)>);
+    let mut rings: Option<std::thread::JoinHandle<()>> = None;
     while !halted() {
         let enabled = crate::config::worker_enabled().unwrap_or(false);
         let dir = identity::dir(state);
@@ -91,6 +93,10 @@ fn serve(state: &Path) {
                 let announced = Addresses { port: if enabled { PORT } else { 0 }, addresses: local.clone() };
                 let host = Arc::new(serve::Host { state: state.to_path_buf(), dir: dir.clone(), identity: identity.clone(), account: account.clone(), data: super::data_dir() });
                 listeners.keep(&host, &if enabled { listening(&local) } else { Vec::new() }, &log);
+                if enabled && rings.as_ref().is_none_or(std::thread::JoinHandle::is_finished) {
+                    let host = host.clone();
+                    rings = Some(std::thread::spawn(move || relay::wait_for_rings(host, &|| crate::config::worker_enabled().unwrap_or(false), Arc::new(halted))));
+                }
                 let client = Client::new(&identity.url, Some(identity.token()), CALL);
                 if let Ok(cluster) = cluster::fetch(&dir, &client, &account) {
                     let due = told.as_ref().is_none_or(|(before, counter, at)| *before != announced || *counter != cluster.counter || at.elapsed() >= ANNOUNCE_EVERY);
@@ -114,6 +120,9 @@ fn serve(state: &Path) {
         }
     }
     listeners.drop_all_but(&[], &log);
+    if let Some(rings) = rings {
+        let _ = rings.join();
+    }
 }
 
 pub fn spawn(state: &Path) {

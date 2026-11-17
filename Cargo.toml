@@ -13,8 +13,8 @@ base64 = "0.23"
 crossterm = { version = "0.29", features = ["use-dev-tty"] }
 ed25519-dalek = "3"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-kebbie-hub-api = { git = "https://github.com/gronare/kebbie-hub", rev = "783bf2c19a8443543ce6a99f33fb56a49deaf932" }
-kebbie-hub-protocol = { git = "https://github.com/gronare/kebbie-hub", rev = "783bf2c19a8443543ce6a99f33fb56a49deaf932" }
+kebbie-hub-api = { git = "https://github.com/gronare/kebbie-hub", rev = "951d03c46f6c8e86ae79eae38cf8c790ba4c8652" }
+kebbie-hub-protocol = { git = "https://github.com/gronare/kebbie-hub", rev = "951d03c46f6c8e86ae79eae38cf8c790ba4c8652" }
 libc = "0.2"
 qrcodegen = "1.8"
 ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
@@ -26,16 +26,18 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha1_smol = "1.0.1"
 sha2 = "0.10"
+tungstenite = { version = "0.29.0", default-features = false, features = ["handshake"] }
 toml = { version = "1.1.8", default-features = false, features = ["std", "serde", "parse"] }
 toml_edit = { version = "0.25.17", default-features = false, features = ["parse", "display"] }
 tui-markdown = { version = "0.3.12", default-features = false }
 unicode-width = "0.2"
 ureq = { version = "3.5", default-features = false, features = ["rustls"] }
+webpki-roots = "1.0.10"
 yaml-rust2 = { version = "0.13", default-features = false }
 
 [dev-dependencies]
-kebbie-hub = { git = "https://github.com/gronare/kebbie-hub", rev = "783bf2c19a8443543ce6a99f33fb56a49deaf932" }
-kebbie-hub-fakes = { git = "https://github.com/gronare/kebbie-hub", rev = "783bf2c19a8443543ce6a99f33fb56a49deaf932" }
+kebbie-hub = { git = "https://github.com/gronare/kebbie-hub", rev = "951d03c46f6c8e86ae79eae38cf8c790ba4c8652" }
+kebbie-hub-fakes = { git = "https://github.com/gronare/kebbie-hub", rev = "951d03c46f6c8e86ae79eae38cf8c790ba4c8652" }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros"] }
 
 [profile.release]

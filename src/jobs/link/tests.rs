@@ -16,7 +16,8 @@ use super::super::tests::{Machine, commit, git, repo};
 use super::client::{self, Ran, Target};
 use super::serve::{self, Host};
 use super::wire::Link;
-use super::{addresses, tls};
+use super::wire::{Ask, Frame, Said};
+use super::{addresses, relay, tls};
 use crate::hub::tests::{member, open_hub};
 
 fn host(machine: &Machine, data: &Path) -> Arc<Host> {
@@ -44,7 +45,7 @@ fn listen(host: Arc<Host>) -> Listening {
 }
 
 fn target(of: &Machine, name: &str, address: SocketAddr) -> Target {
-    Target { machine: of.identity.machine.clone(), name: name.to_string(), keys: of.identity.public(), addresses: vec![address] }
+    Target { machine: of.identity.machine.clone(), name: name.to_string(), keys: of.identity.public(), addresses: vec![address], no_address: None }
 }
 
 fn handshake_as(secret: &SecretKeys, peer: &Target) -> Result<(), String> {
@@ -151,7 +152,7 @@ fn run_on(asker: &Machine, at: &Target, top: &Path, argv: &[&str], interrupt_aft
     let watched = out.clone();
     let interrupts = || u32::from(interrupt_after.is_some_and(|marker| String::from_utf8_lossy(&watched.borrow()).contains(marker)));
     let argv: Vec<String> = argv.iter().map(|word| word.to_string()).collect();
-    let ran = client::connect(&asker.identity, at, Duration::from_secs(2)).and_then(|(mut link, _)| client::go(&mut link, top, &argv, &mut Captured(out.clone()), &mut Captured(err.clone()), &interrupts));
+    let ran = client::connect(&asker.identity, at, Duration::from_secs(2)).and_then(|(mut link, _)| client::go(&mut link, &at.name, top, &argv, &mut Captured(out.clone()), &mut Captured(err.clone()), &interrupts));
     let text = |bytes: &Rc<RefCell<Vec<u8>>>| String::from_utf8_lossy(&bytes.borrow()).to_string();
     Run { ran, out: text(&out), err: text(&err) }
 }
@@ -235,5 +236,70 @@ fn a_run_on_this_machine_over_loopback_takes_a_short_round_trip() {
     }).collect();
     took.sort();
     eprintln!("kebbie run --on devbox -- true over loopback: median {:?}, fastest {:?}, slowest {:?}", took[took.len() / 2], took[0], took[took.len() - 1]);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+fn wait_for_log(machine: &Machine, line: &str) {
+    let until = Instant::now() + Duration::from_secs(10);
+    while !keeper_log(machine).contains(line) {
+        assert!(Instant::now() < until, "the keeper log never said {line:?}: {}", keeper_log(machine));
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn a_run_goes_through_the_hubs_relay_when_no_address_answers() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let (devbox, studio) = (Machine::connected(&hub, &mut browser, "devbox"), Machine::connected(&hub, &mut browser, "studio"));
+    let root = crate::sh::test_dir("link-relay");
+    let top = repo(&root);
+    let closed = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
+    let at = target(&studio, "studio", closed);
+    assert!(client::connect(&devbox.identity, &at, Duration::from_secs(2)).err().unwrap().contains("studio is not waiting for links through the hub either"), "a machine that waits for no relayed link has none");
+    studio.work();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (waiting_host, seen) = (host(&studio, &root.join("data")), stop.clone());
+    let waiting = std::thread::spawn(move || relay::wait_for_rings(waiting_host, &|| true, Arc::new(move || seen.load(Ordering::SeqCst))));
+    wait_for_log(&studio, "link: waiting for links relayed through the hub");
+    let (mut link, route) = client::connect(&devbox.identity, &at, Duration::from_secs(2)).unwrap();
+    assert_eq!(route, client::Route::Relay, "the closed address fails and the hub relays");
+    assert!(client::ping(&mut link).is_ok());
+    let ran = run_on(&devbox, &at, &top, &["echo out; echo err >&2; exit 5"], None);
+    assert_eq!((ran.ran.map(|ran| ran.code), ran.out.as_str(), ran.err.as_str()), (Ok(5), "out\n", "err\n"), "the same session runs through the hub");
+    let stopped = run_on(&devbox, &at, &top, &["trap 'echo caught; exit 42' INT; echo ready; while true; do sleep 0.1; done"], Some("ready"));
+    assert_eq!(stopped.ran.map(|ran| ran.code), Ok(42), "Ctrl-C reaches it through the hub too: {}", stopped.err);
+    wait_for_log(&studio, " through the hub): run ");
+    stop.store(true, Ordering::SeqCst);
+    waiting.join().unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_run_gives_up_in_plain_words_when_the_other_machine_goes_silent() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let (devbox, studio) = (Machine::connected(&hub, &mut browser, "devbox"), Machine::connected(&hub, &mut browser, "studio"));
+    let root = crate::sh::test_dir("link-silent");
+    let top = repo(&root);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let at = target(&studio, "studio", listener.local_addr().unwrap());
+    let frozen = host(&studio, &root.join("data"));
+    let allowed = std::collections::BTreeMap::from([(devbox.identity.public().signing, devbox.identity.machine.clone())]);
+    let silent = std::thread::spawn(move || {
+        let (tcp, _) = listener.accept().unwrap();
+        let (mut link, _) = serve::handshake(&frozen, tcp, allowed).unwrap();
+        assert!(matches!(link.expect().unwrap(), Frame::Ask(Ask::Run(_))));
+        link.send(&Frame::Said(Said::Started)).unwrap();
+        std::thread::sleep(Duration::from_secs(4));
+    });
+    let (mut link, _) = client::direct(&devbox.identity, &at, Duration::from_secs(2)).unwrap();
+    link.silent = Duration::from_secs(1);
+    let started = Instant::now();
+    let argv = vec!["make".to_string()];
+    let ended = client::go(&mut link, "studio", &top, &argv, &mut std::io::sink(), &mut std::io::sink(), &|| 0);
+    assert_eq!(ended, Err("kebbie: studio sent nothing for 1 s, so kebbie stopped waiting. The machine or the network between went away; the command may still be running there".to_string()));
+    assert!(started.elapsed() < Duration::from_secs(3), "it gives up once the silence passed, not later");
+    silent.join().unwrap();
     let _ = std::fs::remove_dir_all(root);
 }

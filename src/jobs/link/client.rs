@@ -12,14 +12,14 @@ use rustls::{ClientConnection, StreamOwned};
 use super::super::cluster::{self, Cluster};
 use super::super::{REF, bundle, token};
 use super::wire::{Ask, CHUNK, Frame, Link, RemoteAsk, RunAsk, Said};
-use super::{PORT, addresses, tls};
+use super::wire::keep_alive;
+use super::{PORT, addresses, relay, tls};
 use crate::hub::http::{CALL, Client};
 use crate::hub::identity::{self, Identity};
 use crate::sh::Result;
 
 const DIAL: Duration = Duration::from_secs(2);
 const HANDSHAKE: Duration = Duration::from_secs(5);
-const SYNC_WAIT: Duration = Duration::from_secs(1_800);
 const ESCALATION: [i32; 3] = [libc::SIGINT, libc::SIGTERM, libc::SIGKILL];
 
 // The machine a link goes to: its key on the account's list and the addresses it announced, or loopback when it is this machine.
@@ -29,6 +29,16 @@ pub struct Target {
     pub name: String,
     pub keys: PublicKeys,
     pub addresses: Vec<SocketAddr>,
+    pub no_address: Option<String>,
+}
+
+impl Target {
+    pub fn of(machine: Id, name: String, keys: PublicKeys, dialed: Result<Vec<SocketAddr>>) -> Target {
+        match dialed {
+            Ok(addresses) => Target { machine, name, keys, addresses, no_address: None },
+            Err(why) => Target { machine, name, keys, addresses: Vec::new(), no_address: Some(why) },
+        }
+    }
 }
 
 // The announced addresses to dial, tailnet first; why there are none when there are none.
@@ -64,22 +74,60 @@ fn dial(addresses: &[SocketAddr], wait: Duration) -> Result<(TcpStream, SocketAd
     Err(format!("none of its addresses answered within {} s: {}", wait.as_secs(), failed.join(", ")))
 }
 
-pub fn connect(identity: &Identity, target: &Target, wait: Duration) -> Result<(Link, SocketAddr)> {
-    let (mut tcp, address) = dial(&target.addresses, wait)?;
-    tcp.set_nodelay(true).map_err(|error| error.to_string())?;
-    tcp.set_read_timeout(Some(HANDSHAKE)).map_err(|error| error.to_string())?;
+// How a link reached its machine.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Route {
+    Direct(SocketAddr),
+    Relay,
+}
+
+impl std::fmt::Display for Route {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Route::Direct(address) => write!(formatter, "direct on {address}"),
+            Route::Relay => write!(formatter, "relayed through the hub"),
+        }
+    }
+}
+
+fn secure<T: std::io::Read + std::io::Write + super::wire::Timed + Send + 'static>(identity: &Identity, target: &Target, mut transport: T, path: &Route) -> Result<Link> {
+    transport.wait_at_most(Some(HANDSHAKE)).map_err(|error| error.to_string())?;
     let mut connection = ClientConnection::new(tls::client(&identity.secret(), target.machine.clone(), target.keys.signing)?, tls::name()).map_err(|error| error.to_string())?;
     while connection.is_handshaking() {
-        connection.complete_io(&mut tcp).map_err(|error| format!("{address} answered, but the TLS handshake failed: {error}; only {} with the key the account's list has for it, and a machine on that list, completes it", target.name))?;
+        connection.complete_io(&mut transport).map_err(|error| format!("{path} answered, but the TLS handshake failed: {error}; only {} with the key the account's list has for it, and a machine on that list, completes it", target.name))?;
     }
-    Ok((Link::new(Box::new(StreamOwned::new(connection, tcp))), address))
+    Ok(Link::new(Box::new(StreamOwned::new(connection, transport))))
+}
+
+pub fn direct(identity: &Identity, target: &Target, wait: Duration) -> Result<(Link, Route)> {
+    if target.addresses.is_empty() {
+        return Err(target.no_address.clone().unwrap_or_else(|| format!("{} announced no address", target.name)));
+    }
+    let (tcp, address) = dial(&target.addresses, wait)?;
+    tcp.set_nodelay(true).map_err(|error| error.to_string())?;
+    keep_alive(&tcp);
+    let path = Route::Direct(address);
+    Ok((secure(identity, target, tcp, &path)?, path))
+}
+
+// Direct when an announced address answers within the wait, else through the hub's relay; this machine itself only directly.
+pub fn connect(identity: &Identity, target: &Target, wait: Duration) -> Result<(Link, Route)> {
+    let why = match direct(identity, target, wait) {
+        Ok(linked) => return Ok(linked),
+        Err(why) => why,
+    };
+    if target.machine == identity.machine {
+        return Err(why);
+    }
+    let relayed = relay::ask(identity, &target.machine, &target.name).and_then(|transport| secure(identity, target, transport, &Route::Relay));
+    relayed.map(|link| (link, Route::Relay)).map_err(|relay| format!("{why}; and {relay}"))
 }
 
 // Times a ping over a link already made, which is the round trip a command's output takes.
 pub fn ping(link: &mut Link) -> Result<Duration> {
     let started = Instant::now();
     link.send(&Frame::Ask(Ask::Ping)).map_err(|error| error.to_string())?;
-    match link.expect(HANDSHAKE).map_err(|error| error.to_string())? {
+    match link.expect().map_err(|error| error.to_string())? {
         Frame::Said(Said::Pong) => Ok(started.elapsed()),
         other => Err(format!("the ping was answered with {other:?}")),
     }
@@ -113,6 +161,10 @@ pub struct Ran {
     pub sent: Option<usize>,
 }
 
+fn quiet(name: &str, seconds: u64) -> String {
+    format!("kebbie: {name} sent nothing for {seconds} s, so kebbie stopped waiting. The machine or the network between went away; the command may still be running there")
+}
+
 struct Snapshot<'a> {
     top: &'a Path,
     refname: String,
@@ -125,7 +177,7 @@ impl Drop for Snapshot<'_> {
 }
 
 // The worktree as it stands goes to the target's per-task worktree, then the command runs there with its output streamed here and Ctrl-C forwarded as SIGINT, then SIGTERM, then SIGKILL.
-pub fn go(link: &mut Link, top: &Path, argv: &[String], out: &mut dyn Write, err: &mut dyn Write, interrupts: &dyn Fn() -> u32) -> Result<Ran> {
+pub fn go(link: &mut Link, name: &str, top: &Path, argv: &[String], out: &mut dyn Write, err: &mut dyn Write, interrupts: &dyn Fn() -> u32) -> Result<Ran> {
     let id = cluster::new_id()?;
     let commit = super::super::snapshot(top, id.as_str())?;
     let snapshot = Snapshot { top, refname: format!("{REF}/{id}") };
@@ -134,11 +186,12 @@ pub fn go(link: &mut Link, top: &Path, argv: &[String], out: &mut dyn Write, err
     let task = token(if branch.is_empty() || branch == "HEAD" { "detached" } else { &branch });
     let remote = bundle::remote_base(top, &commit).map(|remote| RemoteAsk { url: remote.url, base: remote.base });
     let ask = RunAsk { repo: token(&super::super::repo_name(top)), task, commit: commit.clone(), remote, command: shell_line(argv) };
-    let lost = |error: std::io::Error| format!("the link was lost: {error}");
+    let silent = link.silent.as_secs();
+    let lost = |error: std::io::Error| if error.kind() == std::io::ErrorKind::TimedOut { quiet(name, silent) } else { format!("kebbie: the link to {name} was lost: {error}") };
     link.send(&Frame::Ask(Ask::Run(ask))).map_err(lost)?;
     let mut sent = None;
     loop {
-        match link.expect(SYNC_WAIT).map_err(lost)? {
+        match link.expect().map_err(lost)? {
             Frame::Said(Said::Want { haves }) => {
                 let bytes = bundle_for(top, &snapshot.refname, &commit, &haves, &std::env::temp_dir().join(format!("kebbie-link-{id}")))?;
                 for chunk in bytes.chunks(CHUNK) {
@@ -164,7 +217,8 @@ pub fn go(link: &mut Link, top: &Path, argv: &[String], out: &mut dyn Write, err
             forwarded += 1;
         }
         match link.recv(Some(Duration::from_millis(50))).map_err(lost)? {
-            None => {}
+            None if link.gone_quiet() => return Err(quiet(name, silent)),
+            None => link.beat_if_due().map_err(lost)?,
             Some(Frame::Out(bytes)) => {
                 let _ = out.write_all(&bytes).and_then(|()| out.flush());
             }
@@ -204,13 +258,13 @@ fn target(here: &Here, client: &Client, cluster: &Cluster, on: Option<&str>) -> 
             return Err(format!("{} is this machine, and its [worker] enabled is off, so it takes no links", row.name));
         }
         let keys = *cluster.keys.get(me).ok_or("this machine is not on the account's list")?;
-        return Ok(Target { machine: me.clone(), name: row.name.clone(), keys, addresses: super::listening(&[]).into_iter().take(1).collect() });
+        return Ok(Target { machine: me.clone(), name: row.name.clone(), keys, addresses: super::listening(&[]).into_iter().take(1).collect(), no_address: None });
     }
     let now = crate::messages::now();
     let row = cluster::pick(cluster, me, on, now).ok_or_else(|| super::super::master::no_live_worker(cluster, me, on, now))?;
     let keys = *cluster.keys.get(&row.machine).ok_or("the worker is not on the account's list")?;
-    let announced = addresses::announced(&here.identity, client, cluster, now)?;
-    Ok(Target { machine: row.machine.clone(), name: row.name.clone(), keys, addresses: dialable(&row.name, announced.get(&row.machine))? })
+    let dialed = addresses::announced(&here.identity, client, cluster, now).and_then(|announced| dialable(&row.name, announced.get(&row.machine)));
+    Ok(Target::of(row.machine.clone(), row.name.clone(), keys, dialed))
 }
 
 static INTERRUPTS: AtomicU32 = AtomicU32::new(0);
@@ -240,10 +294,10 @@ fn run(cwd: &Path, on: Option<&str>, argv: &[String]) -> Result<i32> {
     let client = Client::new(&here.identity.url, Some(here.identity.token()), CALL);
     let cluster = cluster::fetch(&here.dir, &client, &here.account).map_err(|error| format!("kebbie: the hub's list of your machines was not read: {error}"))?;
     let target = target(&here, &client, &cluster, on).map_err(|why| hub_job_hint(&top, &why, on.unwrap_or("a worker")))?;
-    let (mut link, address) = connect(&here.identity, &target, DIAL).map_err(|why| hub_job_hint(&top, &why, &target.name))?;
-    eprintln!("kebbie: {} runs it, direct on {address}", target.name);
+    let (mut link, route) = connect(&here.identity, &target, DIAL).map_err(|why| hub_job_hint(&top, &why, &target.name))?;
+    eprintln!("kebbie: {} runs it, {route}", target.name);
     catch_interrupt();
-    let ran = go(&mut link, &top, argv, &mut std::io::stdout(), &mut std::io::stderr(), &|| INTERRUPTS.load(Ordering::SeqCst))?;
+    let ran = go(&mut link, &target.name, &top, argv, &mut std::io::stdout(), &mut std::io::stderr(), &|| INTERRUPTS.load(Ordering::SeqCst))?;
     Ok(ran.code)
 }
 
@@ -257,7 +311,7 @@ pub fn run_cli(cwd: &Path, on: Option<&str>, argv: &[String]) -> ExitCode {
     }
 }
 
-// Each machine of the account and how a link reaches it now: direct on which address and in what round trip, or why not.
+// Each machine of the account and how a link reaches it now: direct on which address or through the hub, in what round trip, or why not.
 pub fn list_cli() -> Result<String> {
     let here = here()?;
     let client = Client::new(&here.identity.url, Some(here.identity.token()), CALL);
@@ -267,16 +321,15 @@ pub fn list_cli() -> Result<String> {
     for row in &cluster.rows {
         let Some(keys) = cluster.keys.get(&row.machine).copied() else { continue };
         let me = row.machine == here.identity.machine;
-        let addresses = if me {
-            if crate::config::worker_enabled().unwrap_or(false) { Ok(vec![SocketAddr::from(([127, 0, 0, 1], PORT))]) } else { Err("this machine; its [worker] enabled is off, so it takes no links".to_string()) }
+        let target = if me {
+            if crate::config::worker_enabled().unwrap_or(false) { Ok(Target::of(row.machine.clone(), row.name.clone(), keys, Ok(vec![SocketAddr::from(([127, 0, 0, 1], PORT))]))) } else { Err("this machine; its [worker] enabled is off, so it takes no links".to_string()) }
         } else {
-            announced.as_ref().map_err(Clone::clone).and_then(|announced| dialable(&row.name, announced.get(&row.machine)))
+            Ok(Target::of(row.machine.clone(), row.name.clone(), keys, announced.as_ref().map_err(Clone::clone).and_then(|announced| dialable(&row.name, announced.get(&row.machine)))))
         };
-        let path = addresses.and_then(|addresses| {
-            let target = Target { machine: row.machine.clone(), name: row.name.clone(), keys, addresses };
-            let (mut link, address) = connect(&here.identity, &target, DIAL)?;
+        let path = target.and_then(|target| {
+            let (mut link, route) = connect(&here.identity, &target, DIAL)?;
             let rtt = ping(&mut link)?;
-            Ok(format!("direct on {address}, {:.1} ms", rtt.as_secs_f64() * 1000.0))
+            Ok(format!("{route}, {:.1} ms", rtt.as_secs_f64() * 1000.0))
         });
         lines.push(format!("{}{}: {}", row.name, if me { " (this machine)" } else { "" }, path.unwrap_or_else(|why| format!("down: {why}"))));
     }

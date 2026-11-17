@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
-use std::io::Read;
-use std::net::{TcpListener, TcpStream};
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -13,13 +13,12 @@ use rustls::{ServerConnection, StreamOwned};
 
 use super::super::{bundle, cluster, fetchable, safe, worker};
 use super::tls;
-use super::wire::{Ask, Frame, Link, RunAsk, Said};
+use super::wire::{Ask, Frame, Link, RunAsk, Said, Timed, keep_alive};
 use crate::hub::http::{CALL, Client};
 use crate::hub::identity::Identity;
 use crate::sh::Result;
 
 const HANDSHAKE: Duration = Duration::from_secs(10);
-const IDLE: Duration = Duration::from_secs(60);
 const GRACE: Duration = Duration::from_secs(10);
 const DRAIN: Duration = Duration::from_secs(2);
 const MAX_BUNDLE: usize = 2 * 1024 * 1024 * 1024;
@@ -48,25 +47,23 @@ fn allowed(host: &Host) -> Result<(BTreeMap<[u8; 32], Id>, cluster::Cluster)> {
     Ok((cluster.keys.iter().map(|(machine, keys)| (keys.signing, machine.clone())).collect(), cluster))
 }
 
-pub fn handshake(host: &Host, mut tcp: TcpStream, allowed: BTreeMap<[u8; 32], Id>) -> Result<(Link, Id)> {
-    tcp.set_read_timeout(Some(HANDSHAKE)).map_err(|error| error.to_string())?;
-    tcp.set_nodelay(true).map_err(|error| error.to_string())?;
+pub fn handshake<T: Read + Write + Timed + Send + 'static>(host: &Host, mut transport: T, allowed: BTreeMap<[u8; 32], Id>) -> Result<(Link, Id)> {
+    transport.wait_at_most(Some(HANDSHAKE)).map_err(|error| error.to_string())?;
     let mut connection = ServerConnection::new(tls::server(&host.identity.secret(), allowed.clone())?).map_err(|error| error.to_string())?;
     while connection.is_handshaking() {
-        connection.complete_io(&mut tcp).map_err(|error| format!("the TLS handshake failed: {error}"))?;
+        connection.complete_io(&mut transport).map_err(|error| format!("the TLS handshake failed: {error}"))?;
     }
     let peer = connection.peer_certificates().and_then(|certs| certs.first()).and_then(|cert| tls::key_of(cert)).and_then(|key| allowed.get(&key).cloned()).ok_or("the peer showed no key on the account's list")?;
-    Ok((Link::new(Box::new(StreamOwned::new(connection, tcp))), peer))
+    Ok((Link::new(Box::new(StreamOwned::new(connection, transport))), peer))
 }
 
-pub fn session(host: &Host, tcp: TcpStream, halted: &dyn Fn() -> bool) {
-    let from = tcp.peer_addr().map_or_else(|_| "?".to_string(), |address| address.to_string());
-    let opened = allowed(host).and_then(|(allowed, cluster)| handshake(host, tcp, allowed).map(|(link, peer)| (link, cluster.name_of(&peer))));
+pub fn session<T: Read + Write + Timed + Send + 'static>(host: &Host, from: String, transport: T, halted: &(dyn Fn() -> bool + Sync)) {
+    let opened = allowed(host).and_then(|(allowed, cluster)| handshake(host, transport, allowed).map(|(link, peer)| (link, cluster.name_of(&peer))));
     let (mut link, name) = match opened {
         Ok(opened) => opened,
         Err(error) => return host.log(&format!("link: refused a session from {from}: {error}")),
     };
-    let said = match link.expect(IDLE) {
+    let said = match link.expect() {
         Ok(Frame::Ask(Ask::Ping)) => link.send(&Frame::Said(Said::Pong)).map(|()| "ping".to_string()).map_err(|error| error.to_string()),
         Ok(Frame::Ask(Ask::Run(ask))) => {
             let what = format!("run {:?} in {} ({}) at {}", ask.command, ask.repo, ask.task, &ask.commit[..12.min(ask.commit.len())]);
@@ -93,7 +90,7 @@ fn haves(store: &Path) -> Vec<String> {
 fn receive_bundle(link: &mut Link) -> Result<Vec<u8>> {
     let mut bundle = Vec::new();
     loop {
-        match link.expect(IDLE).map_err(|error| error.to_string())? {
+        match link.expect().map_err(|error| error.to_string())? {
             Frame::Data(bytes) if bundle.len() + bytes.len() <= MAX_BUNDLE => bundle.extend(bytes),
             Frame::Data(_) => return Err("the commit is more than 2 GiB as a git bundle".to_string()),
             Frame::End => return Ok(bundle),
@@ -102,8 +99,20 @@ fn receive_bundle(link: &mut Link) -> Result<Vec<u8>> {
     }
 }
 
+// Work that may take long, as a fetch or a checkout, runs beside beats to the asker, so it knows this machine is still there.
+fn beating<T: Send>(link: &mut Link, work: impl FnOnce() -> T + Send) -> T {
+    std::thread::scope(|scope| {
+        let running = scope.spawn(work);
+        while !running.is_finished() {
+            std::thread::sleep(Duration::from_millis(200));
+            let _ = link.beat_if_due();
+        }
+        running.join().expect("the work does not panic")
+    })
+}
+
 // The asked commit in the repo's store under refs/kebbie/tasks/<task>: nothing comes when the store has it, else the history from origin first and then only what the store still lacks.
-fn sync(link: &mut Link, ask: &RunAsk, store: &Path, halted: &dyn Fn() -> bool) -> Result<()> {
+fn sync(link: &mut Link, ask: &RunAsk, store: &Path, halted: &(dyn Fn() -> bool + Sync)) -> Result<()> {
     bundle::open_store(store)?;
     let keep = format!("refs/kebbie/tasks/{}", safe(&ask.task));
     if bundle::has(store, &ask.commit) {
@@ -115,27 +124,34 @@ fn sync(link: &mut Link, ask: &RunAsk, store: &Path, halted: &dyn Fn() -> bool) 
         && !bundle::has(store, &remote.base)
     {
         say(link, &format!("fetching the history from {url}; only what is new comes on later runs"));
-        if let Err(error) = bundle::fetch_remote(store, &url, halted) {
+        if let Err(error) = beating(link, || bundle::fetch_remote(store, &url, halted)) {
             say(link, &format!("the fetch from {url} failed, so the whole history comes over the link: {error}"));
         }
     }
     link.send(&Frame::Said(Said::Want { haves: haves(store) })).map_err(|error| error.to_string())?;
     let bytes = receive_bundle(link)?;
-    let mut said = |text: String| say(link, text.trim().trim_start_matches("[kebbie: ").trim_end_matches(']'));
-    match bundle::store(store, &bytes, &ask.commit, None, &keep, None, &mut said, halted)? {
+    let (stored, lines) = beating(link, || {
+        let mut lines = Vec::new();
+        let stored = bundle::store(store, &bytes, &ask.commit, None, &keep, None, &mut |text| lines.push(text), halted);
+        (stored, lines)
+    });
+    for line in lines {
+        say(link, line.trim().trim_start_matches("[kebbie: ").trim_end_matches(']'));
+    }
+    match stored? {
         bundle::Stored::Ready => Ok(()),
         bundle::Stored::NeedsFull => Err("the commit did not arrive whole".to_string()),
     }
 }
 
-fn run(host: &Host, link: &mut Link, ask: &RunAsk, from: &str, halted: &dyn Fn() -> bool) -> std::result::Result<String, String> {
+fn run(host: &Host, link: &mut Link, ask: &RunAsk, from: &str, halted: &(dyn Fn() -> bool + Sync)) -> std::result::Result<String, String> {
     if !is_commit(&ask.commit) || ask.command.trim().is_empty() {
         return Err("the run named no full commit or no command".to_string());
     }
     let repo = host.data.join(safe(&ask.repo));
     sync(link, ask, &repo.join(".store"), halted)?;
     let work = repo.join("tasks").join(safe(&ask.task));
-    worker::check_out(&repo.join(".store"), &work, &ask.commit, halted)?;
+    beating(link, || worker::check_out(&repo.join(".store"), &work, &ask.commit, halted))?;
     link.send(&Frame::Said(Said::Started)).map_err(|error| error.to_string())?;
     let code = exec(link, &work, ask, from, halted)?;
     Ok(format!("exited {code}"))
@@ -159,7 +175,7 @@ fn pipe_to(sender: mpsc::Sender<(bool, Option<Vec<u8>>)>, mut from: impl Read + 
 }
 
 // Streams the command's output as it comes and forwards the asker's signals to its process group; the asker gone or the keeper stopping ends it with SIGTERM, then SIGKILL after the grace.
-fn exec(link: &mut Link, work: &Path, ask: &RunAsk, from: &str, halted: &dyn Fn() -> bool) -> std::result::Result<i32, String> {
+fn exec(link: &mut Link, work: &Path, ask: &RunAsk, from: &str, halted: &(dyn Fn() -> bool + Sync)) -> std::result::Result<i32, String> {
     let mut child = Command::new("sh").args(["-c", &ask.command]).current_dir(work)
         .envs([("KEBBIE_RUN_TASK", ask.task.as_str()), ("KEBBIE_RUN_FROM", from)])
         .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0).spawn().map_err(|error| format!("the command did not start: {error}"))?;
@@ -184,6 +200,7 @@ fn exec(link: &mut Link, work: &Path, ask: &RunAsk, from: &str, halted: &dyn Fn(
                 Ok(_) => {}
                 Err(_) => gone = true,
             }
+            gone |= link.gone_quiet() || link.beat_if_due().is_err();
         }
         if (gone || halted()) && termed.is_none() {
             worker::signal_group(child.id(), libc::SIGTERM);
@@ -218,10 +235,12 @@ pub fn listen(host: Arc<Host>, listener: TcpListener, halted: Arc<dyn Fn() -> bo
         let _ = listener.set_nonblocking(true);
         while !halted() {
             match listener.accept() {
-                Ok((tcp, _)) => {
+                Ok((tcp, from)) => {
                     let _ = tcp.set_nonblocking(false);
+                    let _ = tcp.set_nodelay(true);
+                    keep_alive(&tcp);
                     let (host, halted) = (host.clone(), halted.clone());
-                    std::thread::spawn(move || session(&host, tcp, &*halted));
+                    std::thread::spawn(move || session(&host, from.to_string(), tcp, &*halted));
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(50)),
                 Err(_) => std::thread::sleep(Duration::from_millis(200)),
