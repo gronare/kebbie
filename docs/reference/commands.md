@@ -860,10 +860,10 @@ The review lists each write under the tool whose files it changes:
 
 | Group | Lines |
 | --- | --- |
-| `mindin` | `install`, when no command found can run `mindin setup`: `curl -fsSL https://mindin.dev/install.sh \| sh`. `setup`, the place you chose: `already` when the vault answers for it now, else `mindin setup --server <url>`, `--folder <path>` or `--s3 <bucket> --endpoint <url> [--prefix <prefix>] [--region <region>]`. Both run first, in the terminal: the server signs this machine in through the browser, and S3 asks for its access key and secret, the secret hidden, unless `S3_ACCESS_KEY` and `S3_SECRET_KEY` are set. |
-| `kebbie` | `link`, `machine`, `vault` (`vault.command`), `backlog`, `signals`, and `keeper` when it needs starting or stopping. |
-| `Claude Code` | `plugin` (kebbie's plugin), `approvals` (nothing to write: kebbie gives each Claude task its permissions as it starts it), `vault` (the vault plugin `vault@gronare`, installed or turned on) and `usage` (kebbie's `statusLine`). |
-| `Codex` | `plugin` (kebbie's [Codex plugin](#kebbie-setup-codex---yes)), `approvals` (`$CODEX_HOME/rules/kebbie.rules`) and `vault` (`[mcp_servers.vault]` in Codex's `config.toml`). |
+| `mindin` | `mindin`, when no command found can run `mindin setup`: `curl -fsSL https://mindin.dev/install.sh \| sh`. `vault server`, `vault bucket` or `vault folder`, the place you chose: `already` when the vault answers for it now, else `mindin setup --server <url>`, `--folder <path>` or `--s3 <bucket> --endpoint <url> [--prefix <prefix>] [--region <region>]`. Both run first, in the terminal: the server signs this machine in through the browser, and S3 asks for its access key and secret, the secret hidden, unless `S3_ACCESS_KEY` and `S3_SECRET_KEY` are set. |
+| `kebbie` | `link`, `machine`, `vault command` (`vault.command`), `backlog`, `signals`, and `keeper` when it needs starting or stopping. |
+| `Claude Code` | `plugin` (kebbie's plugin), `approvals` (nothing to write: kebbie gives each Claude task its permissions as it starts it), `vault plugin` (the vault plugin `vault@gronare`, installed or turned on) and `usage` (kebbie's `statusLine`). |
+| `Codex` | `codex plugin` (kebbie's [Codex plugin](#kebbie-setup-codex---yes)), `codex approvals` (`$CODEX_HOME/rules/kebbie.rules`) and `codex vault` (`[mcp_servers.vault]` in Codex's `config.toml`). |
 | `herdr` | `keys` (`prefix+space`, `prefix+f` and `prefix+t` at the end of herdr's `config.toml`) and `herdr` when kebbie's herdr plugin is disabled. |
 
 - Nothing is written or run before `⏎` on the last step. Then each line turns `done`, `already`, `skipped` or `failed` as it runs, followed by `Setup done · doctor: <n> ok`, with `, <m> to look at` when warnings remain, and the [next steps](#next-steps-after-setup).
@@ -893,7 +893,7 @@ herdr's config is `$HERDR_CONFIG_PATH`, else `$XDG_CONFIG_HOME/herdr/config.toml
 `--yes` applies the review's lines as the guide would offer them, one printed line each, an agent's lines named after it, such as `codex plugin`, and never runs mindin's installer or `mindin setup`. A run without a terminal asks nothing and writes less:
 
 - It links the binary, installs or updates the Claude Code plugin, brings kebbie's Codex plugin up to date when it is installed (never installing it), and skips herdr's keys, naming `kebbie setup --yes`.
-- It writes no `vault.command`. With none set, the `vault` line names the command the guide would run, such as `skipped  vault  mindin on PATH runs the vault: kebbie setup --yes sets vault.command = "mindin" under [vault] in ~/.config/kebbie/config.toml`.
+- It writes no `vault.command`. With none set, the `vault command` line names the command the guide would run, such as `skipped  vault command  mindin on PATH runs the vault: kebbie setup --yes sets vault.command = "mindin" under [vault] in ~/.config/kebbie/config.toml`.
 - `--yes` never writes herdr's keys through a symlinked config.
 - Both end the same way, with `Setup done · doctor: <n> ok` and the next steps, then, while the machine is not connected, `Your board on your phone: kebbie hub connect, or H on the board` and `kebbie.dev/hub`.
 
@@ -927,7 +927,7 @@ Installs kebbie's Codex plugin in `$CODEX_HOME/plugins/cache/kebbie-tasks/kebbie
 - Its `SessionStart`, `UserPromptSubmit` and `Stop` hooks record a Codex task's session, give it its role and ask for a report before a turn ends.
 - The plugin itself never edits Codex's `config.toml` or `hooks.json`. kebbie enables it and trusts its hooks only on the command line of the Codex sessions it starts.
 - Run again, it writes only what changed, and nothing when everything is current.
-- Without a terminal and without `--yes`, it writes the plugin alone and names the rest, such as `approvals  ~/.codex/rules/kebbie.rules`, under `kebbie setup codex --yes also writes:`.
+- Without a terminal and without `--yes`, it writes the plugin alone and names the rest, such as `codex approvals  ~/.codex/rules/kebbie.rules`, under `kebbie setup codex --yes also writes:`.
 
 ### `kebbie update`
 

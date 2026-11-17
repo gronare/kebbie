@@ -38,7 +38,7 @@ fn setup_codex_yes_installs_the_plugin_and_its_rules_file_while_codexs_config_st
     assert!(doctor_line(&doctor, "codex plugin").starts_with("warn"), "{doctor}");
     let said = lab.ok(&["setup", "codex", "--yes"]);
     assert!(said.starts_with("kebbie's Codex plugin installed at "), "{said}");
-    assert!(said.lines().any(|line| line.starts_with("done") && line.contains("approvals  ~/.codex/rules/kebbie.rules")), "the plugin comes with its rules file, printed: {said}");
+    assert!(said.lines().any(|line| line.starts_with("done") && line.contains("codex approvals  ~/.codex/rules/kebbie.rules")), "the plugin comes with its rules file, printed: {said}");
     assert!(codex.join("rules/kebbie.rules").is_file());
     assert_eq!(fs::read_to_string(codex.join("config.toml")).unwrap(), config, "without a vault no server table or other key is added to Codex's own config");
     let doctor = stdout(&lab.run(&["doctor"]));
