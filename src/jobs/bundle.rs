@@ -176,15 +176,43 @@ pub fn remote_base(repo: &Path, commit: &str) -> Option<Remote> {
     Some(Remote { url, base: newest })
 }
 
-// Fetches every branch of the remote into the store, with the worker's own credentials and never a prompt.
-fn fetch_remote(store: &Path, url: &str) -> Result<()> {
-    let output = crate::sh::git_command().current_dir(store).args(["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", url, &format!("+refs/heads/*:{FROM_REMOTE}/*")])
-        .env("GIT_TERMINAL_PROMPT", "0").stdin(std::process::Stdio::null()).output().map_err(|error| format!("git fetch: {error}"))?;
-    if output.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&output.stderr).trim().to_string()) }
+// Network protocols only, whatever the worker's git config allows, as GIT_ALLOW_PROTOCOL overrides every protocol.*.allow there; tests stand in for origin with a local repo.
+pub const ALLOWED_PROTOCOLS: &str = if cfg!(test) { "https:http:ssh:git:file" } else { "https:http:ssh:git" };
+
+// A git call on the worker, in a process group of its own that is killed once stop says so: the job's deadline or the keeper going.
+pub fn git_until(dir: &Path, args: &[&str], stop: &dyn Fn() -> bool, prepare: impl FnOnce(&mut std::process::Command)) -> Result<String> {
+    let mut command = crate::sh::git_command();
+    command.current_dir(dir).args(args);
+    prepare(&mut command);
+    match crate::sh::output_until(command, stop).map_err(|error| format!("git {}: {error}", args.join(" ")))? {
+        None => Err(format!("git {} was stopped", args.first().copied().unwrap_or_default())),
+        Some(done) if done.code == Some(0) => Ok(done.stdout.trim().to_string()),
+        Some(done) => Err(format!("git {} failed: {}", args.join(" "), done.stderr.trim())),
+    }
+}
+
+// ssh as the user set it up, and never asking: BatchMode on top of their own GIT_SSH_COMMAND, core.sshCommand or GIT_SSH.
+pub fn batch_ssh(own: Option<&str>) -> String {
+    format!("{} -oBatchMode=yes", own.map(str::trim).filter(|own| !own.is_empty()).unwrap_or("ssh"))
+}
+
+fn own_ssh(store: &Path) -> Option<String> {
+    std::env::var("GIT_SSH_COMMAND").ok().filter(|own| !own.trim().is_empty())
+        .or_else(|| crate::repo::git(store, &["config", "--get", "core.sshCommand"]).ok().filter(|own| !own.is_empty()))
+        .or_else(|| std::env::var("GIT_SSH").ok().filter(|own| !own.is_empty()).map(|own| crate::sh::quote(&own)))
+}
+
+// Fetches every branch of the remote into the store, with the worker's own credentials and never a prompt: no terminal, no askpass program, ssh in batch mode.
+fn fetch_remote(store: &Path, url: &str, stop: &dyn Fn() -> bool) -> Result<()> {
+    let ssh = batch_ssh(own_ssh(store).as_deref());
+    git_until(store, &["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", url, &format!("+refs/heads/*:{FROM_REMOTE}/*")], stop, |command| {
+        command.envs([("GIT_TERMINAL_PROMPT", "0"), ("GIT_ASKPASS", "true"), ("GCM_INTERACTIVE", "never"), ("SSH_ASKPASS_REQUIRE", "never"), ("GIT_ALLOW_PROTOCOL", ALLOWED_PROTOCOLS), ("GIT_SSH_COMMAND", ssh.as_str())]).env_remove("SSH_ASKPASS");
+    }).map(|_| ())
 }
 
 // The bundle's commits in the repo's bare store, kept under keep so the next incremental bundle finds its base; a base the store lacks is fetched from the job's remote when it names one, and else asks the master for the whole history.
-pub fn store(store: &Path, bundle: &[u8], commit: &str, base: Option<&str>, keep: &str, remote: Option<&str>, say: &mut dyn FnMut(String)) -> Result<Stored> {
+#[allow(clippy::too_many_arguments)]
+pub fn store(store: &Path, bundle: &[u8], commit: &str, base: Option<&str>, keep: &str, remote: Option<&str>, say: &mut dyn FnMut(String), stop: &dyn Fn() -> bool) -> Result<Stored> {
     if !store.join("HEAD").is_file() {
         std::fs::create_dir_all(store).map_err(|error| format!("{}: {error}", store.display()))?;
         crate::repo::git(store, &["init", "--quiet", "--bare"])?;
@@ -192,7 +220,10 @@ pub fn store(store: &Path, bundle: &[u8], commit: &str, base: Option<&str>, keep
     if let Some(base) = base.filter(|base| !has(store, base)) {
         let Some(url) = remote else { return Ok(Stored::NeedsFull) };
         say(format!("[kebbie: fetching the history up to {} from {url}; only what is new comes on later jobs]\n", &base[..12.min(base.len())]));
-        if let Err(error) = fetch_remote(store, url) {
+        if let Err(error) = fetch_remote(store, url, stop) {
+            if stop() {
+                return Err(format!("the fetch from {url} was stopped"));
+            }
             say(format!("[kebbie: the fetch from {url} failed: {error}]\n"));
             return Ok(Stored::NeedsFull);
         }
@@ -204,7 +235,7 @@ pub fn store(store: &Path, bundle: &[u8], commit: &str, base: Option<&str>, keep
     if !bundle.is_empty() {
         let file = store.join(format!("kebbie-job-{}.bundle", std::process::id()));
         std::fs::write(&file, bundle).map_err(|error| format!("{}: {error}", file.display()))?;
-        let fetched = crate::repo::git(store, &["fetch", "--quiet", "--no-write-fetch-head", &file.to_string_lossy(), &format!("+{}/*:{INCOMING}/*", super::REF)]);
+        let fetched = git_until(store, &["fetch", "--quiet", "--no-write-fetch-head", &file.to_string_lossy(), &format!("+{}/*:{INCOMING}/*", super::REF)], stop, |_| {});
         let _ = std::fs::remove_file(&file);
         fetched?;
         for incoming in crate::repo::git(store, &["for-each-ref", "--format=%(refname)", INCOMING])?.lines() {

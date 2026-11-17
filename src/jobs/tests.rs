@@ -101,6 +101,13 @@ fn the_remote_a_worker_fetches_from_rides_in_the_command_without_credentials_and
         ("./app", None),
         ("file:///srv/git/app.git", None),
         ("ext::sh -c touch% /tmp/x", None),
+        ("ext::/tmp/x.sh", None),
+        ("fd::3", None),
+        ("helper::https://host/app.git", None),
+        ("https://host/app.git?private_token=secret", None),
+        ("https://host/app.git#secret", None),
+        ("me@ho$t:app.git", None),
+        ("a/b@host:app.git", None),
         ("-uhttps://host/app", None),
         ("https://host/app\ntouch pwned", None),
         ("", None),
@@ -204,6 +211,27 @@ fn a_job_the_inbox_hands_over_again_is_queued_once_and_jobs_wait_in_the_order_th
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[test]
+fn a_job_that_could_not_be_queued_is_queued_when_the_inbox_hands_it_over_again() {
+    let dir = crate::sh::test_dir("jobs-queue-fails");
+    let (from, id) = (machine(1), cluster::new_id().unwrap());
+    let job = Job { repo: "app".into(), name: "build".into(), command: "true".into(), task: "billing".into(), commit: "a".repeat(40), base: None, bundle: Vec::new(), on: None };
+    std::fs::create_dir_all(dir.join("jobs")).unwrap();
+    std::fs::write(dir.join("jobs/queue"), "not a folder").unwrap();
+    assert!(worker::take(&dir, &from, "devbox", &id, job.clone(), 10).unwrap().contains("was not queued"));
+    std::fs::remove_file(dir.join("jobs/queue")).unwrap();
+    assert!(worker::take(&dir, &from, "devbox", &id, job, 11).unwrap().starts_with("jobs: queued build"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_job_that_waited_in_the_queue_past_the_day_a_job_lives_is_refused_not_run() {
+    let job = Job { repo: "app".into(), name: "build".into(), command: "true".into(), task: "billing".into(), commit: "a".repeat(40), base: None, bundle: Vec::new(), on: None };
+    let queued = Queued { from: machine(1), from_name: "devbox".into(), id: cluster::new_id().unwrap(), job, at: 1_000, seq: 0 };
+    assert!(!worker::stale(&queued, 1_000 + 86_400));
+    assert!(worker::stale(&queued, 1_001 + 86_400));
+}
+
 fn sent(worker: Id) -> Sent {
     Sent { id: cluster::new_id().unwrap(), worker, worker_name: "studio".into(), repo: "app".into(), name: "build".into(), commit: "a".repeat(40), base: None, blobs: Vec::new(), at: 100, pid: std::process::id() }
 }
@@ -229,6 +257,19 @@ fn only_the_jobs_own_worker_reports_on_it_and_each_report_counts_once() {
     let mut printed = String::new();
     let followed = master::follow(&state, &job, &mut |text| printed.push_str(text), &mut || {}, &|| 120, &|| false);
     assert!(matches!(followed, Followed::Ended(JobEnd::Exited { code: 65, .. })) && printed == log());
+    let _ = std::fs::remove_dir_all(state);
+}
+
+#[test]
+fn a_report_numbered_the_last_there_is_is_refused_and_counting_never_wraps() {
+    let state = crate::sh::test_dir("jobs-report-last");
+    let job = sent(machine(2));
+    std::fs::create_dir_all(state.join("jobs")).unwrap();
+    std::fs::write(master::part(&state, &job.id, "sent.json"), serde_json::to_string(&job).unwrap()).unwrap();
+    let said = master::report(&state, &machine(2), &JobReport { job: job.id.clone(), seq: u32::MAX, log: "late\n".into(), end: None }, 110).unwrap();
+    assert!(said.contains("refused"), "{said}");
+    assert_eq!(master::report(&state, &machine(2), &JobReport { job: job.id.clone(), seq: 0, log: "first\n".into(), end: None }, 111), None);
+    assert_eq!(std::fs::read_to_string(master::part(&state, &job.id, "log")).unwrap(), "first\n");
     let _ = std::fs::remove_dir_all(state);
 }
 
@@ -409,6 +450,51 @@ fn a_worker_fetches_the_history_from_the_jobs_remote_and_asks_for_all_when_the_f
 }
 
 #[test]
+fn the_workers_fetch_runs_no_remote_helper_even_when_its_git_config_allows_one() {
+    let root = crate::sh::test_dir("jobs-fetch-helper");
+    let store = root.join("store");
+    let marker = root.join("ran");
+    std::fs::create_dir_all(&store).unwrap();
+    git(&store, &["init", "--quiet", "--bare"]);
+    git(&store, &["config", "protocol.ext.allow", "always"]);
+    git(&store, &["config", &format!("url.ext::sh -c touch% {}.insteadOf", marker.display()), ORIGIN]);
+    let stored = bundle::store(&store, &[], &"a".repeat(40), Some(&"b".repeat(40)), "refs/kebbie/keep", Some(ORIGIN), &mut |_| {}, &|| false);
+    assert_eq!(stored, Ok(bundle::Stored::NeedsFull));
+    assert!(!marker.exists(), "the ext:: helper the config rewrote origin to never ran");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_fetch_from_a_remote_that_never_answers_ends_when_the_worker_stops_it() {
+    let root = crate::sh::test_dir("jobs-fetch-hung");
+    let store = root.join("store");
+    std::fs::create_dir_all(&store).unwrap();
+    git(&store, &["init", "--quiet", "--bare"]);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("git://127.0.0.1:{}/app.git", listener.local_addr().unwrap().port());
+    std::thread::spawn(move || {
+        let held: Vec<_> = listener.incoming().take(4).collect();
+        std::thread::sleep(std::time::Duration::from_secs(60));
+        drop(held);
+    });
+    let (sent, got) = std::sync::mpsc::channel();
+    let started = std::time::Instant::now();
+    std::thread::spawn(move || {
+        let stored = bundle::store(&store, &[], &"a".repeat(40), Some(&"b".repeat(40)), "refs/kebbie/keep", Some(&url), &mut |_| {}, &|| started.elapsed() >= std::time::Duration::from_secs(1));
+        let _ = sent.send(stored);
+    });
+    let stored = got.recv_timeout(std::time::Duration::from_secs(15)).expect("the fetch ends once stopped");
+    assert!(stored.is_err_and(|error| error.contains("was stopped")), "a stopped fetch is no reason to ask for the whole history");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn the_workers_ssh_never_asks_and_keeps_the_users_own_options() {
+    assert_eq!(bundle::batch_ssh(None), "ssh -oBatchMode=yes");
+    assert_eq!(bundle::batch_ssh(Some("ssh -i ~/.ssh/deploy")), "ssh -i ~/.ssh/deploy -oBatchMode=yes");
+}
+
+#[test]
 fn a_worker_reports_on_a_job_from_the_bundles_fetch_on_and_on_the_jobs_queued_behind_it() {
     let root = crate::sh::test_dir("jobs-heartbeat");
     let (top, data) = (repo(&root), root.join("worker"));
@@ -481,6 +567,9 @@ fn a_hung_job_is_stopped_at_its_timeout_with_its_process_group_and_a_job_that_le
     assert_eq!(end, JobEnd::Failed { reason: "build ran past its timeout of 1 s, so the worker stopped it, with SIGKILL as it outlasted SIGTERM by 1 s".into() });
     assert!(took < 4 * second, "{took:?}");
     let (end, _, _) = run("sleep 30", 60 * second, &|| true);
+    assert_eq!(end, JobEnd::Failed { reason: "the worker's kebbie stopped while it took the commit of build, so it stopped the job".into() });
+    let stopping = std::time::Instant::now();
+    let (end, _, _) = run("sleep 30", 60 * second, &|| stopping.elapsed() >= second);
     assert_eq!(end, JobEnd::Failed { reason: "the worker's kebbie stopped while build ran, so it stopped the job".into() });
     let def = Def { run: "make".to_string(), on: None, timeout_minutes: Some(90) };
     assert_eq!(command_of(&command_for(&def, None)), Command { timeout: Some(90), fetch: None, run: "make" }, "the job's own timeout goes along in its command");

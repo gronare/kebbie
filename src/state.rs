@@ -66,6 +66,29 @@ impl Locked {
             _ => Err(format!("{}: {}", lock.display(), std::io::Error::last_os_error())),
         }
     }
+
+    // For a lock file in a folder less trusted processes write too: it never follows a link or blocks on a pipe, and gives up after `limit` rather than wait for ever.
+    pub fn within(lock: &Path, limit: std::time::Duration) -> Result<Locked> {
+        use std::os::fd::AsRawFd;
+        if let Some(dir) = lock.parent() {
+            private_dir(dir)?;
+        }
+        let file = OpenOptions::new().create(true).append(true).mode(0o600).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(lock).map_err(|error| format!("{}: {error}", lock.display()))?;
+        if !file.metadata().is_ok_and(|meta| meta.is_file()) {
+            return Err(format!("{}: not a plain file", lock.display()));
+        }
+        let until = std::time::Instant::now() + limit;
+        loop {
+            // SAFETY: flock on a descriptor this File owns.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                return Ok(Locked(file));
+            }
+            if std::time::Instant::now() >= until {
+                return Err(format!("{}: still locked by another process after {} ms", lock.display(), limit.as_millis()));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
 }
 
 impl Drop for Locked {

@@ -73,10 +73,10 @@ pub fn take(dir: &Path, from: &Id, from_name: &str, id: &Id, job: Job, now: u64)
     let queued = Queued { from: from.clone(), from_name: from_name.to_string(), id: id.clone(), job, at: now, seq: 0 };
     seen.queued += 1;
     let file = dir.join(QUEUE).join(format!("{:020}-{id}.json", seen.queued));
-    let written = serde_json::to_string(&queued).map_err(|error| error.to_string()).and_then(|text| crate::state::write(&file, text));
-    let kept = serde_json::to_string(&seen).map_err(|error| error.to_string()).and_then(|text| crate::state::write(&dir.join(SEEN), text));
+    let written = serde_json::to_string(&queued).map_err(|error| error.to_string()).and_then(|text| crate::state::write(&file, text))
+        .and_then(|()| serde_json::to_string(&seen).map_err(|error| error.to_string()).and_then(|text| crate::state::write(&dir.join(SEEN), text)));
     drop(held);
-    Some(match written.and(kept) {
+    Some(match written {
         Ok(()) => format!("jobs: queued {said}"),
         Err(error) => format!("jobs: {said} was not queued: {error}"),
     })
@@ -92,6 +92,11 @@ fn all_queued(dir: &Path) -> Vec<(PathBuf, Queued)> {
             None
         }
     }).collect()
+}
+
+// A job that waited in the queue longer than the protocol lets a job live is refused, not run long after its master stopped asking.
+pub fn stale(queued: &Queued, now: u64) -> bool {
+    now.saturating_sub(queued.at) > kebbie_hub_protocol::Kind::Job.max_ttl()
 }
 
 pub fn next_queued(dir: &Path) -> Option<(PathBuf, Queued)> {
@@ -186,20 +191,20 @@ fn failed(text: &str) -> JobEnd {
 }
 
 // The job's commit in a folder of the task's own, reused and cleaned per job; None when the store lacks the base the bundle builds on.
-fn checkout(data: &Path, queued: &Queued, bundle: &[u8], remote: Option<&str>, say: &mut dyn FnMut(String)) -> std::result::Result<Option<PathBuf>, String> {
+fn checkout(data: &Path, queued: &Queued, bundle: &[u8], remote: Option<&str>, say: &mut dyn FnMut(String), stop: &dyn Fn() -> bool) -> std::result::Result<Option<PathBuf>, String> {
     let job = &queued.job;
     let repo = data.join(safe(&job.repo));
     let keep = format!("refs/kebbie/from/{}", queued.from);
-    if bundle::store(&repo.join(".store"), bundle, &job.commit, job.base.as_deref(), &keep, remote, say).map_err(|error| format!("the worker could not take the commit: {error}"))? == bundle::Stored::NeedsFull {
+    if bundle::store(&repo.join(".store"), bundle, &job.commit, job.base.as_deref(), &keep, remote, say, stop).map_err(|error| format!("the worker could not take the commit: {error}"))? == bundle::Stored::NeedsFull {
         return Ok(None);
     }
     let store = repo.join(".store");
     let work = repo.join(safe(&job.task));
-    let reused = work.join(".git").exists() && crate::repo::git(&work, &["checkout", "--quiet", "--detach", "--force", &job.commit]).and_then(|_| crate::repo::git(&work, &["clean", "-fdq"])).is_ok();
+    let reused = work.join(".git").exists() && bundle::git_until(&work, &["checkout", "--quiet", "--detach", "--force", &job.commit], stop, |_| {}).and_then(|_| bundle::git_until(&work, &["clean", "-fdq"], stop, |_| {})).is_ok();
     if !reused {
         let _ = std::fs::remove_dir_all(&work);
         let _ = crate::repo::git(&store, &["worktree", "prune"]);
-        crate::repo::git(&store, &["worktree", "add", "--quiet", "--detach", &work.to_string_lossy(), &job.commit]).map_err(|error| format!("the worker could not check out the commit: {error}"))?;
+        bundle::git_until(&store, &["worktree", "add", "--quiet", "--detach", &work.to_string_lossy(), &job.commit], stop, |_| {}).map_err(|error| format!("the worker could not check out the commit: {error}"))?;
     }
     Ok(Some(work))
 }
@@ -314,13 +319,18 @@ pub fn execute(queued: &Queued, data: &Path, fetch: &dyn Fn(&[BlobRef]) -> Resul
         }
     };
     let command = super::command_of(&job.command);
-    let checked = checkout(data, queued, &bundle, command.fetch.as_deref(), &mut |text| send(text, None));
+    let timeout = command.timeout.map_or(limits.timeout, |minutes| Duration::from_secs(minutes * 60));
+    let deadline = clock().saturating_add(timeout.as_millis() as u64);
+    let late = || clock() >= deadline;
+    let checked = checkout(data, queued, &bundle, command.fetch.as_deref(), &mut |text| send(text, None), &|| stop() || late());
     let work = match checked {
         Ok(Some(work)) => work,
         Ok(None) => return end(send, JobEnd::NeedsFull {}),
+        Err(_) if stop() => return end(send, failed(&format!("the worker's kebbie stopped while it took the commit of {}, so it stopped the job", job.name))),
+        Err(_) if late() => return end(send, failed(&format!("{} ran past its timeout of {} while the worker took its commit, so the worker stopped it", job.name, span(timeout)))),
         Err(error) => return end(send, failed(&error)),
     };
-    let limits = Limits { timeout: command.timeout.map_or(limits.timeout, |minutes| Duration::from_secs(minutes * 60)), ..limits };
+    let limits = Limits { timeout: Duration::from_millis(deadline.saturating_sub(clock())), ..limits };
     let mut child = match start(queued, &work, command.run) {
         Ok(child) => child,
         Err(error) => return end(send, failed(&format!("the job's command did not start: {error}"))),
@@ -335,7 +345,7 @@ pub fn execute(queued: &Queued, data: &Path, fetch: &dyn Fn(&[BlobRef]) -> Resul
     let how = if killed { format!(", with SIGKILL as it outlasted SIGTERM by {}", span(limits.grace)) } else { String::new() };
     let ended = match (why, status) {
         (Some(Why::Halted), _) => failed(&format!("the worker's kebbie stopped while {} ran, so it stopped the job{how}", job.name)),
-        (Some(Why::TimedOut), _) => failed(&format!("{} ran past its timeout of {}, so the worker stopped it{how}", job.name, span(limits.timeout))),
+        (Some(Why::TimedOut), _) => failed(&format!("{} ran past its timeout of {}, so the worker stopped it{how}", job.name, span(timeout))),
         (None, Ok(status)) => JobEnd::Exited { code: status.code().unwrap_or_else(|| 128 + status.signal().unwrap_or(0)), artifacts: Vec::new() },
         (None, Err(error)) => failed(&format!("the job's command was lost: {error}")),
     };
@@ -522,7 +532,10 @@ fn serve(state: &Path) {
                 Err(error) => log(&format!("jobs: the hub did not take worker.enabled = {enabled}: {error}")),
             }
             if let Some((file, queued)) = next_queued(&dir) {
-                let note = if enabled { run_one(&dir, &identity, &account, &client, &super::data_dir(), &file, &queued, &halted) } else { refuse(&dir, &identity, &account, &client, &queued, &format!("{} runs no jobs: worker.enabled is off there", identity.name)) };
+                let now = crate::messages::now();
+                let note = if stale(&queued, now) {
+                    refuse(&dir, &identity, &account, &client, &queued, &format!("it waited {} hours in {}'s queue, past the day a job lives", now.saturating_sub(queued.at) / 3_600, identity.name))
+                } else if enabled { run_one(&dir, &identity, &account, &client, &super::data_dir(), &file, &queued, &halted) } else { refuse(&dir, &identity, &account, &client, &queued, &format!("{} runs no jobs: worker.enabled is off there", identity.name)) };
                 let _ = std::fs::remove_file(file);
                 log(&note);
             }

@@ -14,13 +14,17 @@ pub const EVERY: u64 = 3;
 pub const HOLD: u64 = 180;
 const LINGER: u64 = 10;
 const UPDATE_HOLD: u64 = 30;
+const MAX_HOLD: u64 = 30 * 60;
+const UPDATE_WAIT: Duration = Duration::from_secs(10 * 60);
 const KEEPER_QUIET: u64 = 60;
 const QUEUED_EXIT: u8 = 75;
 const HELD_VAR: &str = "KEBBIE_BUILD_SLOT";
 const GUARD_DIR: &str = "build-guard";
 const QUEUE: &str = "queue.json";
-const CARGO_BUILDS: [&str; 18] = ["build", "b", "check", "c", "test", "t", "run", "r", "clippy", "bench", "doc", "d", "install", "rustc", "rustdoc", "fix", "nextest", "llvm-cov"];
+const CARGO_BUILDS: [&str; 16] = ["build", "b", "check", "c", "test", "t", "clippy", "bench", "doc", "d", "install", "rustc", "rustdoc", "fix", "nextest", "llvm-cov"];
 const CARGO_VALUED: [&str; 5] = ["-C", "--config", "-Z", "--color", "--manifest-path"];
+const QUEUE_LOCK_WAIT: Duration = Duration::from_secs(2);
+const QUEUE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -54,7 +58,28 @@ pub enum Take {
     NoKeeper,
 }
 
+// A holder id becomes a file name and an address a message's recipient, and sandboxed tasks write the queue, so only plain tokens pass.
+fn plain(word: &str) -> bool {
+    !word.is_empty() && word.len() <= 128 && !word.starts_with('.') && word.chars().all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character))
+}
+
+fn addressed(address: &str) -> bool {
+    address == UPDATE || address.split_once('@').is_some_and(|(task, repo)| plain(task) && plain(repo))
+}
+
 impl Queue {
+    fn drop_unsound(&mut self) {
+        self.holders.retain(|holder| plain(&holder.id) && addressed(&holder.address));
+        self.line.retain(|address| addressed(address));
+        self.turns.retain(|turn| addressed(&turn.address));
+    }
+
+    // A lapsed turn ends here too, so a queue no keeper ticks still moves; one its task was told of is left to a ticking keeper to tell it the turn passed.
+    fn lapse(&mut self, now: u64) {
+        let keeper = now.saturating_sub(self.ticked) <= KEEPER_QUIET;
+        self.turns.retain(|turn| turn.until > now || (turn.told && keeper));
+    }
+
     fn slots(&self) -> usize {
         self.slots.unwrap_or(crate::config::DEFAULT_BUILD_SLOTS).max(1) as usize
     }
@@ -73,6 +98,7 @@ impl Queue {
 
     // A turn handed to the address, a slot it already holds, or a free slot with nobody ahead of it is taken; else it keeps or takes its place in line, unless no keeper is there to tell it its turn.
     pub fn take(&mut self, address: &str, id: &str, front: bool, needs_keeper: bool, now: u64) -> Take {
+        self.lapse(now);
         let turn = self.turns.iter().position(|turn| turn.address == address);
         let holding = self.holders.iter().any(|holder| holder.address == address);
         let first = self.line.first().is_none_or(|queued| queued == address);
@@ -95,6 +121,7 @@ impl Queue {
 
     // A build that ends while others wait keeps its slot a few seconds, so the next command of the same script finds it.
     pub fn release(&mut self, id: &str, now: u64) {
+        self.lapse(now);
         let Some(at) = self.holders.iter().position(|holder| holder.id == id) else { return };
         let holder = self.holders.remove(at);
         if !self.line.is_empty() && !self.holders.iter().any(|other| other.address == holder.address) {
@@ -107,13 +134,18 @@ impl Queue {
         self.turns.retain(|turn| turn.address != address);
     }
 
-    // The keeper's round: dead builds free their slots, a turn not taken in time passes on, and each free slot goes to the next in line; what to tell whom comes back.
+    // The keeper's round: dead builds free their slots, as does one that held its slot MAX_HOLD while others wait, a turn not taken in time passes on, and each free slot goes to the next in line; what to tell whom comes back.
     pub fn tick(&mut self, slots: u32, commands: &[String], alive: impl Fn(&str) -> bool, now: u64) -> Vec<(String, String)> {
         self.slots = Some(slots);
         self.commands = Some(commands.to_vec());
         self.ticked = now;
         self.holders.retain(|holder| alive(&holder.id));
         let mut told = Vec::new();
+        if !self.line.is_empty() {
+            let (long, kept): (Vec<Holder>, Vec<Holder>) = std::mem::take(&mut self.holders).into_iter().partition(|holder| now.saturating_sub(holder.at) >= MAX_HOLD);
+            self.holders = kept;
+            told.extend(long.into_iter().filter(|holder| holder.address != UPDATE).map(|holder| (holder.address, OUTHELD.to_string())));
+        }
         let (expired, kept): (Vec<Turn>, Vec<Turn>) = std::mem::take(&mut self.turns).into_iter().partition(|turn| turn.until <= now);
         self.turns = kept;
         told.extend(expired.into_iter().filter(|turn| turn.told).map(|turn| (turn.address, MISSED.to_string())));
@@ -130,11 +162,12 @@ impl Queue {
 }
 
 pub const TURN: &str = "kebbie: a build slot is free for you; run your build within 3 minutes, or it passes to the next in line.";
+pub const OUTHELD: &str = "kebbie: your build held its build slot 30 minutes while other tasks waited, so the slot passed to the next in line; the build runs on outside the queue.";
 pub const MISSED: &str = "kebbie: your build turn passed unused to the next in line; run the build again to queue.";
 
 pub fn queued_line(place: usize, holders: &[Holder]) -> String {
     let building: Vec<&str> = holders.iter().map(|holder| holder.address.as_str()).collect();
-    format!("kebbie: every build slot is taken ({}); this task is {} in line, and kebbie tells it when its turn comes.", building.join(", "), crate::tasks::ordinal(place))
+    format!("kebbie: no build slot is free for this task ({} building); it is {} in line, and kebbie tells it when its turn comes.", building.join(", "), crate::tasks::ordinal(place))
 }
 
 pub fn board_note(place: usize) -> String {
@@ -149,13 +182,26 @@ pub fn dir() -> Result<PathBuf> {
     std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache/kebbie/builds")).ok_or_else(|| "HOME is not set".to_string())
 }
 
+fn read_plain(file: &Path) -> Option<String> {
+    use std::io::Read;
+    let open = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(file).ok()?;
+    if !open.metadata().is_ok_and(|meta| meta.is_file()) {
+        return None;
+    }
+    let mut text = String::new();
+    open.take(QUEUE_BYTES).read_to_string(&mut text).ok()?;
+    Some(text)
+}
+
 pub fn load(dir: &Path) -> Queue {
-    fs::read_to_string(dir.join(QUEUE)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+    let mut queue: Queue = read_plain(&dir.join(QUEUE)).and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+    queue.drop_unsound();
+    queue
 }
 
 fn with_queue<T>(dir: &Path, change: impl FnOnce(&mut Queue) -> T) -> Result<T> {
     crate::state::private_dir(dir)?;
-    let _lock = crate::state::Locked::wait(&dir.join("queue.lock"))?;
+    let _lock = crate::state::Locked::within(&dir.join("queue.lock"), QUEUE_LOCK_WAIT)?;
     let mut queue = load(dir);
     let out = change(&mut queue);
     crate::state::write(&dir.join(QUEUE), serde_json::to_string(&queue).map_err(|error| error.to_string())?)?;
@@ -183,8 +229,14 @@ fn held_file(dir: &Path, id: &str) -> PathBuf {
 
 // A build holds a lock on its own file for as long as it runs, which the kernel drops however it ends, across a sandbox's process namespace too.
 fn alive_in(dir: &Path, id: &str) -> bool {
+    if !plain(id) {
+        return false;
+    }
     let file = held_file(dir, id);
-    let Ok(open) = File::open(&file) else { return false };
+    let Ok(open) = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(&file) else { return false };
+    if !open.metadata().is_ok_and(|meta| meta.is_file()) {
+        return false;
+    }
     if try_flock(&open) {
         let _ = fs::remove_file(&file);
         return false;
@@ -200,7 +252,10 @@ pub struct Slot {
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        let _ = with_queue(&self.dir, |queue| queue.release(&self.id, crate::messages::now()));
+        let _ = with_queue(&self.dir, |queue| {
+            queue.release(&self.id, crate::messages::now());
+            queue.holders.retain(|holder| alive_in(&self.dir, &holder.id));
+        });
         let _ = fs::remove_file(held_file(&self.dir, &self.id));
     }
 }
@@ -215,11 +270,14 @@ pub fn take_slot(dir: &Path, address: &str, front: bool, needs_keeper: bool) -> 
     crate::state::private_dir(dir)?;
     let id = crate::messages::new_id("build");
     let path = held_file(dir, &id);
-    let file = OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let file = OpenOptions::new().write(true).create_new(true).mode(0o600).custom_flags(libc::O_NOFOLLOW).open(&path).map_err(|error| format!("{}: {error}", path.display()))?;
     if !try_flock(&file) {
         return Err(format!("{}: could not be locked", path.display()));
     }
-    let (took, holders) = with_queue(dir, |queue| (queue.take(address, &id, front, needs_keeper, crate::messages::now()), queue.holders.clone()))?;
+    let (took, holders) = with_queue(dir, |queue| {
+        queue.holders.retain(|holder| alive_in(dir, &holder.id));
+        (queue.take(address, &id, front, needs_keeper, crate::messages::now()), queue.holders.clone())
+    })?;
     match took {
         Take::Taken => Ok(Took::Slot(Slot { _file: file, dir: dir.to_path_buf(), id })),
         Take::Queued(place) => {
@@ -233,12 +291,20 @@ pub fn take_slot(dir: &Path, address: &str, front: bool, needs_keeper: bool) -> 
     }
 }
 
-// kebbie update goes first in line and waits there, since the user is watching it; a queue it cannot use lets it build at once.
+// kebbie update goes first in line and waits there at most UPDATE_WAIT, since the user is watching it; a queue it cannot use lets it build at once.
 pub fn wait_for_update() -> Option<Slot> {
-    let dir = dir().ok()?;
+    wait_in(&dir().ok()?, UPDATE_WAIT, Duration::from_secs(2))
+}
+
+fn wait_in(dir: &Path, limit: Duration, pause: Duration) -> Option<Slot> {
+    let until = std::time::Instant::now() + limit;
     let mut said = false;
     loop {
-        match take_slot(&dir, UPDATE, true, false) {
+        if std::time::Instant::now() >= until {
+            eprintln!("still no build slot after {} minutes; building without one", limit.as_secs() / 60);
+            return None;
+        }
+        match take_slot(dir, UPDATE, true, false) {
             Ok(Took::Slot(slot)) => return Some(slot),
             Ok(Took::Queued(_, holders)) => {
                 if !said {
@@ -246,7 +312,7 @@ pub fn wait_for_update() -> Option<Slot> {
                     eprintln!("waiting for a build slot: {} builds now", building.join(", "));
                     said = true;
                 }
-                std::thread::sleep(Duration::from_secs(2));
+                std::thread::sleep(pause);
             }
             Ok(Took::NoKeeper) | Err(_) => return None,
         }
@@ -257,9 +323,19 @@ pub fn tick_now() -> Result<Vec<String>> {
     let dir = dir()?;
     let (slots, commands) = crate::config::build_settings().unwrap_or_else(|_| (crate::config::DEFAULT_BUILD_SLOTS, crate::config::DEFAULT_BUILD_COMMANDS.map(str::to_string).to_vec()));
     let told = with_queue(&dir, |queue| queue.tick(slots, &commands, |id| alive_in(&dir, id), crate::messages::now()))?;
-    Ok(told.into_iter().map(|(address, text)| match crate::messages::hand_to(&address, &text) {
-        Ok(()) => format!("builds: told {address}: {text}"),
-        Err(error) => format!("builds: could not tell {address}: {error}"),
+    if told.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sessions = crate::peers::sessions().unwrap_or_default();
+    let known = |address: &str| sessions.iter().any(|session| session.task.is_some() && session.address == address);
+    Ok(told.into_iter().map(|(address, text)| {
+        if !known(&address) {
+            return format!("builds: told nobody: {address} is no task running here");
+        }
+        match crate::messages::hand_to(&address, &text) {
+            Ok(()) => format!("builds: told {address}: {text}"),
+            Err(error) => format!("builds: could not tell {address}: {error}"),
+        }
     }).collect())
 }
 
@@ -384,7 +460,7 @@ pub fn guard(argv: &[String]) -> ExitCode {
             return ExitCode::from(QUEUED_EXIT);
         }
         Ok(Took::NoKeeper) => {
-            eprintln!("kebbie: every build slot is taken and no keeper runs to hand out turns; building without waiting.");
+            eprintln!("kebbie: no build slot is free for this task and no keeper runs to hand out turns; building without waiting.");
             return exit_of(command.status(), program);
         }
         Err(error) => {
@@ -528,6 +604,57 @@ mod tests {
     }
 
     #[test]
+    fn without_a_keeper_a_lapsed_turn_frees_its_slot_for_kebbie_update() {
+        let mut queue = queue(1, 0);
+        queue.take("a@app", "1", false, false, 100);
+        assert_eq!(queue.take(UPDATE, "2", true, false, 100), Take::Queued(1));
+        queue.release("1", 101);
+        assert_eq!(queue.take(UPDATE, "3", true, false, 105), Take::Queued(1), "a's script keeps its slot a moment");
+        assert_eq!(queue.take(UPDATE, "4", true, false, 101 + LINGER), Take::Taken);
+    }
+
+    #[test]
+    fn a_holder_whose_build_died_outright_frees_its_slot_without_a_keeper() {
+        let dir = crate::sh::test_dir("builds-dead-holder");
+        let dead = Queue { holders: vec![Holder { address: "a@app".into(), id: "1-1-0-build".into(), at: 1 }], ..queue(1, 0) };
+        crate::state::write(&dir.join(QUEUE), serde_json::to_string(&dead).unwrap()).unwrap();
+        fs::write(held_file(&dir, "1-1-0-build"), "").unwrap();
+        assert!(matches!(take_slot(&dir, UPDATE, true, false), Ok(Took::Slot(_))), "a lock nobody holds is a build that ended");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_build_that_holds_its_slot_past_the_limit_while_others_wait_loses_it_and_hears_so() {
+        let mut queue = queue(1, 100);
+        queue.take("a@app", "1", false, true, 100);
+        assert!(queue.tick(1, &[], |_| true, 100 + MAX_HOLD).is_empty(), "nobody waits, so the slot stays");
+        queue.take("b@app", "2", false, true, 100 + MAX_HOLD);
+        let told = queue.tick(1, &[], |_| true, 101 + MAX_HOLD);
+        assert_eq!(told, vec![("a@app".to_string(), OUTHELD.to_string()), ("b@app".to_string(), TURN.to_string())]);
+        assert!(queue.holders.is_empty());
+    }
+
+    #[test]
+    fn cargo_run_takes_no_slot_as_what_it_runs_may_never_end() {
+        let commands = strings(&["cargo"]);
+        assert!(!builds("cargo", &strings(&["run"]), &commands) && !builds("cargo", &strings(&["r", "--release"]), &commands));
+    }
+
+    #[test]
+    fn kebbie_update_waits_for_a_held_slot_only_so_long() {
+        let dir = crate::sh::test_dir("builds-update-wait");
+        crate::state::write(&dir.join(QUEUE), serde_json::to_string(&queue(1, crate::messages::now())).unwrap()).unwrap();
+        let Ok(Took::Slot(_held)) = take_slot(&dir, "a@app", false, true) else { panic!("a free slot is taken") };
+        let (sent, got) = std::sync::mpsc::channel();
+        let inside = dir.clone();
+        std::thread::spawn(move || {
+            let _ = sent.send(wait_in(&inside, Duration::from_secs(1), Duration::from_millis(100)).is_none());
+        });
+        assert_eq!(got.recv_timeout(Duration::from_secs(10)), Ok(true));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn a_dropped_task_leaves_the_line_and_its_turn() {
         let mut queue = queue(1, 100);
         queue.take("a@app", "1", false, true, 100);
@@ -575,6 +702,35 @@ mod tests {
         assert!(!dir.join("npm").exists(), "a program the config dropped loses its guard");
         assert_eq!(real_program("cargo", std::slice::from_ref(&dir)), None, "the guard never runs itself as the real program");
         assert_eq!(env_line(Path::new("/s/build-guard")), "case \":$PATH:\" in *:'/s/build-guard':*) ;; *) export PATH='/s/build-guard':\"$PATH\" ;; esac\n");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_queue_a_task_wrote_names_no_file_outside_its_folder_and_no_address_but_a_tasks() {
+        let root = crate::sh::test_dir("builds-untrusted");
+        let dir = root.join("builds");
+        let victim = root.join("victim/Cargo.lock");
+        fs::create_dir_all(dir.join("held-")).unwrap();
+        fs::create_dir_all(victim.parent().unwrap()).unwrap();
+        fs::write(&victim, "kept").unwrap();
+        let written = Queue { holders: vec![Holder { address: "a@app".into(), id: "/../../victim/Cargo".into(), at: 1 }], line: strings(&["lead", "../x@app", "b@app"]), ..queue(1, 1) };
+        crate::state::write(&dir.join(QUEUE), serde_json::to_string(&written).unwrap()).unwrap();
+        let told = with_queue(&dir, |queue| queue.tick(1, &[], |id| alive_in(&dir, id), 10)).unwrap();
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "kept", "a holder id is never a path");
+        assert_eq!(told, vec![("b@app".to_string(), TURN.to_string())], "only a task's address is told");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_queue_lock_held_elsewhere_makes_the_queue_unusable_soon_instead_of_freezing_its_caller() {
+        let dir = crate::sh::test_dir("builds-held-lock");
+        let _held = crate::state::Locked::wait(&dir.join("queue.lock")).unwrap();
+        let (sent, got) = std::sync::mpsc::channel();
+        let inside = dir.clone();
+        std::thread::spawn(move || {
+            let _ = sent.send(with_queue(&inside, |queue| queue.forget("a@app")).is_err());
+        });
+        assert_eq!(got.recv_timeout(Duration::from_secs(10)), Ok(true));
         let _ = fs::remove_dir_all(dir);
     }
 

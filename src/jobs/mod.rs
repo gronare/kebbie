@@ -59,15 +59,20 @@ fn command_of(command: &str) -> Command<'_> {
     }
 }
 
-// A remote URL a worker can fetch from on its own: a network URL with no password or token in it, never a local path, an option or anything that would break its comment line.
+fn host_word(word: &str) -> bool {
+    !word.is_empty() && !word.starts_with('-') && word.chars().all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
+}
+
+// A remote URL a worker can fetch from on its own: an https, http, ssh or git URL, or ssh's [user@]host:path, with no password, token or query in it; never a local path, a remote helper (any ::), an option or anything that would break its comment line.
 pub fn fetchable(url: &str) -> Option<String> {
     let url = url.trim();
-    if url.is_empty() || url.starts_with('-') || url.chars().any(|character| character.is_whitespace() || character.is_control()) {
+    if url.is_empty() || url.starts_with('-') || url.contains("::") || url.contains(['?', '#']) || url.chars().any(|character| character.is_whitespace() || character.is_control()) {
         return None;
     }
     let Some((scheme, rest)) = url.split_once("://") else {
-        let (host, _) = url.split_once(':')?;
-        return (!host.is_empty() && !host.contains('/')).then(|| url.to_string());
+        let (login, _) = url.split_once(':')?;
+        let (user, host) = login.rsplit_once('@').map_or((None, login), |(user, host)| (Some(user), host));
+        return (host_word(host) && user.is_none_or(host_word)).then(|| url.to_string());
     };
     let scheme = scheme.to_ascii_lowercase();
     let web = matches!(scheme.as_str(), "https" | "http");

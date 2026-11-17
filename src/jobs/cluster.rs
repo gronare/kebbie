@@ -78,7 +78,7 @@ fn cached(dir: &Path, account: &AccountKey) -> Option<Cluster> {
     trust(dir, &listed, account).ok()
 }
 
-// A job's sender is checked against the list as the hub has it now, so a machine the account removed sends none; a report may use a list cached for five minutes.
+// A job's sender is checked against the list the hub hands over now, which the account signed and which is no older than any this machine saw; a hub that keeps handing over the last list it had still lets a removed machine send, and a report may use a list cached for five minutes.
 pub fn sender(dir: &Path, client: &Client, account: &AccountKey, from: &Id, fresh: bool) -> Result<(PublicKeys, String)> {
     let known = |cluster: &Cluster| cluster.keys.get(from).map(|keys| (*keys, cluster.name_of(from)));
     if !fresh && let Some(found) = cached(dir, account).as_ref().and_then(known) {
