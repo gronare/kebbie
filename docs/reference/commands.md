@@ -963,18 +963,19 @@ A job is a command another machine of your hub account runs on a worktree as it 
 
 ## Commands on another machine
 
-A command runs on another machine of your hub account over a direct link on a private network both are on, Tailscale or WireGuard. See [Run a command on another machine](../how-to/run-a-command-on-another-machine.md).
+A command runs on another machine of your hub account over a direct link on a private network both are on, Tailscale or WireGuard, or through the hub's relay when no address answers within 2 s. See [Run a command on another machine](../how-to/run-a-command-on-another-machine.md).
 
 | Command | What it does |
 |---|---|
 | `kebbie run --on <system or machine> -- <command …>` | Run the command on that machine, on this worktree with its uncommitted and untracked files, with its stdout and stderr streamed as they come. It exits with the command's exit code, 128 plus the signal's number when a signal ended it, and 255 when no link could be made or the link was lost. |
-| `kebbie link` | Each machine of your hub account and how a link reaches it: direct on which address, with the round trip of a ping, or down and why. |
+| `kebbie link` | Each machine of your hub account and how a link reaches it: direct on which address or relayed through the hub, with the round trip of a ping, or down and why. |
 
 - `--on` picks a worker as a job's `on` does: by its system or its name, the one the hub heard from last. This machine's own name runs the command here over loopback, when its `worker.enabled` is on. Without `--on`, any worker.
-- The link is TLS 1.3 to port 47011, each side shown by its machine's Ed25519 key as a raw public key. The asker accepts only the key the account's list has for that machine. The worker accepts only a key on the list the hub hands over for that session, one the account signed and no older than one it saw.
+- The link is TLS 1.3, to port 47011 or inside a WebSocket the hub passes between the two machines of one account, each side shown by its machine's Ed25519 key as a raw public key. The asker accepts only the key the account's list has for that machine. The worker accepts only a key on the list the hub hands over for that session, one the account signed and no older than one it saw.
 - The worktree goes as a git bundle of what the worker lacks, after the worker has fetched `origin` as for a job, and nothing when it has the commit. On the worker it lands under `refs/kebbie/tasks/<task>` in the repo's store and is checked out in `~/.local/share/kebbie/worker/<repo>/tasks/<task>` with `checkout --force` and `clean -fd`, so ignored files survive.
 - Several words after `--` are quoted one by one; a single word is one `sh -c` line. The command runs with `KEBBIE_RUN_TASK` and `KEBBIE_RUN_FROM` set and stdin closed.
 - Ctrl-C sends SIGINT to the command's process group on the worker, a second SIGTERM, a third SIGKILL; a fourth quits at once. The asker going away ends the command with SIGTERM, then SIGKILL 10 s later.
+- Each side beats every 10 s when it has nothing to send, and gives the link up after 45 s without a word: `kebbie run` says so and exits 255, the worker stops the command. A direct link also has TCP keepalive.
 - The worker's keeper log gets one line per session: who asked, from where, what ran and how it ended, or why the session was refused.
 
 ## The hub
