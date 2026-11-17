@@ -63,8 +63,8 @@ push: ready
 ```
 
 - The keeper writes it every 30 seconds while the card changed, or an open board does without the keeper; an unchanged card is not written again.
-- A task that leaves Ready to push only has `push` rewritten, `pushed` while its CI runs and `waiting` otherwise; nothing new is written.
-- kebbie rewrites only a note whose `kebbie-card` names the task. Any other note at that path is left as it is, and kebbie says so once in `vault.log`.
+- A task that leaves Ready to push only has its `push` line changed, `pushed` while its CI runs and `waiting` otherwise; the rest of the note, frontmatter you added included, stays as it is.
+- kebbie rewrites only a note whose `kebbie-card` names the task and whose body is still the card kebbie last wrote there. A note you wrote in, a note kebbie has no record of writing, or any other note at that path is left as it is, and kebbie says so once in `vault.log`.
 - `kebbie done`, a drop and a reset close the card note with `task close`, which moves it to the archive beside the task note.
 - A failed write is one line in `vault.log`, and in the keeper's `keeper.log`; the task's push waits for nothing.
 

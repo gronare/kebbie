@@ -125,13 +125,39 @@ fn ours(text: &str, address: &str) -> bool {
     frontmatter_value(text, MARKER).is_some_and(|value| value.trim_matches(['"', '\'']) == address)
 }
 
-// None when nothing needed saying; a line when the vault refused or a note in the way is not kebbie's, said once until it changes.
+fn body(text: &str) -> &str {
+    let after = text.strip_prefix("---\n").and_then(|rest| rest.find("\n---").map(|end| &rest[end + 4..])).unwrap_or(text);
+    after.trim()
+}
+
+// The stored note with only its frontmatter `push:` line set to the wanted state; None when it has no such line.
+fn with_push(stored: &str, push: &str) -> Option<String> {
+    let rest = stored.strip_prefix("---\n")?;
+    let end = rest.find("\n---")? + 4;
+    let mut found = false;
+    let front: Vec<String> = rest[..end - 4].lines().map(|line| match line.strip_prefix("push:") {
+        Some(_) if !found => {
+            found = true;
+            format!("push: {push}")
+        }
+        _ => line.to_string(),
+    }).collect();
+    found.then(|| format!("---\n{}{}", front.join("\n"), &rest[end - 4..]))
+}
+
+// None when nothing needed saying; a line when the vault refused or a note in the way is not kebbie's, or not as kebbie left it, said once until it changes.
 fn sync(store: &dyn Store, state: &Path, address: &str, wanted: Kept, create: bool) -> Option<String> {
-    if load(state, address).as_ref() == Some(&wanted) {
+    let last = load(state, address);
+    if last.as_ref() == Some(&wanted) {
         return None;
     }
     let (written, fresh) = match store.read(&wanted.key) {
         Ok((stored, _)) if !ours(&stored, address) => return once(state, address, format!("{}: not kebbie's card, so the card was not written there", wanted.key)),
+        Ok((stored, _)) if last.as_ref().is_none_or(|last| body(&stored) != last.text.trim()) => return once(state, address, format!("{}: the card note was changed outside kebbie, so kebbie leaves it as it is", wanted.key)),
+        Ok((stored, etag)) if last.as_ref().is_some_and(|last| last.text == wanted.text && last.title == wanted.title && last.up == wanted.up) => match with_push(&stored, &wanted.push) {
+            Some(patched) => (store.write(&wanted.key, &etag, &patched), false),
+            None => return once(state, address, format!("{}: the card note has no push line, so kebbie leaves it as it is", wanted.key)),
+        },
         Ok((stored, etag)) => (store.write(&wanted.key, &etag, &render(&wanted, address, frontmatter_value(&stored, "date").as_deref())), false),
         Err(_) if !create => return None,
         Err(_) => (store.write(&wanted.key, "*", &render(&wanted, address, None)), true),
@@ -360,9 +386,45 @@ mod tests {
     fn a_rewrite_keeps_the_stored_date_and_reads_the_marker_however_the_vault_quoted_it() {
         let (vault, state) = (Vault::default(), state("date"));
         vault.notes.borrow_mut().insert(KEY.to_string(), ("---\ntitle: billing\ndate: '2026-11-01'\nkebbie-card: billing@web\n---\n\nold\n".to_string(), 4));
+        save(&state, "billing@web", &Kept { key: KEY.to_string(), up: NOTE.to_string(), title: "billing".to_string(), text: "old".to_string(), push: "ready".to_string() });
         assert!(run(&vault, &state, &ready(), "new").is_empty());
         let (text, _) = vault.read(KEY).unwrap();
         assert!(text.contains("date: '2026-11-01'\n") && text.ends_with("\n\nnew\n"), "{text}");
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn a_card_note_the_user_wrote_in_is_never_rewritten_and_said_once() {
+        let (vault, state) = (Vault::default(), state("edited"));
+        run(&vault, &state, &ready(), "## Built\nX.");
+        let edited = vault.read(KEY).unwrap().0.replace("X.\n", "X.\n\nMy own notes on this.\n");
+        vault.notes.borrow_mut().insert(KEY.to_string(), (edited.clone(), 7));
+        let said = run(&vault, &state, &ready(), "## Built\nY.");
+        assert_eq!(said, ["billing@web: Kebbie/web-billing-card.md: the card note was changed outside kebbie, so kebbie leaves it as it is"]);
+        assert!(run(&vault, &state, &at(Phase::CiRed { sha: "abc".to_string() }), "## Built\nY.").is_empty(), "said once");
+        assert_eq!(vault.read(KEY).unwrap().0, edited);
+        assert_eq!(vault.writes.borrow().len(), 1);
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn a_card_note_without_kebbies_record_is_not_rewritten() {
+        let (vault, state) = (Vault::default(), state("unrecorded"));
+        let stored = "---\ntitle: billing\nkebbie-card: billing@web\npush: ready\n---\n\nSomething kebbie cannot vouch for.\n";
+        vault.notes.borrow_mut().insert(KEY.to_string(), (stored.to_string(), 1));
+        assert_eq!(run(&vault, &state, &ready(), "new").len(), 1);
+        assert_eq!(vault.read(KEY).unwrap().0, stored);
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn leaving_push_ready_patches_only_the_push_line() {
+        let (vault, state) = (Vault::default(), state("patch"));
+        run(&vault, &state, &ready(), "## Built\nX.");
+        let tagged = vault.read(KEY).unwrap().0.replace("tags: [kebbie, card]", "tags: [kebbie, card, mine]\nrating: 5");
+        vault.notes.borrow_mut().insert(KEY.to_string(), (tagged.clone(), 3));
+        run(&vault, &state, &at(Phase::CiRed { sha: "abc".to_string() }), "## Built\nX.");
+        assert_eq!(vault.read(KEY).unwrap().0, tagged.replace("push: ready", "push: waiting"));
         let _ = std::fs::remove_dir_all(&state);
     }
 
