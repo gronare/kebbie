@@ -63,16 +63,16 @@ push: ready
 ```
 
 - The keeper writes it every 30 seconds while the card changed, or an open board does without the keeper; an unchanged card is not written again.
-- A task that leaves Ready to push only has `push` rewritten, `pushed` while its CI runs and `waiting` otherwise; nothing new is written.
-- kebbie rewrites only a note whose `kebbie-card` names the task. Any other note at that path is left as it is, and kebbie says so once in `vault.log`.
-- `kebbie done`, a drop and a reset close the card note with `task close`, which moves it to the archive beside the task note.
+- A task that leaves Ready to push only has its `push` line changed, `pushed` while its CI runs and `waiting` otherwise; the rest of the note, frontmatter you added included, stays as it is.
+- kebbie rewrites only a note whose `kebbie-card` names the task and whose body is still the card kebbie last wrote there. A note you wrote in, a note kebbie has no record of writing, or any other note at that path is left as it is, and kebbie says so once in `vault.log`.
+- `kebbie done`, a drop and a reset close the card note with `task close`, which moves it to the archive beside the task note. When that fails, or the vault is off, the keeper's card routine closes it later, and only while its body is still the card kebbie wrote; a later task at the same address starts with no card of its own.
 - A failed write is one line in `vault.log`, and in the keeper's `keeper.log`; the task's push waits for nothing.
 
 ## The backlog style
 
 kebbie owns how a backlog item reads, and keeps its rules in the vault, where the vault hands them to any agent that files an item there, kebbie's or not. The default ships in kebbie as `styles/backlog.md`, its first line stamping its version as `<!-- style-version: N -->`.
 
-- `kebbie setup`, the end of `kebbie update` and the keeper's start write it to `.vault/styles/backlog.md` with `style write`. A vault holding a newer version refuses it and keeps its own, and kebbie says nothing; any other refusal is one line, in the keeper's in `keeper.log`.
+- `kebbie setup`, the end of `kebbie update` and the keeper's start write it to `.vault/styles/backlog.md` with `style write`. A vault already at that version, or holding a newer one, keeps its own, and kebbie says nothing; any other refusal is one line, in the keeper's in `keeper.log`, said once until it changes or a write goes through.
 - kebbie writes nothing else under `.vault/`: never the schema, never a note, never `.vault/styles/backlog.override.md`.
 - Your own rules go in `.vault/styles/backlog.override.md`, edited as a file. It applies in place of the default, and no kebbie writes it.
 - `kebbie backlog template` asks `template --json --kind backlog` for the style that applies, and prints kebbie's bundled default when the vault answers none.

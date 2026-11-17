@@ -655,7 +655,7 @@ fn investigate(state: &Path, repo: &Path, worktree: &Path, address: &str, obstac
     let text = fs::read_to_string(&skill).map_err(|error| format!("{}: {error}", skill.display()))?;
     crate::state::write(&prompt, text.trim_end().to_string() + &role)?;
     let answer_file = roles.join(format!("{address}.investigate.answer"));
-    trusted_spawn::ask_helper(&profile, &prompt, &answer_file, worktree, &input, &kebbie, TIMEOUT)
+    trusted_spawn::ask_helper(crate::agent::Helper::Investigator, &profile, &prompt, &answer_file, worktree, &input, &kebbie, TIMEOUT)
 }
 
 pub fn brief(state: &Path, address: &str, worktree: &Path, obstacle: &Obstacle, kebbie: &str) -> String {
@@ -1120,14 +1120,14 @@ mod tests {
     fn the_investigator_gets_the_vault_the_web_and_the_code_with_the_users_own_settings() {
         let prompt = Path::new("/state/roles/billing@app.investigate.md");
         let reader = crate::agent::Reviewer { model: Some("opus"), effort: Some("high"), settings: prompt, prompt, rules: None, docs: None, answer: Path::new("/state/answer") };
-        let (program, args) = crate::agent::Agent::Claude.investigator_command(&reader, "/bin/kebbie");
+        let (program, args) = crate::agent::Agent::Claude.investigator_command(&reader, "/bin/kebbie", crate::agent::Helper::Investigator);
         assert_eq!(program, "claude");
         for wanted in ["WebSearch", "WebFetch", "mcp__plugin_vault_vault", "Read", "Bash(git log:*)", "Bash(/bin/kebbie status:*)", "Bash(/bin/kebbie obstacles:*)"] {
             assert!(args.iter().any(|arg| arg == wanted), "{wanted}: {args:?}");
         }
         assert!(!args.iter().any(|arg| arg == "--strict-mcp-config" || arg == "--setting-sources"), "the user's plugins and MCP servers load, the vault among them: {args:?}");
         assert!(args.windows(2).any(|pair| pair == ["--effort", "high"]) && args.windows(2).any(|pair| pair == ["--model", "opus"]));
-        let (program, args) = crate::agent::Agent::Codex.investigator_command(&reader, "/bin/kebbie");
+        let (program, args) = crate::agent::Agent::Codex.investigator_command(&reader, "/bin/kebbie", crate::agent::Helper::Investigator);
         assert_eq!(program, "codex");
         assert!(!args.iter().any(|arg| arg == "--ignore-user-config") && args.iter().any(|arg| arg == "web_search=\"live\""), "Codex keeps its MCP servers and searches the web: {args:?}");
     }

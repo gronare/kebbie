@@ -44,6 +44,7 @@ pub enum Wrote {
 #[derive(Debug, PartialEq)]
 pub enum StyleWrote {
     Saved,
+    Unchanged,
     Newer,
 }
 
@@ -309,6 +310,7 @@ impl Cli {
         }
         let version = version.to_string();
         match self.run_with(&self.command, &["style", "write", "--kind", kind, "--file", "-", "--version", &version], Some(text))? {
+            Ok(answer) if style_unchanged(&answer) => Ok(StyleWrote::Unchanged),
             Ok(_) => Ok(StyleWrote::Saved),
             Err(error) if error.contains("newer than") => Ok(StyleWrote::Newer),
             Err(error) => Err(format!("vault style write: {error}")),
@@ -665,6 +667,11 @@ pub fn warn_log(state: &Path, text: &str) {
     if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(state.join("vault.log")) {
         let _ = writeln!(file, "{} {text}", now());
     }
+}
+
+// mindin answers a style already at the offered version with a note that it was left as it is.
+fn style_unchanged(answer: &str) -> bool {
+    serde_json::from_str::<Value>(answer.trim()).ok().is_some_and(|value| field(&value, "note").contains("is already at style-version"))
 }
 
 #[cfg(test)]
