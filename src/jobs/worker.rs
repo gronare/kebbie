@@ -198,18 +198,23 @@ fn checkout(data: &Path, queued: &Queued, bundle: &[u8], remote: Option<&str>, s
     if bundle::store(&repo.join(".store"), bundle, &job.commit, job.base.as_deref(), &keep, remote, say, stop).map_err(|error| format!("the worker could not take the commit: {error}"))? == bundle::Stored::NeedsFull {
         return Ok(None);
     }
-    let store = repo.join(".store");
     let work = repo.join(safe(&job.task));
-    let reused = work.join(".git").exists() && bundle::git_until(&work, &["checkout", "--quiet", "--detach", "--force", &job.commit], stop, |_| {}).and_then(|_| bundle::git_until(&work, &["clean", "-fdq"], stop, |_| {})).is_ok();
-    if !reused {
-        let _ = std::fs::remove_dir_all(&work);
-        let _ = crate::repo::git(&store, &["worktree", "prune"]);
-        bundle::git_until(&store, &["worktree", "add", "--quiet", "--detach", &work.to_string_lossy(), &job.commit], stop, |_| {}).map_err(|error| format!("the worker could not check out the commit: {error}"))?;
-    }
+    check_out(&repo.join(".store"), &work, &job.commit, stop)?;
     Ok(Some(work))
 }
 
-fn signal_group(pid: u32, signal: libc::c_int) {
+// The commit in a worktree of the store's that is reused and cleaned without -x, so build caches the commit ignores survive.
+pub(super) fn check_out(store: &Path, work: &Path, commit: &str, stop: &dyn Fn() -> bool) -> std::result::Result<(), String> {
+    let reused = work.join(".git").exists() && bundle::git_until(work, &["checkout", "--quiet", "--detach", "--force", commit], stop, |_| {}).and_then(|_| bundle::git_until(work, &["clean", "-fdq"], stop, |_| {})).is_ok();
+    if !reused {
+        let _ = std::fs::remove_dir_all(work);
+        let _ = crate::repo::git(store, &["worktree", "prune"]);
+        bundle::git_until(store, &["worktree", "add", "--quiet", "--detach", &work.to_string_lossy(), commit], stop, |_| {}).map_err(|error| format!("the worker could not check out the commit: {error}"))?;
+    }
+    Ok(())
+}
+
+pub(super) fn signal_group(pid: u32, signal: libc::c_int) {
     if let Ok(pid) = libc::pid_t::try_from(pid) {
         // SAFETY: signals the process group this worker started for the job.
         unsafe { libc::kill(-pid, signal) };

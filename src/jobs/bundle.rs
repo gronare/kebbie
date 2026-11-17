@@ -203,20 +203,25 @@ fn own_ssh(store: &Path) -> Option<String> {
 }
 
 // Fetches every branch of the remote into the store, with the worker's own credentials and never a prompt: no terminal, no askpass program, ssh in batch mode.
-fn fetch_remote(store: &Path, url: &str, stop: &dyn Fn() -> bool) -> Result<()> {
+pub fn fetch_remote(store: &Path, url: &str, stop: &dyn Fn() -> bool) -> Result<()> {
     let ssh = batch_ssh(own_ssh(store).as_deref());
     git_until(store, &["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", url, &format!("+refs/heads/*:{FROM_REMOTE}/*")], stop, |command| {
         command.envs([("GIT_TERMINAL_PROMPT", "0"), ("GIT_ASKPASS", "true"), ("GCM_INTERACTIVE", "never"), ("SSH_ASKPASS_REQUIRE", "never"), ("GIT_ALLOW_PROTOCOL", ALLOWED_PROTOCOLS), ("GIT_SSH_COMMAND", ssh.as_str())]).env_remove("SSH_ASKPASS");
     }).map(|_| ())
 }
 
-// The bundle's commits in the repo's bare store, kept under keep so the next incremental bundle finds its base; a base the store lacks is fetched from the job's remote when it names one, and else asks the master for the whole history.
-#[allow(clippy::too_many_arguments)]
-pub fn store(store: &Path, bundle: &[u8], commit: &str, base: Option<&str>, keep: &str, remote: Option<&str>, say: &mut dyn FnMut(String), stop: &dyn Fn() -> bool) -> Result<Stored> {
+pub fn open_store(store: &Path) -> Result<()> {
     if !store.join("HEAD").is_file() {
         std::fs::create_dir_all(store).map_err(|error| format!("{}: {error}", store.display()))?;
         crate::repo::git(store, &["init", "--quiet", "--bare"])?;
     }
+    Ok(())
+}
+
+// The bundle's commits in the repo's bare store, kept under keep so the next incremental bundle finds its base; a base the store lacks is fetched from the job's remote when it names one, and else asks the master for the whole history.
+#[allow(clippy::too_many_arguments)]
+pub fn store(store: &Path, bundle: &[u8], commit: &str, base: Option<&str>, keep: &str, remote: Option<&str>, say: &mut dyn FnMut(String), stop: &dyn Fn() -> bool) -> Result<Stored> {
+    open_store(store)?;
     if let Some(base) = base.filter(|base| !has(store, base)) {
         let Some(url) = remote else { return Ok(Stored::NeedsFull) };
         say(format!("[kebbie: fetching the history up to {} from {url}; only what is new comes on later jobs]\n", &base[..12.min(base.len())]));
