@@ -1409,8 +1409,63 @@ pub fn ending(codex: Option<Login>, checks: &[crate::doctor::Check], shell: &str
     lines
 }
 
-fn row_line(step: &str, outcome: &Outcome) -> Line<'static> {
-    Line::from(vec![Span::raw("  "), Span::styled(format!("{:<9}", outcome.verb), style(verb_color(outcome.verb))), Span::styled(format!("{step:<16}"), style(MAUVE)), Span::styled(outcome.detail.clone(), style(TEXT))])
+const DETAIL_AT: usize = 2 + 9 + 16;
+const MORE: &str = "…; kebbie doctor shows all of it";
+
+// A tool's error read whole joins its lines with nothing between them, as "repository.Please".
+fn one_line(detail: &str) -> String {
+    detail.lines().map(str::trim).filter(|line| !line.is_empty()).collect::<Vec<_>>().join(" ")
+}
+
+fn wrapped(text: &str, width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        let mut word = word.to_string();
+        while !word.is_empty() {
+            let used = line.chars().count();
+            let room = if used == 0 { width } else { width.saturating_sub(used + 1) };
+            let length = word.chars().count();
+            if length <= room {
+                if used > 0 {
+                    line.push(' ');
+                }
+                line.push_str(&word);
+                break;
+            }
+            if used > 0 {
+                lines.push(std::mem::take(&mut line));
+                continue;
+            }
+            let rest = word.split_off(byte_at(&word, width));
+            lines.push(std::mem::replace(&mut word, rest));
+        }
+    }
+    if !line.is_empty() || lines.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
+fn capped(mut lines: Vec<String>, width: usize) -> Vec<String> {
+    if lines.len() <= 2 {
+        return lines;
+    }
+    lines.truncate(2);
+    let more = if width > MORE.chars().count() + 8 { MORE } else { "…" };
+    let kept: String = lines[1].chars().take(width.saturating_sub(more.chars().count())).collect();
+    lines[1] = format!("{}{more}", kept.trim_end());
+    lines
+}
+
+// A detail too long for its column goes on under that column, at most two lines when capped.
+fn row_lines(step: &str, outcome: &Outcome, width: usize, cap: bool) -> Vec<Line<'static>> {
+    let detail = one_line(&outcome.detail);
+    let column = width.saturating_sub(DETAIL_AT);
+    let details = if column < 16 { vec![detail] } else if cap { capped(wrapped(&detail, column), column) } else { wrapped(&detail, column) };
+    let mut details = details.into_iter();
+    let first = Line::from(vec![Span::raw("  "), Span::styled(format!("{:<9}", outcome.verb), style(verb_color(outcome.verb))), Span::styled(format!("{step:<16}"), style(MAUVE)), Span::styled(details.next().unwrap_or_default(), style(TEXT))]);
+    std::iter::once(first).chain(details.map(|more| Line::from(vec![Span::raw(" ".repeat(DETAIL_AT)), Span::styled(more, style(TEXT))]))).collect()
 }
 
 fn verb_color(verb: &str) -> Color {
@@ -1471,7 +1526,7 @@ impl Guide {
         Line::from(spans)
     }
 
-    fn review_lines(&self, rows: Vec<(String, Outcome)>) -> Vec<Line<'static>> {
+    fn review_lines(&self, rows: Vec<(String, Outcome)>, width: usize) -> Vec<Line<'static>> {
         let groups: Vec<&'static str> = self.plan().iter().map(|row| row.group).collect();
         let mut lines = Vec::new();
         let mut group = None;
@@ -1484,12 +1539,12 @@ impl Guide {
                 }
                 lines.push(Line::from(Span::styled(this.unwrap_or_default().to_string(), bold(SUBTEXT))));
             }
-            lines.push(row_line(&step, &outcome));
+            lines.extend(row_lines(&step, &outcome, width, false));
         }
         lines
     }
 
-    fn body(&self) -> Vec<Line<'static>> {
+    fn body(&self, width: usize) -> Vec<Line<'static>> {
         let (facts, answers) = (&self.facts, &self.answers);
         let mut lines = Vec::new();
         match self.step {
@@ -1542,7 +1597,7 @@ impl Guide {
                 lines.push(Line::default());
                 lines.push(Line::from(Span::styled("A bug report with text is always shown to you first and sent only on your y.", style(SUBTEXT))));
             }
-            Step::Review if self.done => lines.extend(self.done_lines()),
+            Step::Review if self.done => lines.extend(self.done_lines(width)),
             Step::Review => {
                 let rows: Vec<(String, Outcome)> = match &self.applied {
                     Some(done) => {
@@ -1552,7 +1607,7 @@ impl Guide {
                     }
                     None => self.plan().into_iter().map(|row| (row.step.to_string(), Outcome::new(row.verb, row.detail))).collect(),
                 };
-                lines.extend(self.review_lines(rows));
+                lines.extend(self.review_lines(rows, width));
                 let runs = if self.applied.is_none() { self.runs() } else { Vec::new() };
                 if !runs.is_empty() {
                     lines.push(Line::default());
@@ -1615,7 +1670,7 @@ impl Guide {
         };
         let [boxed, hint] = Layout::vertical([Constraint::Min(4), Constraint::Length(2)]).areas(main);
         let mut lines = if self.done { Vec::new() } else { vec![Line::from(Span::styled(self.step.help(), style(SUBTEXT))), Line::default()] };
-        lines.extend(self.body());
+        lines.extend(self.body(boxed.width.saturating_sub(4) as usize));
         let framed = |title: &str| Block::bordered().border_type(BorderType::Rounded).border_style(style(FAINT)).padding(Padding::horizontal(1)).title(Span::styled(format!(" {title} "), bold(MAUVE)));
         let tall = |block: &Block, lines: &[Line<'static>], width: u16| Paragraph::new(lines.to_vec()).wrap(Wrap { trim: false }).line_count(block.inner(Rect { width, height: 3, ..boxed }).width) as u16 + 2;
         let phone = (!self.ending.is_empty() && self.offers_hub()).then(|| {
@@ -1638,9 +1693,9 @@ impl Guide {
         frame.render_widget(Paragraph::new(Line::from(Span::styled(self.hint(), style(MUTED)))), Rect { y: hint_at, height: 1, ..hint });
     }
 
-    fn done_lines(&self) -> Vec<Line<'static>> {
+    fn done_lines(&self, width: usize) -> Vec<Line<'static>> {
         let changed: Vec<(String, Outcome)> = self.applied.iter().flatten().filter(|(_, outcome)| !matches!(outcome.verb, "already" | "skipped")).cloned().collect();
-        let mut lines: Vec<Line<'static>> = changed.iter().map(|(step, outcome)| row_line(step, outcome)).collect();
+        let mut lines: Vec<Line<'static>> = changed.iter().flat_map(|(step, outcome)| row_lines(step, outcome, width, true)).collect();
         for said in &self.ending {
             lines.push(match (said.as_str(), said.get(..23), said.get(23..)) {
                 (_, _, _) if said.starts_with(DONE) => Line::from(vec![Span::styled(DONE, style(GREEN)), Span::styled(said[DONE.len()..].to_string(), style(SUBTEXT))]),
@@ -2589,6 +2644,26 @@ mod tests {
         assert!(!shown.contains("Your board on your phone") && shown.contains("any key opens your board"), "a connected machine is offered nothing: {shown}");
         assert!(!guide.text().contains("kebbie.dev/hub"));
         assert!(matches!(guide.key(KeyEvent::from(KeyCode::Char('h'))), Next::Board), "h is any other key once connected");
+    }
+
+    #[test]
+    fn a_long_detail_wraps_under_its_column_and_the_done_list_caps_it_at_two_lines() {
+        let lab = Lab::new("guide-wrap");
+        let mut guide = finished(&lab);
+        let error = "claude plugin install vault@gronare failed: ✘ Failed to install plugin \"vault@gronare\": Failed to clone repository\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.";
+        guide.applied.as_mut().unwrap().push(("vault plugin".to_string(), Outcome::new("failed", error)));
+        let shown = render(&guide, 110, 40);
+        let rows: Vec<&str> = shown.lines().skip_while(|line| !line.contains("failed   vault plugin")).take(3).collect();
+        let column = rows[0][..rows[0].find("claude plugin").unwrap()].chars().count();
+        assert_eq!(rows[1].chars().position(|character| !matches!(character, ' ' | '│')), Some(column), "the second line starts under the detail, not at the box's edge:\n{shown}");
+        assert!(rows[1].trim_end_matches([' ', '│']).ends_with(MORE) && !rows[2].contains("repository exists"), "two lines, then where the rest is:\n{shown}");
+        assert_eq!(one_line(error).matches("repository. Please").count(), 1, "a newline in a tool's error becomes a space");
+        assert!(!one_line(error).contains("rightsand"));
+        assert_eq!(wrapped("abcdefghij kl", 4), ["abcd", "efgh", "ij", "kl"], "a word longer than the column is split");
+        guide.done = false;
+        guide.applied = Some(vec![("vault plugin".to_string(), Outcome::new("failed", error))]);
+        let review = render(&guide, 70, 40);
+        assert!(review.contains("and the repository exists.") && !review.contains(MORE), "the review before the end is never cut short:\n{review}");
     }
 
     #[test]
