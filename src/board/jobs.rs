@@ -24,6 +24,15 @@ pub(super) fn live_pusher() -> Pusher {
     Arc::new(|path, through, keep_open| tasks::push(path, None, through, keep_open))
 }
 
+pub(super) type Dropper = Arc<dyn Fn(&Path, bool) -> Result<String> + Send + Sync>;
+
+pub(super) fn live_dropper() -> Dropper {
+    Arc::new(|path, force| tasks::drop(path, None, force))
+}
+
+// A window a failed job opens in place of its notice, such as the forced drop to confirm.
+type AskAgain = Box<dyn FnOnce(&str) -> Option<Mode>>;
+
 // The step a job is at: the task it works on now and what it does there.
 type Step = Arc<Mutex<Option<(String, String)>>>;
 
@@ -37,9 +46,13 @@ pub(super) struct Job {
     step: Step,
     subject: Option<Subject>,
     result: Receiver<Result<String>>,
+    ask_again: Option<AskAgain>,
 }
 
 impl Job {
+    pub(super) fn ask_again(&mut self, ask: impl FnOnce(&str) -> Option<Mode> + 'static) {
+        self.ask_again = Some(Box::new(ask));
+    }
 
     fn step(&self) -> Option<(String, String)> {
         self.step.lock().ok().and_then(|step| step.clone())
@@ -91,7 +104,7 @@ impl App {
             let _ = sender.send(work());
         });
         let label = label.trim_end_matches('…').to_string();
-        self.jobs.push(Job { tasks, label, doing: doing.to_string(), step, subject, result });
+        self.jobs.push(Job { tasks, label, doing: doing.to_string(), step, subject, result, ask_again: None });
         let _ = self.refresh.send(());
         self.jobs.last_mut().expect("just pushed")
     }
@@ -120,8 +133,14 @@ impl App {
         while at < self.jobs.len() {
             match self.jobs[at].result.try_recv() {
                 Ok(result) => {
-                    let job = self.jobs.remove(at);
+                    let mut job = self.jobs.remove(at);
                     self.drop_restarted_lead();
+                    if let (Err(error), Some(ask)) = (&result, job.ask_again.take())
+                        && let Some(window) = ask(error)
+                    {
+                        self.outcomes.push((window, job.subject));
+                        continue;
+                    }
                     let _ = self.refresh.send(());
                     if result.as_ref().is_ok_and(String::is_empty) {
                         continue;
@@ -353,5 +372,42 @@ mod tests {
         settle_jobs(&mut app);
         assert!(matches!(app.mode, Mode::Normal) && app.toast.as_ref().is_some_and(|toast| toast.notice.headline.contains("Rebased billing")), "the outcome goes by as a toast");
         assert_eq!(app.job_note_for(&app.tasks[0]), None, "the row lets go once it is done");
+    }
+
+    #[test]
+    fn a_drop_runs_behind_the_board_and_one_that_needs_force_asks_again_once_the_board_is_at_rest() {
+        let mut app = test_app(vec![titled("billing", "Refund mails", "/work/wt1.web"), titled("search", "Search filters", "/work/wt2.web")]);
+        let (go, wait) = mpsc::channel::<()>();
+        let wait = Arc::new(Mutex::new(wait));
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let seen = calls.clone();
+        app.dropper = Arc::new(move |path, force| {
+            seen.lock().unwrap().push((path.to_path_buf(), force));
+            let _ = wait.lock().unwrap().recv();
+            if force { Ok("Dropped billing".to_string()) } else { Notice::new(Tone::You, "Not dropped: it has commits nowhere else").you(format!("{} drops them too.", crate::tasks::FORCE)).err() }
+        });
+        press(&mut app, key(KeyCode::Char('x')));
+        assert!(matches!(app.mode, Mode::ConfirmDrop { force: false, .. }), "x asks first");
+        press(&mut app, key(KeyCode::Char('y')));
+        assert!(matches!(app.mode, Mode::Normal), "no window waits on the drop");
+        until(&mut app, |_| calls.lock().unwrap().len() == 1);
+        assert_eq!(app.job_note_for(&app.tasks[0]).as_deref(), Some("dropping…"));
+        let before = app.work_selected;
+        press(&mut app, key(KeyCode::Char('j')));
+        assert_ne!(app.work_selected, before, "j moves while the drop runs");
+        press(&mut app, key(KeyCode::Char('k')));
+        press(&mut app, key(KeyCode::Char('?')));
+        go.send(()).unwrap();
+        settle_jobs(&mut app);
+        assert!(matches!(app.mode, Mode::Help(_)), "the question waits for the window the user has open");
+        press(&mut app, key(KeyCode::Esc));
+        app.poll_jobs();
+        let Mode::ConfirmDrop { force: true, name, .. } = &app.mode else { panic!("the forced drop asks once the board is at rest") };
+        assert!(name.contains("commits nowhere else"), "{name}");
+        press(&mut app, key(KeyCode::Char('y')));
+        go.send(()).unwrap();
+        settle_jobs(&mut app);
+        assert_eq!(*calls.lock().unwrap(), [(PathBuf::from("/work/wt1.web"), false), (PathBuf::from("/work/wt1.web"), true)]);
+        assert!(matches!(app.mode, Mode::Normal) && app.toast.as_ref().is_some_and(|toast| toast.notice.headline == "Dropped billing"), "the drop goes by as a toast");
     }
 }

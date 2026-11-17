@@ -53,7 +53,7 @@ impl App {
             }
             KeyCode::Char('y') => {
                 self.about("queued", &name);
-                self.show(tasks::drop_wait(&name));
+                self.task_in_background(&name.clone(), None, "dropping its wait", format!("Dropping the wait of {name}"), move || tasks::drop_wait(&name));
             }
             _ if cancels => {}
             _ => self.mode = Mode::ConfirmQueued { name, about, now, nudged: true },
@@ -89,16 +89,17 @@ impl App {
 
     pub(super) fn confirm_drop(&mut self, path: PathBuf, name: String, force: bool, key: KeyEvent, cancels: bool) {
         match key.code {
-            KeyCode::Char('y') => match tasks::drop(&path, None, force) {
-                Err(error) if !force && error.contains(tasks::FORCE) => {
-                    let said = crate::notice::Notice::read(&error, true).headline;
-                    self.mode = Mode::ConfirmDrop { path, name: format!("{name}: {said}"), force: true, nudged: false };
+            KeyCode::Char('y') => {
+                self.about("drop", &name);
+                let (dropper, dropped) = (self.dropper.clone(), path.clone());
+                let Some(job) = self.task_in_background(&name, Some(path.as_path()), "dropping", format!("Dropping {name}"), move || dropper(&dropped, force)) else { return };
+                if !force {
+                    job.ask_again(move |error| error.contains(tasks::FORCE).then(|| {
+                        let said = crate::notice::Notice::read(error, true).headline;
+                        Mode::ConfirmDrop { path, name: format!("{name}: {said}"), force: true, nudged: false }
+                    }));
                 }
-                result => {
-                    self.about("drop", &name);
-                    self.show(result);
-                }
-            },
+            }
             _ if cancels => {}
             _ => self.mode = Mode::ConfirmDrop { path, name, force, nudged: true },
         }
