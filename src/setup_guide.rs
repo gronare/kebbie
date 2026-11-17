@@ -463,6 +463,7 @@ const MINDIN: &str = "mindin";
 pub struct Guide {
     pub step: Step,
     cursor: usize,
+    caret: usize,
     pub answers: Answers,
     facts: Facts,
     visited: [bool; Step::ALL.len()],
@@ -476,6 +477,15 @@ pub struct Guide {
 
 fn home(path: &Path) -> String {
     crate::area_page::home_relative(path)
+}
+
+fn byte_at(text: &str, chars: usize) -> usize {
+    text.char_indices().nth(chars).map_or(text.len(), |(at, _)| at)
+}
+
+fn with_caret(text: &str, caret: usize) -> String {
+    let at = byte_at(text, caret);
+    format!("{}▏{}", &text[..at], &text[at..])
 }
 
 fn source_line(source: Source) -> (&'static str, &'static str) {
@@ -494,7 +504,7 @@ fn short(wanted: &setup::Wanted) -> String {
 impl Guide {
     pub fn new(facts: Facts, at: Step) -> Guide {
         let answers = Answers::from(&facts);
-        let mut guide = Guide { step: Step::Name, cursor: 0, answers, facts, visited: [false; Step::ALL.len()], skipped: [false; Step::ALL.len()], fresh: true, error: None, applied: None, done: false, ending: Vec::new() };
+        let mut guide = Guide { step: Step::Name, cursor: 0, caret: 0, answers, facts, visited: [false; Step::ALL.len()], skipped: [false; Step::ALL.len()], fresh: true, error: None, applied: None, done: false, ending: Vec::new() };
         guide.go(at);
         guide
     }
@@ -624,6 +634,34 @@ impl Guide {
         self.error = None;
         self.fresh = true;
         self.cursor = self.spots().iter().position(|spot| *spot == Spot::Choice(self.chosen())).unwrap_or(0);
+        self.caret_to_end();
+    }
+
+    fn caret_to_end(&mut self) {
+        self.caret = self.typed().map_or(0, |field| self.answers.text(field).chars().count());
+    }
+
+    fn move_caret(&mut self, code: KeyCode) {
+        let Some(field) = self.typed() else { return };
+        let count = self.answers.text(field).chars().count();
+        self.fresh = false;
+        self.caret = match code {
+            KeyCode::Left => self.caret.saturating_sub(1),
+            KeyCode::Right => (self.caret + 1).min(count),
+            KeyCode::Home => 0,
+            _ => count,
+        };
+    }
+
+    fn erase(&mut self, code: KeyCode) {
+        let Some(field) = self.typed() else { return };
+        self.fresh = false;
+        let at = if code == KeyCode::Backspace { self.caret.checked_sub(1) } else { Some(self.caret) };
+        let text = self.answers.text_mut(field);
+        if let Some(at) = at.filter(|at| *at < text.chars().count()) {
+            text.remove(byte_at(text, at));
+            self.caret = at;
+        }
     }
 
     fn choose(&mut self, at: usize) {
@@ -645,20 +683,25 @@ impl Guide {
     }
 
     fn type_char(&mut self, character: char) {
+        self.insert(&character.to_string());
+    }
+
+    // A field just entered is replaced by what is typed; once the caret has moved, typing goes in at the caret.
+    fn insert(&mut self, typed: &str) {
         let Some(field) = self.typed() else { return };
-        let fresh = std::mem::replace(&mut self.fresh, false);
-        let text = self.answers.text_mut(field);
-        if fresh {
-            text.clear();
+        if std::mem::replace(&mut self.fresh, false) {
+            self.answers.text_mut(field).clear();
+            self.caret = 0;
         }
-        text.push(character);
+        let caret = self.caret;
+        let text = self.answers.text_mut(field);
+        text.insert_str(byte_at(text, caret), typed);
+        self.caret += typed.chars().count();
     }
 
     pub fn paste(&mut self, text: &str) {
-        if let Some(field) = self.typed() {
-            self.fresh = false;
-            self.answers.text_mut(field).push_str(text.trim());
-        }
+        self.fresh = false;
+        self.insert(text.trim());
     }
 
     fn reset(&mut self, step: Step) {
@@ -709,14 +752,11 @@ impl Guide {
                 }
                 self.fresh = true;
                 self.error = None;
+                self.caret_to_end();
             }
             KeyCode::Char(character) if typing => self.type_char(character),
-            KeyCode::Backspace if typing => {
-                self.fresh = false;
-                if let Some(field) = self.typed() {
-                    self.answers.text_mut(field).pop();
-                }
-            }
+            KeyCode::Backspace | KeyCode::Delete if typing => self.erase(key.code),
+            KeyCode::Left | KeyCode::Right | KeyCode::Home | KeyCode::End if typing => self.move_caret(key.code),
             KeyCode::Char(' ') => match self.spot() {
                 Some(Spot::Check(at)) => self.toggle(at),
                 Some(Spot::Choice(at)) => self.choose(at),
@@ -1362,7 +1402,7 @@ impl Guide {
         let chosen = self.spot() == Some(Spot::Text(field));
         let value = self.answers.text(field).to_string();
         let mut spans = vec![Span::styled(if chosen { "      ▸ " } else { "        " }, style(MAUVE)), Span::styled(format!("{:<10}", field.label()), style(SUBTEXT))];
-        spans.push(Span::styled(format!("{value}{}", if chosen { "▏" } else { "" }), if chosen { bold(TEXT).bg(MANTLE) } else { style(TEXT) }));
+        spans.push(Span::styled(if chosen { with_caret(&value, self.caret) } else { value.clone() }, if chosen { bold(TEXT).bg(MANTLE) } else { style(TEXT) }));
         if value.is_empty() {
             spans.push(Span::styled(field.placeholder().to_string(), style(FAINT)));
         }
@@ -1393,8 +1433,8 @@ impl Guide {
         match self.step {
             Step::Name => {
                 let chosen = self.spot() == Some(Spot::Text(Field::Name));
-                let caret = if chosen { "▏" } else { "" };
-                lines.push(Line::from(vec![Span::styled(if chosen { "    ▸ " } else { "      " }, style(MAUVE)), Span::styled(format!("{:<9}", "name"), style(SUBTEXT)), Span::styled(format!("{}{caret}", answers.name), if chosen { bold(TEXT).bg(MANTLE) } else { style(TEXT) })]));
+                let name = if chosen { with_caret(&answers.name, self.caret) } else { answers.name.clone() };
+                lines.push(Line::from(vec![Span::styled(if chosen { "    ▸ " } else { "      " }, style(MAUVE)), Span::styled(format!("{:<9}", "name"), style(SUBTEXT)), Span::styled(name, if chosen { bold(TEXT).bg(MANTLE) } else { style(TEXT) })]));
                 if !facts.name_set {
                     lines.push(Line::from(Span::styled("           from this computer's name", style(MUTED))));
                 }
@@ -1475,8 +1515,8 @@ impl Guide {
         match self.step {
             _ if self.applied.is_some() && !self.done => "applying…".to_string(),
             _ if self.applied.is_some() => "any key opens your board".to_string(),
-            Step::Name => "type to change · ⏎ next · esc quit".to_string(),
-            Step::Vault if self.typed().is_some() => "type to change · ↑ ↓ move · ⏎ next · ← back · esc quit".to_string(),
+            Step::Name => "type to change · ← → move in the text · ⏎ next · esc quit".to_string(),
+            Step::Vault if self.typed().is_some() => "type to change · ← → move in the text · ↑ ↓ choose · ⏎ next · esc quit".to_string(),
             Step::Review => "⏎ apply all · ← back · esc quit without writing".to_string(),
             step => {
                 let toggle = if matches!(step, Step::Agents | Step::Backlog) { "space toggle · " } else { "" };
@@ -1823,7 +1863,7 @@ mod tests {
         for gone in ["Plugin", "Login", "Approvals", "Updates", "herdr keys", "Vault for kebbie", "Vault in Codex"] {
             assert!(!shown.contains(gone), "{gone} is no step of its own: {shown}");
         }
-        assert!(shown.contains("▸ name     mac▏") && shown.contains("from this computer's name") && shown.contains("type to change · ⏎ next · esc quit"), "{shown}");
+        assert!(shown.contains("▸ name     mac▏") && shown.contains("from this computer's name") && shown.contains("type to change · ← → move in the text · ⏎ next · esc quit"), "{shown}");
         type_text(&mut guide, "devbox");
         press(&mut guide, &[KeyCode::Enter]);
         assert_eq!((guide.step, guide.answers.name.as_str()), (Step::Agents, "devbox"), "typing replaces the name it was given");
@@ -1880,6 +1920,25 @@ mod tests {
         assert!(!lab.dir.join("codex").exists() && !lab.machine.home.join(".local/bin/kebbie").exists() && !lab.machine.claude_dir.join("settings.json").exists());
         assert!(matches!(guide.key(KeyEvent::from(KeyCode::Esc)), Next::Quit));
         assert_eq!(guide.text(), "Nothing written: kebbie setup runs the guide again whenever you want.");
+    }
+
+    #[test]
+    fn the_arrow_keys_move_inside_a_text_field_and_typing_goes_in_at_the_caret() {
+        let lab = Lab::new("guide-caret");
+        let mut guide = fresh(&lab);
+        press(&mut guide, &[KeyCode::Left]);
+        assert!(screen(&guide).contains("▸ name     ma▏c"), "{}", screen(&guide));
+        type_text(&mut guide, "r");
+        assert_eq!(guide.answers.name, "marc", "a moved caret keeps the name and types into it");
+        press(&mut guide, &[KeyCode::Home, KeyCode::Char('x'), KeyCode::Delete]);
+        assert_eq!(guide.answers.name, "xarc");
+        press(&mut guide, &[KeyCode::Right, KeyCode::Backspace, KeyCode::End, KeyCode::Char('h')]);
+        assert_eq!((guide.answers.name.as_str(), guide.step), ("xrch", Step::Name));
+        let mut vault = vault_step(&lab, vec![found("mindin on PATH", "mindin")], None);
+        press(&mut vault, &[KeyCode::Down]);
+        assert_eq!(vault.typed(), Some(Field::Address));
+        press(&mut vault, &[KeyCode::Left, KeyCode::Left, KeyCode::Left, KeyCode::Char('x')]);
+        assert_eq!((vault.step, vault.answers.vault.address.as_str()), (Step::Vault, "https://vault.example.xcom"), "← in a field moves in the text, never back a step");
     }
 
     #[test]
