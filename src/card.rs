@@ -334,7 +334,7 @@ pub fn answered(messages: &[crate::messages::Message], address: &str) -> Vec<Rec
             crate::status::LEAD_LABEL => (By::Lead, Source::Method, answer.text.strip_prefix(LEADS).unwrap_or(&answer.text)),
             _ => return None,
         };
-        Some(Record { text: clip(&format!("{} → {}", one_line(&asked.text), one_line(said)), MAX_DECISION), by, source, at: answer.at, key: None })
+        Some(Record { text: clip(&format!("{} → {}", crate::plan_brief::title(&asked.text), one_line(said)), MAX_DECISION), by, source, at: answer.at, key: None })
     }).collect()
 }
 
@@ -728,6 +728,12 @@ mod tests {
             r#"{"id":"q3","at":50,"from":"search@app","to":"you","text":"Other task?","state":"asked","question":{"options":[["Yes","y"],["No","n"]],"recommend":1}}"#,
         ].join("\n");
         let records = answered(&crate::messages::fold(&log), "billing@app");
+        assert_eq!(records.len(), 2);
+        let brief = format!("Build refunds per invoice?\n\n{}", "The plan in detail. ".repeat(200));
+        let planned = serde_json::json!({"id":"q4","at":60,"from":"billing@app","to":"you","text":brief,"state":"asked","question":{"options":[["Approve","go"],["No","stop"]],"recommend":1,"plan":"Projects/refunds"}}).to_string();
+        let approved = r#"{"id":"a4","at":70,"from":"you","to":"billing@app","text":"Approve: go","state":"delivered","about":"q4","kind":"answer"}"#;
+        let plan = answered(&crate::messages::fold(&[planned.as_str(), approved].join("\n")), "billing@app");
+        assert_eq!(plan.iter().map(|record| record.text.as_str()).collect::<Vec<_>>(), ["Build refunds per invoice? → Approve: go"], "the brief's title and the answer, not the brief");
         assert_eq!(records.iter().map(|record| (record.text.as_str(), record.by, record.source, record.at)).collect::<Vec<_>>(), [
             ("Which queue should retries use? → Solid Queue: one less service", By::You, Source::Question, 20),
             ("Split the module? → keep it in one module", By::Lead, Source::Method, 40),
