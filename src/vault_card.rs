@@ -168,9 +168,22 @@ fn sync(store: &dyn Store, state: &Path, address: &str, wanted: Kept, create: bo
             let _ = std::fs::remove_file(said_file(state, address));
             None
         }
-        Ok(Wrote::Stale) if fresh => once(state, address, format!("{}: the card was not written, as the vault holds a note there it could not read", wanted.key)),
+        Ok(Wrote::Stale) if fresh => lost_create(store, state, address, &wanted),
         Ok(Wrote::Stale) => None,
         Err(error) => once(state, address, format!("{}: the card was not written ({error})", wanted.key)),
+    }
+}
+
+// A create that lost to a note written meanwhile: kebbie's own card from another round is kept as written, anyone else's is said once.
+fn lost_create(store: &dyn Store, state: &Path, address: &str, wanted: &Kept) -> Option<String> {
+    match store.read(&wanted.key) {
+        Ok((stored, _)) if ours(&stored, address) && body(&stored) == wanted.text.trim() => {
+            save(state, address, wanted);
+            None
+        }
+        Ok((stored, _)) if ours(&stored, address) => None,
+        Ok(_) => once(state, address, format!("{}: not kebbie's card, so the card was not written there", wanted.key)),
+        Err(error) => once(state, address, format!("{}: the card was not written, as the vault holds a note there kebbie could not read ({error})", wanted.key)),
     }
 }
 
@@ -425,6 +438,42 @@ mod tests {
         vault.notes.borrow_mut().insert(KEY.to_string(), (tagged.clone(), 3));
         run(&vault, &state, &at(Phase::CiRed { sha: "abc".to_string() }), "## Built\nX.");
         assert_eq!(vault.read(KEY).unwrap().0, tagged.replace("push: ready", "push: waiting"));
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    struct Racing {
+        vault: Vault,
+        meanwhile: String,
+    }
+
+    impl Store for Racing {
+        fn read(&self, key: &str) -> Result<(String, String), String> {
+            self.vault.read(key)
+        }
+
+        fn write(&self, key: &str, etag: &str, text: &str) -> Result<Wrote, String> {
+            if etag == "*" && self.vault.read(key).is_err() {
+                self.vault.notes.borrow_mut().insert(key.to_string(), (self.meanwhile.clone(), 1));
+            }
+            self.vault.write(key, etag, text)
+        }
+
+        fn close(&self, key: &str) -> Result<String, String> {
+            self.vault.close(key)
+        }
+    }
+
+    #[test]
+    fn a_create_that_loses_to_kebbies_own_card_says_nothing_and_to_another_note_says_whose() {
+        let state = state("race");
+        let own = Racing { vault: Vault::default(), meanwhile: "---\nkebbie-card: \"billing@web\"\npush: ready\n---\n\n## Built\nX.\n".to_string() };
+        assert!(sync_items(&own, &state, std::slice::from_ref(&ready()), |_| Some(NOTE.to_string()), |_| Some("## Built\nX.".to_string())).is_empty());
+        assert!(run(&own.vault, &state, &ready(), "## Built\nX.").is_empty() && own.vault.writes.borrow().is_empty(), "the card the other round wrote is kept as kebbie's");
+        let _ = std::fs::remove_dir_all(&state);
+        let state = self::state("race-theirs");
+        let theirs = Racing { vault: Vault::default(), meanwhile: "---\ntitle: Mine\n---\n\nMine.\n".to_string() };
+        let said = sync_items(&theirs, &state, std::slice::from_ref(&ready()), |_| Some(NOTE.to_string()), |_| Some("## Built\nX.".to_string()));
+        assert_eq!(said, ["billing@web: Kebbie/web-billing-card.md: not kebbie's card, so the card was not written there"]);
         let _ = std::fs::remove_dir_all(&state);
     }
 
