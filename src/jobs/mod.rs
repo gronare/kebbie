@@ -9,13 +9,23 @@ use crate::sh::Result;
 
 mod bundle;
 mod cluster;
+pub mod link;
 mod master;
 mod worker;
 #[cfg(test)]
 mod tests;
 
 pub use master::run;
-pub use worker::{spawn, stop};
+
+pub fn spawn(state: &Path) {
+    worker::spawn(state);
+    link::spawn(state);
+}
+
+pub fn stop(replaced: bool) {
+    link::stop();
+    worker::stop(replaced);
+}
 
 pub const REF: &str = "refs/kebbie/jobs";
 pub const TIMEOUT_MINUTES: u64 = 60;

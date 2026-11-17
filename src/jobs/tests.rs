@@ -293,11 +293,11 @@ fn a_worker_that_sends_nothing_for_ten_minutes_is_given_up_on_while_one_that_rep
     let _ = std::fs::remove_dir_all(state);
 }
 
-fn git(dir: &Path, args: &[&str]) -> String {
+pub(super) fn git(dir: &Path, args: &[&str]) -> String {
     crate::repo::git(dir, args).unwrap()
 }
 
-fn repo(root: &Path) -> PathBuf {
+pub(super) fn repo(root: &Path) -> PathBuf {
     let top = root.join("app");
     std::fs::create_dir_all(&top).unwrap();
     git(&top, &["init", "--quiet", "-b", "main"]);
@@ -307,7 +307,7 @@ fn repo(root: &Path) -> PathBuf {
     top
 }
 
-fn commit(top: &Path, message: &str) {
+pub(super) fn commit(top: &Path, message: &str) {
     git(top, &["add", "."]);
     git(top, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", message]);
 }
@@ -601,15 +601,15 @@ fn inbox_round(dir: &Path) -> Vec<String> {
     commands::round(dir, 0, &[], Policy { trust: crate::config::HubTrust::Account, auto: crate::config::AutoApprove::Day }, &hands, &crate::messages::now).unwrap()
 }
 
-struct Machine {
-    state: PathBuf,
-    dir: PathBuf,
-    identity: identity::Identity,
-    account: AccountKey,
+pub(super) struct Machine {
+    pub(super) state: PathBuf,
+    pub(super) dir: PathBuf,
+    pub(super) identity: identity::Identity,
+    pub(super) account: AccountKey,
 }
 
 impl Machine {
-    fn connected(hub: &TestHub, browser: &mut kebbie_hub_fakes::browser::Browser, name: &str) -> Machine {
+    pub(super) fn connected(hub: &TestHub, browser: &mut kebbie_hub_fakes::browser::Browser, name: &str) -> Machine {
         let state = connected_named(hub, &hub.url, browser, name);
         let dir = identity::dir(&state);
         let identity = identity::load_at(&dir).unwrap().unwrap();
@@ -617,11 +617,11 @@ impl Machine {
         Machine { state, dir, identity, account }
     }
 
-    fn client(&self) -> Client {
+    pub(super) fn client(&self) -> Client {
         Client::new(&self.identity.url, Some(self.identity.token()), CALL)
     }
 
-    fn work(&self) {
+    pub(super) fn work(&self) {
         worker::register(&self.client(), true, None, crate::messages::now()).unwrap();
     }
 

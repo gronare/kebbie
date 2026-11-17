@@ -146,6 +146,10 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
   kebbie job run [<name>]         run the repo's job of that name ([jobs] in its repo config) on another machine of
                                   your hub account that has worker.enabled, on this worktree as it stands; prints its
                                   output and exits as the job did; no name lists the repo's jobs
+  kebbie run --on <machine> -- <command …>
+                                  run the command on that machine of your hub account (a system, macos or linux,
+                                  or a machine name) over a direct link on Tailscale or WireGuard, on this worktree
+                                  as it stands; streams its output and exits with its exit code; Ctrl-C reaches it
   kebbie status [--json]          every task and Claude session, grouped by what it needs from you
   kebbie next                     what needs you, in the order to do it: what is stopped on you, what to push in
                                   which order, what to read; the same list N shows on the board
@@ -281,7 +285,8 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   the sections a backlog item is written in, where new items go: the vault's task
                                   template, the file [board.backlog] template names, or kebbie's own
   kebbie link <name> <item>       tie a running task to a backlog item or project note, as start --backlog does:
-                                  done tells the lead to close it, reset puts it back in the backlog
+                                  done tells the lead to close it, reset puts it back in the backlog; kebbie link alone
+                                  lists each machine of your hub account and how a link reaches it, with the round trip
   kebbie land [name]              rebase a task onto the default branch without pushing; on a conflict, its Claude
                                   resolves the rebase (push rebases by itself, so land is optional)
   kebbie follow [name] [on|off]   keep a task rebased on the default branch (also u on the board), off by default: when
@@ -862,6 +867,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("done") => tasks::done(&cwd, name),
         Some("drop") => tasks::drop(&cwd, name, arguments.flag("--force")),
         Some("reset") => tasks::reset(&cwd, name),
+        Some("link") if name.is_none() => jobs::link::list_cli(),
         Some("link") => {
             let name = name.ok_or("kebbie link needs a task name and the item")?;
             tasks::link(&cwd, name, &arguments.rest(2).join(" "))
@@ -1022,6 +1028,10 @@ fn main() -> ExitCode {
         let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input);
         usage::record(&input);
         return ExitCode::SUCCESS;
+    }
+    if arguments.positional(0) == Some("run") {
+        let cwd = arguments.value("-C").map_or_else(|| std::env::current_dir().unwrap_or_default(), std::path::PathBuf::from);
+        return jobs::link::run_cli(&cwd, arguments.value("--on"), arguments.rest(1));
     }
     signals::install_panic_hook();
     if matches!(arguments.positional(0), Some("board" | "start" | "after" | "land" | "push" | "done" | "move" | "update" | "ci" | "routine" | "routines")) {

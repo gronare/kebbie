@@ -1835,6 +1835,7 @@ dependencies = [
  "ratatui-image",
  "ratatui-textarea",
  "rusqlite",
+ "rustls",
  "serde",
  "serde_json",
  "sha1_smol",
