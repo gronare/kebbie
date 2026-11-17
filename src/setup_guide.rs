@@ -1410,7 +1410,7 @@ pub fn ending(codex: Option<Login>, checks: &[crate::doctor::Check], shell: &str
 }
 
 const DETAIL_AT: usize = 2 + 9 + 16;
-const MORE: &str = "…; kebbie doctor shows all of it";
+const MORE: &str = "…; the summary after setup shows all of it";
 
 // A tool's error read whole joins its lines with nothing between them, as "repository.Please".
 fn one_line(detail: &str) -> String {
