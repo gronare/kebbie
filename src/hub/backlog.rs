@@ -489,11 +489,7 @@ fn writes(cli: &crate::vault_cli::Cli) -> bool {
 // A task name from the item's title that no branch or running task in the repo has yet, so the start never resumes another task.
 fn free_name(repo: &Path, title: &str) -> String {
     let base = Some(crate::board::suggested_name(title)).filter(|name| !name.is_empty()).unwrap_or_else(|| "item".to_string());
-    let running: Vec<String> = crate::tasks::started_links().into_keys().collect();
-    let repo_name = crate::repo::name_of(repo);
-    (1..).map(|n| if n == 1 { base.clone() } else { format!("{base}-{n}") })
-        .find(|name| !crate::repo::branch_exists(repo, name) && !running.contains(&crate::peers::address(name, &repo_name)))
-        .unwrap_or(base)
+    (1..).map(|n| if n == 1 { base.clone() } else { format!("{base}-{n}") }).find(|name| !super::start::taken(repo, name)).unwrap_or(base)
 }
 
 fn start_found(found: &Found) -> Result<String> {

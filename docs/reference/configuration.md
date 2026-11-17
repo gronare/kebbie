@@ -248,7 +248,7 @@ A `vault.command` that pins an older version of the package the enabled Claude v
 | `"push"` | Pushes of a task. |
 | `"prompt"` | Choices on an agent's prompt. |
 | `"idea"` | Ideas, added to the backlog as `kebbie backlog add` adds them. |
-| `"start"` | Starts of a backlog item as a task, as `g` on the board starts one, and what tasks found started, added to a task or kept in the backlog. |
+| `"start"` | Starts of a backlog item as a task, as `g` on the board starts one, a new task from the app's **New**, as `n` starts one, and what tasks found started, added to a task or kept in the backlog. |
 | `"edit"` | Edits of a backlog item's title or one of its sections. |
 | `"review"` | A task's waiting subtask opened for review, line comments typed into its Claude, files marked read, the subtask accepted, and a task or subtask sent to a full review. |
 | `"lead"` | Your messages to the lead, typed into its chat as your own word once it is free, and away mode switched on or off. |

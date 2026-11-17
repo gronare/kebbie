@@ -49,9 +49,13 @@ pub(super) enum Choice {
 
 const HEAD: &str = "New · what do you want done?";
 
-// The description started as a task, its first words kept as the row's title until the task's agent names it.
 fn start(repo: &Path, name: &str, text: &str) -> Result<String> {
-    titled(&crate::lead::state_dir()?, repo, name, text, || start_in_background(repo, name, Some(text), &StartWith::default()))
+    start_described(repo, name, text, None)
+}
+
+// The description started as a task, its first words kept as the row's title until the task's agent names it.
+pub(crate) fn start_described(repo: &Path, name: &str, text: &str, device: Option<&str>) -> Result<String> {
+    titled(&crate::lead::state_dir()?, repo, name, text, || start_in_background(repo, name, Some(text), &StartWith { device, ..StartWith::default() }))
 }
 
 fn titled(state: &Path, repo: &Path, name: &str, text: &str, start: impl FnOnce() -> Result<String>) -> Result<String> {
@@ -67,7 +71,7 @@ fn file(sources: &[Source], repo: &str, text: &str) -> Result<String> {
 }
 
 // A task name from the description's first words, made unique with -2, -3 and on against what is taken.
-pub(super) fn task_name(text: &str, taken: impl Fn(&str) -> bool) -> String {
+pub(crate) fn task_name(text: &str, taken: impl Fn(&str) -> bool) -> String {
     let base = Some(suggested_name(text)).filter(|name| !name.is_empty()).unwrap_or_else(|| "task".to_string());
     (1..).map(|count| if count == 1 { base.clone() } else { format!("{base}-{count}") }).find(|name| !taken(name)).expect("an unused name")
 }

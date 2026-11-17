@@ -85,6 +85,7 @@ use crate::tasks;
 use crate::usage::Usage;
 use crate::{lead, update};
 pub(crate) use columns::suggested_name;
+pub(crate) use new_task::{start_described, task_name};
 use detail::Detail;
 use draw::draw;
 use editor::MessageEditor;

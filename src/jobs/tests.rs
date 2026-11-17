@@ -585,6 +585,7 @@ fn inbox_round(dir: &Path) -> Vec<String> {
         idea: &|_, _| unreachable!(),
         item_answers: &|_, _| unreachable!(),
         start_item: &|_, _| unreachable!(),
+        start: &|_, _| unreachable!(),
         item_edit: &|_, _| unreachable!(),
         item_write: &|_, _| unreachable!(),
         review_open: &|_, _| unreachable!(),
