@@ -12,6 +12,7 @@ Where kebbie keeps its config, state and the files it ships, and what each file 
 | State directory | `~/.local/state/kebbie` | `KEBBIE_STATE_DIR`, `XDG_STATE_HOME` |
 | The lead's working directory | `lead` in the state directory | `KEBBIE_LEAD_DIR` |
 | A worker's job folders | `~/.local/share/kebbie/worker/<repo>/<task>`, with the repo's history in `.store` beside them | none |
+| A worker's folders for `kebbie run` | `~/.local/share/kebbie/worker/<repo>/tasks/<task>`, from the same `.store` | none |
 | Install link | `~/.local/share/kebbie/current`, written by herdr's startup | none: kebbie reads it under `~/.local/share` |
 | The binary | `~/.local/share/kebbie/current/target/release/kebbie` | `KEBBIE_BIN` for roles and skills |
 | Sidebar sync state | `~/.local/state/herdr-sync` | `XDG_STATE_HOME` |

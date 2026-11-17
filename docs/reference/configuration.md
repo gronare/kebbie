@@ -293,7 +293,7 @@ commands = ["answer", "prompt", "idea"]
 | `restart.auto` | `true` | config.toml only | Whether kebbie restarts the Claude sessions and Codex tasks that run older code than is installed, after an update or a new Claude Code or Codex; no other session restarts. |
 | `restart.idle_minutes` | `10` | config.toml only | How long, an integer from 1 to 1440 minutes, a session on older code waits to be idle and out of focus before that restart. |
 | `keeper.enabled` | `true` | config.toml only | Whether the keeper, one background kebbie per machine, runs the routines. |
-| `worker.enabled` | `false` | config.toml only | Whether this machine runs [jobs](#jobs) for the other machines of its hub account. |
+| `worker.enabled` | `false` | config.toml only | Whether this machine runs [jobs](#jobs) and [`kebbie run`](commands.md#commands-on-another-machine) commands for the other machines of its hub account. |
 | `recover.enabled` | `true` | config.toml only | Whether kebbie resumes a task whose Claude an API error stopped, and puts a Codex task an API error stopped under Needs you. |
 | `builds.slots` | `1` | config.toml only | How many task builds run at once on this machine, a whole number from 1 to 64. See [Builds](#builds). |
 | `builds.commands` | `["cargo"]` | config.toml only | The commands that take a build slot: a program, and the words its arguments start with, such as `"npm run build"`. |
@@ -315,7 +315,7 @@ full_command = "cargo test --locked"
 
 `restart.auto`: each restarted session resumes its conversation, and `kebbie update` restarts the idle ones at once. A session mid-turn, the pane you are in and one with background work running are never restarted on their own. `false` restarts nothing on its own; the board still marks the sessions on older code.
 
-`worker.enabled`: the keeper tells the hub this machine is a worker, takes the jobs the other machines on your account's signed list send, and runs them one at a time, in your user account, each in a folder of its task's own under `~/.local/share/kebbie/worker`. Turning it on is your yes to every one of those machines; nothing on this machine listens, as the jobs come through the hub. Turning it off, or stopping the keeper, tells the hub it is no worker any more. See [Run a job on another machine](../how-to/run-a-job-on-another-machine.md).
+`worker.enabled`: the keeper tells the hub this machine is a worker, takes the jobs the other machines on your account's signed list send, and runs them one at a time, in your user account, each in a folder of its task's own under `~/.local/share/kebbie/worker`. Turning it on is your yes to every one of those machines. Jobs come through the hub; for [`kebbie run`](commands.md#commands-on-another-machine) the keeper also listens on port 47011, on loopback and this machine's Tailscale and WireGuard addresses only, and tells the account's other machines those addresses through the hub. Turning it off, or stopping the keeper, tells the hub it is no worker any more and stops the listening. See [Run a job on another machine](../how-to/run-a-job-on-another-machine.md) and [Run a command on another machine](../how-to/run-a-command-on-another-machine.md).
 
 `keeper.enabled`: the keeper's routines then go on with the board closed. `false` runs them in an open board instead, and the board then posts the hub's board once a minute. See [The keeper](../explanation/updates-and-restarts.md#the-keeper). The routines are:
 

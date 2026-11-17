@@ -22,7 +22,7 @@ enabled = true
 
 Its keeper then tells the hub this machine runs jobs, and it runs them one at a time, in the order they come. Turning the setting off, or stopping the keeper, tells the hub it no longer does.
 
-Turning it on is your yes to every machine of your account: each can run commands in your user account on this machine. Only a machine on the list your account signed can send it a job, and nothing on the worker listens.
+Turning it on is your yes to every machine of your account: each can run commands in your user account on this machine. Only a machine on the list your account signed can send it a job. Jobs come through the hub; the setting also lets the account's machines [run a command](run-a-command-on-another-machine.md) here over a direct link.
 
 ## 2. Name the repo's jobs on the master
 
