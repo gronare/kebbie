@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use crate::sh::Result;
 use crate::vault_cli::{Cli, STYLES, StyleWrote};
 
@@ -8,6 +10,7 @@ const STAMP: (&str, &str) = ("<!-- style-version:", "-->");
 #[derive(Debug, PartialEq)]
 pub enum Synced {
     Wrote(u32),
+    Unchanged,
     Newer,
     Skipped,
 }
@@ -49,21 +52,43 @@ pub fn sync(cli: &Cli) -> Result<Synced> {
     let version = version(DEFAULT);
     Ok(match cli.write_style(KIND, version, DEFAULT)? {
         StyleWrote::Saved => Synced::Wrote(version),
+        StyleWrote::Unchanged => Synced::Unchanged,
         StyleWrote::Newer => Synced::Newer,
     })
 }
 
-// The line setup, update and the keeper say: a write or a failure; a skip or a newer style in the vault says nothing.
+// The line setup, update and the keeper say: a write or a failure; a skip, an unchanged style or a newer style in the vault says nothing.
 pub fn said(synced: Result<Synced>) -> Option<String> {
     match synced {
         Ok(Synced::Wrote(version)) => Some(format!("Wrote kebbie's backlog style, version {version}, to the vault")),
-        Ok(Synced::Newer | Synced::Skipped) => None,
+        Ok(Synced::Unchanged | Synced::Newer | Synced::Skipped) => None,
         Err(error) => Some(format!("kebbie's backlog style was not written to the vault: {error}")),
     }
 }
 
+// A failure is said once until it changes or a write goes through, not at every start.
+fn said_once(state: &Path, synced: Result<Synced>) -> Option<String> {
+    let file = state.join("backlog-style.said");
+    let failed = synced.is_err();
+    let line = said(synced);
+    if !failed {
+        let _ = std::fs::remove_file(&file);
+        return line;
+    }
+    let line = line?;
+    if std::fs::read_to_string(&file).is_ok_and(|said| said == line) {
+        return None;
+    }
+    let _ = crate::state::write(&file, &line);
+    Some(line)
+}
+
 pub fn sync_here() -> Option<String> {
-    said(sync(&crate::vault_cli::detect()?))
+    let synced = sync(&crate::vault_cli::detect()?);
+    match crate::lead::state_dir() {
+        Ok(state) => said_once(&state, synced),
+        Err(_) => said(synced),
+    }
 }
 
 fn source_shown(source: &str) -> String {
@@ -125,6 +150,30 @@ mod tests {
         assert_eq!(sync(&fake.cli).unwrap(), Synced::Skipped, "a command not yet probed is asked first");
         assert!(writes(&fake).is_empty());
         assert_eq!(said(Ok(Synced::Skipped)), None);
+    }
+
+    #[test]
+    fn a_style_already_at_this_version_is_unchanged_and_says_nothing() {
+        let fake = Fake::new("style-unchanged");
+        fake.answer("style-write", r#"{"path":".vault/styles/backlog.md","etag":"e1","version":1,"note":".vault/styles/backlog.md is already at style-version 1; it was left as it is"}"#);
+        assert_eq!(sync(&capable(&fake, &["styles"])).unwrap(), Synced::Unchanged);
+        assert_eq!(said_once(&fake.state(), sync(&capable(&fake, &["styles"]))), None);
+        fake.answer("style-write", r#"{"path":".vault/styles/backlog.md","etag":"e2","version":2,"note":"The user's override .vault/styles/backlog.override.md applies in place of it."}"#);
+        assert!(matches!(sync(&capable(&fake, &["styles"])).unwrap(), Synced::Wrote(_)), "a write beside an override is still a write");
+    }
+
+    #[test]
+    fn a_refusal_is_said_once_until_it_changes_or_a_write_goes_through() {
+        let fake = Fake::new("style-once");
+        let state = fake.state();
+        fake.fail("style-write", "mindin: .vault/styles/backlog.md has no style-version stamp, so it may be the user's own and was left as it is");
+        let first = said_once(&state, sync(&capable(&fake, &["styles"])));
+        assert!(first.is_some_and(|line| line.contains("no style-version stamp")));
+        assert_eq!(said_once(&state, sync(&capable(&fake, &["styles"]))), None, "the next keeper start says nothing");
+        fake.answer("style-write", r#"{"path":".vault/styles/backlog.md","etag":"e1","version":1}"#);
+        assert!(said_once(&state, sync(&capable(&fake, &["styles"]))).is_some());
+        fake.fail("style-write", "mindin: .vault/styles/backlog.md has no style-version stamp, so it may be the user's own and was left as it is");
+        assert!(said_once(&state, sync(&capable(&fake, &["styles"]))).is_some(), "said again after a write went through");
     }
 
     #[test]
