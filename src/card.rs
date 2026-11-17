@@ -287,7 +287,7 @@ fn significant(text: &str) -> BTreeSet<String> {
     text.split(|character: char| !character.is_alphanumeric()).map(str::to_lowercase).filter(|word| word.chars().count() > 3 && word != "because").collect()
 }
 
-// A line names its record by key, or claims who took it and shares most of its words; words alone never move a line from the task to someone else, and a claim with no such record takes the earliest answer of that decider left.
+// A line names its record by key, or claims who took it and shares most of its words; words alone never move a line from the task to someone else, and once every line has taken the record it names, a claim with none takes the earliest answer of that decider no line named.
 fn same_decision(line: &Claimed, record: &Record) -> bool {
     if record.key.as_ref().is_some_and(|key| line.text.split(|character: char| !character.is_alphanumeric()).any(|word| word == key)) {
         return true;
@@ -349,15 +349,25 @@ pub fn decisions(claimed: &[Claimed], records: &[Record], red: Option<&str>) -> 
     let mut used = vec![false; records.len()];
     let mut taken: Vec<Decision> = Vec::new();
     let mut unbacked = Vec::new();
-    let matched = |line: &Claimed, used: &mut Vec<bool>| -> Option<usize> {
-        let open = |index: &usize| !used[*index];
-        let found = records.iter().enumerate().find(|(index, record)| open(index) && same_decision(line, record)).or_else(|| records.iter().enumerate().find(|(index, record)| open(index) && record.key.is_none() && line.by == Some(record.by) && record.by != By::Task)).map(|(index, _)| index)?;
-        used[found] = true;
-        Some(found)
-    };
+    let mut matched: Vec<Option<usize>> = vec![None; claimed.len()];
+    for (at, line) in claimed.iter().enumerate() {
+        matched[at] = (0..records.len()).find(|&index| !used[index] && same_decision(line, &records[index]));
+        if let Some(index) = matched[at] {
+            used[index] = true;
+        }
+    }
+    for (at, line) in claimed.iter().enumerate() {
+        if matched[at].is_some() {
+            continue;
+        }
+        matched[at] = (0..records.len()).find(|&index| !used[index] && records[index].key.is_none() && line.by == Some(records[index].by) && records[index].by != By::Task);
+        if let Some(index) = matched[at] {
+            used[index] = true;
+        }
+    }
     let mut replacements: Vec<(usize, String)> = Vec::new();
-    for line in claimed {
-        let decision = match matched(line, &mut used) {
+    for (line, found) in claimed.iter().zip(matched) {
+        let decision = match found {
             Some(index) => Decision { text: line.text.clone(), by: records[index].by, source: Some(records[index].source), at: Some(records[index].at), replaced_by: None },
             None => {
                 if line.by.is_some_and(|by| by != By::Task) {
@@ -627,6 +637,15 @@ mod tests {
         let forgot = decisions_left(&records);
         let shown = render(&next_version(&parsed, Vec::new(), forgot, None, 1));
         assert!(!shown.contains("Decisions:") && !shown.contains("→") && !shown.contains("Should that"), "an answer the card leaves out is never pasted in: {shown}");
+    }
+
+    #[test]
+    fn a_your_claim_with_no_matching_words_never_takes_the_answer_a_later_line_matches() {
+        let records = [record("Should refunds show on the invoice page? → Yes, under the invoice total", By::You, Source::Question, 50, None)];
+        let claimed = parse("**Refunds.**\n\nBuilt:\n- x\n\nDecisions:\n- Keep the old endpoint a week (you)\n- Refunds show on the invoice page, under the invoice total (you)\n").unwrap().decisions;
+        let taken = decisions(&claimed, &records, None);
+        assert_eq!(taken.decisions.iter().map(|decision| decision.by).collect::<Vec<_>>(), [By::Task, By::You], "the line that names the answer takes it");
+        assert_eq!(taken.unbacked, ["Keep the old endpoint a week"]);
     }
 
     fn decisions_left(records: &[Record]) -> Vec<Decision> {
