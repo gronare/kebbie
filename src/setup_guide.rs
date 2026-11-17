@@ -17,6 +17,7 @@ use crate::agent::codex_setup::{self, Placed};
 use crate::agent::login::{self, Login};
 use crate::doctor::Repair;
 use crate::setup::{self, Asking, KeyPlan, Machine, Outcome};
+use crate::setup_vault::{self, Failure, Job, Mindin, Signed, State};
 use crate::sh::Result;
 use crate::vault_cli::{Plugin, Probe};
 use crate::vault_found::{Found, Origin};
@@ -156,7 +157,7 @@ impl Step {
             Step::Agents => "Agents",
             Step::Vault => "Vault",
             Step::Backlog => "Backlog",
-            Step::Signals => "Error signals",
+            Step::Signals => "Signals",
             Step::Review => "Review and apply",
         }
     }
@@ -165,10 +166,10 @@ impl Step {
         match self {
             Step::Name => "How your phone and your other machines show this one. One word, like mac or devbox.",
             Step::Agents => "The agents kebbie found on this machine. Each one you tick gets kebbie's plugin and its approval rules when you apply. Claude Code runs the lead and the reviewer, so it stays on.",
-            Step::Vault => "Optional. A note for every task and a log line for every push. Choose where the vault lives; when that changes, kebbie runs mindin setup for it as you apply.",
+            Step::Vault => "Optional. A note for every task and a log line for every push. Choose where the vault lives; ⏎ installs mindin when it is missing and signs this machine in to a server, here on this screen.",
             Step::Backlog => "Where work waits and new items are written: the local file or the vault, one of them. Linear can sit beside either; the lead only reads it.",
-            Step::Signals => "Off until you say yes. With them on, when kebbie itself crashes or hits some internal errors, it sends its maintainers an error signal, at most once a day. A signal holds only kebbie's version and commit, your OS and CPU architecture, the part of kebbie that failed, the kind of failure and a count; never your code, paths or text. Once a day it also sends an install signal, so they can count active installs: a random id made for this install, kebbie's version, your OS and CPU architecture and the update channel. Turning them off deletes that id.",
-            Step::Review => "Everything kebbie writes or installs, each tool's own files included. Nothing is written until you press ⏎ here.",
+            Step::Signals => "Both are off until you say yes. Neither ever sends notes, names, paths or your vault's address.",
+            Step::Review => "Everything kebbie writes or installs, each tool's own files included. Apart from mindin's install and sign-in on step 3, nothing is written until you press ⏎ here.",
         }
     }
 }
@@ -216,6 +217,8 @@ pub struct Facts {
     pub codex_config: Option<String>,
     pub vault_found: Vec<Found>,
     pub vault_command: Option<String>,
+    pub mindin_lookup: Vec<PathBuf>,
+    pub os: String,
 }
 
 fn version(program: &str) -> Option<String> {
@@ -288,6 +291,8 @@ impl Facts {
             codex_home: env.codex_home.clone(),
             vault_found,
             vault_command,
+            mindin_lookup: lookup,
+            os: std::env::consts::OS.to_string(),
         }
     }
 
@@ -379,13 +384,15 @@ pub struct Answers {
     pub codex: bool,
     pub sources: Vec<(Source, bool)>,
     pub vault: Where,
-    pub signals: usize,
+    pub signals: bool,
+    pub usage: bool,
 }
 
 impl Answers {
     fn from(facts: &Facts) -> Answers {
         let vault = Where::from(facts);
-        Answers { name: facts.name.clone(), codex: facts.codex.is_some(), sources: Answers::sources(facts, vault.chosen() != Place::None), vault, signals: usize::from(!facts.signals) }
+        let usage = facts.runner_answer().and_then(|probe| probe.usage).unwrap_or(false);
+        Answers { name: facts.name.clone(), codex: facts.codex.is_some(), sources: Answers::sources(facts, vault.chosen() != Place::None), vault, signals: facts.signals, usage }
     }
 
     // Sources this machine never chose follow the vault: with one, new items go to it.
@@ -445,7 +452,9 @@ pub enum Act {
     Keys(Box<KeyPlan>, Vec<toml::Table>),
     Sources(Vec<Source>),
     InstallMindin,
+    SignIn,
     VaultSetup(Command, Vec<String>),
+    MindinSignals(Command, bool),
     VaultCommand(Option<Command>),
     ClaudeVault,
     CodexVault(Command),
@@ -468,6 +477,7 @@ pub enum Next {
     Stay,
     Quit,
     Apply,
+    Retry,
     Connect,
     Board,
 }
@@ -492,6 +502,10 @@ pub struct Guide {
     pub applied: Option<Vec<(String, Outcome)>>,
     pub done: bool,
     pub ending: Vec<String>,
+    pub vault_job: Option<Job>,
+    mindin: Option<Mindin>,
+    signed: Option<(String, Signed, Option<u64>)>,
+    planned: Vec<Planned>,
 }
 
 fn home(path: &Path) -> String {
@@ -523,7 +537,7 @@ fn short(wanted: &setup::Wanted) -> String {
 impl Guide {
     pub fn new(facts: Facts, at: Step) -> Guide {
         let answers = Answers::from(&facts);
-        let mut guide = Guide { step: Step::Name, cursor: 0, caret: 0, sources_touched: false, answers, facts, visited: [false; Step::ALL.len()], skipped: [false; Step::ALL.len()], fresh: true, error: None, applied: None, done: false, ending: Vec::new() };
+        let mut guide = Guide { step: Step::Name, cursor: 0, caret: 0, sources_touched: false, answers, facts, visited: [false; Step::ALL.len()], skipped: [false; Step::ALL.len()], fresh: true, error: None, applied: None, done: false, ending: Vec::new(), vault_job: None, mindin: None, signed: None, planned: Vec::new() };
         guide.go(at);
         guide
     }
@@ -580,8 +594,68 @@ impl Guide {
     fn vault_used(&self) -> Option<Command> {
         match self.place()? {
             Place::None => None,
-            _ if self.installs() => Some(Command::Installed),
+            _ if self.installs() => Some(self.mindin.as_ref().map_or(Command::Installed, |mindin| Command::Found(mindin.command.clone()))),
             _ => Some(self.facts.runner().map_or(Command::Installed, |found| Command::Found(found.command.clone()))),
+        }
+    }
+
+    fn server_address(&self) -> Option<String> {
+        match self.answers.vault.chosen() {
+            Place::Hosted => HOSTED_VAULT.map(str::to_string),
+            Place::Server => Some(self.answers.vault.address.trim().to_string()).filter(|address| !address.is_empty()),
+            _ => None,
+        }
+    }
+
+    // This machine signed in on this screen to the server chosen now.
+    fn signed_here(&self) -> Option<&(String, Signed, Option<u64>)> {
+        let address = self.server_address()?;
+        self.signed.as_ref().filter(|(signed, ..)| same_url(signed, &address))
+    }
+
+    fn signs_in(&self) -> bool {
+        self.server_address().is_some() && self.needs_setup() && self.signed_here().is_none()
+    }
+
+    // What ⏎ on the vault step runs in the background: mindin's installer when it is missing, then the sign-in to a server.
+    fn job_plan(&self, install: bool) -> Option<setup_vault::Plan> {
+        if !self.needs_setup() || self.setup_flags().is_none() {
+            return None;
+        }
+        let install = ((self.installs() && self.mindin.is_none()) || install).then(|| setup_vault::Install { script: MINDIN_INSTALL_ONLY.to_string(), lookup: self.facts.mindin_lookup.clone() });
+        let sign_in = self.signs_in().then(|| self.setup_flags()).flatten();
+        if install.is_none() && sign_in.is_none() {
+            return None;
+        }
+        let command = match self.vault_used() {
+            Some(Command::Found(command)) => Some(command),
+            _ => None,
+        };
+        Some(setup_vault::Plan { install, command, sign_in })
+    }
+
+    fn start_job(&mut self, install: bool) -> bool {
+        let Some(plan) = self.job_plan(install) else { return false };
+        self.vault_job = Some(Job::new(plan));
+        true
+    }
+
+    // The background step moves on: started, polled, and what it finished kept for the plan.
+    pub fn tick(&mut self) {
+        if let Some(job) = &mut self.vault_job {
+            job.launch();
+            job.poll();
+        }
+        self.absorb();
+    }
+
+    fn absorb(&mut self) {
+        let Some(job) = &self.vault_job else { return };
+        if let Some(mindin) = &job.mindin {
+            self.mindin = Some(mindin.clone());
+        }
+        if let (true, Some(signed), Some(address)) = (job.finished(), &job.signed, self.server_address()) {
+            self.signed = Some((address, signed.clone(), job.moved));
         }
     }
 
@@ -603,10 +677,11 @@ impl Guide {
     }
 
     fn runner_shown(&self) -> String {
-        match self.facts.runner() {
-            Some(found) if self.installs() => format!("mindin, installed when you apply: {} has no setup", found.shown()),
-            Some(found) => format!("{} · {}", found.shown(), found.source),
-            None => "mindin, installed when you apply".to_string(),
+        match (self.facts.runner(), &self.mindin) {
+            (_, Some(mindin)) if self.installs() => format!("mindin {}, installed here", mindin.version),
+            (Some(found), None) if self.installs() => format!("mindin, installed on ⏎: {} has no setup", found.shown()),
+            (Some(found), _) => format!("{} · {}", found.shown(), found.source),
+            (None, _) => "mindin, installed on ⏎".to_string(),
         }
     }
 
@@ -631,7 +706,7 @@ impl Guide {
                 std::iter::once(Spot::Choice(at)).chain(fields.iter().map(|field| Spot::Text(*field)))
             }).collect(),
             Step::Backlog => (0..self.answers.sources.len()).map(Spot::Check).collect(),
-            Step::Signals => vec![Spot::Choice(0), Spot::Choice(1)],
+            Step::Signals => vec![Spot::Check(0), Spot::Check(1)],
             Step::Review => Vec::new(),
         }
     }
@@ -643,7 +718,6 @@ impl Guide {
     fn chosen(&self) -> usize {
         match self.step {
             Step::Vault => Place::ALL.iter().position(|place| *place == self.answers.vault.chosen()).unwrap_or(0),
-            Step::Signals => self.answers.signals,
             _ => 0,
         }
     }
@@ -688,13 +762,9 @@ impl Guide {
     }
 
     fn choose(&mut self, at: usize) {
-        match self.step {
-            Step::Vault => {
-                self.answers.vault.place = Place::ALL.get(at).copied();
-                self.cursor = self.spots().iter().position(|spot| *spot == Spot::Choice(at)).unwrap_or(self.cursor);
-            }
-            Step::Signals => self.answers.signals = at,
-            _ => {}
+        if self.step == Step::Vault {
+            self.answers.vault.place = Place::ALL.get(at).copied();
+            self.cursor = self.spots().iter().position(|spot| *spot == Spot::Choice(at)).unwrap_or(self.cursor);
         }
     }
 
@@ -732,7 +802,7 @@ impl Guide {
         match step {
             Step::Vault => self.answers.vault = today.vault,
             Step::Backlog => self.answers.sources = today.sources,
-            Step::Signals => self.answers.signals = today.signals,
+            Step::Signals => (self.answers.signals, self.answers.usage) = (today.signals, today.usage),
             Step::Name | Step::Agents | Step::Review => {}
         }
     }
@@ -760,8 +830,14 @@ impl Guide {
             return match key.code {
                 _ if !self.done => Next::Stay,
                 KeyCode::Char('h') if self.offers_hub() => Next::Connect,
-                _ => Next::Board,
+                KeyCode::Char('r') if !self.failed_rows().is_empty() => Next::Retry,
+                KeyCode::Enter => Next::Board,
+                KeyCode::Esc => Next::Quit,
+                _ => Next::Stay,
             };
+        }
+        if self.step == Step::Vault && self.vault_job.is_some() {
+            return self.job_key(key.code);
         }
         let spots = self.spots();
         let typing = self.typed().is_some();
@@ -785,7 +861,12 @@ impl Guide {
                 Some(Spot::Choice(at)) => self.choose(at),
                 _ => {}
             },
+            KeyCode::Enter if self.step == Step::Review && self.job_plan(false).is_some() => {
+                self.go(Step::Vault);
+                self.start_job(false);
+            }
             KeyCode::Enter if self.step == Step::Review => return Next::Apply,
+            KeyCode::Enter if self.step == Step::Vault && self.check().is_ok() && self.start_job(false) => {}
             KeyCode::Enter => match self.check() {
                 Ok(()) => {
                     self.visited[self.step.index()] = true;
@@ -810,9 +891,59 @@ impl Guide {
         Next::Stay
     }
 
+    fn job_key(&mut self, code: KeyCode) -> Next {
+        let Some(state) = self.vault_job.as_ref().map(|job| job.state.clone()) else { return Next::Stay };
+        match (code, state) {
+            (KeyCode::Esc, _) => return Next::Quit,
+            (KeyCode::Char(answer @ ('y' | 'n')), State::Move { .. }) => {
+                if let Some(job) = &mut self.vault_job {
+                    job.answer(answer == 'y');
+                }
+            }
+            (KeyCode::Char('o'), State::Code(code)) => {
+                if let (Some(program), Some(job)) = (crate::hub::connect::opener(), &mut self.vault_job) {
+                    std::thread::spawn(move || crate::issues::open_url(program, &code.link));
+                    job.opened = true;
+                }
+            }
+            (KeyCode::Char('c'), State::Code(code)) => {
+                let copied = crate::hub::console::copy_here(&code.code).is_ok();
+                if let Some(job) = &mut self.vault_job {
+                    job.copied = copied;
+                }
+            }
+            (KeyCode::Char('r'), State::Failed(failure)) => {
+                self.start_job(failure.kind == "old");
+            }
+            (KeyCode::Char('e'), state) if state != State::Moving => {
+                self.vault_job = None;
+                self.go(Step::Vault);
+            }
+            (KeyCode::Enter, State::Done) => {
+                self.absorb();
+                self.visited[Step::Vault.index()] = true;
+                self.skipped[Step::Vault.index()] = false;
+                self.go(self.next_step());
+            }
+            (KeyCode::Left, _) => {
+                if let Some(previous) = self.previous_step() {
+                    self.go(previous);
+                }
+            }
+            _ => {}
+        }
+        Next::Stay
+    }
+
+    fn usage_asked(&self) -> bool {
+        self.place().is_some_and(|place| place != Place::None) && (self.installs() || self.mindin.is_some() || self.facts.runner_answer().is_some_and(|probe| probe.setup))
+    }
+
     fn toggle(&mut self, at: usize) {
         match self.step {
             Step::Agents if Agent::ALL.get(at) == Some(&Agent::Codex) && self.facts.codex.is_some() => self.answers.codex = !self.answers.codex,
+            Step::Signals if at == 0 => self.answers.signals = !self.answers.signals,
+            Step::Signals if self.usage_asked() => self.answers.usage = !self.answers.usage,
             Step::Backlog => {
                 let Some((source, on)) = self.answers.sources.get(at).copied() else { return };
                 self.sources_touched = true;
@@ -888,15 +1019,37 @@ impl Guide {
         let Some(place) = self.place().filter(|place| *place != Place::None) else { return Vec::new() };
         let mut rows = Vec::new();
         if self.installs() {
-            let detail = self.facts.runner().map_or("installed first, then it runs the vault".to_string(), |found| format!("installed first, since {} has no setup", found.shown()));
-            rows.push(row("mindin", "to do", detail, Act::InstallMindin));
+            rows.push(match &self.mindin {
+                Some(mindin) => row("mindin", "already", format!("mindin {}, installed on step 3", mindin.version), Act::Nothing),
+                None => row("mindin", "to do", self.facts.runner().map_or("installed first, then it runs the vault".to_string(), |found| format!("installed first, since {} has no setup", found.shown())), Act::InstallMindin),
+            });
         }
         let step = place.step();
+        let usage = self.usage_asked() && !self.skipped(Step::Signals);
+        let mut folded = false;
         rows.push(match self.setup_flags() {
             _ if self.place_in() => row(step, "already", format!("{}{}", self.place_shown(), if matches!(place, Place::Hosted | Place::Server) { " · signed in" } else { "" }), Act::Nothing),
-            Some(flags) => row(step, "to do", self.place_shown(), Act::VaultSetup(self.vault_used().unwrap_or(Command::Installed), flags)),
+            Some(_) if self.server_address().is_some() => match self.signed_here() {
+                Some((_, signed, moved)) => row(step, "already", format!("{} · {}{}", self.place_shown(), signed_words(signed), moved.map_or(String::new(), |files| format!(" · {files} files moved in"))), Act::Nothing),
+                None => row(step, "to do", format!("{} · signs in on step 3", self.place_shown()), Act::SignIn),
+            },
+            Some(mut flags) => {
+                if usage {
+                    flags.extend(["--signals".to_string(), yes_no(self.answers.usage).to_string()]);
+                    folded = true;
+                }
+                row(step, "to do", self.place_shown(), Act::VaultSetup(self.vault_used().unwrap_or(Command::Installed), flags))
+            }
             None => row(step, "skipped", format!("{} needs {}", place.label(), place.needs()), Act::Nothing),
         });
+        let known = self.facts.runner_answer().and_then(|probe| probe.usage).filter(|_| !self.installs());
+        if usage && !folded {
+            let said = if self.answers.usage { "on, once a day" } else { "off" };
+            rows.push(match known {
+                Some(on) if on == self.answers.usage => row("usage data", "already", said.to_string(), Act::Nothing),
+                _ => row("usage data", "to do", said.to_string(), Act::MindinSignals(self.vault_used().unwrap_or(Command::Installed), self.answers.usage)),
+            });
+        }
         rows
     }
 
@@ -923,7 +1076,7 @@ impl Guide {
             _ if sources == facts.sources => row("backlog", "already", listed, Act::Nothing),
             _ => row("backlog", "to do", listed, Act::Sources(sources)),
         });
-        let on = answers.signals == 0;
+        let on = answers.signals;
         let said = |on: bool| if on { "on" } else { "off" };
         rows.push(match () {
             _ if self.skipped(Step::Signals) => row("signals", "skipped", format!("stay {}", said(facts.signals)), Act::Nothing),
@@ -1018,8 +1171,10 @@ impl Guide {
         let config = self.codex_home_shown("config.toml");
         let claude = Path::new(&self.facts.claude_bin).file_name().map_or(self.facts.claude_bin.clone(), |name| name.to_string_lossy().to_string());
         self.plan().iter().filter_map(|row| match &row.act {
-            Act::InstallMindin => Some(format!("{MINDIN_INSTALL_ONLY} first, in this terminal")),
-            Act::VaultSetup(command, flags) => Some(format!("{} in this terminal{}", setup_script(&shown_command(command), flags), self.setup_asks())),
+            Act::InstallMindin => Some(format!("{MINDIN_INSTALL_ONLY} first, its output kept on this screen")),
+            Act::VaultSetup(command, flags) if self.answers.vault.chosen() == Place::S3 && !s3_keys_set() => Some(format!("{} in this terminal; it asks for the access key and the secret, hidden, unless S3_ACCESS_KEY and S3_SECRET_KEY are set", setup_script(&shown_command(command), flags))),
+            Act::VaultSetup(command, flags) => Some(format!("{} on this screen{}", setup_script(&shown_command(command), flags), if self.answers.vault.chosen() == Place::Folder { "; the folder must exist" } else { "" })),
+            Act::MindinSignals(command, on) => Some(format!("{} on this screen", setup_script(&shown_command(command), &["--signals".to_string(), yes_no(*on).to_string()]))),
             Act::Rules(text) => Some(format!("writes {}, {} lines", self.codex_home_shown(codex_setup::RULES_FILE), text.lines().count())),
             Act::CodexVault(command) if self.codex_server_placed(command) == Placed::Differs => Some(format!("replaces [mcp_servers.vault] in {config}; the rest of the file stays as it is")),
             Act::CodexVault(_) => Some(format!("adds [mcp_servers.vault] to the end of {config}; the rest of the file stays as it is")),
@@ -1028,18 +1183,22 @@ impl Guide {
         }).collect()
     }
 
-    fn setup_asks(&self) -> &'static str {
-        match self.answers.vault.chosen() {
-            Place::Hosted | Place::Server => "; it signs this machine in through the browser when it is not yet",
-            Place::S3 => "; it asks for the access key and the secret, hidden, unless S3_ACCESS_KEY and S3_SECRET_KEY are set",
-            Place::Folder => "; the folder must exist",
-            Place::None => "",
-        }
-    }
-
     fn offers_hub(&self) -> bool {
         self.facts.hub.is_none()
     }
+}
+
+fn yes_no(on: bool) -> &'static str {
+    if on { "yes" } else { "no" }
+}
+
+fn s3_keys_set() -> bool {
+    ["S3_ACCESS_KEY", "S3_SECRET_KEY"].iter().all(|name| std::env::var(name).is_ok_and(|value| !value.is_empty()))
+}
+
+fn signed_words(signed: &Signed) -> String {
+    let vault = [&signed.vault_name, &signed.vault].into_iter().find(|name| !name.is_empty()).map_or("signed in".to_string(), |name| format!("signed in: vault {name}"));
+    if signed.access.is_empty() { vault } else { format!("{vault}, {}", signed.access) }
 }
 
 fn shown_command(command: &Command) -> Vec<String> {
@@ -1119,18 +1278,22 @@ fn rules(env: &Env, text: &str) -> Outcome {
 }
 
 // The installer puts mindin in uv's tool folder, ~/.local/bin unless uv was told otherwise, which a running PATH may not list yet.
-fn installed_mindin(env: &Env) -> Option<PathBuf> {
-    let path: Vec<PathBuf> = env.machine.path.iter().cloned().chain([env.machine.home.join(".local/bin")]).collect();
-    crate::doctor::which("mindin", &path)
+fn install_mindin(env: &Env) -> (Outcome, Option<Vec<String>>) {
+    let lookup: Vec<PathBuf> = env.machine.path.iter().cloned().chain([env.machine.home.join(".local/bin")]).collect();
+    match setup_vault::install(&setup_vault::Install { script: MINDIN_INSTALL_ONLY.to_string(), lookup }, &|_| {}) {
+        Ok(mindin) => (Outcome::new("done", format!("mindin {} at {}", mindin.version, home(Path::new(&mindin.command[0])))), Some(mindin.command)),
+        Err(cause) => (Outcome::new("failed", cause), None),
+    }
 }
 
-fn install_mindin(env: &Env, hooks: &mut dyn Hooks) -> (Outcome, Option<Vec<String>>) {
-    if let Err(error) = hooks.outside(MINDIN_INSTALL_ONLY) {
-        return (Outcome::new("failed", format!("mindin's installer stopped: {error}")), None);
-    }
-    match installed_mindin(env) {
-        Some(mindin) => (Outcome::new("done", format!("mindin at {}", home(&mindin))), Some(vec![mindin.to_string_lossy().to_string()])),
-        None => (Outcome::new("failed", "mindin's installer ran, but mindin is neither on PATH nor in ~/.local/bin"), None),
+// A mindin step that asks nothing runs with its output kept, and its last line is the cause when it fails.
+fn run_captured(command: &[String], args: &[String]) -> std::result::Result<(), String> {
+    let Some((program, rest)) = command.split_first() else { return Err("the vault command is empty".to_string()) };
+    let words: Vec<&str> = rest.iter().chain(args).map(String::as_str).collect();
+    match crate::sh::attempt(program, &words, None) {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(said)) => Err(stopped(Some(1), None, said.lines().map(str::trim).rfind(|line| !line.is_empty()).unwrap_or_default())),
+        Err(error) => Err(error),
     }
 }
 
@@ -1220,12 +1383,24 @@ fn apply_row(row: &Planned, env: &Env, hooks: &mut dyn Hooks, installed: &mut Op
         Act::CodexPlugin(on) => codex_plugin(env, *on, &row.detail),
         Act::Rules(text) => rules(env, text),
         Act::InstallMindin => {
-            let (outcome, mindin) = install_mindin(env, hooks);
+            let (outcome, mindin) = install_mindin(env);
             *installed = mindin;
             outcome
         }
+        Act::SignIn => Outcome::new("skipped", "the sign-in happens on step 3 Vault"),
         Act::VaultSetup(command, flags) => match resolved(command, installed) {
-            Ok(command) => match hooks.outside(&setup_script(&command, flags)) {
+            Ok(command) if flags.first().is_some_and(|flag| flag == "--s3") && !s3_keys_set() => match hooks.outside(&setup_script(&command, flags)) {
+                Ok(()) => Outcome::new("done", row.detail.clone()),
+                Err(cause) => Outcome::new("failed", cause),
+            },
+            Ok(command) => match run_captured(&command, &[&["setup".to_string()], flags.as_slice()].concat()) {
+                Ok(()) => Outcome::new("done", row.detail.clone()),
+                Err(cause) => Outcome::new("failed", cause),
+            },
+            Err(outcome) => outcome,
+        },
+        Act::MindinSignals(command, on) => match resolved(command, installed) {
+            Ok(command) => match run_captured(&command, &["setup".to_string(), "--signals".to_string(), yes_no(*on).to_string()]) {
                 Ok(()) => Outcome::new("done", row.detail.clone()),
                 Err(cause) => Outcome::new("failed", cause),
             },
@@ -1293,7 +1468,7 @@ impl Hooks for Plain {
 pub fn without_asking(env: &Env, asking: Asking) -> Vec<(String, Outcome)> {
     let facts = Facts::read(env);
     if asking == Asking::Yes {
-        let planned: Vec<Planned> = Guide::new(facts.clone(), Step::Review).plan().into_iter().filter(|row| !matches!(row.act, Act::InstallMindin | Act::VaultSetup(..))).collect();
+        let planned: Vec<Planned> = Guide::new(facts.clone(), Step::Review).plan().into_iter().filter(|row| !matches!(row.act, Act::InstallMindin | Act::SignIn | Act::VaultSetup(..) | Act::MindinSignals(..))).collect();
         return planned.iter().map(|row| match &row.act {
             Act::Signals(_) => (label(row), Outcome::new("skipped", "error signals stay off until you say yes in kebbie setup")),
             Act::Keys(..) => {
@@ -1564,6 +1739,7 @@ impl Guide {
                     lines.push(self.option(Spot::Check(at), Self::check_mark(on, found), label.to_string(), self.agent_line(agent), found));
                 }
             }
+            Step::Vault if self.vault_job.is_some() => lines.extend(self.job_lines()),
             Step::Vault => {
                 for (at, place) in Place::ALL.into_iter().enumerate() {
                     lines.push(self.place_line(at, place));
@@ -1586,15 +1762,12 @@ impl Guide {
                 }
             }
             Step::Signals => {
-                let labels = match (facts.signals_set, facts.signals) {
-                    (false, _) => [("Yes, turn them on", "writes signals = true under [report]"), ("No, keep them off", "writes signals = false under [report]")],
-                    (true, true) => [("Keep them on", "signals = true stays under [report]"), ("Turn them off", "writes signals = false under [report]")],
-                    (true, false) => [("Turn them on", "writes signals = true under [report]"), ("Keep them off", "signals = false stays under [report]")],
-                };
-                for (at, (label, about)) in labels.into_iter().enumerate() {
-                    lines.push(self.option(Spot::Choice(at), Self::radio(answers.signals == at), label.to_string(), about.to_string(), true));
-                }
+                lines.push(self.option(Spot::Check(0), Self::check_mark(answers.signals, true), "kebbie error signals".to_string(), "on a crash: kebbie's version, your OS, what failed and a count; daily, a random install id".to_string(), true));
+                let usage = self.usage_asked();
+                let about = if usage { "a random install id, mindin's version, your OS and CPU and how mindin runs" } else { "only with a mindin vault, chosen on step 3" };
+                lines.push(self.option(Spot::Check(1), Self::check_mark(answers.usage && usage, usage), "mindin usage data, once a day".to_string(), about.to_string(), usage));
                 lines.push(Line::default());
+                lines.push(Line::from(Span::styled("mindin gets your answer from here and does not ask again.", style(SUBTEXT))));
                 lines.push(Line::from(Span::styled("A bug report with text is always shown to you first and sent only on your y.", style(SUBTEXT))));
             }
             Step::Review if self.done => lines.extend(self.done_lines(width)),
@@ -1631,8 +1804,14 @@ impl Guide {
     fn hint(&self) -> String {
         match self.step {
             _ if self.applied.is_some() && !self.done => "applying…".to_string(),
-            _ if self.applied.is_some() => "any key opens your board".to_string(),
+            _ if self.applied.is_some() => {
+                let retry = if self.failed_rows().is_empty() { "" } else { "r tries the failed steps again · " };
+                let phone = if self.offers_hub() { "h connects your phone · " } else { "" };
+                format!("{retry}{phone}⏎ opens your board")
+            }
+            Step::Vault if self.vault_job.is_some() => self.job_hint(),
             Step::Name => "type to change · ← → move in the text · ⏎ next · esc quit".to_string(),
+            Step::Signals => "↑ ↓ choose · space toggle · ⏎ next · ← back · s skip · esc quit".to_string(),
             Step::Vault if self.typed().is_some() => "type to change · ← → move in the text · ↑ ↓ choose · ⏎ next · esc quit".to_string(),
             Step::Review => "⏎ apply all · ← back · esc quit without writing".to_string(),
             step => {
@@ -1694,17 +1873,154 @@ impl Guide {
     }
 
     fn done_lines(&self, width: usize) -> Vec<Line<'static>> {
-        let changed: Vec<(String, Outcome)> = self.applied.iter().flatten().filter(|(_, outcome)| !matches!(outcome.verb, "already" | "skipped")).cloned().collect();
-        let mut lines: Vec<Line<'static>> = changed.iter().flat_map(|(step, outcome)| row_lines(step, outcome, width, true)).collect();
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        for (at, (step, outcome)) in self.applied.iter().flatten().enumerate().filter(|(_, (_, outcome))| !matches!(outcome.verb, "already" | "skipped")) {
+            lines.extend(row_lines(step, outcome, width, true));
+            if outcome.verb == "failed" {
+                let later = self.planned.get(at).and_then(|row| self.later(&row.act)).map_or(String::new(), |command| format!(" · or later: {command}"));
+                let column = width.saturating_sub(DETAIL_AT).max(16);
+                lines.extend(wrapped(&format!("r tries it again{later}"), column).into_iter().map(|said| Line::from(vec![Span::raw(" ".repeat(DETAIL_AT)), Span::styled(said, style(MUTED))])));
+            }
+        }
+        let failed = !self.failed_rows().is_empty();
+        let headline = self.headline();
         for said in &self.ending {
             lines.push(match (said.as_str(), said.get(..23), said.get(23..)) {
-                (_, _, _) if said.starts_with(DONE) => Line::from(vec![Span::styled(DONE, style(GREEN)), Span::styled(said[DONE.len()..].to_string(), style(SUBTEXT))]),
+                (_, _, _) if said.starts_with(DONE) => Line::from(vec![Span::styled(DONE, style(GREEN)), Span::styled(headline[DONE.len()..].to_string(), style(if failed { RED } else { GREEN })), Span::styled(said[DONE.len()..].to_string(), style(SUBTEXT))]),
                 (NEXT, _, _) => Line::from(Span::styled(NEXT, bold(MAUVE))),
                 (_, Some(command), Some(why)) => Line::from(vec![Span::styled(command.to_string(), style(TEXT)), Span::styled(why.to_string(), style(SUBTEXT))]),
                 _ => Line::from(Span::styled(said.clone(), style(TEXT))),
             });
         }
         lines
+    }
+
+    fn spinner(&self) -> &'static str {
+        const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let at = self.vault_job.as_ref().map_or(0, |job| job.started.elapsed().as_millis() / 100) as usize;
+        FRAMES[at % FRAMES.len()]
+    }
+
+    // Why the background step stopped, in words, and what r does about it.
+    fn failure_lines(&self, failure: &Failure) -> Vec<Line<'static>> {
+        let server = self.server_address().unwrap_or_default();
+        let (said, retry) = match failure.kind.as_str() {
+            "expired" => ("The code expired before it was approved.".to_string(), "r gets a new code"),
+            "denied" => ("The sign-in was denied in the browser.".to_string(), "r gets a new code"),
+            "unreachable" if crate::hub::http::local_network(&self.facts.os, &failure.message, failure.errno) => (format!("{}.", crate::hub::http::LOCAL_NETWORK), "r tries again"),
+            "unreachable" => (format!("{} did not answer: {}", crate::hub::host(&server), failure.message), "r tries again"),
+            "old" => ("This mindin is too old to sign in from here.".to_string(), "r installs the newest mindin and signs in"),
+            "install" => (format!("{}.", failure.message.trim_end_matches('.')), "r runs the installer again"),
+            _ => (format!("The sign-in stopped: {}", failure.message), "r tries again"),
+        };
+        vec![Line::from(vec![Span::styled("✗ ", style(RED)), Span::styled(said, style(TEXT))]), Line::default(), Line::from(vec![Span::styled(retry[..1].to_string(), bold(MAUVE)), Span::styled(retry[1..].to_string(), style(SUBTEXT))])]
+    }
+
+    fn job_lines(&self) -> Vec<Line<'static>> {
+        let Some(job) = &self.vault_job else { return Vec::new() };
+        let mut lines = Vec::new();
+        let tick = |text: String| Line::from(vec![Span::styled("✓ ", style(GREEN)), Span::styled(text, style(TEXT))]);
+        let waiting = |text: &str| Line::from(vec![Span::styled(format!("{text} "), style(SUBTEXT)), Span::styled(self.spinner(), style(MAUVE))]);
+        match (&job.mindin, &job.state) {
+            (Some(mindin), _) => lines.push(tick(format!("mindin {} installed", mindin.version))),
+            (None, State::Waiting | State::Installing) if job.plan.install.is_some() => {
+                lines.push(waiting("installing mindin"));
+                if !job.progress.is_empty() {
+                    lines.push(Line::from(Span::styled(format!("  {}", job.progress), style(MUTED))));
+                }
+            }
+            _ => {}
+        }
+        if job.plan.sign_in.is_none() {
+            match &job.state {
+                State::Done => lines.extend([Line::default(), Line::from(vec![Span::styled("⏎", bold(MAUVE)), Span::styled(format!(" next: {}", self.next_step().title()), style(SUBTEXT))])]),
+                State::Failed(failure) => lines.extend(self.failure_lines(failure)),
+                _ => {}
+            }
+            return lines;
+        }
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
+        if let Some(signed) = &job.signed {
+            lines.push(tick(signed_words(signed)));
+            let about: Vec<String> = signed.layout.iter().map(|layout| format!("layout {layout}")).chain(signed.notes.map(|notes| format!("{notes} notes"))).collect();
+            if !about.is_empty() {
+                lines.push(Line::from(Span::styled(format!("  {}", about.join(" · ")), style(SUBTEXT))));
+            }
+            if let Some(files) = job.moved {
+                lines.push(tick(format!("moved {files} files into it")));
+            }
+        }
+        match &job.state {
+            State::Waiting | State::Installing => {}
+            State::Starting if job.signed.is_none() => lines.push(waiting("starting the sign-in")),
+            State::Starting => {}
+            State::Code(code) => {
+                lines.push(Line::from(Span::styled("Sign this machine in", bold(TEXT))));
+                lines.push(Line::from(vec![Span::styled("Open ", style(TEXT)), Span::styled(code.uri.clone(), style(MAUVE)), Span::styled(" and enter the code", style(TEXT))]));
+                lines.push(Line::default());
+                let large: String = code.code.chars().map(|character| character.to_string()).collect::<Vec<_>>().join(" ");
+                lines.push(Line::from(vec![Span::raw("    "), Span::styled(large, bold(MAUVE).bg(SURFACE))]));
+                lines.push(Line::default());
+                lines.push(Line::from(Span::styled("There you pick the vault this machine uses, an existing one or a new one.", style(SUBTEXT))));
+                lines.push(Line::default());
+                let opened = if job.opened { "  opened" } else { "" };
+                let copied = if job.copied { "  copied" } else { "" };
+                lines.push(Line::from(vec![Span::styled("o", bold(MAUVE)), Span::styled(format!(" opens the browser{opened}   "), style(SUBTEXT)), Span::styled("c", bold(MAUVE)), Span::styled(format!(" copies the code{copied}"), style(SUBTEXT))]));
+                lines.push(waiting("waiting for you to approve"));
+            }
+            State::Move { files, source } => {
+                lines.push(Line::default());
+                lines.push(Line::from(Span::styled(format!("This machine's vault was {source}, with {files} files."), style(TEXT))));
+                lines.push(Line::from(vec![Span::styled("Bring them into the server vault?  ", style(TEXT)), Span::styled("y", bold(MAUVE)), Span::styled(" brings them · ", style(SUBTEXT)), Span::styled("n", bold(MAUVE)), Span::styled(" leaves them where they are", style(SUBTEXT))]));
+            }
+            State::Moving => lines.push(waiting("moving the notes")),
+            State::Done => lines.extend([Line::default(), Line::from(vec![Span::styled("⏎", bold(MAUVE)), Span::styled(format!(" next: {}", self.next_step().title()), style(SUBTEXT))])]),
+            State::Failed(failure) => lines.extend(self.failure_lines(failure)),
+        }
+        lines
+    }
+
+    fn job_hint(&self) -> String {
+        match self.vault_job.as_ref().map(|job| &job.state) {
+            Some(State::Code(_)) => "o open the browser · c copy the code · e change the vault · ← back · esc quit".to_string(),
+            Some(State::Move { .. }) => "y bring the notes · n leave them · esc quit".to_string(),
+            Some(State::Moving) => "esc quit".to_string(),
+            Some(State::Done) => "⏎ next · e change the vault · ← back · esc quit".to_string(),
+            Some(State::Failed(_)) => "r try again · e change the vault · ← back · esc quit".to_string(),
+            _ => "e change the vault · ← back · esc quit".to_string(),
+        }
+    }
+
+    fn failed_rows(&self) -> Vec<usize> {
+        self.applied.iter().flatten().enumerate().filter(|(_, (_, outcome))| outcome.verb == "failed").map(|(at, _)| at).collect()
+    }
+
+    fn headline(&self) -> String {
+        match self.failed_rows().len() {
+            0 => DONE.to_string(),
+            1 => format!("{DONE}, 1 step failed"),
+            failed => format!("{DONE}, {failed} steps failed"),
+        }
+    }
+
+    // The command that does a failed row's work later, outside this guide.
+    fn later(&self, act: &Act) -> Option<String> {
+        let claude = Path::new(&self.facts.claude_bin).file_name().map_or(self.facts.claude_bin.clone(), |name| name.to_string_lossy().to_string());
+        Some(match act {
+            Act::Nothing => return None,
+            Act::Link | Act::Keys(..) => "kebbie setup --yes".to_string(),
+            Act::ClaudePlugin => "kebbie setup claude --yes".to_string(),
+            Act::CodexPlugin(_) | Act::Rules(_) | Act::CodexVault(_) => "kebbie setup codex --yes".to_string(),
+            Act::Name(_) | Act::Sources(_) | Act::Signals(_) | Act::VaultCommand(_) => "kebbie setup".to_string(),
+            Act::InstallMindin => MINDIN_INSTALL_ONLY.to_string(),
+            Act::SignIn => "kebbie setup vault".to_string(),
+            Act::VaultSetup(command, flags) => setup_script(&shown_command(command), flags),
+            Act::MindinSignals(command, on) => setup_script(&shown_command(command), &["--signals".to_string(), yes_no(*on).to_string()]),
+            Act::ClaudeVault => setup::steps(&claude, &self.facts.vault, self.facts.gronare).iter().map(|step| step.join(" ")).collect::<Vec<_>>().join(", then "),
+            Act::Repair(_) => "kebbie doctor".to_string(),
+        })
     }
 
     fn phone(&self) -> Vec<Line<'static>> {
@@ -1726,7 +2042,8 @@ impl Guide {
             Some(rows) => {
                 let planned = self.plan();
                 let mut lines: Vec<String> = rows.iter().enumerate().map(|(at, (step, outcome))| outcome.line(&planned.get(at).map_or(step.clone(), label))).collect();
-                lines.extend(self.ending.iter().cloned());
+                let headline = self.headline();
+                lines.extend(self.ending.iter().map(|said| said.strip_prefix(DONE).map_or_else(|| said.clone(), |rest| format!("{headline}{rest}"))));
                 if phone {
                     lines.extend(PHONE.iter().map(|line| line.to_string()));
                 }
@@ -1740,14 +2057,20 @@ fn running(script: &str) -> String {
     format!("\n  \x1b[2m→ {script}\x1b[0m\n")
 }
 
+type Again = (Vec<(String, Outcome)>, Vec<usize>);
+
 struct Screen<'a> {
     terminal: &'a mut ratatui::DefaultTerminal,
     guide: &'a mut Guide,
+    again: Option<Again>,
 }
 
 impl Hooks for Screen<'_> {
     fn progress(&mut self, rows: &[(String, Outcome)]) {
-        self.guide.applied = Some(rows.to_vec());
+        self.guide.applied = Some(match &self.again {
+            Some((before, at)) => merged(before, at, rows),
+            None => rows.to_vec(),
+        });
         let guide = &*self.guide;
         let _ = self.terminal.draw(|frame| guide.draw(frame));
     }
@@ -1764,20 +2087,50 @@ impl Hooks for Screen<'_> {
     }
 }
 
+// The rows tried again take the places of the failed ones they were.
+fn merged(before: &[(String, Outcome)], at: &[usize], again: &[(String, Outcome)]) -> Vec<(String, Outcome)> {
+    let mut rows = before.to_vec();
+    for (place, row) in at.iter().zip(again) {
+        if let Some(slot) = rows.get_mut(*place) {
+            *slot = row.clone();
+        }
+    }
+    rows
+}
+
+impl Guide {
+    // Only the failed rows run again, each in its place on the done list.
+    fn retried(&self) -> (Vec<(String, Outcome)>, Vec<usize>, Vec<Planned>) {
+        let at = self.failed_rows();
+        let rows = at.iter().filter_map(|place| self.planned.get(*place).cloned()).collect();
+        (self.applied.clone().unwrap_or_default(), at, rows)
+    }
+}
+
 fn ask(env: &Env, at: Step) -> Result<(Next, Guide)> {
     use ratatui::crossterm::event::{self, Event, KeyEventKind};
     let mut guide = Guide::new(Facts::read(env), at);
     let mut terminal = crate::board::terminal::init_terminal();
     let result = (|| -> Result<Next> {
         loop {
+            guide.tick();
             terminal.draw(|frame| guide.draw(frame)).map_err(|error| error.to_string())?;
+            if !event::poll(std::time::Duration::from_millis(100)).map_err(|error| error.to_string())? {
+                continue;
+            }
             match event::read().map_err(|error| error.to_string())? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => match guide.key(key) {
                     Next::Stay => {}
+                    Next::Retry => {
+                        let (before, at, rows) = guide.retried();
+                        let again = apply(&rows, env, &mut Screen { terminal: &mut terminal, guide: &mut guide, again: Some((before.clone(), at.clone())) });
+                        guide.applied = Some(merged(&before, &at, &again));
+                    }
                     Next::Apply => {
                         let planned = guide.plan();
+                        guide.planned = planned.clone();
                         guide.applied = Some(Vec::new());
-                        let rows = apply(&planned, env, &mut Screen { terminal: &mut terminal, guide: &mut guide });
+                        let rows = apply(&planned, env, &mut Screen { terminal: &mut terminal, guide: &mut guide, again: None });
                         let codex = guide.codex_on().then(|| login::codex(guide.facts.codex_bin.as_deref(), login::TIMEOUT));
                         guide.ending = ending(codex, &crate::doctor::checks(&crate::doctor::Env::current()), &std::env::var("SHELL").unwrap_or_default());
                         guide.ending.splice(0..0, crate::backlog_style::sync_here());
@@ -1976,6 +2329,23 @@ mod tests {
         guide
     }
 
+    fn signed(name: &str) -> Signed {
+        Signed { server: "https://notes.example.org".to_string(), vault: name.to_lowercase(), vault_name: name.to_string(), access: "read and write".to_string(), layout: Some("default".to_string()), notes: Some(128), already: false }
+    }
+
+    fn feed(guide: &mut Guide, msgs: Vec<setup_vault::Msg>) {
+        for msg in msgs {
+            guide.vault_job.as_mut().expect("a job runs").take(msg);
+        }
+        guide.absorb();
+    }
+
+    fn finish_job(guide: &mut Guide) {
+        use setup_vault::{Msg, Said};
+        let mindin = Mindin { command: vec!["/opt/mindin".to_string()], version: "0.21.0".to_string() };
+        feed(guide, vec![Msg::Installed(Ok(mindin)), Msg::Said(Said::Signed(signed("Work"))), Msg::Said(Said::Done)]);
+    }
+
     fn vault_rows(guide: &Guide) -> Vec<String> {
         plan(guide).into_iter().filter(|row| row.starts_with("mindin ") || row.contains(" vault ")).collect()
     }
@@ -1985,7 +2355,7 @@ mod tests {
         let lab = Lab::new("guide-walk");
         let mut guide = fresh(&lab);
         let shown = screen(&guide);
-        assert!(shown.contains("kebbie setup  step 1 of 6") && shown.contains("▸ 1 This machine") && shown.contains("· 2 Agents") && shown.contains("· 3 Vault") && shown.contains("· 4 Backlog") && shown.contains("· 5 Error signals") && shown.contains("· 6 Review and apply"), "{shown}");
+        assert!(shown.contains("kebbie setup  step 1 of 6") && shown.contains("▸ 1 This machine") && shown.contains("· 2 Agents") && shown.contains("· 3 Vault") && shown.contains("· 4 Backlog") && shown.contains("· 5 Signals") && shown.contains("· 6 Review and apply"), "{shown}");
         for gone in ["Plugin", "Login", "Approvals", "Updates", "herdr keys", "Vault for kebbie", "Vault in Codex"] {
             assert!(!shown.contains(gone), "{gone} is no step of its own: {shown}");
         }
@@ -2011,7 +2381,7 @@ mod tests {
         assert!(guide.answers.codex, "an agent that is not found cannot be ticked or unticked");
         press(&mut guide, &[KeyCode::Enter]);
         assert_eq!(guide.step, Step::Vault);
-        assert!(screen(&guide).contains("( ) Hosted mindin    coming soon") && screen(&guide).contains("▸ (•) None             kebbie keeps tasks without one") && screen(&guide).contains("runs  mindin, installed when you apply"), "{}", screen(&guide));
+        assert!(screen(&guide).contains("( ) Hosted mindin    coming soon") && screen(&guide).contains("▸ (•) None             kebbie keeps tasks without one") && screen(&guide).contains("runs  mindin, installed on ⏎"), "{}", screen(&guide));
         press(&mut guide, &[KeyCode::Enter]);
         assert_eq!(guide.step, Step::Backlog);
         assert!(screen(&guide).contains("[x] Local file  · an item file each in backlog/ beside your config · new items go here"), "{}", screen(&guide));
@@ -2021,7 +2391,7 @@ mod tests {
         assert_eq!(guide.answers.chosen_sources(), [Source::Vault, Source::Linear], "Linear sits beside either");
         press(&mut guide, &[KeyCode::Char(' '), KeyCode::Enter]);
         assert_eq!(guide.step, Step::Signals);
-        assert!(screen(&guide).contains("never your code, paths or text") && screen(&guide).contains("A bug report with text is always shown to you first"));
+        assert!(screen(&guide).contains("Neither ever sends notes, names, paths or your vault's address.") && screen(&guide).contains("A bug report with text is always shown to you first"));
         press(&mut guide, &[KeyCode::Enter]);
         assert_eq!(guide.step, Step::Review);
         let codex = format!("{}/codex", lab.dir.display());
@@ -2107,7 +2477,7 @@ mod tests {
         assert_eq!(rerun.answers.name, "mac");
         assert_eq!(rerun.answers.chosen_sources(), [Source::Vault]);
         let shown = screen(&rerun);
-        assert!(shown.contains("✓ in place: machine.name is \"mac\"") && shown.lines().any(|line| line.contains("✓") && line.contains("Error signals")), "the rail marks what is in place: {shown}");
+        assert!(shown.contains("✓ in place: machine.name is \"mac\"") && shown.lines().any(|line| line.contains("✓") && line.contains("5 Signals")), "the rail marks what is in place: {shown}");
         rerun.go(Step::Review);
         let plan = plan(&rerun);
         for row in ["kebbie already machine \"mac\"", "herdr already keys kebbie's keys are bound in herdr", "kebbie already backlog vault", "kebbie already signals off", "Claude Code already plugin kebbie's plugin"] {
@@ -2122,12 +2492,13 @@ mod tests {
         let mut guide = vault_step(&lab, vec![answering(found("kebbie's [vault] command", "/opt/old-vault"), |probe| probe.setup = false)], Some("/opt/old-vault"));
         guide.go(Step::Name);
         type_text(&mut guide, "work");
-        press(&mut guide, &[KeyCode::Enter, KeyCode::Enter, KeyCode::Down]);
-        type_text(&mut guide, "https://notes.example.org");
+        press(&mut guide, &[KeyCode::Enter, KeyCode::Enter]);
+        guide.answers.vault = Where { place: Some(Place::S3), endpoint: "https://s3.example.com".to_string(), bucket: "notes".to_string(), ..Where::default() };
+        guide.mindin = Some(Mindin { command: vec!["/opt/mindin".to_string()], version: "0.21.0".to_string() });
         guide.go(Step::Review);
-        let mut fake = Fake { installs: Some(lab.machine.home.join(".local/bin")), config: Some(lab.dir.join("kebbie/config.toml")), ..Fake::new() };
+        let mut fake = Fake { config: Some(lab.dir.join("kebbie/config.toml")), ..Fake::new() };
         let rows = apply(&guide.plan(), &lab.env(), &mut fake);
-        assert_eq!(fake.ran.len(), 2, "{:?}", fake.ran);
+        assert_eq!(fake.ran, ["/opt/mindin setup --s3 notes --endpoint https://s3.example.com --signals no"], "only a bucket's setup leaves the screen, to ask for its keys hidden");
         assert!(fake.config_outside.iter().all(|config| config.contains("[machine]\nname = \"work\"\n")), "the name is in config.toml before anything leaves the screen: {:?}", fake.config_outside);
         assert_eq!(rows.iter().map(|(step, _)| step.as_str()).collect::<Vec<_>>(), guide.plan().iter().map(|row| row.step).collect::<Vec<_>>(), "the rows still come back in the plan's order");
         assert_eq!(fake.drawn, rows.len());
@@ -2148,6 +2519,9 @@ mod tests {
         assert_eq!(guide.answers.vault.chosen(), Place::Server);
         press(&mut guide, &[KeyCode::Down]);
         type_text(&mut guide, "https://notes.example.org");
+        press(&mut guide, &[KeyCode::Enter]);
+        assert_eq!(guide.step, Step::Vault, "⏎ installs mindin and signs in before the next step");
+        finish_job(&mut guide);
         press(&mut guide, &[KeyCode::Enter]);
         assert_eq!(guide.step, Step::Backlog);
         assert_eq!(guide.answers.chosen_sources(), [Source::Vault], "a vault chosen a step before is where new items go");
@@ -2292,23 +2666,30 @@ mod tests {
         press(&mut guide, &[KeyCode::Down]);
         type_text(&mut guide, "https://notes.example.org");
         assert!(screen(&guide).contains("▸ address   https://notes.example.org▏"), "typing replaces the address it was given: {}", screen(&guide));
-        assert!(screen(&guide).contains("runs  mindin, installed when you apply: uv run -q --project /src/notes-vault-mcp notes-vault-mcp has no setup"), "{}", screen(&guide));
+        assert!(screen(&guide).contains("runs  mindin, installed on ⏎: uv run -q --project /src/notes-vault-mcp notes-vault-mcp has no setup"), "{}", screen(&guide));
         press(&mut guide, &[KeyCode::Enter]);
+        let job = guide.vault_job.as_ref().expect("⏎ starts mindin's install and sign-in in the background");
+        assert_eq!((job.plan.install.as_ref().map(|install| install.script.as_str()), job.plan.sign_in.clone()), (Some(MINDIN_INSTALL_ONLY), Some(vec!["--server".to_string(), "https://notes.example.org".to_string()])));
+        let mindin = lab.dir.join("bin/mindin").display().to_string();
+        std::fs::create_dir_all(lab.dir.join("bin")).unwrap();
+        crate::executable::write(lab.dir.join("bin/mindin"), "#!/bin/sh\n").unwrap();
+        feed(&mut guide, vec![setup_vault::Msg::Installed(Ok(Mindin { command: vec![mindin.clone()], version: "0.21.0".to_string() })), setup_vault::Msg::Said(setup_vault::Said::Signed(signed("Work"))), setup_vault::Msg::Said(setup_vault::Said::Done)]);
+        press(&mut guide, &[KeyCode::Enter]);
+        assert_eq!(guide.step, Step::Backlog);
         guide.go(Step::Review);
         let rows = vault_rows(&guide);
-        assert_eq!(rows[..3], [
-            format!("mindin to do mindin installed first, since {kept} has no setup"),
-            "mindin to do vault server your own server https://notes.example.org".to_string(),
-            "kebbie to do vault command vault.command = the mindin it installs".to_string(),
-        ], "a vault command older than mindin cannot move the vault: {rows:?}");
-        assert!(screen(&guide).contains("runs: mindin setup --server https://notes.example.org in this terminal; it signs this machine in through the browser when it is not yet"), "{}", screen(&guide));
+        assert_eq!(rows[..4], [
+            "mindin already mindin mindin 0.21.0, installed on step 3".to_string(),
+            "mindin already vault server your own server https://notes.example.org · signed in: vault Work, read and write".to_string(),
+            "mindin to do usage data off".to_string(),
+            format!("kebbie to do vault command vault.command = \"{mindin}\""),
+        ], "a vault command older than mindin cannot move the vault, so mindin was installed on step 3: {rows:?}");
+        assert!(!screen(&guide).contains("in this terminal"), "{}", screen(&guide));
         let vault: Vec<Planned> = guide.plan().into_iter().filter(|row| row.group == MINDIN || matches!(row.step, "vault command" | "codex vault")).collect();
-        let mut fake = Fake { installs: Some(lab.machine.home.join(".local/bin")), ..Fake::new() };
+        let mut fake = Fake::new();
         let done = apply(&vault, &lab.env(), &mut fake);
-        let mindin = lab.machine.home.join(".local/bin/mindin").display().to_string();
-        assert_eq!(fake.ran, ["curl -fsSL https://mindin.dev/install.sh | sh -s -- --no-setup".to_string(), format!("{mindin} setup --server https://notes.example.org")], "the installer asks nothing, then mindin's setup asks once, each outside the guide's screen");
+        assert!(fake.ran.is_empty(), "no mindin step leaves the screen: {:?}", fake.ran);
         assert!(done.iter().all(|(_, outcome)| outcome.verb != "failed"), "{done:?}");
-        assert_eq!(running(&fake.ran[1]), format!("\n  \x1b[2m→ {mindin} setup --server https://notes.example.org\x1b[0m\n"), "the line before a step outside sits indented and dim, as the installers' own do");
         assert_eq!(lab.config(), format!("[vault]\ncommand = \"{mindin}\"\n"));
         assert!(lab.codex_config().starts_with("# mine\nmodel_reasoning_effort = \"high\"\n") && lab.codex_config().contains(&format!("command = \"{mindin}\"")), "{}", lab.codex_config());
     }
@@ -2329,9 +2710,19 @@ mod tests {
         press(&mut guide, &[KeyCode::Enter]);
         guide.go(Step::Review);
         assert_eq!(vault_rows(&guide)[..2], ["mindin to do vault folder the folder /srv/my notes".to_string(), "kebbie to do vault command vault.command = \"mindin\"".to_string()]);
+        let said = lab.dir.join("mindin-said");
+        let mindin = lab.dir.join("bin/mindin").display().to_string();
+        std::fs::create_dir_all(lab.dir.join("bin")).unwrap();
+        crate::executable::write(lab.dir.join("bin/mindin"), format!("#!/bin/sh\nprintf '%s|' \"$@\" > '{}'\n", said.display())).unwrap();
+        let rows: Vec<Planned> = guide.plan().into_iter().filter(|row| row.group == MINDIN).map(|row| match row.act {
+            Act::VaultSetup(_, flags) => Planned { act: Act::VaultSetup(Command::Found(vec![mindin.clone()]), flags), ..row },
+            _ => row,
+        }).collect();
+        assert!(screen(&guide).contains("runs: mindin setup --folder '/srv/my notes' --signals no on this screen; the folder must exist"), "{}", screen(&guide));
         let mut fake = Fake::new();
-        apply(&guide.plan().into_iter().filter(|row| row.group == MINDIN).collect::<Vec<_>>(), &lab.env(), &mut fake);
-        assert_eq!(fake.ran, ["mindin setup --folder '/srv/my notes'"], "no installer, and a path with a space reaches the shell whole");
+        let done = apply(&rows, &lab.env(), &mut fake);
+        assert!(fake.ran.is_empty() && done[0].1.verb == "done", "mindin's setup for a folder asks nothing, so it runs on this screen: {done:?}");
+        assert_eq!(std::fs::read_to_string(&said).unwrap(), "setup|--folder|/srv/my notes|--signals|no|", "no installer, a path with a space reaches mindin whole, and the usage answer goes along");
         press(&mut guide, &[KeyCode::Left, KeyCode::Left, KeyCode::Left, KeyCode::Down, KeyCode::Down]);
         assert_eq!(guide.answers.vault.chosen(), Place::None);
         guide.go(Step::Review);
@@ -2367,30 +2758,86 @@ mod tests {
         press(&mut guide, &[KeyCode::Enter]);
         guide.go(Step::Review);
         assert_eq!(vault_rows(&guide)[..2], ["mindin to do vault bucket the bucket notes/team at https://s3.example.com".to_string(), "kebbie already vault command vault.command = \"uvx mindin\"".to_string()]);
-        assert!(screen(&guide).contains("runs: uvx mindin setup --s3 notes --endpoint https://s3.example.com --prefix team in this terminal; it asks for the access key and the secret, hidden"), "{}", screen(&guide));
+        assert!(screen(&guide).contains("runs: uvx mindin setup --s3 notes --endpoint https://s3.example.com --prefix team --signals no in this terminal; it asks for the access key and the secret, hidden"), "{}", screen(&guide));
     }
 
     #[test]
-    fn with_nothing_found_a_place_chosen_installs_mindin_first() {
+    fn with_nothing_found_a_server_chosen_installs_mindin_and_signs_in_on_the_vault_step() {
+        use setup_vault::{Code, Failure, Msg, Said};
         let lab = Lab::new("guide-mindin");
         let mut guide = fresh(&lab);
         guide.go(Step::Vault);
         let shown = screen(&guide);
-        assert!(shown.contains("( ) Your own server  address") && shown.contains("▸ (•) None") && shown.contains("runs  mindin, installed when you apply"), "{shown}");
+        assert!(shown.contains("( ) Your own server  address") && shown.contains("▸ (•) None") && shown.contains("runs  mindin, installed on ⏎"), "{shown}");
         press(&mut guide, &[KeyCode::Up, KeyCode::Up, KeyCode::Up, KeyCode::Down]);
         assert_eq!((guide.answers.vault.chosen(), guide.typed()), (Place::Server, Some(Field::Address)));
-        type_text(&mut guide, "https://vault.example.com");
+        type_text(&mut guide, "https://notes.example.org");
+        guide.go(Step::Review);
+        assert_eq!(plan(&guide)[..2], ["mindin to do mindin installed first, then it runs the vault".to_string(), "mindin to do vault server your own server https://notes.example.org · signs in on step 3".to_string()]);
+        assert!(matches!(guide.key(KeyEvent::from(KeyCode::Enter)), Next::Stay), "⏎ on the review does not apply a server not yet signed in to");
+        assert_eq!(guide.step, Step::Vault, "it goes back to the vault step and starts there");
+        assert!(guide.vault_job.as_ref().is_some_and(|job| job.plan.install.is_some() && job.plan.command.is_none()));
+        assert!(screen(&guide).contains("installing mindin"), "{}", screen(&guide));
+        feed(&mut guide, vec![Msg::Installing("→ installing mindin with uv".to_string()), Msg::Installed(Ok(Mindin { command: vec!["/opt/mindin".to_string()], version: "0.21.0".to_string() })), Msg::Said(Said::Code(Code { uri: "https://notes.example.org/device".to_string(), link: "https://notes.example.org/device?code=WVVD-XQNR".to_string(), code: "WVVD-XQNR".to_string() }))]);
+        let shown = screen(&guide);
+        for line in ["✓ mindin 0.21.0 installed", "Sign this machine in", "Open https://notes.example.org/device and enter the code", "W V V D - X Q N R", "There you pick the vault this machine uses, an existing one or a new one.", "o opens the browser", "c copies the code", "waiting for you to approve", "o open the browser · c copy the code"] {
+            assert!(shown.contains(line), "{line:?} missing from:\n{shown}");
+        }
+        assert!(!shown.contains("( ) None"), "the sign-in takes the box: {shown}");
+        press(&mut guide, &[KeyCode::Enter]);
+        assert_eq!(guide.step, Step::Vault, "⏎ waits for the approval");
+        feed(&mut guide, vec![Msg::Said(Said::Signed(signed("Work"))), Msg::Said(Said::Done)]);
+        let shown = screen(&guide);
+        assert!(shown.contains("✓ signed in: vault Work, read and write") && shown.contains("layout default · 128 notes") && shown.contains("⏎ next: Backlog"), "{shown}");
+        press(&mut guide, &[KeyCode::Enter]);
+        assert_eq!(guide.step, Step::Backlog);
+        guide.go(Step::Review);
+        assert!(plan(&guide).contains(&"mindin already vault server your own server https://notes.example.org · signed in: vault Work, read and write".to_string()), "{:?}", plan(&guide));
+        assert!(matches!(guide.key(KeyEvent::from(KeyCode::Enter)), Next::Apply), "signed in, the review applies");
+
+        let mut failing = fresh(&lab);
+        failing.answers.vault = Where { place: Some(Place::Server), address: "https://192.168.1.20".to_string(), ..Where::default() };
+        failing.go(Step::Vault);
+        press(&mut failing, &[KeyCode::Enter]);
+        let code = Msg::Said(Said::Code(Code { uri: "https://192.168.1.20/device".to_string(), link: String::new(), code: "AAAA-BBBB".to_string() }));
+        let error = |kind: &str, message: &str, errno| Msg::Said(Said::Error(Failure { kind: kind.to_string(), message: message.to_string(), errno }));
+        feed(&mut failing, vec![Msg::Installed(Ok(Mindin { command: vec!["/opt/mindin".to_string()], version: "0.21.0".to_string() })), code.clone(), error("expired", "the code expired before it was approved; run login again", None)]);
+        assert!(screen(&failing).contains("✗ The code expired before it was approved.") && screen(&failing).contains("r gets a new code"), "{}", screen(&failing));
+        press(&mut failing, &[KeyCode::Char('r')]);
+        assert!(failing.vault_job.as_ref().is_some_and(|job| job.plan.install.is_none() && job.plan.command == Some(vec!["/opt/mindin".to_string()]) && job.state == State::Waiting), "r asks for a new code with the mindin just installed");
+        feed(&mut failing, vec![code, error("denied", "the sign-in was denied; no key was stored", None)]);
+        assert!(screen(&failing).contains("✗ The sign-in was denied in the browser."), "{}", screen(&failing));
+        press(&mut failing, &[KeyCode::Char('r')]);
+        feed(&mut failing, vec![error("unreachable", "[Errno 65] No route to host", Some(65))]);
+        assert!(screen(&failing).contains("✗ 192.168.1.20 did not answer: [Errno 65] No route to host"), "off macOS error 65 is no permission: {}", screen(&failing));
+        failing.facts.os = "macos".to_string();
+        let shown = screen(&failing);
+        assert!(shown.contains("System Settings → Privacy & Security → Local Network, then restart the terminal") && !shown.contains("did not answer"), "{shown}");
+        press(&mut failing, &[KeyCode::Char('e')]);
+        assert!(failing.vault_job.is_none() && screen(&failing).contains("(•) Your own server"), "e goes back to the choice");
+    }
+
+    #[test]
+    fn a_local_vault_this_machine_had_is_offered_to_move_into_the_server_vault_in_the_same_box() {
+        use setup_vault::{Msg, Said};
+        let lab = Lab::new("guide-mindin-move");
+        let mut guide = vault_step(&lab, vec![answering(found("mindin on PATH", "/opt/mindin"), |probe| {
+            probe.backend = "local".to_string();
+            probe.server.clear();
+        })], None);
+        guide.answers.vault = Where { place: Some(Place::Server), address: "https://notes.example.org".to_string(), ..Where::default() };
+        press(&mut guide, &[KeyCode::Enter]);
+        assert!(guide.vault_job.as_ref().is_some_and(|job| job.plan.install.is_none() && job.plan.command == Some(vec!["/opt/mindin".to_string()])), "a mindin with setup signs in without an install");
+        feed(&mut guide, vec![Msg::Said(Said::Signed(signed("Work"))), Msg::Said(Said::Move { files: 120, source: "the folder /srv/notes".to_string() })]);
+        let shown = screen(&guide);
+        assert!(shown.contains("This machine's vault was the folder /srv/notes, with 120 files.") && shown.contains("Bring them into the server vault?  y brings them · n leaves them where they are"), "{shown}");
+        press(&mut guide, &[KeyCode::Char('y')]);
+        assert_eq!(guide.vault_job.as_ref().map(|job| job.state.clone()), Some(State::Moving));
+        feed(&mut guide, vec![Msg::Said(Said::Moved { files: 120 }), Msg::Said(Said::Done)]);
+        assert!(screen(&guide).contains("✓ moved 120 files into it"), "{}", screen(&guide));
         press(&mut guide, &[KeyCode::Enter]);
         guide.go(Step::Review);
-        let rows = plan(&guide);
-        assert_eq!(rows[..2], ["mindin to do mindin installed first, then it runs the vault".to_string(), "mindin to do vault server your own server https://vault.example.com".to_string()], "the install and the setup come first, as the rest points at them");
-        assert!(rows.contains(&"kebbie to do vault command vault.command = the mindin it installs".to_string()) && rows.contains(&"Claude Code to do vault plugin the vault plugin vault@gronare".to_string()), "{rows:?}");
-        assert!(screen(&guide).contains(&format!("runs: {MINDIN_INSTALL_ONLY} first, in this terminal")), "{}", screen(&guide));
-        let vault: Vec<Planned> = guide.plan().into_iter().filter(|row| row.group == MINDIN || row.step == "vault command").collect();
-        let none = apply(&vault, &lab.env(), &mut Fake::new());
-        assert!(none[0].1.verb == "failed" && none[1].1.verb == "skipped" && none[2].1.detail.contains("mindin is not installed"), "an installer that leaves no mindin runs no setup and points nothing at it: {none:?}");
-        let yes: Vec<String> = Guide::new(guide.facts.clone(), Step::Review).plan().iter().map(|row| row.step.to_string()).collect();
-        assert!(!yes.contains(&"vault server".to_string()), "the default on a bare machine is no vault: {yes:?}");
+        assert!(plan(&guide).iter().any(|row| row.ends_with("signed in: vault Work, read and write · 120 files moved in")), "{:?}", plan(&guide));
     }
 
     #[test]
@@ -2463,24 +2910,41 @@ mod tests {
     }
 
     #[test]
-    fn error_signals_start_on_no_and_only_the_review_writes_the_answer() {
+    fn both_signals_start_off_and_the_review_passes_mindins_answer_to_mindin_on_this_screen() {
         let lab = Lab::new("guide-signals-consent");
-        let mut guide = fresh(&lab);
+        let said = lab.dir.join("mindin-said");
+        let mindin = lab.dir.join("bin/mindin");
+        std::fs::create_dir_all(lab.dir.join("bin")).unwrap();
+        crate::executable::write(&mindin, format!("#!/bin/sh\necho \"$@\" >> '{}'\necho 'Anonymous usage data: on'\n", said.display())).unwrap();
+        let mut guide = vault_step(&lab, vec![found("mindin on PATH", &mindin.display().to_string())], None);
         assert!(!guide.facts.signals_set && !guide.facts.signals);
         guide.go(Step::Signals);
         let shown = screen(&guide);
-        assert_eq!(guide.answers.signals, 1, "No is the answer until you pick yes");
-        assert!(shown.contains("Off until you say yes") && shown.contains("Yes, turn them on") && shown.contains("No, keep them off") && shown.contains("a random id made for this install"), "{shown}");
+        assert!(!guide.answers.signals && !guide.answers.usage, "both are off until you say yes");
+        for line in ["Both are off until you say yes. Neither ever sends notes, names, paths or your vault's address.", "▸ [ ] kebbie error signals", "[ ] mindin usage data, once a day  · a random install id", "mindin gets your answer from here and does not ask again."] {
+            assert!(shown.contains(line), "{line:?} missing from:\n{shown}");
+        }
         press(&mut guide, &[KeyCode::Enter]);
-        assert_eq!((guide.step, guide.answers.signals), (Step::Review, 1), "⏎ takes the No");
-        let review = screen(&guide);
-        assert!(plan(&guide).contains(&"kebbie to do signals off".to_string()) && review.lines().any(|line| line.contains("signals") && line.contains("off") && !line.contains("Error signals")), "a No is written too and listed on the review: {review}");
-        guide.answers.signals = 0;
-        let rows: Vec<Planned> = guide.plan().into_iter().filter(|row| row.step == "signals").collect();
-        assert_eq!(rows.iter().map(|row| format!("{} {}", row.verb, row.detail)).collect::<Vec<_>>(), ["to do on"]);
+        assert_eq!(guide.step, Step::Review);
+        assert!(plan(&guide).contains(&"kebbie to do signals off".to_string()) && plan(&guide).contains(&"mindin to do usage data off".to_string()), "a No is written too, for each: {:?}", plan(&guide));
+        guide.go(Step::Signals);
+        press(&mut guide, &[KeyCode::Char(' '), KeyCode::Down, KeyCode::Char(' ')]);
+        assert!(guide.answers.signals && guide.answers.usage);
+        guide.go(Step::Review);
+        let rows: Vec<Planned> = guide.plan().into_iter().filter(|row| matches!(row.step, "signals" | "usage data")).collect();
+        assert_eq!(rows.iter().map(|row| format!("{} {}", row.verb, row.detail)).collect::<Vec<_>>(), ["to do on, once a day", "to do on"]);
         assert!(lab.config().is_empty(), "nothing is written before the review applies");
-        apply(&rows, &lab.env(), &mut Fake::new());
+        let mut fake = Fake::new();
+        let done = apply(&rows, &lab.env(), &mut fake);
+        assert!(done.iter().all(|(_, outcome)| outcome.verb == "done"), "{done:?}");
         assert!(lab.config().contains("[report]\nsignals = true\n"), "{}", lab.config());
+        assert_eq!(std::fs::read_to_string(&said).unwrap(), "setup --signals yes\n", "mindin hears the answer and asks nothing");
+        assert!(fake.ran.is_empty(), "no step leaves the screen: {:?}", fake.ran);
+        let mut none = fresh(&lab);
+        none.go(Step::Signals);
+        assert!(screen(&none).contains("[ ] mindin usage data, once a day  · only with a mindin vault, chosen on step 3"), "{}", screen(&none));
+        press(&mut none, &[KeyCode::Down, KeyCode::Char(' ')]);
+        assert!(!none.answers.usage && plan(&none).iter().all(|row| !row.contains("usage data")), "without a vault there is no mindin to tell");
     }
 
     #[test]
@@ -2629,7 +3093,7 @@ mod tests {
             "╭ Your board on your phone ",
             "│ h  connect now     later: kebbie hub connect, or H on the board",
             "│ kebbie.dev/hub",
-            "any key opens your board",
+            "h connects your phone · ⏎ opens your board",
         ] {
             assert!(shown.contains(line), "{line:?} missing from:\n{shown}");
         }
@@ -2638,12 +3102,40 @@ mod tests {
         assert!(guide.text().ends_with("  prefix+space         tell the lead what you want done\n\nYour board on your phone: kebbie hub connect, or H on the board\nkebbie.dev/hub"), "{}", guide.text());
         assert!(!guide.said(false).contains("kebbie.dev/hub"), "the connect that h runs follows the summary instead");
         assert!(matches!(guide.key(KeyEvent::from(KeyCode::Char('h'))), Next::Connect));
-        assert!(matches!(guide.key(KeyEvent::from(KeyCode::Char('x'))), Next::Board), "any other key opens the board");
+        assert!(matches!(guide.key(KeyEvent::from(KeyCode::Enter)), Next::Board), "⏎ opens the board");
+        assert!(matches!(guide.key(KeyEvent::from(KeyCode::Char('x'))), Next::Stay) && matches!(guide.key(KeyEvent::from(KeyCode::Char('r'))), Next::Stay), "another key does nothing, and r only with a failed step");
         guide.facts.hub = Some("hub.kebbie.dev".to_string());
         let shown = screen(&guide);
-        assert!(!shown.contains("Your board on your phone") && shown.contains("any key opens your board"), "a connected machine is offered nothing: {shown}");
+        assert!(!shown.contains("Your board on your phone") && shown.contains("⏎ opens your board") && !shown.contains("h connects"), "a connected machine is offered nothing: {shown}");
         assert!(!guide.text().contains("kebbie.dev/hub"));
-        assert!(matches!(guide.key(KeyEvent::from(KeyCode::Char('h'))), Next::Board), "h is any other key once connected");
+        assert!(matches!(guide.key(KeyEvent::from(KeyCode::Char('h'))), Next::Stay), "h does nothing once connected");
+    }
+
+    #[test]
+    fn a_failed_step_is_counted_in_the_headline_named_with_its_retry_and_r_runs_only_the_failed_rows() {
+        let lab = Lab::new("guide-retry");
+        let mut guide = finished(&lab);
+        let codex = lab.dir.join("codex");
+        guide.planned = vec![
+            Planned { group: KEBBIE, step: "machine", verb: "to do", detail: "\"Hetzner devbox\"".to_string(), act: Act::Name("Hetzner devbox".to_string()) },
+            Planned { group: CODEX, step: "codex approvals", verb: "to do", detail: "rules".to_string(), act: Act::Rules(guide.facts.rules.clone()) },
+        ];
+        guide.applied = Some(vec![("machine".to_string(), Outcome::new("done", "\"Hetzner devbox\"")), ("codex approvals".to_string(), Outcome::new("failed", "Codex's home is not writable"))]);
+        let shown = screen(&guide);
+        assert!(shown.contains("Setup done, 1 step failed · doctor: 36 ok"), "{shown}");
+        assert!(shown.contains("failed   codex approvals Codex's home is not writable") && shown.contains("r tries it again · or later: kebbie setup codex --yes"), "the failed row says why, and how to run it again: {shown}");
+        assert!(shown.contains("r tries the failed steps again · h connects your phone · ⏎ opens your board"), "{shown}");
+        assert!(guide.text().contains("Setup done, 1 step failed · doctor: 36 ok"), "{}", guide.text());
+        assert!(matches!(guide.key(KeyEvent::from(KeyCode::Char('r'))), Next::Retry));
+        let (before, at, rows) = guide.retried();
+        assert_eq!((at.clone(), rows.iter().map(|row| row.step).collect::<Vec<_>>()), (vec![1], vec!["codex approvals"]), "only the failed row runs again");
+        let again = apply(&rows, &lab.env(), &mut Fake::new());
+        guide.applied = Some(merged(&before, &at, &again));
+        assert!(lab.config().is_empty(), "the machine row that was done is not written again");
+        assert!(codex.join("rules/kebbie.rules").is_file());
+        assert_eq!(guide.applied.as_ref().unwrap().iter().map(|(step, outcome)| format!("{} {step}", outcome.verb)).collect::<Vec<_>>(), ["done machine", "done codex approvals"]);
+        let shown = screen(&guide);
+        assert!(shown.contains("Setup done · doctor: 36 ok") && !shown.contains("r tries"), "{shown}");
     }
 
     #[test]

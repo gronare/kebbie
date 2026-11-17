@@ -85,6 +85,7 @@ mod sh;
 mod state;
 mod setup;
 mod setup_guide;
+mod setup_vault;
 mod shell_write;
 mod signals;
 mod status;

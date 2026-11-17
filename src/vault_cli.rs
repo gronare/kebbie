@@ -89,6 +89,7 @@ pub struct Probe {
     pub capabilities: Vec<String>,
     pub former_names: Vec<String>,
     pub setup: bool,
+    pub usage: Option<bool>,
 }
 
 impl Probe {
@@ -333,7 +334,7 @@ impl Cli {
     pub fn probe(&self, try_write: bool) -> Result<Probe> {
         let about = self.output(&["about", "--json"])?.ok().and_then(|answer| serde_json::from_str::<Value>(answer.trim()).ok()).filter(|about| about["contract"].as_u64().is_some());
         let status = self.call(if try_write { &["status", "--probe"] } else { &["status"] })?;
-        let probe = Probe { configured: status["configured"] == true, writable: status["writable"].as_bool(), version: field(&status, "version"), backend: field(&status, "backend"), server: field(&status, "server"), ..Probe::default() };
+        let probe = Probe { configured: status["configured"] == true, writable: status["writable"].as_bool(), version: field(&status, "version"), backend: field(&status, "backend"), server: field(&status, "server"), usage: usage(&status), ..Probe::default() };
         Ok(match about {
             Some(about) => from_about(&about, probe),
             None => self.bridge(probe),
@@ -358,6 +359,15 @@ impl Cli {
         capabilities.extend([SNAPSHOT, READ].into_iter().filter(|command| top.iter().any(|listed| listed == command)));
         let name = task_help.as_deref().and_then(|help| help.split_whitespace().skip_while(|word| *word != "usage:").nth(1)).unwrap_or_default().to_string();
         Probe { name, capabilities: capabilities.into_iter().map(str::to_string).collect(), ..probe }
+    }
+}
+
+// mindin's answer to its usage data question: on, off, or not asked.
+fn usage(status: &Value) -> Option<bool> {
+    match status["signals"].as_str()? {
+        "on" => Some(true),
+        "off" => Some(false),
+        _ => None,
     }
 }
 

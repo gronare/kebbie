@@ -5,6 +5,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- kebbie setup installs mindin and signs this machine in to a vault server on its own screen, asks mindin's usage question in its Signals step, and r on the done list tries only the failed steps again.
 
 ### Fixed
 - kebbie hub connect names macOS's Local Network permission, and where to turn it on, when the hub is out of the terminal's reach.
