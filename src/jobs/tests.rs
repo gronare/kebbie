@@ -424,10 +424,40 @@ fn the_workers_fetch_runs_no_remote_helper_even_when_its_git_config_allows_one()
     git(&store, &["init", "--quiet", "--bare"]);
     git(&store, &["config", "protocol.ext.allow", "always"]);
     git(&store, &["config", &format!("url.ext::sh -c touch% {}.insteadOf", marker.display()), ORIGIN]);
-    let stored = bundle::store(&store, &[], &"a".repeat(40), Some(&"b".repeat(40)), "refs/kebbie/keep", Some(ORIGIN), &mut |_| {});
+    let stored = bundle::store(&store, &[], &"a".repeat(40), Some(&"b".repeat(40)), "refs/kebbie/keep", Some(ORIGIN), &mut |_| {}, &|| false);
     assert_eq!(stored, Ok(bundle::Stored::NeedsFull));
     assert!(!marker.exists(), "the ext:: helper the config rewrote origin to never ran");
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_fetch_from_a_remote_that_never_answers_ends_when_the_worker_stops_it() {
+    let root = crate::sh::test_dir("jobs-fetch-hung");
+    let store = root.join("store");
+    std::fs::create_dir_all(&store).unwrap();
+    git(&store, &["init", "--quiet", "--bare"]);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("git://127.0.0.1:{}/app.git", listener.local_addr().unwrap().port());
+    std::thread::spawn(move || {
+        let held: Vec<_> = listener.incoming().take(4).collect();
+        std::thread::sleep(std::time::Duration::from_secs(60));
+        drop(held);
+    });
+    let (sent, got) = std::sync::mpsc::channel();
+    let started = std::time::Instant::now();
+    std::thread::spawn(move || {
+        let stored = bundle::store(&store, &[], &"a".repeat(40), Some(&"b".repeat(40)), "refs/kebbie/keep", Some(&url), &mut |_| {}, &|| started.elapsed() >= std::time::Duration::from_secs(1));
+        let _ = sent.send(stored);
+    });
+    let stored = got.recv_timeout(std::time::Duration::from_secs(15)).expect("the fetch ends once stopped");
+    assert!(stored.is_err_and(|error| error.contains("was stopped")), "a stopped fetch is no reason to ask for the whole history");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn the_workers_ssh_never_asks_and_keeps_the_users_own_options() {
+    assert_eq!(bundle::batch_ssh(None), "ssh -oBatchMode=yes");
+    assert_eq!(bundle::batch_ssh(Some("ssh -i ~/.ssh/deploy")), "ssh -i ~/.ssh/deploy -oBatchMode=yes");
 }
 
 #[test]
@@ -503,6 +533,9 @@ fn a_hung_job_is_stopped_at_its_timeout_with_its_process_group_and_a_job_that_le
     assert_eq!(end, JobEnd::Failed { reason: "build ran past its timeout of 1 s, so the worker stopped it, with SIGKILL as it outlasted SIGTERM by 1 s".into() });
     assert!(took < 4 * second, "{took:?}");
     let (end, _, _) = run("sleep 30", 60 * second, &|| true);
+    assert_eq!(end, JobEnd::Failed { reason: "the worker's kebbie stopped while it took the commit of build, so it stopped the job".into() });
+    let stopping = std::time::Instant::now();
+    let (end, _, _) = run("sleep 30", 60 * second, &|| stopping.elapsed() >= second);
     assert_eq!(end, JobEnd::Failed { reason: "the worker's kebbie stopped while build ran, so it stopped the job".into() });
     let def = Def { run: "make".to_string(), on: None, timeout_minutes: Some(90) };
     assert_eq!(command_of(&command_for(&def, None)), Command { timeout: Some(90), fetch: None, run: "make" }, "the job's own timeout goes along in its command");

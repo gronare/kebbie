@@ -88,7 +88,13 @@ pub struct Timed {
 const DRAIN: std::time::Duration = std::time::Duration::from_millis(500);
 
 // None once it outlives the timeout, its process group stopped; a grandchild that keeps its pipes open is not waited for.
-pub fn output_with_timeout(mut command: Command, timeout: std::time::Duration) -> std::io::Result<Option<Timed>> {
+pub fn output_with_timeout(command: Command, timeout: std::time::Duration) -> std::io::Result<Option<Timed>> {
+    let started = std::time::Instant::now();
+    output_until(command, &|| started.elapsed() >= timeout)
+}
+
+// None once stop says so, its process group stopped; a grandchild that keeps its pipes open is not waited for.
+pub fn output_until(mut command: Command, stop: &dyn Fn() -> bool) -> std::io::Result<Option<Timed>> {
     use std::io::Read;
     use std::os::unix::process::CommandExt;
     let mut child = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0).spawn()?;
@@ -104,12 +110,11 @@ pub fn output_with_timeout(mut command: Command, timeout: std::time::Duration) -
             let _ = sender.send((index, String::from_utf8_lossy(&bytes).to_string()));
         });
     }
-    let started = std::time::Instant::now();
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
         }
-        if started.elapsed() >= timeout {
+        if stop() {
             let _ = Command::new("kill").args(["-s", "KILL", "--", &format!("-{}", child.id())]).stderr(Stdio::null()).status();
             let _ = child.wait();
             return Ok(None);
