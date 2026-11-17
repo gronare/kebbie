@@ -21,6 +21,8 @@ const GUARD_DIR: &str = "build-guard";
 const QUEUE: &str = "queue.json";
 const CARGO_BUILDS: [&str; 18] = ["build", "b", "check", "c", "test", "t", "run", "r", "clippy", "bench", "doc", "d", "install", "rustc", "rustdoc", "fix", "nextest", "llvm-cov"];
 const CARGO_VALUED: [&str; 5] = ["-C", "--config", "-Z", "--color", "--manifest-path"];
+const QUEUE_LOCK_WAIT: Duration = Duration::from_secs(2);
+const QUEUE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -54,7 +56,22 @@ pub enum Take {
     NoKeeper,
 }
 
+// A holder id becomes a file name and an address a message's recipient, and sandboxed tasks write the queue, so only plain tokens pass.
+fn plain(word: &str) -> bool {
+    !word.is_empty() && word.len() <= 128 && !word.starts_with('.') && word.chars().all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character))
+}
+
+fn addressed(address: &str) -> bool {
+    address == UPDATE || address.split_once('@').is_some_and(|(task, repo)| plain(task) && plain(repo))
+}
+
 impl Queue {
+    fn drop_unsound(&mut self) {
+        self.holders.retain(|holder| plain(&holder.id) && addressed(&holder.address));
+        self.line.retain(|address| addressed(address));
+        self.turns.retain(|turn| addressed(&turn.address));
+    }
+
     fn slots(&self) -> usize {
         self.slots.unwrap_or(crate::config::DEFAULT_BUILD_SLOTS).max(1) as usize
     }
@@ -149,13 +166,26 @@ pub fn dir() -> Result<PathBuf> {
     std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache/kebbie/builds")).ok_or_else(|| "HOME is not set".to_string())
 }
 
+fn read_plain(file: &Path) -> Option<String> {
+    use std::io::Read;
+    let open = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(file).ok()?;
+    if !open.metadata().is_ok_and(|meta| meta.is_file()) {
+        return None;
+    }
+    let mut text = String::new();
+    open.take(QUEUE_BYTES).read_to_string(&mut text).ok()?;
+    Some(text)
+}
+
 pub fn load(dir: &Path) -> Queue {
-    fs::read_to_string(dir.join(QUEUE)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+    let mut queue: Queue = read_plain(&dir.join(QUEUE)).and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+    queue.drop_unsound();
+    queue
 }
 
 fn with_queue<T>(dir: &Path, change: impl FnOnce(&mut Queue) -> T) -> Result<T> {
     crate::state::private_dir(dir)?;
-    let _lock = crate::state::Locked::wait(&dir.join("queue.lock"))?;
+    let _lock = crate::state::Locked::within(&dir.join("queue.lock"), QUEUE_LOCK_WAIT)?;
     let mut queue = load(dir);
     let out = change(&mut queue);
     crate::state::write(&dir.join(QUEUE), serde_json::to_string(&queue).map_err(|error| error.to_string())?)?;
@@ -183,8 +213,14 @@ fn held_file(dir: &Path, id: &str) -> PathBuf {
 
 // A build holds a lock on its own file for as long as it runs, which the kernel drops however it ends, across a sandbox's process namespace too.
 fn alive_in(dir: &Path, id: &str) -> bool {
+    if !plain(id) {
+        return false;
+    }
     let file = held_file(dir, id);
-    let Ok(open) = File::open(&file) else { return false };
+    let Ok(open) = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(&file) else { return false };
+    if !open.metadata().is_ok_and(|meta| meta.is_file()) {
+        return false;
+    }
     if try_flock(&open) {
         let _ = fs::remove_file(&file);
         return false;
@@ -215,7 +251,7 @@ pub fn take_slot(dir: &Path, address: &str, front: bool, needs_keeper: bool) -> 
     crate::state::private_dir(dir)?;
     let id = crate::messages::new_id("build");
     let path = held_file(dir, &id);
-    let file = OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let file = OpenOptions::new().write(true).create_new(true).mode(0o600).custom_flags(libc::O_NOFOLLOW).open(&path).map_err(|error| format!("{}: {error}", path.display()))?;
     if !try_flock(&file) {
         return Err(format!("{}: could not be locked", path.display()));
     }
@@ -257,9 +293,19 @@ pub fn tick_now() -> Result<Vec<String>> {
     let dir = dir()?;
     let (slots, commands) = crate::config::build_settings().unwrap_or_else(|_| (crate::config::DEFAULT_BUILD_SLOTS, crate::config::DEFAULT_BUILD_COMMANDS.map(str::to_string).to_vec()));
     let told = with_queue(&dir, |queue| queue.tick(slots, &commands, |id| alive_in(&dir, id), crate::messages::now()))?;
-    Ok(told.into_iter().map(|(address, text)| match crate::messages::hand_to(&address, &text) {
-        Ok(()) => format!("builds: told {address}: {text}"),
-        Err(error) => format!("builds: could not tell {address}: {error}"),
+    if told.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sessions = crate::peers::sessions().unwrap_or_default();
+    let known = |address: &str| sessions.iter().any(|session| session.task.is_some() && session.address == address);
+    Ok(told.into_iter().map(|(address, text)| {
+        if !known(&address) {
+            return format!("builds: told nobody: {address} is no task running here");
+        }
+        match crate::messages::hand_to(&address, &text) {
+            Ok(()) => format!("builds: told {address}: {text}"),
+            Err(error) => format!("builds: could not tell {address}: {error}"),
+        }
     }).collect())
 }
 
@@ -575,6 +621,35 @@ mod tests {
         assert!(!dir.join("npm").exists(), "a program the config dropped loses its guard");
         assert_eq!(real_program("cargo", std::slice::from_ref(&dir)), None, "the guard never runs itself as the real program");
         assert_eq!(env_line(Path::new("/s/build-guard")), "case \":$PATH:\" in *:'/s/build-guard':*) ;; *) export PATH='/s/build-guard':\"$PATH\" ;; esac\n");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_queue_a_task_wrote_names_no_file_outside_its_folder_and_no_address_but_a_tasks() {
+        let root = crate::sh::test_dir("builds-untrusted");
+        let dir = root.join("builds");
+        let victim = root.join("victim/Cargo.lock");
+        fs::create_dir_all(dir.join("held-")).unwrap();
+        fs::create_dir_all(victim.parent().unwrap()).unwrap();
+        fs::write(&victim, "kept").unwrap();
+        let written = Queue { holders: vec![Holder { address: "a@app".into(), id: "/../../victim/Cargo".into(), at: 1 }], line: strings(&["lead", "../x@app", "b@app"]), ..queue(1, 1) };
+        crate::state::write(&dir.join(QUEUE), serde_json::to_string(&written).unwrap()).unwrap();
+        let told = with_queue(&dir, |queue| queue.tick(1, &[], |id| alive_in(&dir, id), 10)).unwrap();
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "kept", "a holder id is never a path");
+        assert_eq!(told, vec![("b@app".to_string(), TURN.to_string())], "only a task's address is told");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_queue_lock_held_elsewhere_makes_the_queue_unusable_soon_instead_of_freezing_its_caller() {
+        let dir = crate::sh::test_dir("builds-held-lock");
+        let _held = crate::state::Locked::wait(&dir.join("queue.lock")).unwrap();
+        let (sent, got) = std::sync::mpsc::channel();
+        let inside = dir.clone();
+        std::thread::spawn(move || {
+            let _ = sent.send(with_queue(&inside, |queue| queue.forget("a@app")).is_err());
+        });
+        assert_eq!(got.recv_timeout(Duration::from_secs(10)), Ok(true));
         let _ = fs::remove_dir_all(dir);
     }
 
