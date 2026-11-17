@@ -87,6 +87,9 @@ pub fn report(state: &Path, from: &Id, report: &JobReport, now: u64) -> Option<S
     if report.seq < heard.next {
         return None;
     }
+    let Some(next) = report.seq.checked_add(1) else {
+        return Some(format!("jobs: refused a report on {} from {}: its number is the last there is", sent.name, sent.worker_name));
+    };
     let text = format!("{}{}", gap(report.seq - heard.next, &sent.worker_name), report.log);
     if !text.is_empty() {
         let appended = crate::state::append_to(&part(state, &sent.id, "log")).and_then(|mut log| log.write_all(text.as_bytes()));
@@ -94,7 +97,7 @@ pub fn report(state: &Path, from: &Id, report: &JobReport, now: u64) -> Option<S
             return Some(format!("jobs: the output of {} was not kept: {error}", sent.name));
         }
     }
-    heard = Heard { next: report.seq + 1, at: now };
+    heard = Heard { next, at: now };
     let mut kept = write(&heard_file, &heard);
     if let Some(end) = &report.end {
         kept = kept.and(write(&part(state, &sent.id, "end.json"), end));

@@ -261,6 +261,19 @@ fn only_the_jobs_own_worker_reports_on_it_and_each_report_counts_once() {
 }
 
 #[test]
+fn a_report_numbered_the_last_there_is_is_refused_and_counting_never_wraps() {
+    let state = crate::sh::test_dir("jobs-report-last");
+    let job = sent(machine(2));
+    std::fs::create_dir_all(state.join("jobs")).unwrap();
+    std::fs::write(master::part(&state, &job.id, "sent.json"), serde_json::to_string(&job).unwrap()).unwrap();
+    let said = master::report(&state, &machine(2), &JobReport { job: job.id.clone(), seq: u32::MAX, log: "late\n".into(), end: None }, 110).unwrap();
+    assert!(said.contains("refused"), "{said}");
+    assert_eq!(master::report(&state, &machine(2), &JobReport { job: job.id.clone(), seq: 0, log: "first\n".into(), end: None }, 111), None);
+    assert_eq!(std::fs::read_to_string(master::part(&state, &job.id, "log")).unwrap(), "first\n");
+    let _ = std::fs::remove_dir_all(state);
+}
+
+#[test]
 fn a_worker_that_sends_nothing_for_ten_minutes_is_given_up_on_while_one_that_reports_is_waited_for() {
     let state = crate::sh::test_dir("jobs-silent");
     let job = sent(machine(2));
