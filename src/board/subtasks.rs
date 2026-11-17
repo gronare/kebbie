@@ -367,7 +367,7 @@ impl App {
         }
     }
 
-    // Inside the task ↑ ↓ stay among its subtasks; ← or esc go back to the task, and the board-wide keys act as on the task.
+    // Inside the task ↑ ↓ stay among its subtasks and pgup pgdn scroll its card; ← or esc go back to the task, and the board-wide keys act as on the task.
     pub(super) fn handle_subtasks(&mut self, act: Option<Act>, key: &KeyEvent) {
         self.mode = Mode::Subtasks;
         let Some((item, at)) = self.selected_task().and_then(|item| self.subtask_at(&item).map(|at| (item, at))) else {
@@ -390,7 +390,11 @@ impl App {
                 self.leave_subtasks();
                 self.handle_normal(*key);
             }
-            _ => {}
+            _ => match key.code {
+                KeyCode::PageUp => self.beside.scroll = self.beside.scroll.saturating_sub(10),
+                KeyCode::PageDown | KeyCode::Char(' ') => self.beside.scroll = self.beside.scroll.saturating_add(10),
+                _ => {}
+            },
         }
     }
 
@@ -750,11 +754,20 @@ mod tests {
     }
 
     #[test]
-    fn inside_a_task_help_and_the_board_keys_work_as_on_the_task() {
+    fn inside_a_task_help_and_the_board_keys_work_and_page_keys_scroll_the_subtasks_card() {
         let (mut app, _) = two_tasks();
         key(&mut app, KeyCode::Right);
         key(&mut app, KeyCode::Char('?'));
         assert!(matches!(app.mode, Mode::Help(_)), "? opens help inside a task too");
+        app.mode = Mode::Normal;
+        key(&mut app, KeyCode::Right);
+        render(&mut app, 120, 40);
+        key(&mut app, KeyCode::PageDown);
+        assert_eq!(app.beside.scroll, 10);
+        key(&mut app, KeyCode::Char(' '));
+        assert_eq!(app.beside.scroll, 20);
+        key(&mut app, KeyCode::PageUp);
+        assert!(app.beside.scroll == 10 && matches!(app.mode, Mode::Subtasks), "the cursor stays inside the task");
     }
 
     #[test]
