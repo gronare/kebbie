@@ -29,6 +29,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - On the Areas page, opening an area's Space, its push permission and the commits its push window shows are read behind the page; on the Routines page, a run's card and the routines after a run are too.
 - L answers at once: a small window says it checks the lead, and the restart question opens when the lead answers.
 - n and , open at once: the repos of herdr's Spaces are read behind the board and join the new task dialog's list when they come, and a new task's name is checked against the repo's branches as it starts.
+- A backlog item's card opens at once with a line saying it reads the item, and fills in when the read comes.
 - After kebbie update the open board and the keeper move to the new kebbie by themselves, also when herdr installed it in a new folder.
 - In a narrow board pane the Work page shows only the tasks, and the card opens in its window from s or ⏎, as before the card column.
 - Answers to a backlog item's questions from your phone reach the lead together, and a reworded question no longer turns an answer away.

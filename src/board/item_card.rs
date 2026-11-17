@@ -98,13 +98,14 @@ pub(super) struct ItemCard {
     pub(super) follow: bool,
     pub(super) typing: Option<String>,
     pub(super) template: Template,
+    pub(super) loading: bool,
 }
 
 impl ItemCard {
     pub(super) fn new(entry: Entry, body: String, answers: Vec<Answer>) -> Self {
         let (priority, repo) = (entry.priority.clone(), entry.area.clone());
         let template = crate::item_template::for_source(&entry.source);
-        let mut card = Self { entry, path: None, priority, repo, filed: String::new(), drafting: false, short: false, body, answers, pick: 0, scroll: 0, follow: true, typing: None, template };
+        let mut card = Self { entry, path: None, priority, repo, filed: String::new(), drafting: false, short: false, body, answers, pick: 0, scroll: 0, follow: true, typing: None, template, loading: false };
         card.pick = card.next_open(0);
         card
     }
@@ -141,7 +142,7 @@ impl ItemCard {
     fn take_read(&mut self, read: ItemCard) {
         (self.path, self.priority, self.repo, self.filed, self.body) = (read.path, read.priority, read.repo, read.filed, read.body);
         (self.drafting, self.short, self.answers, self.entry.title) = (read.drafting, read.short, read.answers, read.entry.title);
-        self.pick = self.pick.min(self.questions().len().saturating_sub(1));
+        self.pick = if std::mem::take(&mut self.loading) { self.next_open(0) } else { self.pick.min(self.questions().len().saturating_sub(1)) };
     }
 
     pub(super) fn questions(&self) -> Vec<Question> {
@@ -246,6 +247,9 @@ pub(super) fn card_lines(card: &ItemCard, width: usize) -> (Vec<Line<'static>>, 
     let mut heading = "";
     let mut asked = 0;
     lines.push(Line::default());
+    if card.loading {
+        lines.push(Line::from(Span::styled("reading the item…", style(MUTED))));
+    }
     for raw in card.body.lines() {
         let line = raw.trim();
         if let Some(name) = line.strip_prefix("## ") {
@@ -370,6 +374,10 @@ impl App {
                 card.take_read(found);
                 true
             }
+            (None, Mode::ItemCard(card)) if card.loading => {
+                self.mode = Mode::Options(0);
+                true
+            }
             _ => false,
         }
     }
@@ -379,6 +387,14 @@ impl App {
             return false;
         }
         let Ok(state) = crate::lead::state_dir() else { return false };
+        if self.card_reader {
+            let mut card = ItemCard::new(entry, String::new(), Vec::new());
+            card.loading = true;
+            self.mode = Mode::ItemCard(Box::new(card));
+            self.card_read = None;
+            self.reread_item_card();
+            return true;
+        }
         match ItemCard::load(entry, &state) {
             Some(card) => {
                 self.mode = Mode::ItemCard(Box::new(card));
@@ -617,6 +633,24 @@ mod tests {
         settle_jobs(&mut app);
         assert!(told.lock().unwrap()[0].contains("Answer: \"Only the e2e job.\""), "{:?}", told.lock().unwrap());
         assert!(matches!(app.mode, Mode::Normal) && app.toast.is_none(), "a told answer says nothing more");
+    }
+
+    #[test]
+    fn a_card_opens_at_once_with_a_loading_line_and_fills_in_from_its_read() {
+        let mut app = test_app(Vec::new());
+        app.card_reader = true;
+        assert!(app.open_item_card(entry("Projects/loading-card.md", Shape::default())));
+        let Mode::ItemCard(card) = &app.mode else { panic!("the card opens at once") };
+        assert!(card.loading);
+        assert!(screen(&mut card.as_ref().clone()).join("\n").contains("reading the item…"));
+        let start = std::time::Instant::now();
+        while app.card_read.is_some() {
+            assert!(start.elapsed() < std::time::Duration::from_secs(10), "the read never came");
+            app.take_item_card_read();
+        }
+        let Mode::ItemCard(card) = &app.mode else { panic!("the card stays open: {:?}", std::mem::discriminant(&app.mode)) };
+        assert!(!card.loading, "the read replaced the loading line");
+        assert!(!screen(&mut card.as_ref().clone()).join("\n").contains("reading the item…"));
     }
 
     #[test]
