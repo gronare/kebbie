@@ -124,7 +124,7 @@ jobs:
         working-directory: dist
         run: |
           set -- kebbie-*.tar.gz
-          [ $# -eq 4 ] || { echo "::error::expected 4 binaries, got $*"; exit 1; }
+          [ $# -eq 3 ] || { echo "::error::expected 3 binaries, got $*"; exit 1; }
           sha256sum kebbie-*.tar.gz > SHA256SUMS
           cat SHA256SUMS
       - name: Draft a GitHub Release with the binaries, the SBOM and the version's notes
