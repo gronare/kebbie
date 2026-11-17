@@ -10,7 +10,7 @@ mod test_seal;
 
 const SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/release-smoke.sh");
 
-// A kebbie that keeps each started task as a file, reports it ready at once (resumed once it was started again, or answers the restart with what unprompted holds) or holds a Codex task under NEEDS YOU on what codex-asks says, logs every call, and a herdr that closes Spaces.
+// A kebbie that keeps each started task as a file, reports it ready at once (resumed once it was started again, or answers the restart with what unprompted holds; working and in its rules check for as many looks as busy says) or holds a Codex task under NEEDS YOU on what codex-asks says, logs every call, and a herdr that closes Spaces.
 const KEBBIE: &str = r#"#!/bin/sh
 d=$(dirname "$(dirname "$0")")
 echo "$*" >> "$d/kebbie.log"
@@ -19,6 +19,8 @@ case "$1" in
   start)
     if [ -f "$d/tasks/$2" ] && [ -f "$d/unprompted" ]; then cat "$d/unprompted"; elif [ -f "$d/tasks/$2" ]; then echo resumed > "$d/tasks/$2"; echo 'Restarted its Claude'; echo '  next: It resumes its last conversation and has the prompt again.'; else echo started > "$d/tasks/$2"; echo '✓ Started'; fi ;;
   status)
+    busy=$(cat "$d/busy" 2>/dev/null || echo 0)
+    [ "$busy" -gt 0 ] && echo $((busy - 1)) > "$d/busy" && echo "busy $busy" >> "$d/kebbie.log"
     printf '{"items":['
     sep=
     for file in "$d"/tasks/*; do
@@ -28,7 +30,8 @@ case "$1" in
       [ -f "$d/never-ready" ] && state=working || state=ready
       group='"READY TO PUSH"' next=null
       case "$name" in smoke-codex-*) [ -f "$d/codex-asks" ] && state=working group='"NEEDS YOU"' next="\"$(cat "$d/codex-asks")\"" ;; esac
-      printf '%s{"name":"%s","place":"sandbox","workspace":"w_%s","group":%s,"next_for_you":%s,"git":{"ahead":1},"report":{"state":"%s","summary":"%s"}}' "$sep" "$name" "$name" "$group" "$next" "$state" "$summary"
+      [ "$busy" -gt 0 ] && agent=working rules=checking || agent=idle rules=ok
+      printf '%s{"name":"%s","place":"sandbox","workspace":"w_%s","group":%s,"next_for_you":%s,"agent":{"status":"%s"},"git":{"ahead":1,"rules":"%s"},"report":{"state":"%s","summary":"%s"}}' "$sep" "$name" "$name" "$group" "$next" "$agent" "$rules" "$state" "$summary"
       sep=,
     done
     printf ']}\n' ;;
@@ -145,6 +148,24 @@ fn without_kebbies_codex_plugin_the_smoke_skips_codex_and_a_task_that_never_repo
     assert_eq!(output.status.code(), Some(1), "{shown}");
     assert!(shown.contains("claude   FAIL  no ready report within 5s") && shown.contains("codex    PASS  skipped: kebbie's Codex plugin is not installed") && shown.ends_with("release-smoke: FAILED\n"), "{shown}");
     assert!(sandbox.calls().iter().any(|call| call.contains(" drop smoke-claude-")), "the failed task is dropped too");
+}
+
+#[test]
+fn the_smoke_closes_a_tasks_space_only_once_its_turn_and_rules_check_are_over() {
+    let sandbox = Sandbox::new("busy");
+    fs::write(sandbox.dir.join("busy"), "4").unwrap();
+    let output = sandbox.run(&[sandbox.repo.to_str().unwrap()]);
+    let shown = said(&output);
+    assert!(output.status.success(), "{shown}");
+    let calls = sandbox.calls();
+    let restart = calls.iter().rposition(|call| call.contains(" start smoke-claude-")).unwrap();
+    assert!(calls[..restart].iter().filter(|call| call.starts_with("busy ")).count() == 4, "the restart came while the task still worked: {calls:?}");
+    let still = Sandbox::new("busy-long");
+    fs::write(still.dir.join("busy"), "1000").unwrap();
+    let output = still.run(&[still.repo.to_str().unwrap()]);
+    let shown = said(&output);
+    assert!(shown.contains("claude   FAIL  still working or in its rules check after 5s"), "{shown}");
+    assert!(!fs::read_to_string(still.dir.join("herdr.log")).unwrap_or_default().contains("workspace close"), "a working task's Space is never closed");
 }
 
 #[test]

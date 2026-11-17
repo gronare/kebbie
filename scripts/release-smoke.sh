@@ -88,6 +88,19 @@ wait_ready() {
   return 1
 }
 
+# 0 once the task runs no turn and its rules check neither runs nor waits on a fix, 1 at the timeout: a Space closed mid-turn takes the turn's last answer with it.
+wait_idle() {
+  task=$1 deadline=$(($(date +%s) + timeout))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    shown=$(item "$task")
+    if [ -n "$shown" ] && printf '%s' "$shown" | jq -e '(.agent.status // "") != "working" and ((.git.rules // "") | IN("checking", "breaks") | not)' >/dev/null; then
+      return 0
+    fi
+    sleep "$poll"
+  done
+  return 1
+}
+
 said_in_full() {
   printf 'release-smoke: %s %s said:\n%s\n\n' "$label" "$1" "$said" >&2
 }
@@ -116,6 +129,10 @@ smoke() {
   got=$?
   if [ "$got" -ne 0 ]; then
     waited "$got" "no ready report within ${timeout}s"
+    return
+  fi
+  if ! wait_idle "$task"; then
+    record "$label" FAIL "still working or in its rules check after ${timeout}s"
     return
   fi
   ahead=$(item "$task" | jq -r '.git.ahead // 0')
