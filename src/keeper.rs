@@ -473,13 +473,13 @@ pub fn start_after_update(dir: &Path, was_running: bool) -> String {
     }
 }
 
-// The board's part: a keeper runs while it is on. The start goes through a short-lived kebbie, so the keeper is never the board's child.
+// The board's part: a keeper runs while it is on. The start goes through a short-lived kebbie, so the keeper is never the board's child; a board left from before an update starts the installed kebbie, never its own older binary.
 pub fn ensure() {
     let Ok(dir) = crate::lead::state_dir() else { return };
     if !should_start(enabled(), holder(&dir).is_some()) {
         return;
     }
-    let Ok(exe) = crate::peers::kebbie_command() else { return };
+    let Ok(exe) = crate::peers::installed_command() else { return };
     if let Ok(child) = Command::new(exe).args(["keeper", "--start"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
         crate::sh::reap(child);
     }
@@ -686,6 +686,20 @@ mod tests {
         assert_eq!(render_status(true, None, Some(&status), log, 17_200), "keeper: not running; kebbie keeper --start starts it, and so do herdr's startup and the board\nlog: /state/keeper.log");
         assert!(render_status(false, None, None, log, 0).starts_with(OFF));
         assert!(render_status(false, Some(&me), None, log, 17_200).contains("enabled = false: it stops at its next round"));
+    }
+
+    #[test]
+    fn a_board_left_from_before_an_update_starts_the_installed_keeper_not_its_own_older_binary() {
+        let home = crate::sh::test_dir("keeper-installed");
+        let installed = home.join(".local/share/kebbie/current/target/release/kebbie");
+        std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
+        std::fs::write(&installed, "").unwrap();
+        let old_board = || Ok("/plugins/kebbie/1877683-0/checkout/target/release/kebbie".to_string());
+        assert_eq!(crate::peers::installed_command_in(&home, old_board), Ok(installed.to_string_lossy().to_string()), "the keeper ran kebbie 0.39.1 beside a 0.40.3 install");
+        assert_eq!(crate::peers::installed_command_in(&home.join("nowhere"), old_board).as_deref(), Ok("/plugins/kebbie/1877683-0/checkout/target/release/kebbie"), "without an install the board starts its own binary");
+        let ensure = &include_str!("keeper.rs")[include_str!("keeper.rs").find("pub fn ensure()").unwrap()..];
+        assert!(ensure[..ensure.find("\n}\n").unwrap()].contains("crate::peers::installed_command()"), "the board starts the keeper from the installed kebbie");
+        std::fs::remove_dir_all(home).unwrap();
     }
 
     #[test]

@@ -7,8 +7,10 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### What's new
 - The backlog style kebbie keeps in the vault asks for items in the vault's language.
 - The hub app's New starts a task now on the machine you pick, named from your first words as n on the board names one.
+- kebbie run --on <system or machine> -- <command> runs a command on another machine of your hub account over Tailscale or WireGuard, with its output live, its exit code and Ctrl-C reaching it; kebbie link shows how each machine is reached and its round trip.
 
 ### Fixed
+- A board left open across an update starts the newly installed keeper when the keeper stops, instead of the board's own older kebbie.
 
 ## 0.40.3
 

@@ -152,9 +152,13 @@ pub fn kebbie_command() -> Result<String> {
 
 // The kebbie installed now: the link an update moves to herdr's new folder, else this binary when nothing installed it.
 pub fn installed_command() -> Result<String> {
-    match installed_in(Path::new(&std::env::var("HOME").unwrap_or_default())) {
+    installed_command_in(Path::new(&std::env::var("HOME").unwrap_or_default()), kebbie_command)
+}
+
+pub(crate) fn installed_command_in(home: &Path, own: impl FnOnce() -> Result<String>) -> Result<String> {
+    match installed_in(home) {
         Some(stable) => Ok(stable.to_string_lossy().to_string()),
-        None => kebbie_command(),
+        None => own(),
     }
 }
 
