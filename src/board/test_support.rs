@@ -29,7 +29,6 @@ pub(super) fn press(app: &mut App, event: KeyEvent) {
     app.handle_key(event, None);
 }
 
-// Waits for the board's background jobs to finish and hand over their outcomes.
 pub(super) fn settle_jobs(app: &mut App) {
     let start = std::time::Instant::now();
     app.poll_jobs();

@@ -97,7 +97,6 @@ impl<A: Clone + Send + 'static> Reader<A> {
         self.answers.get(key).cloned()
     }
 
-    // Takes the answers that came in; true when any did, so the board draws them.
     pub fn take(&mut self) -> bool {
         let Some(results) = &self.results else { return false };
         let mut changed = false;

@@ -134,7 +134,6 @@ impl Reads {
 
 pub(super) type Loads = crate::behind::Reader<Loaded>;
 
-// Which read of a subtask a card shows: its task, its id and its last commit.
 pub(super) fn subject_of(address: &str, step: &Subtask) -> String {
     format!("{address}#{}#{}", step.id, step.head().unwrap_or_default())
 }
@@ -356,7 +355,6 @@ impl App {
         }).collect()
     }
 
-    // What the subtask's card shows as far as it is read.
     pub(super) fn subtask_loaded(&mut self, item: &Item, step: &Subtask) -> Loaded {
         let Some(path) = item.path.clone() else { return Loaded::default() };
         let (address, step, load) = (address_of(item), step.clone(), self.subtask_io.load.clone());

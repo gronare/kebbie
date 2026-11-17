@@ -73,7 +73,6 @@ impl MessageEditor {
     }
 }
 
-// The reword or squash, then the push window again on the commits it left.
 fn rewrite_commits(path: &std::path::Path, rewrite: Rewrite, message: &str, (selected, scroll): (usize, super::push::Scroll), (card, tests): (Option<(report::Card, bool)>, Option<evidence::Shown>), working: bool) -> super::push::Opening {
     let result = match &rewrite {
         Rewrite::Reword(sha) => tasks::reword(path, sha, message),

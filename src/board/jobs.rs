@@ -57,7 +57,7 @@ impl Job {
         self.ask_again = Some(Box::new(ask));
     }
 
-    // What the board does once the job has worked, before its outcome shows.
+    // Runs on the board only once the job succeeded, before its outcome shows.
     pub(super) fn then(&mut self, after: impl FnOnce(&mut App) + 'static) {
         self.after = Some(Box::new(after));
     }
@@ -129,7 +129,6 @@ impl App {
         });
     }
 
-    // What the board is doing to the task now, if anything.
     pub(super) fn doing(&self, name: &str, path: Option<&Path>) -> Option<String> {
         self.jobs.iter().find(|job| job.holds(name, path)).map(|job| job.doing.clone())
     }
