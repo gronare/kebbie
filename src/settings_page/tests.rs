@@ -1181,3 +1181,47 @@ fn the_title_line_ends_at_the_right_edge() {
     let end: String = (last - 3..=last).map(|x| buffer[(x, row as u16)].symbol().to_string()).collect();
     assert_eq!(end, "edit", "the hint ends in the title area's last column: {shown}");
 }
+
+#[test]
+fn the_vault_section_shows_the_vault_this_machine_uses_and_s_runs_mindin_setup() {
+    fn server() -> vault::Seen {
+        let probe = crate::vault_cli::Probe { configured: true, version: "0.20.1".to_string(), backend: "server".to_string(), server: "https://notes.example.org".to_string(), name: "mindin".to_string(), setup: true, ..Default::default() };
+        vault::Seen::Answered { command: vec!["/opt/bin/mindin".to_string()], probe: Ok(probe) }
+    }
+    fn none() -> vault::Seen {
+        vault::Seen::NoCommand
+    }
+    fn slow() -> vault::Seen {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        server()
+    }
+    let mut fixture = fixture("settings-vault", "", None);
+    let page = &mut fixture.page;
+    page.vault_read = slow;
+    page.spawn_reads();
+    go_to(page, "vault.command");
+    let shown = screen(page);
+    assert!(shown.contains("reading what the vault says…") && shown.contains("vault.command"), "the page draws at once and says it is reading: {shown}");
+    let start = std::time::Instant::now();
+    while !page.take_reads() && start.elapsed() < std::time::Duration::from_secs(10) {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let shown = screen(page);
+    assert!(shown.contains("lives in  a server, https://notes.example.org") && shown.contains("sign-in   signed in") && shown.contains("version   mindin 0.20.1"), "{shown}");
+    assert!(shown.contains("s mindin setup"), "{shown}");
+    assert!(matches!(page.handle(KeyEvent::from(KeyCode::Char('s'))), Effect::Run(command) if command == ["/opt/bin/mindin", "setup"]), "s runs the vault's own mindin setup");
+    let mut fresh = fixture_page_with(none);
+    go_to(&mut fresh.page, "vault.command");
+    assert!(screen(&mut fresh.page).contains("no vault command on this machine: s runs mindin setup"));
+    assert!(matches!(fresh.page.handle(KeyEvent::from(KeyCode::Char('s'))), Effect::Run(command) if command == ["mindin", "setup"]));
+    fresh.page.vault_read = server;
+    fresh.page.ran(&["mindin".to_string(), "setup".to_string()], Ok(()));
+    assert!(said(&fresh.page).contains("✓ mindin setup done"), "{}", said(&fresh.page));
+    assert!(screen(&mut fresh.page).contains("lives in  a server, https://notes.example.org"), "after setup the page reads the vault again");
+}
+
+fn fixture_page_with(read: fn() -> vault::Seen) -> Fixture {
+    let mut fixture = fixture("settings-vault-none", "", None);
+    fixture.page.vault_read = read;
+    fixture
+}

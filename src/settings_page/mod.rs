@@ -2,6 +2,7 @@ mod agents;
 mod chooser;
 mod draw;
 mod profile_edit;
+mod vault;
 mod wizard;
 
 use std::path::{Path, PathBuf};
@@ -25,7 +26,10 @@ pub enum Effect {
     Left,
     Open(PathBuf),
     Show(PathBuf),
+    Run(Vec<String>),
 }
+
+pub use vault::run;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Tab {
@@ -34,14 +38,15 @@ pub enum Tab {
 }
 
 // The page's sections, by the table a key sits in; a key's own line comes from kebbie config's entries.
-const SECTIONS: [(&str, &[&str]); 8] = [
+const SECTIONS: [(&str, &[&str]); 9] = [
     ("Tasks", &["task"]),
     ("Board", &["board"]),
     ("Worktrees", &["worktree"]),
     ("Review & docs", &["review", "ci", "tests", "comments", "docs"]),
     (PROFILES, &[]),
     ("Updates", &["update", "restart", "keeper", "recover"]),
-    ("This machine", &["machine", "lead", "hub", "notify", "vault"]),
+    ("This machine", &["machine", "lead", "hub", "notify"]),
+    (vault::SECTION, &["vault"]),
     ("Reports", &["report", "issues"]),
 ];
 
@@ -105,6 +110,8 @@ pub struct Page {
     error: Option<String>,
     agents: Agents,
     hits: Vec<(Rect, Spot)>,
+    vault: crate::behind::Reader<vault::Seen>,
+    vault_read: fn() -> vault::Seen,
 }
 
 fn edit_text(value: &str) -> String {
@@ -159,7 +166,7 @@ pub fn copy_skill(kebbie: &Path, claude_home: &Path, skill: &str) -> Result<(Pat
 
 impl Page {
     pub fn new(paths: Paths, repo: Option<PathBuf>) -> Self {
-        Page { paths, repo, tab: Tab::Machine, section: 0, row: 0, filter: String::new(), mode: Mode::Normal, said: None, entries: Vec::new(), error: None, agents: Agents::default(), hits: Vec::new() }
+        Page { paths, repo, tab: Tab::Machine, section: 0, row: 0, filter: String::new(), mode: Mode::Normal, said: None, entries: Vec::new(), error: None, agents: Agents::default(), hits: Vec::new(), vault: Default::default(), vault_read: vault::read }
     }
 
     pub fn is_normal(&self) -> bool {
@@ -451,6 +458,9 @@ impl Page {
                 _ => {}
             }
         }
+        if key.code == KeyCode::Char('s') && self.on_vault() {
+            return self.vault_setup();
+        }
         let sections = self.sections();
         let rows = sections.get(self.section).map_or(0, |(_, rows)| rows.len());
         match key.code {
@@ -603,10 +613,16 @@ pub fn edit(cwd: &Path, repo: Option<&str>) -> Result<String> {
     };
     let mut page = Page::new(Paths::current(), repo);
     page.load();
+    page.spawn_reads();
     let mut terminal = crate::board::terminal::init_terminal();
     let result = (|| -> Result<()> {
         loop {
             terminal.draw(|frame| page.draw_alone(frame)).map_err(|error| error.to_string())?;
+            while !ratatui::crossterm::event::poll(std::time::Duration::from_millis(200)).map_err(|error| error.to_string())? {
+                if page.take_reads() {
+                    terminal.draw(|frame| page.draw_alone(frame)).map_err(|error| error.to_string())?;
+                }
+            }
             let effect = match ratatui::crossterm::event::read().map_err(|error| error.to_string())? {
                 ratatui::crossterm::event::Event::Key(key) if key.kind == ratatui::crossterm::event::KeyEventKind::Press => {
                     if crate::keys::ctrl_c(&key) {
@@ -630,6 +646,10 @@ pub fn edit(cwd: &Path, repo: Option<&str>) -> Result<String> {
                 Effect::Show(file) => {
                     let status = crate::board::terminal::outside(&mut terminal, || show_in_pager(&file));
                     page.shown(status);
+                }
+                Effect::Run(command) => {
+                    let result = crate::board::terminal::outside(&mut terminal, || run(&command));
+                    page.ran(&command, result);
                 }
                 Effect::Handled => {}
             }

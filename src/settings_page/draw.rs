@@ -50,6 +50,12 @@ impl Page {
             Some(Kind::Choice(_) | Kind::Skill | Kind::Profile | Kind::LeadProfile | Kind::ReviewProfile | Kind::SecondOpinion) => "⏎ pick",
             _ => "⏎ edit",
         };
+        if self.on_vault() {
+            return (
+                line(&["s mindin setup", "↑ ↓ key", "← → section", change, "d back to default", "tab machine / repo", "/ search", "esc board"]),
+                line(&["s mindin setup", change, "d default", "esc board"]),
+            );
+        }
         (
             line(&["↑ ↓ key", "← → section", change, "d back to default", "tab machine / repo", "/ search", "esc board"]),
             line(&["↑ ↓ key", change, "d default", "tab repo", "esc board"]),
@@ -258,7 +264,13 @@ impl Page {
                 if chosen { line.style(Style::new().bg(SURFACE)) } else { line }
             }).collect();
             frame.render_widget(Paragraph::new(rail_lines), rail);
-            let (lines, selected) = if self.on_profiles() { self.profile_lines(rows.width as usize) } else { self.row_lines(rows.width as usize) };
+            let (mut lines, mut selected) = if self.on_profiles() { self.profile_lines(rows.width as usize) } else { self.row_lines(rows.width as usize) };
+            if self.on_vault() {
+                let seen = self.vault_seen();
+                let above = super::vault::lines(seen.as_ref());
+                selected += above.len();
+                lines.splice(0..0, above);
+            }
             let scroll = selected.saturating_sub(rows.height.saturating_sub(10) as usize);
             frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), rows);
         }

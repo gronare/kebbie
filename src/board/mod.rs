@@ -520,6 +520,13 @@ impl App {
                 }
                 None => self.settings.shown(Err("no terminal to show it in".to_string())),
             },
+            settings_page::Effect::Run(command) => match terminal {
+                Some(terminal) => {
+                    let result = crate::board::terminal::outside(terminal, || settings_page::run(&command));
+                    self.settings.ran(&command, result);
+                }
+                None => self.settings.ran(&command, Err("no terminal to run it in".to_string())),
+            },
             settings_page::Effect::Handled => {}
         }
     }
@@ -1281,6 +1288,7 @@ pub fn run(overlay: bool) -> Result<String> {
     app.loads.spawn();
     app.screens.spawn();
     app.space_repos.spawn();
+    app.settings.spawn_reads();
     app.card_reader = true;
     app.space_repos(Duration::ZERO);
     app.plan_reads.spawn();
@@ -1413,6 +1421,7 @@ pub fn run(overlay: bool) -> Result<String> {
                 changed = true;
             }
             changed |= app.plan_reads.take();
+            changed |= app.settings.take_reads();
             changed |= app.take_item_card_read();
             if let Some(Effect::Left) = app.areas.tick(app.page == Page::Areas) {
                 app.quit = app.overlay;

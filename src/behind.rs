@@ -97,6 +97,11 @@ impl<A: Clone + Send + 'static> Reader<A> {
         self.answers.get(key).cloned()
     }
 
+    pub fn forget(&mut self, key: &str) {
+        self.answers.remove(key);
+        self.asked.remove(key);
+    }
+
     pub fn take(&mut self) -> bool {
         let Some(results) = &self.results else { return false };
         let mut changed = false;

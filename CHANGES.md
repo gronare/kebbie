@@ -17,6 +17,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A plan to approve opens with a short brief in your vault's language.
 - Backlog items follow a short style kept in your vault, which your own backlog.override.md replaces.
 - A task's edits no longer wait for its vault note, and kebbie done closes the note whatever it holds.
+- Settings has a Vault section showing where your vault lives, whether this machine is signed in and mindin's version, and s runs mindin setup.
 
 ### Fixed
 - Dropping, resetting, restarting and rebasing a task no longer freeze the board until they finish.
