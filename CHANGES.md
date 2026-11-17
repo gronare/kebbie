@@ -5,6 +5,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- The backlog style kebbie keeps in the vault asks for items in the vault's language.
 
 ### Fixed
 

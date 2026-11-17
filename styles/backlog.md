@@ -1,7 +1,9 @@
-<!-- style-version: 1 -->
+<!-- style-version: 2 -->
 # A kebbie backlog item
 
 The reader is a human scanning the board on a narrow terminal or a phone, deciding in seconds whether to start, park or answer it.
+
+Write the item in the vault's language, the `language` its schema names, title and question labels included; commands, file names and code stay as they are.
 
 - **Title**: what changes, in at most 12 words.
 - **Purpose**: the body's first line, one line on what the user can do once it is done.
