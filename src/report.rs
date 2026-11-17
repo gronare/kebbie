@@ -330,6 +330,12 @@ pub fn save_card(state: &Path, address: &str, sha: &str, text: &str) -> Result<(
     crate::state::write(&file, format!("card: {sha}\n\n{text}\n"))
 }
 
+// The user's answers to questions a card leaves out that the task was not told of at its last report; plan approvals and the lead's calls on method stay off the card.
+fn unnamed_answers(left_out: &[crate::card::Decision], before: Option<&crate::card::Data>) -> Vec<String> {
+    let told = |decision: &crate::card::Decision| before.is_some_and(|before| before.recorded.iter().any(|seen| seen.text == decision.text && seen.at == decision.at));
+    left_out.iter().filter(|decision| decision.source == Some(crate::card::Source::Question) && !told(decision)).map(|decision| decision.text.clone()).collect()
+}
+
 // An untracked card left in the worktree would count as an uncommitted change and stop the push, so kebbie keeps the card and removes the file; its Also noticed lines are filed as it is taken, and a sign-off card is kept as data with who took each decision from kebbie's own records.
 fn take_card(cwd: &Path, file: &Path, state: &Path, address: &str, text: &str, sign_off: bool, red: Option<&str>) -> Result<String> {
     let now = messages::now();
@@ -340,8 +346,9 @@ fn take_card(cwd: &Path, file: &Path, state: &Path, address: &str, text: &str, s
     if sign_off {
         let parsed = crate::card::parse(&text)?;
         let crate::card::Taken { decisions, unbacked, left_out } = crate::card::decisions(&parsed.decisions, &crate::card::records(state, address), red);
-        let missing: Vec<String> = left_out.iter().map(|decision| decision.text.clone()).collect();
-        let data = crate::card::next_version(&parsed, decisions, left_out, crate::card::load(state, address), now);
+        let before = crate::card::load(state, address);
+        let missing = unnamed_answers(&left_out, before.as_ref());
+        let data = crate::card::next_version(&parsed, decisions, left_out, before, now);
         crate::card::save(state, address, &data)?;
         if data.changed_at == Some(now) {
             said.push_str(&format!(" It replaces your card's version {}; the user sees what changed.", data.version - 1));
@@ -726,5 +733,16 @@ mod tests {
         assert!(red_gate(&green, Some("x")).unwrap_err().contains("it is not red"));
         assert_eq!(red_gate(&[], None), Ok(None));
         assert_eq!(red_gate(&[run(crate::evidence::Outcome::Unknown)], None), Ok(None), "a result kebbie could not read is not red");
+    }
+
+    #[test]
+    fn the_card_is_told_once_of_each_answer_to_a_question_it_leaves_out_and_never_of_a_plan_or_a_method_call() {
+        use crate::card::{By, Decision, Source};
+        let left = |text: &str, by: By, source: Source, at: u64| Decision { text: text.to_string(), by, source: Some(source), at: Some(at), replaced_by: None };
+        let left_out = [left("Which queue? → Solid Queue", By::You, Source::Question, 20), left("Build refunds? → Approve", By::You, Source::Plan, 30), left("Split the module? → one module", By::Lead, Source::Method, 40)];
+        assert_eq!(unnamed_answers(&left_out, None), ["Which queue? → Solid Queue"]);
+        let parsed = crate::card::parse("**Refunds.**\n\nBuilt:\n- x\n").unwrap();
+        let reported = crate::card::next_version(&parsed, Vec::new(), left_out.to_vec(), None, 50);
+        assert!(unnamed_answers(&left_out, Some(&reported)).is_empty(), "named at the last report, not again");
     }
 }
