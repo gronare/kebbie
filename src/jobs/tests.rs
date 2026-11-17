@@ -211,6 +211,19 @@ fn a_job_the_inbox_hands_over_again_is_queued_once_and_jobs_wait_in_the_order_th
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[test]
+fn a_job_that_could_not_be_queued_is_queued_when_the_inbox_hands_it_over_again() {
+    let dir = crate::sh::test_dir("jobs-queue-fails");
+    let (from, id) = (machine(1), cluster::new_id().unwrap());
+    let job = Job { repo: "app".into(), name: "build".into(), command: "true".into(), task: "billing".into(), commit: "a".repeat(40), base: None, bundle: Vec::new(), on: None };
+    std::fs::create_dir_all(dir.join("jobs")).unwrap();
+    std::fs::write(dir.join("jobs/queue"), "not a folder").unwrap();
+    assert!(worker::take(&dir, &from, "devbox", &id, job.clone(), 10).unwrap().contains("was not queued"));
+    std::fs::remove_file(dir.join("jobs/queue")).unwrap();
+    assert!(worker::take(&dir, &from, "devbox", &id, job, 11).unwrap().starts_with("jobs: queued build"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 fn sent(worker: Id) -> Sent {
     Sent { id: cluster::new_id().unwrap(), worker, worker_name: "studio".into(), repo: "app".into(), name: "build".into(), commit: "a".repeat(40), base: None, blobs: Vec::new(), at: 100, pid: std::process::id() }
 }

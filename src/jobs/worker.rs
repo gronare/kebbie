@@ -73,10 +73,10 @@ pub fn take(dir: &Path, from: &Id, from_name: &str, id: &Id, job: Job, now: u64)
     let queued = Queued { from: from.clone(), from_name: from_name.to_string(), id: id.clone(), job, at: now, seq: 0 };
     seen.queued += 1;
     let file = dir.join(QUEUE).join(format!("{:020}-{id}.json", seen.queued));
-    let written = serde_json::to_string(&queued).map_err(|error| error.to_string()).and_then(|text| crate::state::write(&file, text));
-    let kept = serde_json::to_string(&seen).map_err(|error| error.to_string()).and_then(|text| crate::state::write(&dir.join(SEEN), text));
+    let written = serde_json::to_string(&queued).map_err(|error| error.to_string()).and_then(|text| crate::state::write(&file, text))
+        .and_then(|()| serde_json::to_string(&seen).map_err(|error| error.to_string()).and_then(|text| crate::state::write(&dir.join(SEEN), text)));
     drop(held);
-    Some(match written.and(kept) {
+    Some(match written {
         Ok(()) => format!("jobs: queued {said}"),
         Err(error) => format!("jobs: {said} was not queued: {error}"),
     })
