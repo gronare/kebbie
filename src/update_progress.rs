@@ -598,7 +598,8 @@ mod tests {
         std::fs::write(dir.join("cargo.jsonl"), "{\"reason\":\"compiler-artifact\"}\n").unwrap();
         std::fs::write(dir.join("cargo.log"), "   Compiling kebbie v0.27.0\n").unwrap();
         let started = std::time::Instant::now();
-        while load(&file(&state)).and_then(|progress| progress.meter).is_none() {
+        let metered = Some(Meter::Build { done: 1, total: None, compiling: Some("kebbie".to_string()) });
+        while load(&file(&state)).and_then(|progress| progress.meter) != metered {
             assert!(started.elapsed() < Duration::from_secs(10), "the watcher never metered the build");
             std::thread::sleep(Duration::from_millis(20));
         }
