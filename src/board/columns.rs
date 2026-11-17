@@ -374,7 +374,7 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
                 Line::from(spans).style(Style::new().bg(SURFACE))
             }));
             if let Some(at) = cursor {
-                lines.push(super::subtasks::row_hint(super::steps::accept_matters(item, &super::steps::walked(item)[at])));
+                lines.push(super::subtasks::row_hint(super::steps::accept_offered(item, &super::steps::walked(item)[at])));
             } else {
                 let mut hint = app.s_gives(item).map_or_else(options_hint, |gives| card_hint(&gives));
                 if !super::steps::walked(item).is_empty() {

@@ -29,12 +29,16 @@ pub(super) fn accept_matters(item: &Item, subtask: &Subtask) -> bool {
     item.to_accept.is_some() || (!item.reported_ready() && item.subtasks.items.iter().skip_while(|other| other.id != subtask.id).skip(1).any(|later| matches!(later.state, SubtaskState::Planned | SubtaskState::InProgress)))
 }
 
+pub(super) fn accept_offered(item: &Item, subtask: &Subtask) -> bool {
+    waiting(subtask) && accept_matters(item, subtask)
+}
+
 pub(super) fn accept_count(item: &Item) -> usize {
     to_accept(item).count()
 }
 
 fn to_accept(item: &Item) -> impl Iterator<Item = &Subtask> {
-    item.subtasks.items.iter().filter(|subtask| waiting(subtask) && accept_matters(item, subtask))
+    item.subtasks.items.iter().filter(|subtask| accept_offered(item, subtask))
 }
 
 // The commits of the pushable run at the top of the push order, which a push may take while the task keeps working.

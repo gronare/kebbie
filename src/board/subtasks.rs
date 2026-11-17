@@ -177,7 +177,7 @@ pub(super) fn subtask_choices(item: &Item, step: &Subtask) -> Vec<super::widgets
         choice(Act::Review, "Open the review", "its diff in the review split next to its Claude"),
     ];
     choices.push(choice(Act::Chat, "Message its Claude", "send it a line without leaving"));
-    if super::steps::accept_matters(item, step) && step.state == SubtaskState::Ready {
+    if super::steps::accept_offered(item, step) {
         choices.push(choice(Act::Permit, "Accept", "mark it reviewed, so a push can take it ahead of the subtasks still being built"));
     }
     choices
@@ -300,7 +300,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     let lines = subtask_card(&steps[at], &view.loaded, body.width as usize);
     let scroll = view.scroll.min(lines.len().saturating_sub(body.height as usize) as u16);
     frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), body);
-    let accept = if super::steps::accept_matters(item, &steps[at]) { format!(" · {} accept", keys::key(Act::Permit)) } else { String::new() };
+    let accept = if super::steps::accept_offered(item, &steps[at]) { format!(" · {} accept", keys::key(Act::Permit)) } else { String::new() };
     let keys = format!("← → subtask · ↑ ↓ scroll · {} review{accept} · {} close", keys::key(Act::Review), keys::map().label(Act::Back));
     frame.render_widget(Paragraph::new(fit(vec![Span::styled(keys, style(MUTED))], foot.width as usize)), foot);
     if let Mode::SubtaskCard(view) = &mut app.mode {
@@ -320,7 +320,7 @@ impl App {
     // Inside a task the keys at the bottom are the subtask's.
     pub(super) fn subtask_keys(&self) -> Option<Line<'static>> {
         let item = self.selected_task()?;
-        self.subtask_at(&item).map(|at| inside_hint(super::steps::accept_matters(&item, &walked(&item)[at])))
+        self.subtask_at(&item).map(|at| inside_hint(super::steps::accept_offered(&item, &walked(&item)[at])))
     }
 
     // The task under the cursor has subtask rows to step into, and the cursor is on the task itself.
@@ -401,8 +401,10 @@ impl App {
         self.about("accept", &item.name);
         let result = (self.subtask_io.accept)(&path, &item.name, &step.id);
         self.show(result);
-        if matches!(self.mode, Mode::Normal) {
-            self.mode = back;
+        match &self.mode {
+            Mode::Normal => self.mode = back,
+            Mode::Message(text) => self.after_message = Some((text.clone(), back)),
+            _ => {}
         }
     }
 
@@ -689,6 +691,38 @@ mod tests {
         key(&mut app, KeyCode::Esc);
         key(&mut app, KeyCode::Char('a'));
         assert_eq!(accepted.borrow().len(), 1, "on the task's row a is the task's own key");
+    }
+
+    #[test]
+    fn a_subtask_still_being_built_offers_no_accept_in_any_of_its_key_lines() {
+        let mut app = test_app(vec![worked(stepped(stripe()))]);
+        app.subtask_io.load = Rc::new(|_, _, _| Loaded::default());
+        key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Down);
+        let item = app.tasks[0].clone();
+        assert!(super::super::steps::accept_matters(&item, &walked(&item)[1]), "a later subtask is planned, so accepting would matter once it is ready");
+        let (_, shown) = screen(&mut app);
+        assert!(shown.contains("↑ ↓ subtask · ⏎ options") && shown.contains("╰ ⏎ options") && !shown.contains("a accept"), "{shown}");
+        key(&mut app, KeyCode::Char('s'));
+        let (_, shown) = screen(&mut app);
+        assert!(shown.contains("r review") && !shown.contains("a accept"), "{shown}");
+    }
+
+    #[test]
+    fn an_accept_that_fails_shows_why_and_then_goes_back_to_the_card_or_the_row() {
+        let (mut app, _) = two_tasks();
+        app.subtask_io.accept = Rc::new(|_, _, _| Err("the task's worktree is gone".to_string()));
+        key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Char('a'));
+        assert!(matches!(&app.mode, Mode::Message(text) if text.contains("worktree is gone")), "the failure shows");
+        key(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Subtasks) && app.subtask_row.clone().unwrap().1 == "s3", "the cursor stays on its row");
+        key(&mut app, KeyCode::Char('s'));
+        key(&mut app, KeyCode::Char('a'));
+        assert!(matches!(app.mode, Mode::Message(_)));
+        key(&mut app, KeyCode::Esc);
+        assert!(matches!(&app.mode, Mode::SubtaskCard(view) if view.id == "s3"), "the card stays open");
     }
 
     #[test]

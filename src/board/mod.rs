@@ -203,6 +203,7 @@ struct App {
     fold_file: Option<PathBuf>,
     in_messages: bool,
     message_back: usize,
+    after_message: Option<(String, Mode)>,
     questions: Vec<Message>,
     answering: Option<(String, Receiver<Result<String>>)>,
     sending: Option<(Vec<String>, Receiver<Result<String>>)>,
@@ -618,6 +619,15 @@ impl App {
         let _ = self.refresh.send(());
     }
 
+    // A window that opened over another goes back to it once read.
+    fn back_from_message(&mut self, text: &str) {
+        if let Some((shown, back)) = self.after_message.take()
+            && shown == text
+        {
+            self.mode = back;
+        }
+    }
+
     fn about_path(&mut self, kind: &str, path: &Path) {
         let name = self.tasks.iter().find(|item| item.path.as_deref() == Some(path)).map(|item| item.name.clone());
         self.about(kind, &name.unwrap_or_else(|| name_of(path)));
@@ -739,7 +749,10 @@ impl App {
                 let shown = self.shown.take();
                 let offered = Notice::parse(&text).map(|notice| notices::offers(&notice, shown.as_ref())).unwrap_or_default();
                 if act.is_some_and(|act| offered.contains(&act)) {
+                    self.after_message = None;
                     self.handle_normal(key);
+                } else {
+                    self.back_from_message(&text);
                 }
             }
             working @ Mode::Working { .. } => self.mode = working,
@@ -1229,7 +1242,7 @@ impl App {
             column: Column::Work, tasks: Vec::new(), checkouts: Vec::new(), backlog, found: Vec::new(), work_selected: 0, backlog_selected: 0,
             mode: Mode::Normal, overlay, loaded: false, error: None, screens: HashMap::new(), refresh, quit: false, wanted_task: None, hits: Vec::new(), links: Vec::new(),
             page: Page::Work, areas: area_page::Page::new(sources.clone()), routines: routine_page::Page::new(config::path(), config::repos_dir()), settings: settings_page::Page::new(settings_page::Paths::current(), None), sources, fetch_failures: Vec::new(), away: false,
-            messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), answering: None, sending: None, offers: Vec::new(), offer_panel: Default::default(), reporter: Default::default(), fixed: None, fixed_seen: 0, usage: None, ongoing: Vec::new(), groups: Group::ALL.to_vec(), ongoing_at: OngoingAt::default(), parked_open: false,
+            messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, after_message: None, questions: Vec::new(), answering: None, sending: None, offers: Vec::new(), offer_panel: Default::default(), reporter: Default::default(), fixed: None, fixed_seen: 0, usage: None, ongoing: Vec::new(), groups: Group::ALL.to_vec(), ongoing_at: OngoingAt::default(), parked_open: false,
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
             graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel).map(|outcome| outcome.details.join("\n"))), update: None, progress_file: None, recheck: None, stale: Vec::new(), stale_at: 0, restart_after_update: false,

@@ -171,7 +171,12 @@ impl App {
                     (Some(Hit::Question(index)), Mode::Questions(window)) => window.select(&self.questions, index),
                     (Some(Hit::Answer(index)), Mode::Questions(window)) => window.click(&self.questions, index),
                     (None, Mode::SubtaskOptions(_)) => self.mode = Mode::Subtasks,
-                    (None, Mode::Options(_) | Mode::ReviewMenu(_) | Mode::RestartLead(_) | Mode::FixedOptions(_) | Mode::Park { .. } | Mode::Message(_) | Mode::Help(_)) => self.mode = Mode::Normal,
+                    (None, Mode::Message(text)) => {
+                        let text = text.clone();
+                        self.mode = Mode::Normal;
+                        self.back_from_message(&text);
+                    }
+                    (None, Mode::Options(_) | Mode::ReviewMenu(_) | Mode::RestartLead(_) | Mode::FixedOptions(_) | Mode::Park { .. } | Mode::Help(_)) => self.mode = Mode::Normal,
                     (None, Mode::Update) => {
                         self.mode = Mode::Normal;
                         self.handle_update(KeyEvent::from(KeyCode::Esc));
