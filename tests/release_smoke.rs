@@ -10,14 +10,14 @@ mod test_seal;
 
 const SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/release-smoke.sh");
 
-// A kebbie that keeps each started task as a file, reports it ready at once (resumed once it was started again) or holds a Codex task under NEEDS YOU on what codex-asks says, logs every call, and a herdr that closes Spaces.
+// A kebbie that keeps each started task as a file, reports it ready at once (resumed once it was started again, or answers the restart with what unprompted holds) or holds a Codex task under NEEDS YOU on what codex-asks says, logs every call, and a herdr that closes Spaces.
 const KEBBIE: &str = r#"#!/bin/sh
 d=$(dirname "$(dirname "$0")")
 echo "$*" >> "$d/kebbie.log"
 [ "$1" = -C ] && shift 2
 case "$1" in
   start)
-    if [ -f "$d/tasks/$2" ]; then echo resumed > "$d/tasks/$2"; echo 'Restarted its Claude'; echo '  next: It resumes its last conversation and has the prompt again.'; else echo started > "$d/tasks/$2"; echo '✓ Started'; fi ;;
+    if [ -f "$d/tasks/$2" ] && [ -f "$d/unprompted" ]; then cat "$d/unprompted"; elif [ -f "$d/tasks/$2" ]; then echo resumed > "$d/tasks/$2"; echo 'Restarted its Claude'; echo '  next: It resumes its last conversation and has the prompt again.'; else echo started > "$d/tasks/$2"; echo '✓ Started'; fi ;;
   status)
     printf '{"items":['
     sep=
@@ -145,6 +145,18 @@ fn without_kebbies_codex_plugin_the_smoke_skips_codex_and_a_task_that_never_repo
     assert_eq!(output.status.code(), Some(1), "{shown}");
     assert!(shown.contains("claude   FAIL  no ready report within 5s") && shown.contains("codex    PASS  skipped: kebbie's Codex plugin is not installed") && shown.ends_with("release-smoke: FAILED\n"), "{shown}");
     assert!(sandbox.calls().iter().any(|call| call.contains(" drop smoke-claude-")), "the failed task is dropped too");
+}
+
+#[test]
+fn a_restart_that_does_not_resume_shows_kebbies_whole_answer_with_its_error() {
+    let sandbox = Sandbox::new("unprompted");
+    let answer = "! Restarted, but its prompt did not reach Claude\n  you: Paste the task's prompt into its Claude.\n  task: Kebbie release smoke test (smoke-claude-1)\n  folder: /home/ada/wt1.sandbox\n  error: its input box did not show the prompt kebbie pasted within 5 s";
+    fs::write(sandbox.dir.join("unprompted"), answer).unwrap();
+    let output = sandbox.run(&[sandbox.repo.to_str().unwrap()]);
+    let shown = said(&output);
+    assert_eq!(output.status.code(), Some(1), "{shown}");
+    assert!(shown.contains("claude   FAIL  restart did not resume: ! Restarted, but its prompt did not reach Claude"), "{shown}");
+    assert!(shown.contains("error: its input box did not show the prompt kebbie pasted within 5 s"), "the row is cut at 120 characters, so the error kebbie named must be shown in full: {shown}");
 }
 
 #[test]
