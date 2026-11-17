@@ -333,12 +333,13 @@ Each Claude task runs its builds through a guard kebbie puts first on the PATH o
 
 - A task that finds every slot taken is told its place in line, and its command exits with status 75. The board shows `waiting for a build slot, 2nd` on its row.
 - When a slot frees, the keeper tells the next task in line that its turn has come and holds the slot 3 minutes for it. A task that does not build in that time loses its turn to the next, and is told so.
-- `kebbie update` goes first in line and waits there.
+- `kebbie update` goes first in line and waits there, at most 10 minutes, then builds without a slot.
+- A build that has held its slot 30 minutes while other tasks wait loses it to the next in line and is told so; it runs on outside the queue.
 - A command a build runs, such as `cargo` from a build script, runs in its build's slot. The next command of the same script finds the slot it just left for 10 seconds.
 - The guard runs cargo with `sccache` as `RUSTC_WRAPPER` when `sccache` is on PATH and neither `RUSTC_WRAPPER` nor a cargo config sets a wrapper, so the machine compiles each dependency once; each worktree builds its own crate in its own `target/`.
 - Without a keeper running, a build that finds no slot free for it goes ahead without waiting. Turns that run out and slots of builds that died are freed all the same, by the next build that asks.
 
-`"cargo"` in `builds.commands` counts only cargo's compiling commands: `build`, `check`, `test`, `run`, `clippy`, `bench`, `doc`, `install`, `rustc`, `rustdoc`, `fix`, `nextest` and `llvm-cov`. A task started after a change to the list has the new one.
+`"cargo"` in `builds.commands` counts only cargo's compiling commands: `build`, `check`, `test`, `clippy`, `bench`, `doc`, `install`, `rustc`, `rustdoc`, `fix`, `nextest` and `llvm-cov`. `cargo run` takes no slot, as what it runs, such as a dev server, may never end. A task started after a change to the list has the new one.
 
 ```toml
 # ~/.config/kebbie/config.toml

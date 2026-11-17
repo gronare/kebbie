@@ -14,12 +14,14 @@ pub const EVERY: u64 = 3;
 pub const HOLD: u64 = 180;
 const LINGER: u64 = 10;
 const UPDATE_HOLD: u64 = 30;
+const MAX_HOLD: u64 = 30 * 60;
+const UPDATE_WAIT: Duration = Duration::from_secs(10 * 60);
 const KEEPER_QUIET: u64 = 60;
 const QUEUED_EXIT: u8 = 75;
 const HELD_VAR: &str = "KEBBIE_BUILD_SLOT";
 const GUARD_DIR: &str = "build-guard";
 const QUEUE: &str = "queue.json";
-const CARGO_BUILDS: [&str; 18] = ["build", "b", "check", "c", "test", "t", "run", "r", "clippy", "bench", "doc", "d", "install", "rustc", "rustdoc", "fix", "nextest", "llvm-cov"];
+const CARGO_BUILDS: [&str; 16] = ["build", "b", "check", "c", "test", "t", "clippy", "bench", "doc", "d", "install", "rustc", "rustdoc", "fix", "nextest", "llvm-cov"];
 const CARGO_VALUED: [&str; 5] = ["-C", "--config", "-Z", "--color", "--manifest-path"];
 const QUEUE_LOCK_WAIT: Duration = Duration::from_secs(2);
 const QUEUE_BYTES: u64 = 1024 * 1024;
@@ -132,13 +134,18 @@ impl Queue {
         self.turns.retain(|turn| turn.address != address);
     }
 
-    // The keeper's round: dead builds free their slots, a turn not taken in time passes on, and each free slot goes to the next in line; what to tell whom comes back.
+    // The keeper's round: dead builds free their slots, as does one that held its slot MAX_HOLD while others wait, a turn not taken in time passes on, and each free slot goes to the next in line; what to tell whom comes back.
     pub fn tick(&mut self, slots: u32, commands: &[String], alive: impl Fn(&str) -> bool, now: u64) -> Vec<(String, String)> {
         self.slots = Some(slots);
         self.commands = Some(commands.to_vec());
         self.ticked = now;
         self.holders.retain(|holder| alive(&holder.id));
         let mut told = Vec::new();
+        if !self.line.is_empty() {
+            let (long, kept): (Vec<Holder>, Vec<Holder>) = std::mem::take(&mut self.holders).into_iter().partition(|holder| now.saturating_sub(holder.at) >= MAX_HOLD);
+            self.holders = kept;
+            told.extend(long.into_iter().filter(|holder| holder.address != UPDATE).map(|holder| (holder.address, OUTHELD.to_string())));
+        }
         let (expired, kept): (Vec<Turn>, Vec<Turn>) = std::mem::take(&mut self.turns).into_iter().partition(|turn| turn.until <= now);
         self.turns = kept;
         told.extend(expired.into_iter().filter(|turn| turn.told).map(|turn| (turn.address, MISSED.to_string())));
@@ -155,6 +162,7 @@ impl Queue {
 }
 
 pub const TURN: &str = "kebbie: a build slot is free for you; run your build within 3 minutes, or it passes to the next in line.";
+pub const OUTHELD: &str = "kebbie: your build held its build slot 30 minutes while other tasks waited, so the slot passed to the next in line; the build runs on outside the queue.";
 pub const MISSED: &str = "kebbie: your build turn passed unused to the next in line; run the build again to queue.";
 
 pub fn queued_line(place: usize, holders: &[Holder]) -> String {
@@ -283,12 +291,20 @@ pub fn take_slot(dir: &Path, address: &str, front: bool, needs_keeper: bool) -> 
     }
 }
 
-// kebbie update goes first in line and waits there, since the user is watching it; a queue it cannot use lets it build at once.
+// kebbie update goes first in line and waits there at most UPDATE_WAIT, since the user is watching it; a queue it cannot use lets it build at once.
 pub fn wait_for_update() -> Option<Slot> {
-    let dir = dir().ok()?;
+    wait_in(&dir().ok()?, UPDATE_WAIT, Duration::from_secs(2))
+}
+
+fn wait_in(dir: &Path, limit: Duration, pause: Duration) -> Option<Slot> {
+    let until = std::time::Instant::now() + limit;
     let mut said = false;
     loop {
-        match take_slot(&dir, UPDATE, true, false) {
+        if std::time::Instant::now() >= until {
+            eprintln!("still no build slot after {} minutes; building without one", limit.as_secs() / 60);
+            return None;
+        }
+        match take_slot(dir, UPDATE, true, false) {
             Ok(Took::Slot(slot)) => return Some(slot),
             Ok(Took::Queued(_, holders)) => {
                 if !said {
@@ -296,7 +312,7 @@ pub fn wait_for_update() -> Option<Slot> {
                     eprintln!("waiting for a build slot: {} builds now", building.join(", "));
                     said = true;
                 }
-                std::thread::sleep(Duration::from_secs(2));
+                std::thread::sleep(pause);
             }
             Ok(Took::NoKeeper) | Err(_) => return None,
         }
@@ -604,6 +620,37 @@ mod tests {
         crate::state::write(&dir.join(QUEUE), serde_json::to_string(&dead).unwrap()).unwrap();
         fs::write(held_file(&dir, "1-1-0-build"), "").unwrap();
         assert!(matches!(take_slot(&dir, UPDATE, true, false), Ok(Took::Slot(_))), "a lock nobody holds is a build that ended");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_build_that_holds_its_slot_past_the_limit_while_others_wait_loses_it_and_hears_so() {
+        let mut queue = queue(1, 100);
+        queue.take("a@app", "1", false, true, 100);
+        assert!(queue.tick(1, &[], |_| true, 100 + MAX_HOLD).is_empty(), "nobody waits, so the slot stays");
+        queue.take("b@app", "2", false, true, 100 + MAX_HOLD);
+        let told = queue.tick(1, &[], |_| true, 101 + MAX_HOLD);
+        assert_eq!(told, vec![("a@app".to_string(), OUTHELD.to_string()), ("b@app".to_string(), TURN.to_string())]);
+        assert!(queue.holders.is_empty());
+    }
+
+    #[test]
+    fn cargo_run_takes_no_slot_as_what_it_runs_may_never_end() {
+        let commands = strings(&["cargo"]);
+        assert!(!builds("cargo", &strings(&["run"]), &commands) && !builds("cargo", &strings(&["r", "--release"]), &commands));
+    }
+
+    #[test]
+    fn kebbie_update_waits_for_a_held_slot_only_so_long() {
+        let dir = crate::sh::test_dir("builds-update-wait");
+        crate::state::write(&dir.join(QUEUE), serde_json::to_string(&queue(1, crate::messages::now())).unwrap()).unwrap();
+        let Ok(Took::Slot(_held)) = take_slot(&dir, "a@app", false, true) else { panic!("a free slot is taken") };
+        let (sent, got) = std::sync::mpsc::channel();
+        let inside = dir.clone();
+        std::thread::spawn(move || {
+            let _ = sent.send(wait_in(&inside, Duration::from_secs(1), Duration::from_millis(100)).is_none());
+        });
+        assert_eq!(got.recv_timeout(Duration::from_secs(10)), Ok(true));
         let _ = fs::remove_dir_all(dir);
     }
 
