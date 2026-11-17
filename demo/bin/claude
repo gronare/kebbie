@@ -13,7 +13,8 @@ import textwrap
 import time
 import tty
 
-demo = os.environ.get("KDEMO_DIR", "/tmp/kebbie-demo")
+# kebbie starts the reviewer with its own environment, which drops KDEMO_DIR, so the world is found from where this file was copied to.
+demo = os.environ.get("KDEMO_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 # kebbie's rules check asks a reviewer for a verdict on stdin; the demo's is $KDEMO_DIR/verdicts/<branch>, or a pass. A review station's reviewer keeps reading, so its task stays In review.
@@ -21,11 +22,16 @@ def rules_verdict():
     brief = "" if sys.stdin.isatty() else sys.stdin.read()
     if not brief:
         return
+    branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True).stdout.strip()
+    if "needs an independent review" in brief:
+        reasons = {"checkout-copy": "copy changes only", "product-images": "one component, no data or money paths", "request-ids": "a header and a log field", "refunds": "it moves money"}
+        time.sleep(2)
+        sys.stdout.write(f"needed: {'yes' if branch == 'refunds' else 'no'}\nreason: {reasons.get(branch, 'a small change with tests')}\n")
+        return
     if "this is a rules check" not in brief:
         time.sleep(1200)
         sys.stdout.write("verdict: ok\n")
         return
-    branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True).stdout.strip()
     short = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
     try:
         verdict = open(os.path.join(demo, "verdicts", branch)).read().replace("{sha}", short)

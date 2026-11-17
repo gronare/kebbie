@@ -7,6 +7,7 @@ D=${KDEMO_DIR:-$(cd /tmp && pwd -P)/kebbie-demo}
 H=$D/home
 
 case "$D" in /tmp/*|/private/tmp/*) ;; *) echo "KDEMO_DIR must be under /tmp" >&2; exit 1 ;; esac
+[ ${#H} -le 75 ] || { echo "KDEMO_DIR is too long for herdr's socket path (at most 70 characters): $D" >&2; exit 1; }
 
 demo_socket() { "$D/env.sh" herdr status --json 2>/dev/null | jq -r .server.socket; }
 
@@ -127,13 +128,16 @@ if [ "$scene" = vault ]; then
   ln -s "$(dirname "$D")/kebbie-demo-models" "$H/.cache/notes-vault-mcp/models"
 fi
 
-chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-[ -x "$chrome" ] || chrome=$(command -v chromium || command -v google-chrome || true)
-[ -n "$chrome" ] || { echo "no Chrome to render the card images with" >&2; exit 1; }
+chrome=${KDEMO_CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}
+[ -x "$chrome" ] || chrome=$(command -v chromium || command -v google-chrome || command -v google-chrome-stable || true)
+[ -n "$chrome" ] || { echo "no Chrome to render the card images with: put chromium on PATH or set KDEMO_CHROME" >&2; exit 1; }
+chrome_sandbox=
+# Ubuntu's AppArmor refuses Chrome's sandbox to a Chrome it has no profile for, and these pages are the repo's own files.
+[ "$(uname -s)" = Linux ] && chrome_sandbox=--no-sandbox
 # Headless Chrome now and then exits without a screenshot, so each page gets three tries.
 for page in card:saved-carts checkout:checkout-copy; do
   for _ in 1 2 3; do
-    "$chrome" --headless=new --disable-gpu --hide-scrollbars --no-first-run --user-data-dir="$D/chrome" \
+    "$chrome" --headless=new ${chrome_sandbox:+"$chrome_sandbox"} --disable-gpu --hide-scrollbars --no-first-run --user-data-dir="$D/chrome" \
       --window-size=900,544 --screenshot="$D/shots/${page#*:}.png" "file://$repo_root/demo/${page%%:*}.html" >/dev/null 2>&1 && break
   done
   [ -s "$D/shots/${page#*:}.png" ] || { echo "Chrome rendered no ${page#*:}.png" >&2; exit 1; }
@@ -158,6 +162,8 @@ EOF
 # The repos' origins read as GitHub, so kebbie watches CI after a push, and git sends the pushes to the bare repos here.
 printf '[url "%s/remotes/"]\n\tinsteadOf = https://github.com/robin-demo/\n' "$D" >> "$H/.gitconfig"
 printf '{"projects":{"%s":{"hasTrustDialogAccepted":true}}}\n' "$H/code" > "$H/.claude.json"
+# The board opens the setup guide instead until Claude Code lists kebbie's plugin as installed.
+mkdir -p "$H/.claude/plugins" && printf '{"version":2,"plugins":{"kebbie@kebbie":[]}}\n' > "$H/.claude/plugins/installed_plugins.json"
 cat > "$H/.config/herdr/config.toml" <<'EOF'
 onboarding = false
 [update]
@@ -188,6 +194,7 @@ auto = $restart_auto
 
 [task]
 steps = true
+sandbox = false
 EOF
 # The board's message log starts folded to one line, so the film shows every task.
 mkdir -p "$H/.local/state/kebbie" && printf 'line\t0\n' > "$H/.local/state/kebbie/board-messages"
@@ -568,7 +575,7 @@ def over_limit(key, limit):
 EOF
 save "$H/code/wt1.api" "Count requests per API key" "The public API has no limit, so one key can starve the others. Each key now keeps its request times for the last minute, the count the limiter middleware will check."
 
-cd "$H/code/wt2.api" && run kebbie subtasks "Round VAT once per invoice and rate" "Preview old and new VAT per invoice" >/dev/null
+as_user "$H/code/wt2.api" kebbie subtasks "Round VAT once per invoice and rate" "Preview old and new VAT per invoice"
 put "$H/code/wt2.api" app/invoices/vat.py <<'EOF'
 from collections import defaultdict
 from decimal import Decimal, ROUND_HALF_UP
@@ -599,11 +606,11 @@ echo working > "$D/modes/wt1.api"
 cd "$H/code/wt1.api" && run kebbie report --state working --next "nothing yet" "Counting requests per key; the limiter middleware is next" >/dev/null
 cd "$H/code/wt2.api" && run kebbie report --state needs-you --next "check the totals in the preview" "VAT is rounded once per invoice; the preview shows old and new totals" >/dev/null
 cat > "$H/code/wt2.shop/card.md" <<EOF
-The checkout speaks plainly: Pay now, a declined card says what to do, and the shipping line says when you see the cost.
+**The checkout in plain words**
 
-![the checkout with a declined card]($D/shots/checkout-copy.png)
-
-Confirm: the declined message reads right to you.
+Built:
+- The checkout speaks plainly: Pay now, a declined card says what to do, and the shipping line says when you see the cost.
+- ![the checkout with a declined card]($D/shots/checkout-copy.png)
 EOF
 cd "$H/code/wt2.shop" && run kebbie report --state ready --card card.md --next "push it" "Checkout copy rewritten in plain words; tests pass" >/dev/null
 cd "$H/code/wt1.shop" && run kebbie tell rate-limit "search will call the API once per keystroke; leave room for that in the limit" >/dev/null
@@ -659,7 +666,7 @@ verdict: changes
 EOF
   cd "$H/code/wt3.shop" && run kebbie report --state ready --next "push it" "Product images load as they scroll into view" >/dev/null
 
-  cd "$H/code/wt4.api" && run kebbie subtasks "Add the refunds table" "Refund an invoice in part or in full" "Write a credit note for each refund" >/dev/null
+  as_user "$H/code/wt4.api" kebbie subtasks "Add the refunds table" "Refund an invoice in part or in full" "Write a credit note for each refund"
   put "$H/code/wt4.api" app/db/migrations/0007_refunds.py <<'EOF'
 def up(db):
     db.create_table("refunds", invoice_id="int", amount="decimal", reason="text", created_at="timestamp")
@@ -716,12 +723,12 @@ if [ "$scene" = push-and-card ]; then
   as_user "$H/code/shop" kebbie start free-shipping "Show in the checkout how far the basket is from free shipping" --after checkout-copy --why "it adds a line to the copy checkout-copy rewrites" --no-focus
 fi
 
-checked() { for _ in $(seq 1 120); do grep -qs "approved\.\|break the rules" "$H/.local/state/kebbie/rules/$1.log" && return 0; sleep 0.5; done; echo "the rules check of $1 gave no verdict" >&2; exit 1; }
+checked() { for _ in $(seq 1 120); do grep -qs "hold to the rules\.\|break the rules" "$H/.local/state/kebbie/rules/$1.log" && return 0; sleep 0.5; done; echo "the rules check of $1 gave no verdict" >&2; exit 1; }
 checked checkout-copy@shop
 for commit in HEAD~1 HEAD; do as_user "$H/code/shop" kebbie accept checkout-copy "$(git -C "$H/code/wt2.shop" rev-parse --short "$commit")"; done
 if [ "$scene" = demo ]; then
   checked request-ids@api
-  as_user "$H/code/api" kebbie stage request-ids
+  as_user "$H/code/api" kebbie try request-ids
   checked product-images@shop
   for _ in $(seq 1 60); do grep -q "rules check of your commits" "$D/screens/wt3.shop" && break; sleep 0.5; done
   printf '%s\n' "" "● The rules check is right: the rename in src/search/search.ts is a change of its own. Splitting it into a second commit." >> "$D/screens/wt3.shop"

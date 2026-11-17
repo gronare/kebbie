@@ -1,6 +1,6 @@
 #!/bin/bash
 # A stand-in for the GitHub CLI in the demo: logged in, and each pushed commit gets one CI run that is green 20 seconds after kebbie first asks for it.
-D=${KDEMO_DIR:-/tmp/kebbie-demo}
+D=${KDEMO_DIR:-$(cd "$(dirname "$0")/.." && pwd)}
 case "$1 $2" in
   "auth status") exit 0 ;;
   "run list") ;;
