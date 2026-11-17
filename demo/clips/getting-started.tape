@@ -23,17 +23,15 @@ Type "h"
 Sleep 800ms
 Show
 
-# A new task from the board: a name, then a prompt.
+# A new task from the board: what you want done, then Start now, which names it from the first words.
 Sleep 1.5s
 Type "n"
 Sleep 700ms
-Type "wishlist"
-Sleep 400ms
-Enter
-Sleep 600ms
-Type "Save products for later from the product page"
+Type "Wishlist: save products for later from the product page"
 Sleep 600ms
 Enter
+Sleep 800ms
+Type "s"
 Sleep 2s
 
 # Its own worktree, branch and Space, with Claude at work in it.
