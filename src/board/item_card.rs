@@ -1,4 +1,6 @@
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::thread;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::style::{Color, Style};
@@ -80,6 +82,7 @@ pub(super) fn go_refusal(entry: &Entry) -> Option<String> {
     (waiting > 0).then(|| format!("Not started: {} on you. Answer them on its card, or press {} again to start anyway.", waits(waiting), keys::map().label(Act::Go)))
 }
 
+#[derive(Clone)]
 pub(super) struct ItemCard {
     pub(super) entry: Entry,
     pub(super) path: Option<PathBuf>,
@@ -132,6 +135,13 @@ impl ItemCard {
         self.answers = crate::backlog_kept::settle(state, &self.entry.reference, &self.body, &self.template);
         self.pick = self.pick.min(self.questions().len().saturating_sub(1));
         Some(())
+    }
+
+    // What a read behind the board found, laid over the open card where the user keeps his place.
+    fn take_read(&mut self, read: ItemCard) {
+        (self.path, self.priority, self.repo, self.filed, self.body) = (read.path, read.priority, read.repo, read.filed, read.body);
+        (self.drafting, self.short, self.answers, self.entry.title) = (read.drafting, read.short, read.answers, read.entry.title);
+        self.pick = self.pick.min(self.questions().len().saturating_sub(1));
     }
 
     pub(super) fn questions(&self) -> Vec<Question> {
@@ -332,6 +342,38 @@ pub(super) fn draw_item_card(frame: &mut Frame, card: &mut ItemCard) {
 }
 
 impl App {
+    // The open item card is read again on a thread, one read at a time, as a snapshot comes every few seconds.
+    pub(super) fn reread_item_card(&mut self) {
+        let Mode::ItemCard(card) = &self.mode else { return };
+        let Ok(state) = crate::lead::state_dir() else { return };
+        if self.card_read.is_some() {
+            return;
+        }
+        let mut copy = (**card).clone();
+        let (sender, read) = mpsc::channel();
+        thread::spawn(move || {
+            let _ = sender.send(copy.reload(&state).map(|_| copy));
+        });
+        self.card_read = Some(read);
+    }
+
+    pub(super) fn take_item_card_read(&mut self) -> bool {
+        let Some(read) = &self.card_read else { return false };
+        let found = match read.try_recv() {
+            Ok(found) => found,
+            Err(mpsc::TryRecvError::Empty) => return false,
+            Err(mpsc::TryRecvError::Disconnected) => None,
+        };
+        self.card_read = None;
+        match (found, &mut self.mode) {
+            (Some(found), Mode::ItemCard(card)) if card.entry.reference == found.entry.reference => {
+                card.take_read(found);
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub(super) fn open_item_card(&mut self, entry: Entry) -> bool {
         if !has_card(&entry) {
             return false;

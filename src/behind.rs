@@ -1,5 +1,7 @@
-use std::sync::mpsc::{self, Receiver};
+use std::collections::HashMap;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
+use std::time::{Duration, Instant};
 
 // Work a page runs behind it: a line for each while it runs, and outcomes that wait until the page can show them.
 pub struct Runs<T> {
@@ -44,6 +46,69 @@ impl<T: Send + 'static> Runs<T> {
     }
 }
 
+type Read<A> = (String, Box<dyn FnOnce() -> A + Send>);
+
+// Reads a draw needs, done on one thread: each key is asked again once its last ask is older than the wait, and its last answer shows meanwhile; before spawn, as in tests, it reads in place.
+pub struct Reader<A> {
+    answers: HashMap<String, A>,
+    asked: HashMap<String, Instant>,
+    requests: Option<Sender<Read<A>>>,
+    results: Option<Receiver<(String, A)>>,
+}
+
+impl<A> Default for Reader<A> {
+    fn default() -> Self {
+        Reader { answers: HashMap::new(), asked: HashMap::new(), requests: None, results: None }
+    }
+}
+
+impl<A: Clone + Send + 'static> Reader<A> {
+    pub fn spawn(&mut self) {
+        let (request_tx, request_rx) = mpsc::channel::<Read<A>>();
+        let (answer_tx, answer_rx) = mpsc::channel();
+        thread::spawn(move || {
+            while let Ok((key, read)) = request_rx.recv() {
+                if answer_tx.send((key, read())).is_err() {
+                    return;
+                }
+            }
+        });
+        (self.requests, self.results) = (Some(request_tx), Some(answer_rx));
+    }
+
+    #[cfg(test)]
+    pub fn put(&mut self, key: &str, answer: A) {
+        self.answers.insert(key.to_string(), answer);
+        self.asked.insert(key.to_string(), Instant::now());
+    }
+
+    pub fn get(&mut self, key: &str, wait: Duration, read: impl FnOnce() -> A + Send + 'static) -> Option<A> {
+        if self.asked.get(key).is_none_or(|at| at.elapsed() >= wait) {
+            self.asked.insert(key.to_string(), Instant::now());
+            match &self.requests {
+                Some(requests) => {
+                    let _ = requests.send((key.to_string(), Box::new(read)));
+                }
+                None => {
+                    self.answers.insert(key.to_string(), read());
+                }
+            }
+        }
+        self.answers.get(key).cloned()
+    }
+
+    // Takes the answers that came in; true when any did, so the board draws them.
+    pub fn take(&mut self) -> bool {
+        let Some(results) = &self.results else { return false };
+        let mut changed = false;
+        while let Ok((key, answer)) = results.try_recv() {
+            self.answers.insert(key, answer);
+            changed = true;
+        }
+        changed
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::Runs;
@@ -66,5 +131,22 @@ mod tests {
         assert!(!runs.is_empty(), "the outcome waits");
         assert_eq!(runs.next(true), Some(7));
         assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn a_reader_asks_once_per_wait_and_shows_the_last_answer_while_it_reads_again() {
+        let mut reader = super::Reader::default();
+        reader.spawn();
+        let (go, wait) = std::sync::mpsc::channel::<()>();
+        assert_eq!(reader.get("pane", std::time::Duration::ZERO, move || { let _ = wait.recv(); "first".to_string() }), None, "nothing until it is read");
+        go.send(()).unwrap();
+        let start = std::time::Instant::now();
+        while !reader.take() {
+            assert!(start.elapsed() < std::time::Duration::from_secs(10), "it never answered");
+        }
+        assert_eq!(reader.get("pane", std::time::Duration::from_secs(60), || panic!("asked again before the wait")), Some("first".to_string()));
+        let (go, wait) = std::sync::mpsc::channel::<()>();
+        assert_eq!(reader.get("pane", std::time::Duration::ZERO, move || { let _ = wait.recv(); "second".to_string() }), Some("first".to_string()), "the last answer shows while it reads again");
+        drop(go);
     }
 }

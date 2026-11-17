@@ -32,7 +32,7 @@ pub(super) struct Loaded {
     pub obstacle: Option<Obstacle>,
 }
 
-pub(super) type Load = Rc<dyn Fn(&Path, &str, &Subtask) -> Loaded>;
+pub(super) type Load = std::sync::Arc<dyn Fn(&Path, &str, &Subtask) -> Loaded + Send + Sync>;
 pub(super) type Count = Rc<dyn Fn(&Path, &Subtask) -> Option<(usize, usize)>>;
 pub(super) type Accept = Rc<dyn Fn(&Path, &str, &str) -> Result<String>>;
 
@@ -44,16 +44,15 @@ pub(super) struct Io {
 
 impl Default for Io {
     fn default() -> Self {
-        Io { load: Rc::new(load), count: Rc::new(read_count), accept: Rc::new(|path, name, id| crate::tasks::accept(path, Some(name), None, Some(id), true)) }
+        Io { load: std::sync::Arc::new(load), count: Rc::new(read_count), accept: Rc::new(|path, name, id| crate::tasks::accept(path, Some(name), None, Some(id), true)) }
     }
 }
 
-// The subtask card window: which subtask of which task, what was read for it, and how far it is scrolled.
+// The subtask card window: which subtask of which task, and how far it is scrolled.
 #[derive(Clone)]
 pub(super) struct View {
     pub address: String,
     pub id: String,
-    pub loaded: Loaded,
     pub scroll: u16,
 }
 
@@ -131,6 +130,13 @@ impl Reads {
         }
         changed
     }
+}
+
+pub(super) type Loads = crate::behind::Reader<Loaded>;
+
+// Which read of a subtask a card shows: its task, its id and its last commit.
+pub(super) fn subject_of(address: &str, step: &Subtask) -> String {
+    format!("{address}#{}#{}", step.id, step.head().unwrap_or_default())
 }
 
 fn waits_for_you(obstacle: &Obstacle) -> bool {
@@ -292,15 +298,17 @@ pub(super) fn card_window(frame: &mut Frame, title: String) -> (Rect, Rect, Rect
 
 pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     let Mode::SubtaskCard(view) = &app.mode else { return };
-    let Some(item) = app.tasks.iter().find(|item| address_of(item) == view.address) else { return };
-    let steps = walked(item);
+    let Some(item) = app.tasks.iter().find(|item| address_of(item) == view.address).cloned() else { return };
+    let steps = walked(&item).to_vec();
     let Some(at) = steps.iter().position(|step| step.id == view.id) else { return };
+    let loaded = app.subtask_loaded(&item, &steps[at]);
+    let Mode::SubtaskCard(view) = &app.mode else { return };
     let total = item.subtasks.pushed.len() + item.subtasks.items.len();
     let (body, _, foot) = card_window(frame, format!("▸ {} › {} of {total}", cut(&item.titled(), 60), steps[at].number));
-    let lines = subtask_card(&steps[at], &view.loaded, body.width as usize);
+    let lines = subtask_card(&steps[at], &loaded, body.width as usize);
     let scroll = view.scroll.min(lines.len().saturating_sub(body.height as usize) as u16);
     frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), body);
-    let accept = if super::steps::accept_offered(item, &steps[at]) { format!(" · {} accept", keys::key(Act::Permit)) } else { String::new() };
+    let accept = if super::steps::accept_offered(&item, &steps[at]) { format!(" · {} accept", keys::key(Act::Permit)) } else { String::new() };
     let keys = format!("← → subtask · ↑ ↓ scroll · {} review{accept} · {} close", keys::key(Act::Review), keys::map().label(Act::Back));
     frame.render_widget(Paragraph::new(fit(vec![Span::styled(keys, style(MUTED))], foot.width as usize)), foot);
     if let Mode::SubtaskCard(view) = &mut app.mode {
@@ -346,6 +354,13 @@ impl App {
             }
             self.reads.counts.get(&key).copied().flatten()
         }).collect()
+    }
+
+    // What the subtask's card shows as far as it is read.
+    pub(super) fn subtask_loaded(&mut self, item: &Item, step: &Subtask) -> Loaded {
+        let Some(path) = item.path.clone() else { return Loaded::default() };
+        let (address, step, load) = (address_of(item), step.clone(), self.subtask_io.load.clone());
+        self.loads.get(&subject_of(&address, &step), Duration::from_secs(4), move || load(&path, &address, &step)).unwrap_or_default()
     }
 
     fn put_cursor(&mut self, item: &Item, step: &Subtask) {
@@ -404,10 +419,9 @@ impl App {
     }
 
     fn open_subtask(&mut self, item: &Item, step: &Subtask) {
-        let Some(path) = item.path.clone() else { return };
-        let address = address_of(item);
-        let loaded = (self.subtask_io.load)(&path, &address, step);
-        self.mode = Mode::SubtaskCard(Box::new(View { address, id: step.id.clone(), loaded, scroll: 0 }));
+        if item.path.is_some() {
+            self.mode = Mode::SubtaskCard(Box::new(View { address: address_of(item), id: step.id.clone(), scroll: 0 }));
+        }
     }
 
     fn accept_subtask(&mut self, item: &Item, step: &Subtask, back: Mode) {
@@ -531,7 +545,7 @@ mod tests {
         let accepted = Rc::new(RefCell::new(Vec::new()));
         let seen = accepted.clone();
         app.subtask_io = Io {
-            load: Rc::new(|_, _, step| Loaded { files: if step.commits.is_empty() { Vec::new() } else { files() }, built: vec![format!("{} keeps the charge in one place.", step.title)], obstacle: None }),
+            load: std::sync::Arc::new(|_, _, step| Loaded { files: if step.commits.is_empty() { Vec::new() } else { files() }, built: vec![format!("{} keeps the charge in one place.", step.title)], obstacle: None }),
             count: Rc::new(|_, step| (!step.commits.is_empty()).then_some((1, 2))),
             accept: Rc::new(move |path, name, id| {
                 seen.borrow_mut().push(format!("{} {name} {id}", path.display()));
@@ -695,6 +709,37 @@ mod tests {
     }
 
     #[test]
+    fn a_subtask_card_draws_at_once_while_its_files_are_read_behind_it_and_fills_in_when_they_come() {
+        let (mut app, _) = two_tasks();
+        let (go, wait) = mpsc::channel::<()>();
+        let wait = std::sync::Arc::new(std::sync::Mutex::new(wait));
+        app.subtask_io.load = std::sync::Arc::new(move |_, _, step| {
+            let _ = wait.lock().unwrap().recv();
+            Loaded { files: files(), built: vec![format!("{} keeps the charge in one place.", step.title)], obstacle: None }
+        });
+        app.loads.spawn();
+        key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Char('s'));
+        let (_, shown) = screen(&mut app);
+        assert!(shown.contains("▸ Switch the payment provider to Stripe › 3 of 4") && !shown.contains("FILES"), "the card draws without waiting for its files: {shown}");
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Esc);
+        key(&mut app, KeyCode::Up);
+        assert!(matches!(app.mode, Mode::Subtasks), "keys work while the files are read");
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Char('s'));
+        go.send(()).unwrap();
+        let start = Instant::now();
+        while !app.loads.take() {
+            assert!(start.elapsed() < Duration::from_secs(10), "the read never came");
+        }
+        let (_, shown) = screen(&mut app);
+        assert!(shown.contains("FILES") && shown.contains("app/gateway.rb") && shown.contains("keeps the charge in one place"), "the files fill in: {shown}");
+        drop(go);
+    }
+
+    #[test]
     fn a_inside_the_task_accepts_the_subtask_under_the_cursor_and_on_the_task_row_stays_the_tasks() {
         let (mut app, accepted) = two_tasks();
         key(&mut app, KeyCode::Right);
@@ -710,7 +755,7 @@ mod tests {
     #[test]
     fn a_subtask_still_being_built_offers_no_accept_in_any_of_its_key_lines() {
         let mut app = test_app(vec![worked(stepped(stripe()))]);
-        app.subtask_io.load = Rc::new(|_, _, _| Loaded::default());
+        app.subtask_io.load = std::sync::Arc::new(|_, _, _| Loaded::default());
         key(&mut app, KeyCode::Right);
         key(&mut app, KeyCode::Down);
         let item = app.tasks[0].clone();

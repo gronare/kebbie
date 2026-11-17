@@ -82,14 +82,8 @@ impl App {
     }
 
     fn agent_screen(&mut self, pane: &str) -> String {
-        if let Some((at, screen)) = self.screens.get(pane)
-            && at.elapsed() < Duration::from_secs(4)
-        {
-            return screen.clone();
-        }
-        let screen = herdr::read_agent(pane).unwrap_or_default();
-        self.screens.insert(pane.to_string(), (Instant::now(), screen.clone()));
-        screen
+        let read = pane.to_string();
+        self.screens.get(pane, Duration::from_secs(4), move || herdr::read_agent(&read).unwrap_or_default()).unwrap_or_default()
     }
 }
 

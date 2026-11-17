@@ -57,7 +57,7 @@ pub(super) fn test_app(tasks: Vec<Item>) -> App {
     let mut app = App::new(vec![Source::Local], Backlog { updated: None, vault: Default::default(), entries: Vec::new() }, false, refresh);
     for item in &tasks {
         if let Some(agent) = &item.agent {
-            app.screens.insert(agent.pane.clone(), (Instant::now(), String::new()));
+            app.screens.put(&agent.pane, String::new());
         }
     }
     app.tasks = tasks;

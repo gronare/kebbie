@@ -141,7 +141,7 @@ pub fn plan_text(question: &Question) -> Option<String> {
 
 const READ_RETRY: Duration = Duration::from_secs(60);
 
-// The board asks for the plan on every draw until it has it, so a refused read waits READ_RETRY before the vault command runs again.
+// The board asks for the plan every few seconds until it has it, so a refused read waits READ_RETRY before the vault command runs again.
 fn read_plan(cli: Option<&crate::vault_cli::Cli>, key: &str, now: Instant) -> Option<String> {
     static REFUSED: std::sync::Mutex<Vec<(String, Instant)>> = std::sync::Mutex::new(Vec::new());
     let mut refused = REFUSED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);

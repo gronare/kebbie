@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -495,7 +496,9 @@ pub(super) fn draw_questions(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit
     let plan = app.questions.get(selected).cloned().and_then(|message| {
         let question = message.question.clone()?;
         if !app.plans.contains_key(&message.id) {
-            app.plans.insert(message.id.clone(), markdown(&brief_and_plan(&message.text, &questions::plan_text(&question)?)));
+            let text = message.text.clone();
+            let read = app.plan_reads.get(&message.id, Duration::from_secs(5), move || questions::plan_text(&question).map(|plan| brief_and_plan(&text, &plan)));
+            app.plans.insert(message.id.clone(), markdown(&read.flatten()?));
         }
         app.plans.get(&message.id).cloned()
     });

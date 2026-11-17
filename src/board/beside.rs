@@ -23,7 +23,6 @@ pub(super) struct Beside {
     pub(super) shown: bool,
     pub(super) scroll: u16,
     subject: String,
-    subtask: Option<(String, super::subtasks::Loaded)>,
 }
 
 pub(super) fn section(title: &str) -> Line<'static> {
@@ -177,13 +176,9 @@ impl App {
         };
         if let Some(at) = self.subtask_at(&item) {
             let step = walked(&item)[at].clone();
-            let subject = format!("{}#{}#{}", address_of(&item), step.id, step.head().unwrap_or_default());
-            let loaded = match self.beside.subtask.take() {
-                Some((seen, loaded)) if seen == subject => loaded,
-                _ => item.path.as_ref().map(|path| (self.subtask_io.load)(path, &address_of(&item), &step)).unwrap_or_default(),
-            };
+            let subject = super::subtasks::subject_of(&address_of(&item), &step);
+            let loaded = self.subtask_loaded(&item, &step);
             let lines = super::subtasks::subtask_card(&step, &loaded, width);
-            self.beside.subtask = Some((subject.clone(), loaded));
             let title = vec![Span::styled(format!("{} › {} of {}", item.titled(), step.number, item.subtasks.pushed.len() + item.subtasks.items.len()), bold(TEXT))];
             return (heading(title, focused, width), lines, subject);
         }
