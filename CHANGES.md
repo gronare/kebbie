@@ -7,6 +7,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### What's new
 
 ### Fixed
+- kebbie setup waits for ⏎ after a step it ran outside its screen fails, and names why it stopped.
 
 ## 0.40.0
 

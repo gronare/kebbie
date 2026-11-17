@@ -204,6 +204,28 @@ pub fn run_visibly(program: &str, args: &[&str], cwd: Option<&Path>) -> Result<(
     if status.success() { Ok(()) } else { Err(format!("{program} {} failed", args.join(" "))) }
 }
 
+// As run_visibly, but stderr is passed on as it comes and its last line comes back with the status.
+pub fn run_visibly_told(program: &str, args: &[&str], cwd: Option<&Path>) -> Result<(std::process::ExitStatus, String)> {
+    use std::io::{Read, Write};
+    let mut child = command(program, args, cwd).stdin(Stdio::inherit()).stderr(Stdio::piped()).spawn().map_err(|error| format!("{program}: {error}"))?;
+    let mut tail: Vec<u8> = Vec::new();
+    if let Some(mut stderr) = child.stderr.take() {
+        let mut chunk = [0u8; 4096];
+        while let Ok(read) = stderr.read(&mut chunk) {
+            if read == 0 {
+                break;
+            }
+            let mut shown = std::io::stderr();
+            let _ = shown.write_all(&chunk[..read]).and_then(|()| shown.flush());
+            tail.extend_from_slice(&chunk[..read]);
+            tail.drain(..tail.len().saturating_sub(4096));
+        }
+    }
+    let status = child.wait().map_err(|error| format!("{program}: {error}"))?;
+    let said = String::from_utf8_lossy(&tail).lines().map(str::trim).rfind(|line| !line.is_empty()).unwrap_or_default().to_string();
+    Ok((status, said))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

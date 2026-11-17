@@ -1218,7 +1218,7 @@ fn apply_row(row: &Planned, env: &Env, hooks: &mut dyn Hooks, installed: &mut Op
         Act::VaultSetup(command, flags) => match resolved(command, installed) {
             Ok(command) => match hooks.outside(&setup_script(&command, flags)) {
                 Ok(()) => Outcome::new("done", row.detail.clone()),
-                Err(error) => Outcome::new("failed", format!("mindin setup stopped: {error}")),
+                Err(cause) => Outcome::new("failed", cause),
             },
             Err(outcome) => outcome,
         },
@@ -1240,13 +1240,43 @@ fn apply_row(row: &Planned, env: &Env, hooks: &mut dyn Hooks, installed: &mut Op
     }
 }
 
+// Why a step outside the screen stopped, in words: mindin's own last line where it names the cause, else its exit.
+fn stopped(code: Option<i32>, signal: Option<i32>, said: &str) -> String {
+    let said = said.strip_prefix("mindin: ").unwrap_or(said).trim();
+    match () {
+        _ if signal == Some(2) || code == Some(130) => "stopped with Ctrl-C".to_string(),
+        _ if said.contains("expired before it was approved") => "the sign-in was not finished before its code expired".to_string(),
+        _ if said.contains("sign-in was denied") => "the sign-in was denied in the browser".to_string(),
+        _ if code == Some(127) => "its command was not found".to_string(),
+        _ if !said.is_empty() && !said.contains("Traceback") => said.to_string(),
+        _ => match (code, signal) {
+            (Some(code), _) => format!("it exited with status {code}"),
+            (None, Some(signal)) => format!("it was killed by signal {signal}"),
+            (None, None) => "it ended without a status".to_string(),
+        },
+    }
+}
+
+fn run_outside(script: &str) -> Result<()> {
+    use std::os::unix::process::ExitStatusExt;
+    let (status, said) = crate::sh::run_visibly_told("sh", &["-c", script], None)?;
+    if status.success() { Ok(()) } else { Err(stopped(status.code(), status.signal(), &said)) }
+}
+
+// After a step outside fails, its output stays on screen until the user has read it.
+fn pause(cause: &str, out: &mut dyn std::io::Write, input: &mut dyn std::io::BufRead) {
+    let _ = writeln!(out, "\n  \x1b[31m✗\x1b[0m that step did not finish: {cause} · its output is above · ⏎ goes back to kebbie setup");
+    let _ = out.flush();
+    let _ = input.read_line(&mut String::new());
+}
+
 struct Plain;
 
 impl Hooks for Plain {
     fn progress(&mut self, _: &[(String, Outcome)]) {}
 
     fn outside(&mut self, script: &str) -> Result<()> {
-        crate::sh::run_visibly("sh", &["-c", script], None)
+        run_outside(script)
     }
 }
 
@@ -1662,7 +1692,11 @@ impl Hooks for Screen<'_> {
     fn outside(&mut self, script: &str) -> Result<()> {
         crate::board::terminal::outside(self.terminal, || {
             println!("{}", running(script));
-            crate::sh::run_visibly("sh", &["-c", script], None)
+            let result = run_outside(script);
+            if let Err(cause) = &result {
+                pause(cause, &mut std::io::stdout(), &mut std::io::stdin().lock());
+            }
+            result
         })
     }
 }
@@ -2294,6 +2328,24 @@ mod tests {
         assert!(none[0].1.verb == "failed" && none[1].1.verb == "skipped" && none[2].1.detail.contains("mindin is not installed"), "an installer that leaves no mindin runs no setup and points nothing at it: {none:?}");
         let yes: Vec<String> = Guide::new(guide.facts.clone(), Step::Review).plan().iter().map(|row| row.step.to_string()).collect();
         assert!(!yes.contains(&"setup".to_string()), "the default on a bare machine is no vault: {yes:?}");
+    }
+
+    #[test]
+    fn a_failed_step_outside_names_its_cause_and_waits_for_enter_before_the_screen_returns() {
+        assert_eq!(stopped(Some(1), None, "mindin: the code expired before it was approved; run login again"), "the sign-in was not finished before its code expired");
+        assert_eq!(stopped(Some(1), None, "mindin: the sign-in was denied; no key was stored"), "the sign-in was denied in the browser");
+        assert_eq!(stopped(None, Some(2), "KeyboardInterrupt"), "stopped with Ctrl-C");
+        assert_eq!(stopped(Some(2), None, "mindin: no folder at /srv/notes; make it first, or run setup in a terminal"), "no folder at /srv/notes; make it first, or run setup in a terminal");
+        assert_eq!((stopped(Some(127), None, "sh: mindin: not found"), stopped(Some(3), None, "")), ("its command was not found".to_string(), "it exited with status 3".to_string()));
+        assert_eq!(run_outside("echo 'mindin: the code expired before it was approved; run login again' >&2; exit 1"), Err("the sign-in was not finished before its code expired".to_string()));
+        assert_eq!(run_outside("true"), Ok(()));
+        let mut out = Vec::new();
+        let mut input = std::io::Cursor::new(b"\nleft for the screen".to_vec());
+        pause("stopped with Ctrl-C", &mut out, &mut input);
+        let said = String::from_utf8(out).unwrap();
+        assert_eq!(said.trim_start_matches('\n').lines().count(), 1, "one line: {said:?}");
+        assert!(said.starts_with("\n  ") && said.contains("did not finish: stopped with Ctrl-C") && said.contains("⏎ goes back to kebbie setup"), "{said:?}");
+        assert_eq!(input.position(), 1, "it reads up to the ⏎ and no further");
     }
 
     #[test]
