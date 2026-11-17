@@ -325,7 +325,7 @@ impl App {
 
     // The task under the cursor has subtask rows to step into, and the cursor is on the task itself.
     pub(super) fn selected_steps(&self) -> bool {
-        matches!(self.mode, Mode::Normal) && self.column == Column::Work && !self.offer_panel.focused && !self.comment_panel.focused && self.selected_task().is_some_and(|item| !walked(&item).is_empty())
+        matches!(self.mode, Mode::Normal) && self.column == Column::Work && !self.offer_panel.focused && !self.comment_panel.focused && !self.on_parked_line() && self.selected_task().is_some_and(|item| !walked(&item).is_empty())
     }
 
     // The read count of each of the task's subtask rows, as far as it is read yet.

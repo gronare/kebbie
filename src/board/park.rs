@@ -315,6 +315,23 @@ mod tests {
         assert!(app.parked_open && matches!(app.mode, Mode::Normal), "a click on the selected line shows them, as ⏎ does");
     }
 
+    #[test]
+    fn right_on_the_parked_line_never_steps_into_a_hidden_tasks_subtasks() {
+        let mut app = board_with_two_parked();
+        let mut tasks = app.tasks.clone();
+        for item in tasks.iter_mut().filter(|item| item.parked.is_some()) {
+            item.subtasks = crate::board::steps::tests::stripe();
+        }
+        app.set_tasks(tasks);
+        press(&mut app, key(KeyCode::Down));
+        assert!(app.on_parked_line());
+        let (rows, _) = render(&mut app, 110, 30);
+        assert!(!rows.join("\n").contains("→ subtasks"), "{}", rows.join("\n"));
+        press(&mut app, key(KeyCode::Right));
+        let (rows, _) = render(&mut app, 110, 30);
+        assert!(app.subtask_row.is_none() && !matches!(app.mode, Mode::Subtasks) && rows.join("\n").contains("That is the parked line"), "{}", rows.join("\n"));
+    }
+
     fn window(rows: &[String], name: &str, height: usize) -> Vec<String> {
         let (left, top) = find(rows, &format!("╭ Park {name} until"))[0];
         rows[top..top + height].iter().map(|row| row.chars().skip(left).take(39).collect()).collect()

@@ -132,6 +132,10 @@ pub(super) fn task_card(item: Option<&Item>, detail: Option<&Detail>, width: usi
 impl App {
     // → on a task: onto its subtask rows when it has them, else its card beside the tasks to scroll it.
     pub(super) fn enter_task(&mut self) {
+        if self.on_parked_line() {
+            self.subject = Some(super::notices::Subject::plain("park"));
+            return self.show(super::park::not_on_the_line());
+        }
         let Some(item) = self.selected_task() else { return self.focus_beside() };
         if !walked(&item).is_empty() {
             return self.open_subtasks(&item);
