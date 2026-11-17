@@ -556,7 +556,7 @@ mod tests {
     #[test]
     fn up_and_down_move_task_to_task_and_never_stop_on_a_subtask_row() {
         let (mut app, _) = two_tasks();
-        assert!(screen(&mut app).1.contains("↑ ↓ task · → subtasks · s card · ⏎ options"), "{}", screen(&mut app).1);
+        assert!(screen(&mut app).1.contains("↑ ↓ task · → subtasks · ⏎ options"), "no card yet, so no s card: {}", screen(&mut app).1);
         key(&mut app, KeyCode::Down);
         assert!(app.work_selected == 1 && app.subtask_row.is_none(), "down goes to the next task");
         key(&mut app, KeyCode::Char('k'));

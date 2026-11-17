@@ -13,12 +13,13 @@ fn status_hints(keys: &Hints) -> Line<'static> {
     Line::from(Span::styled(keys.iter().map(|(key, label, _)| format!("{key} {label}")).collect::<Vec<_>>().join(" · "), style(MUTED)))
 }
 
-// On a task with subtask rows the line opens with how to move and step in: ↑ ↓ task · → subtasks · s card · ⏎ options.
+// On a task with subtask rows the line opens with how to move and step in: ↑ ↓ task · → subtasks · s card · ⏎ options, s only when there is a card or question.
 fn work_hints(ctx: Ctx, opens: Option<&'static str>, lead: bool, steps: bool) -> (Hints, Hints) {
     let (mut full, mut short) = keys::map().hints(ctx, lead);
     let card = (keys::key(Act::Card).to_string(), opens.unwrap_or("card"), keys::map().code(Act::Card));
     if steps {
-        let lead_in = [("↑ ↓".to_string(), "task", KeyCode::Down), ("→".to_string(), "subtasks", KeyCode::Right), card];
+        let mut lead_in = vec![("↑ ↓".to_string(), "task", KeyCode::Down), ("→".to_string(), "subtasks", KeyCode::Right)];
+        lead_in.extend(opens.map(|_| card));
         for hints in [&mut full, &mut short] {
             let at = hints.iter().position(|(_, _, code)| *code == keys::map().code(Act::Options)).unwrap_or(0);
             hints.splice(at..at, lead_in.clone());
@@ -161,6 +162,13 @@ mod tests {
 
     // Thursday 22 Oct 2026, 12:00 UTC.
     const NOON: u64 = 1_792_670_400;
+
+    #[test]
+    fn s_card_is_offered_on_a_task_with_subtasks_only_when_s_has_something_to_open() {
+        let line = |opens| hint_lines(Ctx::Work, opens, false, true).0.to_string();
+        assert!(line(None).contains("↑ ↓ task · → subtasks · ⏎ options") && !line(None).contains("s card"), "{}", line(None));
+        assert!(line(Some("card")).contains("↑ ↓ task · → subtasks · s card · ⏎ options"), "{}", line(Some("card")));
+    }
 
     #[test]
     fn the_status_bar_shows_plan_usage_as_the_mockup_draws_it_wide_and_short() {
