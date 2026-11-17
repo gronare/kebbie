@@ -336,7 +336,7 @@ Each Claude task runs its builds through a guard kebbie puts first on the PATH o
 - `kebbie update` goes first in line and waits there.
 - A command a build runs, such as `cargo` from a build script, runs in its build's slot. The next command of the same script finds the slot it just left for 10 seconds.
 - The guard runs cargo with `sccache` as `RUSTC_WRAPPER` when `sccache` is on PATH and neither `RUSTC_WRAPPER` nor a cargo config sets a wrapper, so the machine compiles each dependency once; each worktree builds its own crate in its own `target/`.
-- Without a keeper running, a build goes ahead without waiting.
+- Without a keeper running, a build that finds no slot free for it goes ahead without waiting. Turns that run out and slots of builds that died are freed all the same, by the next build that asks.
 
 `"cargo"` in `builds.commands` counts only cargo's compiling commands: `build`, `check`, `test`, `run`, `clippy`, `bench`, `doc`, `install`, `rustc`, `rustdoc`, `fix`, `nextest` and `llvm-cov`. A task started after a change to the list has the new one.
 

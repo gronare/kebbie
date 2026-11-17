@@ -72,6 +72,12 @@ impl Queue {
         self.turns.retain(|turn| addressed(&turn.address));
     }
 
+    // A lapsed turn ends here too, so a queue no keeper ticks still moves; one its task was told of is left to a ticking keeper to tell it the turn passed.
+    fn lapse(&mut self, now: u64) {
+        let keeper = now.saturating_sub(self.ticked) <= KEEPER_QUIET;
+        self.turns.retain(|turn| turn.until > now || (turn.told && keeper));
+    }
+
     fn slots(&self) -> usize {
         self.slots.unwrap_or(crate::config::DEFAULT_BUILD_SLOTS).max(1) as usize
     }
@@ -90,6 +96,7 @@ impl Queue {
 
     // A turn handed to the address, a slot it already holds, or a free slot with nobody ahead of it is taken; else it keeps or takes its place in line, unless no keeper is there to tell it its turn.
     pub fn take(&mut self, address: &str, id: &str, front: bool, needs_keeper: bool, now: u64) -> Take {
+        self.lapse(now);
         let turn = self.turns.iter().position(|turn| turn.address == address);
         let holding = self.holders.iter().any(|holder| holder.address == address);
         let first = self.line.first().is_none_or(|queued| queued == address);
@@ -112,6 +119,7 @@ impl Queue {
 
     // A build that ends while others wait keeps its slot a few seconds, so the next command of the same script finds it.
     pub fn release(&mut self, id: &str, now: u64) {
+        self.lapse(now);
         let Some(at) = self.holders.iter().position(|holder| holder.id == id) else { return };
         let holder = self.holders.remove(at);
         if !self.line.is_empty() && !self.holders.iter().any(|other| other.address == holder.address) {
@@ -151,7 +159,7 @@ pub const MISSED: &str = "kebbie: your build turn passed unused to the next in l
 
 pub fn queued_line(place: usize, holders: &[Holder]) -> String {
     let building: Vec<&str> = holders.iter().map(|holder| holder.address.as_str()).collect();
-    format!("kebbie: every build slot is taken ({}); this task is {} in line, and kebbie tells it when its turn comes.", building.join(", "), crate::tasks::ordinal(place))
+    format!("kebbie: no build slot is free for this task ({} building); it is {} in line, and kebbie tells it when its turn comes.", building.join(", "), crate::tasks::ordinal(place))
 }
 
 pub fn board_note(place: usize) -> String {
@@ -236,7 +244,10 @@ pub struct Slot {
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        let _ = with_queue(&self.dir, |queue| queue.release(&self.id, crate::messages::now()));
+        let _ = with_queue(&self.dir, |queue| {
+            queue.release(&self.id, crate::messages::now());
+            queue.holders.retain(|holder| alive_in(&self.dir, &holder.id));
+        });
         let _ = fs::remove_file(held_file(&self.dir, &self.id));
     }
 }
@@ -255,7 +266,10 @@ pub fn take_slot(dir: &Path, address: &str, front: bool, needs_keeper: bool) -> 
     if !try_flock(&file) {
         return Err(format!("{}: could not be locked", path.display()));
     }
-    let (took, holders) = with_queue(dir, |queue| (queue.take(address, &id, front, needs_keeper, crate::messages::now()), queue.holders.clone()))?;
+    let (took, holders) = with_queue(dir, |queue| {
+        queue.holders.retain(|holder| alive_in(dir, &holder.id));
+        (queue.take(address, &id, front, needs_keeper, crate::messages::now()), queue.holders.clone())
+    })?;
     match took {
         Take::Taken => Ok(Took::Slot(Slot { _file: file, dir: dir.to_path_buf(), id })),
         Take::Queued(place) => {
@@ -430,7 +444,7 @@ pub fn guard(argv: &[String]) -> ExitCode {
             return ExitCode::from(QUEUED_EXIT);
         }
         Ok(Took::NoKeeper) => {
-            eprintln!("kebbie: every build slot is taken and no keeper runs to hand out turns; building without waiting.");
+            eprintln!("kebbie: no build slot is free for this task and no keeper runs to hand out turns; building without waiting.");
             return exit_of(command.status(), program);
         }
         Err(error) => {
@@ -571,6 +585,26 @@ mod tests {
         queue.take("a@app", "1", false, true, 1000);
         assert_eq!(queue.take("b@app", "2", false, true, 1000), Take::NoKeeper);
         assert!(queue.line.is_empty());
+    }
+
+    #[test]
+    fn without_a_keeper_a_lapsed_turn_frees_its_slot_for_kebbie_update() {
+        let mut queue = queue(1, 0);
+        queue.take("a@app", "1", false, false, 100);
+        assert_eq!(queue.take(UPDATE, "2", true, false, 100), Take::Queued(1));
+        queue.release("1", 101);
+        assert_eq!(queue.take(UPDATE, "3", true, false, 105), Take::Queued(1), "a's script keeps its slot a moment");
+        assert_eq!(queue.take(UPDATE, "4", true, false, 101 + LINGER), Take::Taken);
+    }
+
+    #[test]
+    fn a_holder_whose_build_died_outright_frees_its_slot_without_a_keeper() {
+        let dir = crate::sh::test_dir("builds-dead-holder");
+        let dead = Queue { holders: vec![Holder { address: "a@app".into(), id: "1-1-0-build".into(), at: 1 }], ..queue(1, 0) };
+        crate::state::write(&dir.join(QUEUE), serde_json::to_string(&dead).unwrap()).unwrap();
+        fs::write(held_file(&dir, "1-1-0-build"), "").unwrap();
+        assert!(matches!(take_slot(&dir, UPDATE, true, false), Ok(Took::Slot(_))), "a lock nobody holds is a build that ended");
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
