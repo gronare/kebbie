@@ -144,24 +144,22 @@ impl App {
             return;
         };
         let tab = process.tab(settings.as_ref());
-        let tab = tab.as_str();
-        let busy = busy_tab_pane(workspace, tab);
-        let result = match busy {
+        let port = repo::worktree_port(path);
+        let url = (process == Process::Server).then(|| item.repo.as_deref().and_then(|repo| {
+            config::dev_url(settings.as_ref()?.dev_url.value.as_deref(), repo, path)
+        })).flatten();
+        let (workspace, path) = (workspace.clone(), path.clone());
+        self.about(process.key(), &item.name);
+        self.task_in_background(&item.name, item.path.as_deref(), &format!("toggling its {}", process.key()), format!("Toggling {}'s {}", item.name, process.noun()), move || match busy_tab_pane(&workspace, &tab) {
             Some(pane) => herdr::send_keys(&pane, &["ctrl+c"]).map(|_| Notice::new(Tone::Done, format!("Stopping {}", process.noun())).to_string()),
             None => {
-                let port = repo::worktree_port(path);
                 let on = port.map(|port| format!(" on port {port}")).unwrap_or_default();
-                let url = (process == Process::Server).then(|| item.repo.as_deref().and_then(|repo| {
-                    config::dev_url(settings.as_ref()?.dev_url.value.as_deref(), repo, path)
-                })).flatten();
                 let at = url.map(|url| format!(" at {url}")).unwrap_or_default();
-                idle_tab_pane(workspace, tab).map(Ok).unwrap_or_else(|| herdr::create_tab(workspace, path, tab))
+                idle_tab_pane(&workspace, &tab).map(Ok).unwrap_or_else(|| herdr::create_tab(&workspace, &path, &tab))
                     .and_then(|pane| herdr::run_in_pane(&pane, &server_command(&command, port)))
-                    .map(|_| Notice::new(Tone::Done, format!("Started {}{on}{at}", process.noun())).detail("command", &command).detail("tab", tab).to_string())
+                    .map(|_| Notice::new(Tone::Done, format!("Started {}{on}{at}", process.noun())).detail("command", &command).detail("tab", &tab).to_string())
             }
-        };
-        self.about(process.key(), &item.name);
-        self.show(result);
+        });
     }
 
     // The review opens next to the task's own Claude, so comments reach that agent; one already open in the Space gets the focus instead of a second split.
@@ -171,52 +169,42 @@ impl App {
 
     // On a subtask, the review opens on it: a review already open picks it from its folder, a new one from the split.
     pub(super) fn open_review_at(&mut self, item: &Item, subtask: Option<usize>) {
-        let (Some(path), Some(agent), Some(script)) = (&item.path, &item.agent, review_script()) else {
-            self.about("review", &item.name);
+        self.about("review", &item.name);
+        let (Some(path), Some(agent), Some(script)) = (item.path.clone(), item.agent.clone(), review_script()) else {
             self.show(Notice::new(Tone::NotNow, "No review: its Claude is not running").next(format!("{} starts it; then the review opens beside it.", keys::map().label(Act::Go))).ok());
             return;
         };
-        if let Some(workspace) = &item.workspace
-            && let Some(pane) = open_review_pane(workspace)
-        {
-            if let (Some(number), Ok(state)) = (subtask, lead::state_location()) {
-                let _ = std::fs::write(super::review::subtask_file(&review_dir(&state, &agent.pane)), number.to_string());
-            }
-            let _ = herdr::focus_workspace(workspace);
-            if let Err(error) = focus_pane(&pane) {
-                self.about("review", &item.name);
-                self.show(Notice::new(Tone::NotNow, "The review is open in its Space, but kebbie could not focus it").detail("error", &error).ok());
-                return;
-            }
-            if self.overlay {
-                self.quit = true;
-            }
-            return;
+        let workspace = item.workspace.clone();
+        if let Some(job) = self.task_in_background(&item.name, Some(path.clone().as_path()), "opening its review", format!("Opening {}'s review", item.name), move || open_review_in(&path, &agent.pane, &script, workspace.as_deref(), subtask)) {
+            job.then(|app| app.quit |= app.overlay);
         }
-        let mut command = std::process::Command::new("sh");
-        command.arg(&script).arg("split").current_dir(path).env("HERDR_PANE_ID", &agent.pane);
-        if let Some(number) = subtask {
-            command.env("KEBBIE_REVIEW_SUBTASK", number.to_string());
+    }
+}
+
+fn open_review_in(path: &std::path::Path, agent: &str, script: &std::path::Path, workspace: Option<&str>, subtask: Option<usize>) -> Result<String> {
+    if let Some(workspace) = workspace
+        && let Some(pane) = open_review_pane(workspace)
+    {
+        if let (Some(number), Ok(state)) = (subtask, lead::state_location()) {
+            let _ = std::fs::write(super::review::subtask_file(&review_dir(&state, agent)), number.to_string());
         }
-        let output = command.output();
-        match output {
-            Ok(output) if output.status.success() => {
-                if let Some(workspace) = &item.workspace {
-                    let _ = herdr::focus_workspace(workspace);
-                }
-                if self.overlay {
-                    self.quit = true;
-                }
+        let _ = herdr::focus_workspace(workspace);
+        return focus_pane(&pane).map(|_| String::new()).map_err(|error| Notice::new(Tone::NotNow, "The review is open in its Space, but kebbie could not focus it").detail("error", &error).to_string());
+    }
+    let mut command = std::process::Command::new("sh");
+    command.arg(script).arg("split").current_dir(path).env("HERDR_PANE_ID", agent);
+    if let Some(number) = subtask {
+        command.env("KEBBIE_REVIEW_SUBTASK", number.to_string());
+    }
+    match command.output() {
+        Ok(output) if output.status.success() => {
+            if let Some(workspace) = workspace {
+                let _ = herdr::focus_workspace(workspace);
             }
-            Ok(output) => {
-                self.about("review", &item.name);
-                self.show(Notice::new(Tone::Failed, "The review did not open").detail("error", String::from_utf8_lossy(&output.stderr)).ok());
-            }
-            Err(error) => {
-                self.about("review", &item.name);
-                self.show(Notice::new(Tone::Failed, "The review did not open").detail("error", error.to_string()).ok());
-            }
+            Ok(String::new())
         }
+        Ok(output) => Notice::new(Tone::Failed, "The review did not open").detail("error", String::from_utf8_lossy(&output.stderr)).err(),
+        Err(error) => Notice::new(Tone::Failed, "The review did not open").detail("error", error.to_string()).err(),
     }
 }
 
@@ -238,8 +226,8 @@ mod tests {
         assert!(!runs_review(&pane(&["sh", "/k/scripts/review.sh", "split"])), "the split command itself is not the review");
         assert!(!runs_review(&pane(&["/k/target/release/kebbie", "review", "billing"])), "sending a task to review is not the split");
         let source = include_str!("space.rs");
-        let open = &source[source.find("fn open_review_at(").unwrap()..];
-        let open = &open[..open.find("\n    }\n").unwrap()];
+        let open = &source[source.find("fn open_review_in(").unwrap()..];
+        let open = &open[..open.find("\n}\n").unwrap()];
         assert!(open.find("open_review_pane(workspace)").unwrap() < open.find("arg(\"split\")").unwrap(), "an open review is looked for before a split is made");
     }
 

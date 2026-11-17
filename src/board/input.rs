@@ -101,18 +101,19 @@ impl App {
                 }
             }
             Purpose::Tidy(path) => {
-                let result = tasks::tidy(&path, None, &text);
                 self.about_path("tidy", &path);
-                self.show(result);
+                let name = self.name_at(&path);
+                let held = path.clone();
+                self.task_in_background(&name, Some(held.as_path()), "tidying", format!("Asking {name} to tidy its commits"), move || tasks::tidy(&path, None, &text));
             }
             Purpose::CommentWords(_) | Purpose::CommentAnswer(_) if text.is_empty() => {}
             Purpose::CommentWords(_) | Purpose::CommentReply(_) | Purpose::CommentAnswer(_) => self.submit_comment(purpose, text),
             Purpose::Message(_, _) if text.is_empty() => {}
             Purpose::Message(pane, name) => {
-                let result = crate::typing::prompt(&pane, &text, &name).map(|_| Notice::new(Tone::Done, "Sent").to_string())
-                    .map_err(|refused| Notice::new(Tone::Failed, "Nothing was sent").next(format!("Its Claude {}.", refused.reason())).you("Send it again once its input box is clear.").detail("message", &text).to_string());
                 self.about("message", &name);
-                self.show(result);
+                let to = name.clone();
+                self.in_background(format!("Typing your message to {name}"), move || crate::typing::prompt(&pane, &text, &to).map(|_| Notice::new(Tone::Done, "Sent").to_string())
+                    .map_err(|refused| Notice::new(Tone::Failed, "Nothing was sent").next(format!("Its Claude {}.", refused.reason())).you("Send it again once its input box is clear.").detail("message", &text).to_string()));
             }
         }
     }

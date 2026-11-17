@@ -470,13 +470,8 @@ impl App {
         let Some(hidden) = self.lead_chat else {
             return self.say(format!("{} hides the lead's chat only on the board in the lead Space", keys::map().label(Act::HideChat)));
         };
-        match lead::toggle_chat() {
-            Ok(_) => {
-                self.lead_chat = Some(!hidden);
-                let _ = self.refresh.send(());
-            }
-            Err(error) => self.show(Err(error)),
-        }
+        let label = format!("{} the lead's chat", if hidden { "Showing" } else { "Hiding" });
+        self.in_background(label, || lead::toggle_chat().map(|_| String::new())).then(move |app| app.lead_chat = Some(!hidden));
     }
 
     fn backlog_len(&self) -> usize {
@@ -620,8 +615,12 @@ impl App {
     }
 
     fn about_path(&mut self, kind: &str, path: &Path) {
-        let name = self.tasks.iter().find(|item| item.path.as_deref() == Some(path)).map(|item| item.name.clone());
-        self.about(kind, &name.unwrap_or_else(|| name_of(path)));
+        let name = self.name_at(path);
+        self.about(kind, &name);
+    }
+
+    fn name_at(&self, path: &Path) -> String {
+        self.tasks.iter().find(|item| item.path.as_deref() == Some(path)).map_or_else(|| name_of(path), |item| item.name.clone())
     }
 
     // The task a step is about, by the name the step was started for, so its notice can name the task by its title.
@@ -691,11 +690,11 @@ impl App {
             };
             match map.act(ctx, &key) {
                 Some(Act::Lead) => {
-                    if let Err(error) = lead::focus_toggle() {
-                        self.show(Err(error));
-                    } else if self.lead_chat == Some(true) {
-                        self.lead_chat = Some(false);
-                    }
+                    self.in_background("Switching to the lead".to_string(), || lead::focus_toggle().map(|_| String::new())).then(|app| {
+                        if app.lead_chat == Some(true) {
+                            app.lead_chat = Some(false);
+                        }
+                    });
                     return;
                 }
                 Some(Act::HideChat) => return self.toggle_chat(),
@@ -718,8 +717,7 @@ impl App {
         }
         if self.page == Page::Areas {
             let top = self.areas.is_normal();
-            let Some(terminal) = terminal else { return };
-            match self.areas.handle(key, terminal) {
+            match self.areas.handle(key) {
                 Effect::Left => self.quit = self.overlay,
                 Effect::Unhandled if top => self.at_top(map.act(Ctx::Areas, &key)),
                 _ => {}
@@ -982,11 +980,11 @@ impl App {
                         self.task_in_background(&item.name, item.path.as_deref(), "restarting", format!("Restarting {}", item.name), move || tasks::start(&path, &name, &tasks::Start { prompt: None, focus: true, from: None, mode: None, profile: None, backlog: None, note: true, anyway: false }));
                     }
                     Act::Go => {
-                        if let Some(workspace) = &item.workspace {
-                            let _ = herdr::focus_workspace(workspace);
-                            if self.overlay {
-                                self.quit = true;
-                            }
+                        if let Some(workspace) = item.workspace.clone() {
+                            self.in_background(format!("Going to {}", item.name), move || {
+                                let _ = herdr::focus_workspace(&workspace);
+                                Ok(String::new())
+                            }).then(|app| app.quit |= app.overlay);
                         }
                     }
                     Act::Chat => {

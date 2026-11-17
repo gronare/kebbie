@@ -285,11 +285,12 @@ impl App {
     }
 
     fn open_on_github(&mut self, comment: &Comment) {
-        let opened = self.viewer.map(|viewer| crate::issues::open_url(viewer, &comment.url));
-        if !matches!(opened, Some(Ok(()))) {
-            self.subject = Some(super::notices::Subject::plain("comment"));
-            self.show_as(Notice::new(Tone::NotNow, "Open the comment in your browser").detail("url", &comment.url).ok(), true);
-        }
+        self.subject = Some(super::notices::Subject::plain("comment"));
+        let unopened = Notice::new(Tone::NotNow, "Open the comment in your browser").detail("url", &comment.url).to_string();
+        let Some(viewer) = self.viewer else { return self.show_as(Ok(unopened), true) };
+        let url = comment.url.clone();
+        self.in_background("Opening the comment in your browser".to_string(), move || crate::issues::open_url(viewer, &url).map(|_| String::new()))
+            .ask_again(move |_| Some(Mode::Message(unopened)));
     }
 
     fn ask_words(&mut self, purpose: Purpose, label: String, buffer: String) {

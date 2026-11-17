@@ -69,27 +69,22 @@ impl App {
 
     pub(super) fn paste(&mut self, text: String) {
         let Some(text) = self.take_paste(text) else { return };
-        let result = herdr::workspaces().and_then(|workspaces| self.pass_on(target(&workspaces, &self.tasks), &text));
-        if let Err(error) = result {
-            self.subject = Some(super::notices::Subject::plain("paste"));
-            self.show(Err(error));
-        }
+        let tasks = self.tasks.clone();
+        self.subject = Some(super::notices::Subject::plain("paste"));
+        self.in_background("Passing the paste on".to_string(), move || herdr::workspaces().and_then(|workspaces| pass_on(target(&workspaces, &tasks), &text)).map(|_| String::new()))
+            .then(|app| app.quit |= app.overlay);
     }
+}
 
-    fn pass_on(&mut self, target: Target, text: &str) -> Result<()> {
-        match target {
-            Target::Lead => lead::paste_into_chat(text)?,
-            Target::Task { workspace, pane } => {
-                herdr::paste(&pane, text)?;
-                herdr::focus_workspace(&workspace)?;
-                super::space::focus_pane(&pane)?;
-            }
-            Target::Nowhere => return crate::notice::Notice::new(crate::notice::Tone::NotNow, "The paste has nowhere to go").next("This Space has no Claude, and no text field is open on the board.").err(),
+fn pass_on(target: Target, text: &str) -> Result<()> {
+    match target {
+        Target::Lead => lead::paste_into_chat(text),
+        Target::Task { workspace, pane } => {
+            herdr::paste(&pane, text)?;
+            herdr::focus_workspace(&workspace)?;
+            super::space::focus_pane(&pane)
         }
-        if self.overlay {
-            self.quit = true;
-        }
-        Ok(())
+        Target::Nowhere => crate::notice::Notice::new(crate::notice::Tone::NotNow, "The paste has nowhere to go").next("This Space has no Claude, and no text field is open on the board.").err(),
     }
 }
 

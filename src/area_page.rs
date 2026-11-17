@@ -3,7 +3,6 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
 
-use ratatui::DefaultTerminal;
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Position, Rect};
@@ -15,7 +14,6 @@ use crate::areas::{self, Area, Areas};
 use crate::backlog;
 use crate::behind::Runs;
 use crate::board::keys_window;
-use crate::board::terminal;
 use crate::board::widgets::{
     self, BLUE, Choice, FAINT, GREEN, MAUVE, MUTED, PEACH, RED, SUBTEXT, SURFACE, TEAL, TEXT, YELLOW, bold, card_text, chips, choice, column_title,
     group_line, modal, options_lines, plural, render_column, row, style, wrap,
@@ -367,7 +365,7 @@ impl Page {
         self.refresh();
     }
 
-    pub fn handle(&mut self, key: KeyEvent, terminal: &mut DefaultTerminal) -> Effect {
+    pub fn handle(&mut self, key: KeyEvent) -> Effect {
         let map = keys::map();
         let act = map.act(Ctx::Areas, &key);
         let leaves = matches!(act, Some(Act::Back | Act::Close));
@@ -411,11 +409,7 @@ impl Page {
             Mode::Confirm { title, lines, question, go, .. } => match key.code {
                 KeyCode::Char('y') => match go {
                     Go::Script { repo, steps, next } => self.runs.start(title, move || run_script(repo, steps, next)),
-                    Go::Task { repo, name, prompt } => {
-                        let options = tasks::Start { prompt: Some(&prompt), focus: true, from: None, mode: None, profile: None, backlog: None, note: true, anyway: false };
-                        let result = terminal::outside(terminal, || tasks::start(&repo, &name, &options));
-                        self.show(result);
-                    }
+                    Go::Task { repo, name, prompt } => self.runs.start(format!("Starting {name}"), move || After::Show(tasks::start(&repo, &name, &tasks::Start { prompt: Some(&prompt), focus: true, from: None, mode: None, profile: None, backlog: None, note: true, anyway: false }), None)),
                 },
                 KeyCode::Char('n') => {}
                 _ if leaves => {}
@@ -664,7 +658,7 @@ impl Page {
         }
     }
 
-    pub fn mouse(&mut self, event: MouseEvent, terminal: &mut DefaultTerminal) -> Effect {
+    pub fn mouse(&mut self, event: MouseEvent) -> Effect {
         let hit = self.hits.iter().find(|(area, _)| area.contains(Position::new(event.column, event.row))).map(|(_, hit)| *hit);
         match event.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
@@ -676,7 +670,7 @@ impl Page {
                     }
                 }
                 let code = if event.kind == MouseEventKind::ScrollUp { KeyCode::Up } else { KeyCode::Down };
-                self.handle(KeyEvent::from(code), terminal)
+                self.handle(KeyEvent::from(code))
             }
             MouseEventKind::Down(MouseButton::Left) => match (hit, &self.mode) {
                 (Some(Hit::Area(position)), Mode::Normal) => {

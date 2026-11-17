@@ -34,7 +34,7 @@ pub(super) struct Loaded {
 
 pub(super) type Load = std::sync::Arc<dyn Fn(&Path, &str, &Subtask) -> Loaded + Send + Sync>;
 pub(super) type Count = Rc<dyn Fn(&Path, &Subtask) -> Option<(usize, usize)>>;
-pub(super) type Accept = Rc<dyn Fn(&Path, &str, &str) -> Result<String>>;
+pub(super) type Accept = std::sync::Arc<dyn Fn(&Path, &str, &str) -> Result<String> + Send + Sync>;
 
 pub(super) struct Io {
     pub load: Load,
@@ -44,7 +44,7 @@ pub(super) struct Io {
 
 impl Default for Io {
     fn default() -> Self {
-        Io { load: std::sync::Arc::new(load), count: Rc::new(read_count), accept: Rc::new(|path, name, id| crate::tasks::accept(path, Some(name), None, Some(id), true)) }
+        Io { load: std::sync::Arc::new(load), count: Rc::new(read_count), accept: std::sync::Arc::new(|path, name, id| crate::tasks::accept(path, Some(name), None, Some(id), true)) }
     }
 }
 
@@ -427,8 +427,8 @@ impl App {
     fn accept_subtask(&mut self, item: &Item, step: &Subtask, back: Mode) {
         let Some(path) = item.path.clone() else { return };
         self.about("accept", &item.name);
-        let result = (self.subtask_io.accept)(&path, &item.name, &step.id);
-        self.show(result);
+        let (accept, name, id, held) = (self.subtask_io.accept.clone(), item.name.clone(), step.id.clone(), path.clone());
+        self.task_in_background(&item.name, Some(held.as_path()), "accepting", format!("Accepting {} of {}", step.title, item.name), move || accept(&path, &name, &id));
         match &self.mode {
             Mode::Normal => self.mode = back,
             Mode::Message(text) => self.after_message = Some((text.clone(), back)),
@@ -510,8 +510,6 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     use super::*;
@@ -534,7 +532,7 @@ mod tests {
     }
 
     // Two tasks under Working: the first with a pushed subtask and three open ones, the second plain.
-    fn two_tasks() -> (App, Rc<RefCell<Vec<String>>>) {
+    fn two_tasks() -> (App, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
         let mut steps = stripe();
         holds(&mut steps.items[1], &["3333333cccc"], false);
         let first = worked(stepped(steps));
@@ -542,13 +540,13 @@ mod tests {
         second.name = "search".to_string();
         crate::status::tests::in_phase(&mut second, crate::phase::Phase::Working);
         let mut app = test_app(vec![first, second]);
-        let accepted = Rc::new(RefCell::new(Vec::new()));
+        let accepted = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let seen = accepted.clone();
         app.subtask_io = Io {
             load: std::sync::Arc::new(|_, _, step| Loaded { files: if step.commits.is_empty() { Vec::new() } else { files() }, built: vec![format!("{} keeps the charge in one place.", step.title)], obstacle: None }),
             count: Rc::new(|_, step| (!step.commits.is_empty()).then_some((1, 2))),
-            accept: Rc::new(move |path, name, id| {
-                seen.borrow_mut().push(format!("{} {name} {id}", path.display()));
+            accept: std::sync::Arc::new(move |path, name, id| {
+                seen.lock().unwrap().push(format!("{} {name} {id}", path.display()));
                 crate::notice::Notice::new(crate::notice::Tone::Done, format!("Accepted {id}")).ok()
             }),
         };
@@ -650,7 +648,8 @@ mod tests {
         assert!(matches!(app.mode, Mode::Subtasks) && app.subtask_row.clone().unwrap().1 == "s3", "esc closes the menu on its row");
         key(&mut app, KeyCode::Enter);
         key(&mut app, KeyCode::Char('a'));
-        assert_eq!(accepted.borrow().as_slice(), ["/work/wt1.billing stripe s3"]);
+        settle_jobs(&mut app);
+        assert_eq!(accepted.lock().unwrap().as_slice(), ["/work/wt1.billing stripe s3"]);
         key(&mut app, KeyCode::Enter);
         key(&mut app, KeyCode::Char('s'));
         assert!(matches!(&app.mode, Mode::SubtaskCard(view) if view.id == "s3"), "s in the menu opens its card");
@@ -702,7 +701,8 @@ mod tests {
         assert!(shown.contains("WHAT IT DOES") && shown.contains("Add Stripe as the gateway keeps the charge in one place."), "{shown}");
         assert!(shown.contains("↑ ↓ scroll · r review · a accept · esc close"), "{shown}");
         key(&mut app, KeyCode::Char('a'));
-        assert_eq!(accepted.borrow().as_slice(), ["/work/wt1.billing stripe s3"]);
+        settle_jobs(&mut app);
+        assert_eq!(accepted.lock().unwrap().as_slice(), ["/work/wt1.billing stripe s3"]);
         assert!(matches!(app.mode, Mode::SubtaskCard(_)), "accepting keeps the card");
         key(&mut app, KeyCode::Esc);
         assert!(matches!(app.mode, Mode::Subtasks) && app.subtask_row.is_some(), "esc goes back to the row");
@@ -745,11 +745,13 @@ mod tests {
         key(&mut app, KeyCode::Right);
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Char('a'));
-        assert_eq!(accepted.borrow().as_slice(), ["/work/wt1.billing stripe s3"], "the subtask under the cursor, not the first that waits");
+        settle_jobs(&mut app);
+        assert_eq!(accepted.lock().unwrap().as_slice(), ["/work/wt1.billing stripe s3"], "the subtask under the cursor, not the first that waits");
         assert!(matches!(app.mode, Mode::Subtasks), "the cursor stays on the row");
         key(&mut app, KeyCode::Esc);
         key(&mut app, KeyCode::Char('a'));
-        assert_eq!(accepted.borrow().len(), 1, "on the task's row a is the task's own key");
+        settle_jobs(&mut app);
+        assert_eq!(accepted.lock().unwrap().len(), 1, "on the task's row a is the task's own key");
     }
 
     #[test]
@@ -770,15 +772,17 @@ mod tests {
     #[test]
     fn an_accept_that_fails_shows_why_and_then_goes_back_to_the_card_or_the_row() {
         let (mut app, _) = two_tasks();
-        app.subtask_io.accept = Rc::new(|_, _, _| Err("the task's worktree is gone".to_string()));
+        app.subtask_io.accept = std::sync::Arc::new(|_, _, _| Err("the task's worktree is gone".to_string()));
         key(&mut app, KeyCode::Right);
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Char('a'));
+        settle_jobs(&mut app);
         assert!(matches!(&app.mode, Mode::Message(text) if text.contains("worktree is gone")), "the failure shows");
         key(&mut app, KeyCode::Esc);
         assert!(matches!(app.mode, Mode::Subtasks) && app.subtask_row.clone().unwrap().1 == "s3", "the cursor stays on its row");
         key(&mut app, KeyCode::Char('s'));
         key(&mut app, KeyCode::Char('a'));
+        settle_jobs(&mut app);
         assert!(matches!(app.mode, Mode::Message(_)));
         key(&mut app, KeyCode::Esc);
         assert!(matches!(&app.mode, Mode::SubtaskCard(view) if view.id == "s3"), "the card stays open");

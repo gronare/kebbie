@@ -139,15 +139,22 @@ impl App {
         }
     }
 
+    fn review_in_background(&mut self, path: PathBuf, doing: &str, step: impl FnOnce(&std::path::Path) -> crate::sh::Result<String> + Send + 'static) {
+        let name = self.name_at(&path);
+        self.about("review", &name);
+        let held = path.clone();
+        self.task_in_background(&name, Some(held.as_path()), doing, format!("{name}: {doing}"), move || step(&path));
+    }
+
     pub(super) fn pick_review(&mut self, menu: &ReviewMenu, at: usize, terminal: Option<&mut DefaultTerminal>) {
         let Some(choice) = menu.choices.get(at) else { return };
         let path = menu.path.clone();
         self.mode = Mode::Normal;
         match (choice.key, choice.label.as_str()) {
-            ('v', "Withdraw from review") => self.show(review::withdraw(&path, None)),
-            ('v', _) => self.show(review::request(&path, None, Request::Review)),
-            ('s', _) => self.show(review::request(&path, None, Request::WithSecond)),
-            ('o', _) => self.show(review::request(&path, None, Request::SecondOnly)),
+            ('v', "Withdraw from review") => self.review_in_background(path, "withdrawing it from review", move |path| review::withdraw(path, None)),
+            ('v', _) => self.review_in_background(path, "sending it to review", move |path| review::request(path, None, Request::Review)),
+            ('s', _) => self.review_in_background(path, "sending it to review", move |path| review::request(path, None, Request::WithSecond)),
+            ('o', _) => self.review_in_background(path, "asking a second opinion", move |path| review::request(path, None, Request::SecondOnly)),
             ('i', _) => match (menu.second_file.clone(), terminal) {
                 (Some(file), Some(terminal)) => {
                     if let Err(error) = super::terminal::outside(terminal, || crate::settings_page::show_in_pager(&file)) {

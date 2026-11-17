@@ -28,7 +28,7 @@ impl App {
             return self.after_routines(effect, None);
         }
         if self.page == Page::Areas {
-            if let Effect::Left = self.areas.mouse(event, terminal) {
+            if let Effect::Left = self.areas.mouse(event) {
                 self.quit = self.overlay;
             }
             return;

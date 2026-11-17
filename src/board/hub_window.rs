@@ -258,7 +258,9 @@ impl Window {
             View::Running(flow) => match (key.code, &mut flow.card) {
                 (KeyCode::Char('c'), Some(waiting)) => flow.copied = (self.paths.copy)(&waiting.link).ok().or(flow.copied),
                 (KeyCode::Enter, Some(waiting)) => {
-                    if let Some(program) = self.paths.opener && crate::issues::open_url(program, &waiting.link).is_ok() {
+                    if let Some(program) = self.paths.opener {
+                        let link = waiting.link.clone();
+                        std::thread::spawn(move || crate::issues::open_url(program, &link));
                         waiting.opened = true;
                     }
                 }
@@ -794,6 +796,11 @@ mod tests {
         assert!(shown.contains("⏎ open in browser · or scan with your phone") && shown.contains("⏎ open · c copy link · esc stop") && !shown.contains("Opened"), "{shown}");
         assert!(!opened.exists(), "the card opens nothing by itself");
         press(&mut app, key(KeyCode::Enter));
+        let start = std::time::Instant::now();
+        while std::fs::read_to_string(&opened).ok().is_none_or(|text| text.is_empty()) {
+            assert!(start.elapsed() < Duration::from_secs(10), "the browser never opened");
+            std::thread::sleep(Duration::from_millis(5));
+        }
         assert_eq!(std::fs::read_to_string(&opened).unwrap(), LINK, "⏎ opens the whole link");
         let shown = screen(&mut app, 110, 50);
         assert!(shown.contains("✓ Opened in your browser") && !shown.contains("open in browser · or scan"), "{shown}");

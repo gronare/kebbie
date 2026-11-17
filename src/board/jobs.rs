@@ -57,7 +57,7 @@ impl Job {
         self.ask_again = Some(Box::new(ask));
     }
 
-    // What the board reads again once the job is done, before its outcome shows.
+    // What the board does once the job has worked, before its outcome shows.
     pub(super) fn then(&mut self, after: impl FnOnce(&mut App) + 'static) {
         self.after = Some(Box::new(after));
     }
@@ -147,7 +147,7 @@ impl App {
         }
     }
 
-    // An outcome that asks nothing goes by as a toast at once, an empty one says nothing; one that needs the user waits until the board is at rest on its work page, so it never covers a window the user has open.
+    // An outcome that asks nothing goes by as a toast at once, an empty one says nothing; one that needs the user waits until the board is at rest on its work page, or on a subtask's row or card it goes back to, so it never covers a window the user has open.
     pub(super) fn poll_jobs(&mut self) {
         let mut at = 0;
         while at < self.jobs.len() {
@@ -155,7 +155,7 @@ impl App {
                 Ok(result) => {
                     let mut job = self.jobs.remove(at);
                     self.drop_restarted_lead();
-                    if let Some(after) = job.after.take() {
+                    if let (Ok(_), Some(after)) = (&result, job.after.take()) {
                         after(self);
                     }
                     if let (Err(error), Some(ask)) = (&result, job.ask_again.take())
@@ -183,8 +183,18 @@ impl App {
                 Err(mpsc::TryRecvError::Empty) => at += 1,
             }
         }
-        if !self.outcomes.is_empty() && self.page == Page::Work && matches!(self.mode, Mode::Normal) {
+        let message = matches!(self.outcomes.first(), Some((Mode::Message(_), _)));
+        let calm = match self.mode {
+            Mode::Normal => true,
+            Mode::Subtasks | Mode::SubtaskCard(_) => message,
+            _ => false,
+        };
+        if !self.outcomes.is_empty() && calm && self.page == Page::Work {
             let (window, subject) = self.outcomes.remove(0);
+            let back = std::mem::replace(&mut self.mode, Mode::Normal);
+            if let Mode::Message(text) = &window && !matches!(back, Mode::Normal) {
+                self.after_message = Some((text.clone(), back));
+            }
             self.shown = subject.filter(|_| matches!(window, Mode::Message(_)));
             self.mode = window;
         }
