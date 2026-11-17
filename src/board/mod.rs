@@ -1345,6 +1345,7 @@ pub fn run(overlay: bool) -> Result<String> {
                             .or_else(|| wanted.and_then(|name| app.tasks.iter().position(|item| item.name == name)));
                         app.work_selected = position.unwrap_or(app.work_selected.min(app.tasks.len().saturating_sub(1)));
                         app.settle_selection();
+                        app.settle_subtask_cursor();
                         if let Ok(sources) = config::sources() {
                             app.sources = sources;
                         }

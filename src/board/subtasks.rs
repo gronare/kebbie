@@ -360,15 +360,21 @@ impl App {
         self.mode = Mode::Subtasks;
     }
 
-    // Inside the task ↑ ↓ stay among its subtasks; ← or esc go back to the task.
+    // A refresh that takes away the highlighted subtask takes the cursor back to the task.
+    pub(super) fn settle_subtask_cursor(&mut self) {
+        if matches!(self.mode, Mode::Subtasks | Mode::SubtaskOptions(_)) && self.selected_task().and_then(|item| self.subtask_at(&item)).is_none() {
+            self.leave_subtasks();
+        }
+    }
+
+    // Inside the task ↑ ↓ stay among its subtasks; ← or esc go back to the task, and the board-wide keys act as on the task.
     pub(super) fn handle_subtasks(&mut self, act: Option<Act>, key: &KeyEvent) {
-        let Some(item) = self.selected_task() else { return self.subtask_row = None };
-        let steps = walked(&item).to_vec();
         self.mode = Mode::Subtasks;
-        let Some(at) = self.subtask_at(&item) else {
-            self.mode = Mode::Normal;
-            return self.subtask_row = None;
+        let Some((item, at)) = self.selected_task().and_then(|item| self.subtask_at(&item).map(|at| (item, at))) else {
+            self.leave_subtasks();
+            return self.handle_normal(*key);
         };
+        let steps = walked(&item).to_vec();
         match act {
             Some(Act::Move) => {
                 let to = if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) { at.saturating_sub(1) } else { (at + 1).min(steps.len() - 1) };
@@ -380,6 +386,10 @@ impl App {
             Some(Act::Review) => self.open_review_at(&item, Some(steps[at].number)),
             Some(Act::Back | Act::Close) => self.leave_subtasks(),
             Some(Act::Switch) if key.code == KeyCode::Left => self.leave_subtasks(),
+            Some(Act::Help | Act::Inbox | Act::Messages) => {
+                self.leave_subtasks();
+                self.handle_normal(*key);
+            }
             _ => {}
         }
     }
@@ -723,6 +733,28 @@ mod tests {
         assert!(matches!(app.mode, Mode::Message(_)));
         key(&mut app, KeyCode::Esc);
         assert!(matches!(&app.mode, Mode::SubtaskCard(view) if view.id == "s3"), "the card stays open");
+    }
+
+    #[test]
+    fn a_refresh_that_takes_the_highlighted_subtask_away_goes_back_to_the_task_and_the_next_key_counts() {
+        let (mut app, _) = two_tasks();
+        key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Down);
+        let mut tasks = app.tasks.clone();
+        tasks[0].subtasks.items.retain(|step| step.id != "s3");
+        app.set_tasks(tasks);
+        app.settle_subtask_cursor();
+        assert!(matches!(app.mode, Mode::Normal) && app.subtask_row.is_none(), "the refresh itself leaves the subtask");
+        key(&mut app, KeyCode::Down);
+        assert_eq!(app.work_selected, 1, "the next key moves, nothing eats it");
+    }
+
+    #[test]
+    fn inside_a_task_help_and_the_board_keys_work_as_on_the_task() {
+        let (mut app, _) = two_tasks();
+        key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Char('?'));
+        assert!(matches!(app.mode, Mode::Help(_)), "? opens help inside a task too");
     }
 
     #[test]
