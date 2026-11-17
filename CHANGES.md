@@ -20,6 +20,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - kebbie job run takes a repo too big for the hub once its branch is on origin: the worker fetches the history from origin itself, and only what is not pushed goes through the hub.
 
 ### Fixed
+- The board keeps taking keys while a task is reset, closed, rebased, staged, restarted or started and while the lead restarts: the task's row says what runs, a line bottom right says it too, a toast says when it is done, and an outcome that needs you waits until you close the window you have open. The Areas and Routines pages run their scripts, pushes and runs the same way.
 - After kebbie update the open board and the keeper move to the new kebbie by themselves, also when herdr installed it in a new folder.
 - In a narrow board pane the Work page shows only the tasks, and the card opens in its window from s or ⏎, as before the card column.
 - Answers to a backlog item's questions from your phone reach the lead together, and a reworded question no longer turns an answer away.

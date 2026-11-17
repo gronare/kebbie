@@ -11,6 +11,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use crate::behind::Runs;
 use crate::board::keys_window;
 use crate::board::widgets::{BLUE, Choice, FAINT, GREEN, MAUVE, MUTED, PEACH, RED, SURFACE, TEXT, bold, choice, column_title, confirm_lines, cut, menu_lines, modal, modal_spots, render_column, style, wrap};
 use crate::keys::{self, Act, Ctx};
@@ -72,7 +73,6 @@ enum Mode {
     Options(usize),
     Wizard(Box<Wizard>),
     ConfirmDelete { id: String, nudged: bool },
-    Working { label: String, result: Receiver<Result<String>> },
     Message(String),
     Help(keys_window::Scroll),
 }
@@ -254,13 +254,14 @@ pub struct Page {
     repos_dir: PathBuf,
     clock: Option<(u64, Offset)>,
     width: u16,
+    runs: Runs<Result<String>>,
 }
 
 impl Page {
     pub fn new(machine: PathBuf, repos_dir: PathBuf) -> Self {
         Self {
             rows: Vec::new(), errors: Vec::new(), tasks: Vec::new(), loaded: false, selected: None, template: 0, focus: Focus::List, mode: Mode::Normal,
-            updates: None, hits: Vec::new(), machine, repos_dir, clock: None, width: WIDE,
+            updates: None, hits: Vec::new(), machine, repos_dir, clock: None, width: WIDE, runs: Runs::default(),
         }
     }
 
@@ -275,7 +276,11 @@ impl Page {
     }
 
     pub fn is_idle(&self) -> bool {
-        matches!(self.mode, Mode::Normal | Mode::Message(_) | Mode::Help(_))
+        matches!(self.mode, Mode::Normal | Mode::Message(_) | Mode::Help(_)) && self.runs.is_empty()
+    }
+
+    pub fn running(&self) -> Vec<String> {
+        self.runs.labels()
     }
 
     fn now(&self) -> (u64, Offset) {
@@ -295,7 +300,7 @@ impl Page {
     }
 
     // Starts reading the routines on the first call, so the tab's ⚠ count is there before the page is opened.
-    pub fn tick(&mut self) {
+    pub fn tick(&mut self, shown: bool) {
         if self.updates.is_none() {
             self.updates = Some(spawn_refresher(self.machine.clone(), self.repos_dir.clone()));
         }
@@ -303,9 +308,7 @@ impl Page {
         for found in found {
             self.take(found);
         }
-        if let Mode::Working { result, .. } = &self.mode
-            && let Ok(result) = result.try_recv()
-        {
+        if let Some(result) = self.runs.next(shown && self.is_normal()) {
             self.show(result);
         }
     }
@@ -384,11 +387,8 @@ impl Page {
     }
 
     fn in_background(&mut self, label: String, step: impl FnOnce() -> Result<String> + Send + 'static) {
-        let (sender, result) = mpsc::channel();
-        thread::spawn(move || {
-            let _ = sender.send(step());
-        });
-        self.mode = Mode::Working { label, result };
+        self.runs.start(label, step);
+        self.mode = Mode::Normal;
     }
 
     fn repos(&self) -> Vec<Repo> {
@@ -476,7 +476,6 @@ impl Page {
                 _ if leaves => {}
                 _ => self.mode = Mode::ConfirmDelete { id, nudged: true },
             },
-            working @ Mode::Working { .. } => self.mode = working,
             Mode::Message(_) => {}
             Mode::Help(scroll) => {
                 if let Some(scroll) = scroll.key(&key) {
@@ -800,9 +799,6 @@ impl Page {
                 let file = found.map(|(routine, _)| crate::area_page::home_relative(&routine_file::file_of(routine))).unwrap_or_default();
                 let lines = confirm_lines(&title, Some(&format!("Its [[routines]] table goes from {file}; a run's task that is open stays.")), "Delete this routine?", *nudged);
                 modal(frame, "delete".to_string(), lines, 72);
-            }
-            Mode::Working { label, .. } => {
-                modal(frame, "kebbie".to_string(), vec![Line::from(Span::styled(label.clone(), style(TEXT)))], 72);
             }
             Mode::Message(text) => {
                 let mut lines: Vec<Line> = text.lines().map(|line| Line::from(Span::styled(line.to_string(), style(TEXT)))).collect();

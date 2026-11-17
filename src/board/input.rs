@@ -53,12 +53,16 @@ impl App {
         }
         match purpose {
             Purpose::BacklogName(_) | Purpose::ClaimedName(_) | Purpose::BacklogLaterName(_) | Purpose::BacklogLaterAt(..) | Purpose::StartAt(_) | Purpose::BacklogItem if text.is_empty() => {}
-            Purpose::StartAt(name) => self.in_background(format!("Setting when {name} starts…"), move || tasks::start_at(&name, &text)),
+            Purpose::StartAt(name) => {
+                self.task_in_background(&name.clone(), None, "setting its start", format!("Setting when {name} starts"), move || tasks::start_at(&name, &text));
+            }
             Purpose::BacklogLaterName(entry) => {
                 self.mode = Mode::Input { purpose: Purpose::BacklogLaterAt(entry, text), label: START_AT_LABEL.to_string(), buffer: String::new() };
             }
             Purpose::FoundName(_) | Purpose::FoundAdd(_) if text.is_empty() => {}
-            Purpose::FoundName(id) => self.in_background(format!("Starting {text}…"), move || crate::found::start(&crate::lead::state_dir()?, &crate::permit::Caller::User, &id, Some(&text))),
+            Purpose::FoundName(id) => {
+                self.task_in_background(&text.clone(), None, "starting", format!("Starting {text}"), move || crate::found::start(&crate::lead::state_dir()?, &crate::permit::Caller::User, &id, Some(&text)));
+            }
             Purpose::FoundAdd(id) => {
                 let result = crate::lead::state_dir().and_then(|state| crate::found::add(&state, &crate::permit::Caller::User, &id, &text));
                 self.subject = Some(super::notices::Subject::plain("backlog"));

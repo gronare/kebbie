@@ -15,6 +15,7 @@ pub(crate) mod images;
 mod inbox;
 mod input;
 mod item_card;
+mod jobs;
 pub(crate) mod keys_window;
 mod link;
 mod message_log;
@@ -26,7 +27,6 @@ mod options;
 mod park;
 mod paste;
 mod push;
-mod pushing;
 pub(crate) mod review;
 pub(crate) mod review_data;
 mod review_draw;
@@ -53,8 +53,7 @@ use std::collections::HashMap;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread;
+use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -135,7 +134,6 @@ enum Mode {
     Fullscreen { path: PathBuf, name: String, scroll: u16, index: usize },
     ConfirmPush { path: PathBuf, commits: Vec<tasks::Commit>, selected: usize, card: Option<(report::Card, bool)>, tests: Option<evidence::Shown>, marks: push::Marks, scroll: push::Scroll },
     EditMessage(Box<MessageEditor>),
-    Working { label: String, result: Receiver<Result<String>> },
     Questions(Box<QuestionWindow>),
     Report { id: String, shown: Box<BugReport>, scroll: u16, read: bool, nudged: bool },
     ReportAll { shown: Vec<bug_report::Offer>, scroll: u16, read: bool, nudged: bool },
@@ -263,9 +261,9 @@ struct App {
     comment_dir: Option<PathBuf>,
     copier: comments::Copier,
     reopener: comments::Reopener,
-    pusher: pushing::Pusher,
-    pushes: Vec<pushing::Pushing>,
-    push_outcomes: Vec<(Notice, notices::Subject)>,
+    pusher: jobs::Pusher,
+    jobs: Vec<jobs::Job>,
+    outcomes: Vec<(Mode, Option<notices::Subject>)>,
     subtask_row: Option<(String, String)>,
     subtask_io: subtasks::Io,
     reads: subtasks::Reads,
@@ -525,16 +523,12 @@ impl App {
         self.page = Page::Settings;
     }
 
-    fn in_background(&mut self, label: String, step: impl FnOnce() -> Result<String> + Send + 'static) {
-        let (sender, result) = mpsc::channel();
-        thread::spawn(move || {
-            let _ = sender.send(step());
-        });
-        self.mode = Mode::Working { label, result };
-    }
-
-    // A restart the user asks for always runs; only the lead's own state refuses it, before the question opens.
+    // A restart the user asks for always runs; only the lead's own state, or a restart already under way, refuses it before the question opens.
     fn restart_lead(&mut self) {
+        if let Some(doing) = self.doing(LEAD_JOB, None) {
+            self.subject = Some(notices::Subject::plain("lead"));
+            return self.already(doing);
+        }
         match (self.lead_checker)() {
             Ok(()) => {
                 let (index, why) = crate::lead_restart::preset(&self.tasks, &self.messages);
@@ -553,14 +547,14 @@ impl App {
         let restarted = self.lead_restarted.clone();
         self.subject = Some(notices::Subject::plain("lead"));
         let label = if self.lead_line().is_some() { "Restarting the lead on the new kebbie…" } else { "Restarting the lead…" };
-        self.in_background(label.to_string(), move || noted_restart(&restarted, restarter()));
+        self.task_in_background(LEAD_JOB, None, "restarting", label.to_string(), move || noted_restart(&restarted, restarter()));
     }
 
     fn start_lead_fresh(&mut self) {
         let starter = self.lead_fresh_starter.clone();
         let restarted = self.lead_restarted.clone();
         self.subject = Some(notices::Subject::plain("lead"));
-        self.in_background("Starting the lead fresh…".to_string(), move || noted_restart(&restarted, starter()));
+        self.task_in_background(LEAD_JOB, None, "restarting", "Starting the lead fresh…".to_string(), move || noted_restart(&restarted, starter()));
     }
 
     pub(super) fn take_stale(&mut self, at: u64, stale: Vec<String>) {
@@ -588,16 +582,9 @@ impl App {
         crate::lead_restart::line(&self.stale, self.restart_auto, width)
     }
 
-    fn take_working_result(&mut self) {
-        let Mode::Working { result, .. } = &self.mode else { return };
-        let Ok(result) = result.try_recv() else { return };
-        self.drop_restarted_lead();
-        self.show(result);
-    }
-
     // A rebuilt binary takes over only once nothing is open, and never while an update this board runs is going or its summary is unread.
     fn may_restart(&self) -> bool {
-        matches!(self.mode, Mode::Normal | Mode::Help(_) | Mode::Message(_)) && self.pushes.is_empty() && self.update.is_none() && self.agent_offer.is_none() && self.areas.is_idle() && self.routines.is_idle() && self.settings.is_normal()
+        matches!(self.mode, Mode::Normal | Mode::Help(_) | Mode::Message(_)) && self.jobs.is_empty() && self.update.is_none() && self.agent_offer.is_none() && self.areas.is_idle() && self.routines.is_idle() && self.settings.is_normal()
     }
 
     fn show(&mut self, result: Result<String>) {
@@ -673,8 +660,7 @@ impl App {
                 self.quit = true;
             } else {
                 self.ctrl_c = Some(Instant::now());
-                let stops = if self.pushes.is_empty() { String::new() } else { ", and the push under way stops where it is".to_string() };
-                self.say(format!("{} again to quit{stops}", map.label(Act::Quit)));
+                self.say(format!("{} again to quit{}", map.label(Act::Quit), self.jobs_stop_line()));
             }
             return;
         }
@@ -755,7 +741,6 @@ impl App {
                     self.back_from_message(&text);
                 }
             }
-            working @ Mode::Working { .. } => self.mode = working,
             Mode::Questions(window) => self.handle_questions(window, key),
             Mode::Hub(window) => self.handle_hub(window, key),
             Mode::Next(window) => self.handle_next(window, key, act),
@@ -866,7 +851,7 @@ impl App {
                 let Some(item) = self.selected_task() else { return };
                 let address = peers::address(&item.name, &item.place);
                 self.about("prompt", &item.name);
-                self.in_background(format!("Sending {}'s start prompt…", item.name), move || crate::typing::send_unsent(&address));
+                self.task_in_background(&item.name, item.path.as_deref(), "sending its prompt", format!("Sending {}'s start prompt", item.name), move || crate::typing::send_unsent(&address));
             }
             Act::Options => {
                 let has_selection = match self.column {
@@ -983,13 +968,8 @@ impl App {
                     Act::Go if item.agent.is_none() => {
                         let Some(path) = item.path.clone() else { return };
                         self.about("restart", &item.name);
-                        let (sender, result) = mpsc::channel();
                         let name = item.name.clone();
-                        thread::spawn(move || {
-                            let options = tasks::Start { prompt: None, focus: true, from: None, mode: None, profile: None, backlog: None, note: true, anyway: false };
-                            let _ = sender.send(tasks::start(&path, &name, &options));
-                        });
-                        self.mode = Mode::Working { label: format!("Restarting {}…", item.name), result };
+                        self.task_in_background(&item.name, item.path.as_deref(), "restarting", format!("Restarting {}", item.name), move || tasks::start(&path, &name, &tasks::Start { prompt: None, focus: true, from: None, mode: None, profile: None, backlog: None, note: true, anyway: false }));
                     }
                     Act::Go => {
                         if let Some(workspace) = &item.workspace {
@@ -1014,14 +994,15 @@ impl App {
                             self.show(Notice::new(Tone::NotNow, "No sign-off card yet").next("Its Claude writes one when it reports ready.").ok());
                         }
                     },
-                    Act::Push | Act::Rebase | Act::Tidy | Act::Stage | Act::Done | Act::Reset | Act::Drop if item.path.as_deref().is_some_and(|path| self.pushing(path)) => {
+                    Act::Push | Act::Rebase | Act::Tidy | Act::Stage | Act::Done | Act::Reset | Act::Drop | Act::DismissCi | Act::RerunCi | Act::SendReview if self.doing(&item.name, item.path.as_deref()).is_some() => {
                         self.about(act_kind(act), &item.name);
-                        self.show(Notice::new(Tone::NotNow, "Already pushing it").next("The board says how the push went once it is done.").ok());
+                        let doing = self.doing(&item.name, item.path.as_deref()).unwrap_or_default();
+                        self.already(doing);
                     }
                     Act::Stage if item.staged => {
                         if let Some(path) = item.path.clone() {
                             self.about("stage", &item.name);
-                            self.in_background(format!("Taking {} off local main…", item.name), move || tasks::unstage(&path, None));
+                            self.task_in_background(&item.name, item.path.as_deref(), "unstaging", format!("Taking {} off local main", item.name), move || tasks::unstage(&path, None));
                         }
                     }
                     Act::Tidy | Act::Stage | Act::Done | Act::SendReview | Act::Rebase if busy(&item) => {
@@ -1035,7 +1016,7 @@ impl App {
                     Act::Push if item.in_push_line() => {
                         if let Some(path) = item.path.clone() {
                             self.about("push", &item.name);
-                            self.in_background(format!("Taking {} out of the push line…", item.name), move || tasks::cancel_push(&path, None));
+                            self.task_in_background(&item.name, item.path.as_deref(), "leaving the push line", format!("Taking {} out of the push line", item.name), move || tasks::cancel_push(&path, None));
                         }
                     }
                     Act::Push if item.awaiting_review() => {
@@ -1045,7 +1026,7 @@ impl App {
                     Act::Stage => {
                         if let Some(path) = item.path.clone() {
                             self.about("stage", &item.name);
-                            self.in_background(format!("Putting {} on local main…", item.name), move || tasks::stage(&path, None, false));
+                            self.task_in_background(&item.name, item.path.as_deref(), "staging", format!("Putting {} on local main", item.name), move || tasks::stage(&path, None, false));
                         }
                     }
                     Act::Tidy => {
@@ -1059,7 +1040,7 @@ impl App {
                     Act::Rebase => {
                         if let Some(path) = item.path.clone() {
                             self.about("rebase", &item.name);
-                            self.in_background(format!("Rebasing {}…", item.name), move || tasks::rebase(&path));
+                            self.task_in_background(&item.name, item.path.as_deref(), "rebasing", format!("Rebasing {}", item.name), move || tasks::rebase(&path));
                         }
                     }
                     Act::Follow => {
@@ -1079,7 +1060,7 @@ impl App {
                     Act::RerunCi if crate::board::options::reruns_ci(&item) => {
                         let address = peers::address(&item.name, &item.place);
                         self.about("ci", &item.name);
-                        self.in_background(format!("Re-running CI for {}…", item.name), move || crate::ci::rerun(&address));
+                        self.task_in_background(&item.name, item.path.as_deref(), "re-running CI", format!("Re-running CI for {}", item.name), move || crate::ci::rerun(&address));
                     }
                     Act::DismissCi if item.ci.as_ref().is_some_and(|ci| !ci.running()) => {
                         if let Some(path) = item.path.clone() {
@@ -1122,6 +1103,9 @@ impl App {
         }
     }
 }
+
+// The name a job on the lead holds; a task's name never has a space.
+const LEAD_JOB: &str = "the lead";
 
 const RESIZE_SETTLE: Duration = Duration::from_secs(1);
 
@@ -1248,7 +1232,7 @@ impl App {
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel).map(|outcome| outcome.details.join("\n"))), update: None, progress_file: None, recheck: None, stale: Vec::new(), stale_at: 0, restart_after_update: false,
             agent_offer: None, agent_mode: std::sync::Arc::new(|| config::agent_updates_in(&config::path())), installer: agent_updates::default_install(),
             filter: None, ctrl_c: None, go_again: None, notice: None, lead_chat: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), lead_fresh_starter: std::sync::Arc::new(crate::lead_restart::fresh_now), lead_checker: std::sync::Arc::new(crate::lead::restart_refusal), lead_restarted: std::sync::Arc::default(), lead_context: None, restart_why: String::new(), devices: Vec::new(), subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
-            comments: Vec::new(), comment_panel: Default::default(), comment_dir: None, copier: comments::default_copier(), reopener: comments::default_reopener(), pusher: pushing::live_pusher(), pushes: Vec::new(), push_outcomes: Vec::new(),
+            comments: Vec::new(), comment_panel: Default::default(), comment_dir: None, copier: comments::default_copier(), reopener: comments::default_reopener(), pusher: jobs::live_pusher(), jobs: Vec::new(), outcomes: Vec::new(),
             subtask_row: None, subtask_io: Default::default(), reads: Default::default(), new_io: Default::default(), beside: Default::default(),
         }
     }
@@ -1315,8 +1299,7 @@ pub fn run(overlay: bool) -> Result<String> {
             }
             app.poll_answer();
             app.poll_sending();
-            app.take_working_result();
-            app.poll_pushes();
+            app.poll_jobs();
             app.poll_hub();
             app.poll_update();
             app.poll_agent_install();
@@ -1398,8 +1381,8 @@ pub fn run(overlay: bool) -> Result<String> {
             }
             changed |= app.take_images();
             changed |= app.reads.take();
-            app.areas.tick();
-            app.routines.tick();
+            app.areas.tick(app.page == Page::Areas);
+            app.routines.tick(app.page == Page::Routines);
             let mut repos: Vec<PathBuf> = app.tasks.iter().filter_map(|item| item.repo.clone()).chain(app.areas.repos()).collect();
             repos.sort();
             repos.dedup();
@@ -1470,7 +1453,6 @@ fn act_kind(act: Act) -> &'static str {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::thread;
     use std::time::{Duration, Instant};
 
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -1730,8 +1712,8 @@ mod tests {
         app.handle_normal(key(KeyCode::Char('L')));
         assert!(matches!(app.mode, Mode::RestartLead(0)), "L asks for a lead kebbie counts as current too");
         press(&mut app, key(KeyCode::Char('2')));
-        assert!(matches!(app.mode, Mode::Working { .. }), "2 resumes it in the background");
-        settle(&mut app);
+        assert!(matches!(app.mode, Mode::Normal) && app.jobs.len() == 1, "2 resumes it in the background");
+        settle_jobs(&mut app);
         assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert!(app.notice.is_none() && app.toast.as_ref().is_some_and(|toast| toast.notice.headline.starts_with("Restarted the lead")), "the result goes by as a toast like the board's other results");
         app.toast = None;
@@ -1763,7 +1745,7 @@ mod tests {
         assert!(app.lead_line().is_some_and(|line| line.contains("when you leave")), "the keeper's round says the lead waits for you to leave it");
         app.handle_normal(key(KeyCode::Char('L')));
         press(&mut app, key(KeyCode::Char('2')));
-        settle(&mut app);
+        settle_jobs(&mut app);
         let restarted = app.lead_restarted.load(std::sync::atomic::Ordering::SeqCst);
         assert!(restarted > 0, "the restart is noted");
         assert_eq!(app.lead_line(), None, "the line goes as soon as L restarted the lead");
@@ -1778,18 +1760,8 @@ mod tests {
         refused.take_stale(100, stale());
         refused.handle_normal(key(KeyCode::Char('L')));
         press(&mut refused, key(KeyCode::Char('2')));
-        settle(&mut refused);
+        settle_jobs(&mut refused);
         assert!(refused.lead_line().is_some(), "a refused restart leaves the line");
-    }
-
-    fn settle(app: &mut App) {
-        let started = Instant::now();
-        app.take_working_result();
-        while matches!(app.mode, Mode::Working { .. }) {
-            assert!(started.elapsed() < Duration::from_secs(30), "the background work never finished");
-            thread::sleep(Duration::from_millis(10));
-            app.take_working_result();
-        }
     }
 
     #[test]
@@ -1825,21 +1797,21 @@ mod tests {
         assert!(matches!(app.mode, Mode::Normal) && count(&calls) + count(&resumed) == 0, "esc cancels and starts nothing");
         app.handle_normal(key(KeyCode::Char('L')));
         press(&mut app, key(KeyCode::Enter));
-        assert!(matches!(app.mode, Mode::Working { .. }), "enter on the first row starts it fresh in the background");
-        settle(&mut app);
+        assert!(matches!(app.mode, Mode::Normal) && app.jobs.len() == 1, "enter on the first row starts it fresh in the background");
+        settle_jobs(&mut app);
         assert_eq!((count(&calls), count(&resumed)), (1, 0));
         assert!(app.toast.as_ref().is_some_and(|toast| toast.notice.headline.contains("with a new conversation")), "the result goes by as a toast");
         app.mode = Mode::Normal;
         app.handle_normal(key(KeyCode::Char('L')));
         press(&mut app, key(KeyCode::Char('1')));
-        settle(&mut app);
+        settle_jobs(&mut app);
         assert_eq!((count(&calls), count(&resumed)), (2, 0), "1 starts it fresh");
         app.mode = Mode::Normal;
         app.handle_normal(key(KeyCode::Char('L')));
         let (rows, _) = render(&mut app, 120, 30);
         let (x, y) = find(&rows, "Resume this conversation")[0];
         click(&mut app, x as u16, y as u16);
-        settle(&mut app);
+        settle_jobs(&mut app);
         assert_eq!((count(&calls), count(&resumed)), (2, 1), "a click on a row picks it");
     }
 
@@ -1863,7 +1835,7 @@ mod tests {
         let screen = rows.join("\n");
         assert!(screen.contains("▸ Resume this conversation") && screen.contains("  New conversation") && screen.contains("resume: 1 task is working"), "{screen}");
         press(&mut app, key(KeyCode::Enter));
-        settle(&mut app);
+        settle_jobs(&mut app);
         assert_eq!(resumed.load(std::sync::atomic::Ordering::SeqCst), 1, "enter resumes");
     }
 

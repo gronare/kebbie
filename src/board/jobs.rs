@@ -24,98 +24,145 @@ pub(super) fn live_pusher() -> Pusher {
     Arc::new(|path, through, keep_open| tasks::push(path, None, through, keep_open))
 }
 
-// The step a push is at: the task it pushes now and what it does there.
+// The step a job is at: the task it works on now and what it does there.
 type Step = Arc<Mutex<Option<(String, String)>>>;
 
-// A push this board runs in the background, for one task or several in order.
-pub(super) struct Pushing {
-    pub names: Vec<String>,
-    pub paths: Vec<PathBuf>,
-    pub label: String,
+const PUSHING: &str = "pushing";
+
+// Work this board runs behind it, for the tasks it holds (one, several in order, or none); their rows say `doing` until it is done.
+pub(super) struct Job {
+    tasks: Vec<(String, Option<PathBuf>)>,
+    label: String,
+    doing: String,
     step: Step,
-    subject: Subject,
+    subject: Option<Subject>,
     result: Receiver<Result<String>>,
 }
 
-impl Pushing {
+impl Job {
+
     fn step(&self) -> Option<(String, String)> {
         self.step.lock().ok().and_then(|step| step.clone())
+    }
+
+    fn holds(&self, name: &str, path: Option<&Path>) -> bool {
+        self.tasks.iter().any(|(held, at)| match (at, path) {
+            (Some(at), Some(path)) => at == path,
+            _ => held == name,
+        })
     }
 }
 
 impl App {
     pub(super) fn push_in_background(&mut self, label: String, tasks: Vec<(String, PathBuf)>, run: impl FnOnce(&Pusher) -> Result<String> + Send + 'static) {
         let step: Step = Arc::default();
-        let (sender, result) = mpsc::channel();
         let (into, pusher) = (step.clone(), self.pusher.clone());
-        thread::spawn(move || {
-            let out = tasks::push_watched(move |task, what| {
-                if let Ok(mut step) = into.lock() {
-                    *step = Some((task.to_string(), what.to_string()));
-                }
-            }, || run(&pusher));
-            let _ = sender.send(out);
-        });
         let subject = match tasks.as_slice() {
             [(name, _)] => self.subject_for("push", name),
             _ => Subject::plain("push"),
         };
-        let (names, paths) = tasks.into_iter().unzip();
-        self.pushes.push(Pushing { names, paths, label, step, subject, result });
-        self.mode = Mode::Normal;
+        let held = tasks.into_iter().map(|(name, path)| (name, Some(path))).collect();
+        self.start_job(held, label, PUSHING, Some(subject), step, move || tasks::push_watched(move |task, what| {
+            if let Ok(mut step) = into.lock() {
+                *step = Some((task.to_string(), what.to_string()));
+            }
+        }, || run(&pusher)));
+    }
+
+    // Work for no one task, such as the lead's restart or a device's answer; its outcome names what self.subject says.
+    pub(super) fn in_background(&mut self, label: String, work: impl FnOnce() -> Result<String> + Send + 'static) {
+        let subject = self.subject.take();
+        self.start_job(Vec::new(), label, "working", subject, Step::default(), work);
+    }
+
+    // Work on one task; a task the board already works on takes no second job until the first is done.
+    pub(super) fn task_in_background(&mut self, name: &str, path: Option<&Path>, doing: &str, label: String, work: impl FnOnce() -> Result<String> + Send + 'static) -> Option<&mut Job> {
+        if let Some(already) = self.doing(name, path) {
+            self.already(already);
+            return None;
+        }
+        let subject = self.subject.take();
+        Some(self.start_job(vec![(name.to_string(), path.map(Path::to_path_buf))], label, doing, subject, Step::default(), work))
+    }
+
+    fn start_job(&mut self, tasks: Vec<(String, Option<PathBuf>)>, label: String, doing: &str, subject: Option<Subject>, step: Step, work: impl FnOnce() -> Result<String> + Send + 'static) -> &mut Job {
+        let (sender, result) = mpsc::channel();
+        thread::spawn(move || {
+            let _ = sender.send(work());
+        });
+        let label = label.trim_end_matches('…').to_string();
+        self.jobs.push(Job { tasks, label, doing: doing.to_string(), step, subject, result });
         let _ = self.refresh.send(());
+        self.jobs.last_mut().expect("just pushed")
     }
 
-    pub(super) fn pushing(&self, path: &Path) -> bool {
-        self.pushes.iter().any(|push| push.paths.iter().any(|pushed| pushed == path))
+    // What the board is doing to the task now, if anything.
+    pub(super) fn doing(&self, name: &str, path: Option<&Path>) -> Option<String> {
+        self.jobs.iter().find(|job| job.holds(name, path)).map(|job| job.doing.clone())
     }
 
-    // An outcome that asks nothing goes by as a toast at once; one that needs the user waits until the board is at rest on its work page, so it never covers a window the user has open.
-    pub(super) fn poll_pushes(&mut self) {
+    // Refuses a second action on a task a job holds; the caller has named the task with about().
+    pub(super) fn already(&mut self, doing: String) {
+        self.show(Notice::new(Tone::NotNow, format!("Already {doing} it")).next("The board says how it went once it is done.").ok());
+    }
+
+    pub(super) fn jobs_stop_line(&self) -> &'static str {
+        match self.jobs.iter().all(|job| job.doing == PUSHING) {
+            _ if self.jobs.is_empty() => "",
+            true => ", and the push under way stops where it is",
+            false => ", and what runs in the background stops where it is",
+        }
+    }
+
+    // An outcome that asks nothing goes by as a toast at once, an empty one says nothing; one that needs the user waits until the board is at rest on its work page, so it never covers a window the user has open.
+    pub(super) fn poll_jobs(&mut self) {
         let mut at = 0;
-        while at < self.pushes.len() {
-            match self.pushes[at].result.try_recv() {
+        while at < self.jobs.len() {
+            match self.jobs[at].result.try_recv() {
                 Ok(result) => {
-                    let push = self.pushes.remove(at);
+                    let job = self.jobs.remove(at);
+                    self.drop_restarted_lead();
+                    let _ = self.refresh.send(());
+                    if result.as_ref().is_ok_and(String::is_empty) {
+                        continue;
+                    }
                     let failed = result.is_err();
                     let notice = Notice::read(&result.unwrap_or_else(|error| error), failed);
                     if notice.tone.passes() && notice.you.is_none() {
-                        self.toast = Some(notices::Toast { notice, subject: Some(push.subject), at: Instant::now() });
+                        self.toast = Some(notices::Toast { notice, subject: job.subject, at: Instant::now() });
                     } else {
-                        self.push_outcomes.push((notice, push.subject));
+                        self.outcomes.push((Mode::Message(notice.to_string()), job.subject));
                     }
-                    let _ = self.refresh.send(());
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    let push = self.pushes.remove(at);
-                    self.push_outcomes.push((Notice::new(Tone::Failed, format!("{} stopped without an answer", push.label)).next("Look at its row: the push line shows where it stands."), push.subject));
+                    let job = self.jobs.remove(at);
+                    self.outcomes.push((Mode::Message(Notice::new(Tone::Failed, format!("{} stopped without an answer", job.label)).next("Look at its row: it shows where it stands.").to_string()), job.subject));
                 }
                 Err(mpsc::TryRecvError::Empty) => at += 1,
             }
         }
-        if !self.push_outcomes.is_empty() && self.page == Page::Work && matches!(self.mode, Mode::Normal) {
-            let (notice, subject) = self.push_outcomes.remove(0);
-            self.shown = Some(subject);
-            self.mode = Mode::Message(notice.to_string());
+        if !self.outcomes.is_empty() && self.page == Page::Work && matches!(self.mode, Mode::Normal) {
+            let (window, subject) = self.outcomes.remove(0);
+            self.shown = subject.filter(|_| matches!(window, Mode::Message(_)));
+            self.mode = window;
         }
     }
 
-    // What a task's row says while this board pushes it: the step for the task the push is at, plain for one still waiting its turn in the same push.
-    pub(super) fn push_note_for(&self, item: &Item) -> Option<String> {
-        let path = item.path.as_deref()?;
-        let push = self.pushes.iter().find(|push| push.paths.iter().any(|pushed| pushed == path))?;
-        Some(match push.step() {
-            Some((task, what)) if task == item.name => format!("pushing… {what}"),
-            _ => "pushing…".to_string(),
+    // What a task's row says while a job holds it: the step for the task the job is at, plain for one still waiting its turn in the same job.
+    pub(super) fn job_note_for(&self, item: &Item) -> Option<String> {
+        let job = self.jobs.iter().find(|job| job.holds(&item.name, item.path.as_deref()))?;
+        Some(match job.step() {
+            Some((task, what)) if task == item.name => format!("{}… {what}", job.doing),
+            _ => format!("{}…", job.doing),
         })
     }
 
-    fn push_line(&self, push: &Pushing) -> String {
+    fn job_line(&self, job: &Job) -> String {
         let title = |name: &str| self.tasks.iter().find(|item| item.name == name).map_or_else(|| name.to_string(), Item::titled);
-        match (push.step(), push.names.len()) {
-            (Some((_, what)), 1) => format!("{}… {what}", push.label),
-            (Some((task, what)), _) => format!("{}… {}: {what}", push.label, title(&task)),
-            (None, _) => format!("{}…", push.label),
+        match (job.step(), job.tasks.len()) {
+            (Some((_, what)), 1) => format!("{}… {what}", job.label),
+            (Some((task, what)), _) => format!("{}… {}: {what}", job.label, title(&task)),
+            (None, _) => format!("{}…", job.label),
         }
     }
 
@@ -128,9 +175,10 @@ impl App {
     }
 }
 
-// One line per push under way, bottom right where toasts show, above a toast that shows at the same time.
-pub(super) fn draw_pushes(frame: &mut Frame, app: &App, below: Option<u16>) {
-    if app.pushes.is_empty() {
+// One line per job under way, the board's and its pages', bottom right where toasts show, above a toast that shows at the same time.
+pub(super) fn draw_jobs(frame: &mut Frame, app: &App, below: Option<u16>) {
+    let texts: Vec<String> = app.jobs.iter().map(|job| app.job_line(job)).chain(app.areas.running()).chain(app.routines.running()).collect();
+    if texts.is_empty() {
         return;
     }
     let full = frame.area();
@@ -139,9 +187,9 @@ pub(super) fn draw_pushes(frame: &mut Frame, app: &App, below: Option<u16>) {
         return;
     }
     let inner = width.saturating_sub(4) as usize;
-    let lines: Vec<Line> = app.pushes.iter().map(|push| Line::from(vec![
+    let lines: Vec<Line> = texts.iter().map(|text| Line::from(vec![
         Span::styled(format!("{} ", Tone::Moving.glyph()), bold(tone_color(Tone::Moving))),
-        Span::styled(cut(&app.push_line(push), inner.saturating_sub(2)), style(TEXT)),
+        Span::styled(cut(text, inner.saturating_sub(2)), style(TEXT)),
     ])).collect();
     let bottom = below.unwrap_or_else(|| full.bottom().saturating_sub(2));
     let height = (lines.len() as u16 + 2).min(bottom.saturating_sub(1));
@@ -150,8 +198,9 @@ pub(super) fn draw_pushes(frame: &mut Frame, app: &App, below: Option<u16>) {
     }
     let area = Rect { x: full.right().saturating_sub(width + 2), y: bottom.saturating_sub(height), width, height };
     frame.render_widget(Clear, area);
+    let title = if !app.jobs.is_empty() && app.jobs.iter().all(|job| job.doing == PUSHING) && texts.len() == app.jobs.len() { " push " } else { " under way " };
     let block = Block::bordered().border_type(BorderType::Rounded).border_style(style(tone_color(Tone::Moving))).padding(Padding::horizontal(1))
-        .title(Span::styled(" push ", style(MUTED))).style(Style::new().bg(MANTLE));
+        .title(Span::styled(title, style(MUTED))).style(Style::new().bg(MANTLE));
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
@@ -200,7 +249,7 @@ mod tests {
     fn until(app: &mut App, done: impl Fn(&App) -> bool) {
         let start = Instant::now();
         while !done(app) && start.elapsed() < Duration::from_secs(10) {
-            app.poll_pushes();
+            app.poll_jobs();
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(done(app), "timed out");
@@ -211,7 +260,7 @@ mod tests {
         let (mut app, go, calls) = pushing_app(Notice::new(Tone::Done, "Pushed 3 commits to main").next("CI runs now; kebbie closes the task when it is green.").ok());
         press(&mut app, key(KeyCode::Char('y')));
         assert!(matches!(app.mode, Mode::Normal), "no window waits on the push");
-        until(&mut app, |app| app.push_note_for(&app.tasks[0]).is_some_and(|note| note.contains("rebasing")));
+        until(&mut app, |app| app.job_note_for(&app.tasks[0]).is_some_and(|note| note.contains("rebasing")));
         let (rows, _) = render(&mut app, 120, 30);
         let screen = rows.join("\n");
         assert!(screen.contains("↻ Pushing Refund mails… rebasing onto main"), "the notice says what it does: {screen}");
@@ -228,7 +277,7 @@ mod tests {
         assert_eq!(app.page, Page::Work);
         assert!(!app.may_restart(), "a rebuilt kebbie waits for the push");
         go.send(()).unwrap();
-        until(&mut app, |app| app.pushes.is_empty());
+        until(&mut app, |app| app.jobs.is_empty());
         assert_eq!(*calls.lock().unwrap(), [(PathBuf::from("/work/wt1.web"), Some("33abcdef33".to_string()), false)], "y pushes every commit and closes the task");
         let (rows, _) = render(&mut app, 120, 30);
         let screen = rows.join("\n");
@@ -244,11 +293,11 @@ mod tests {
         press(&mut app, key(KeyCode::Char('?')));
         assert!(matches!(app.mode, Mode::Help(_)), "another window opens while the push runs");
         go.send(()).unwrap();
-        until(&mut app, |app| app.pushes.is_empty());
-        app.poll_pushes();
+        until(&mut app, |app| app.jobs.is_empty());
+        app.poll_jobs();
         assert!(matches!(app.mode, Mode::Help(_)), "the failure does not cover the open window");
         press(&mut app, key(KeyCode::Esc));
-        app.poll_pushes();
+        app.poll_jobs();
         let Mode::Message(text) = &app.mode else { panic!("the failure opens once the board is at rest: {:?}", std::mem::discriminant(&app.mode)) };
         assert!(text.contains("commits changed after you chose push"));
         let (rows, _) = render(&mut app, 120, 30);
@@ -272,6 +321,37 @@ mod tests {
         assert!(matches!(app.mode, Mode::Normal) && app.toast.as_ref().is_some_and(|toast| toast.notice.headline.starts_with("Already pushing")), "p on a task being pushed says so");
         go.send(()).unwrap();
         go.send(()).unwrap();
-        until(&mut app, |app| app.pushes.is_empty());
+        until(&mut app, |app| app.jobs.is_empty());
+    }
+
+    #[test]
+    fn a_task_job_holds_its_row_while_the_board_keeps_taking_keys_and_refuses_a_second_action_on_it() {
+        let mut app = test_app(vec![titled("billing", "Refund mails", "/work/wt1.web"), titled("search", "Search filters", "/work/wt2.web")]);
+        let (go, wait) = mpsc::channel::<()>();
+        app.about("rebase", "billing");
+        app.task_in_background("billing", Some(std::path::Path::new("/work/wt1.web")), "rebasing", "Rebasing billing…".to_string(), move || {
+            let _ = wait.recv();
+            Ok("Rebased billing onto main".to_string())
+        });
+        assert!(matches!(app.mode, Mode::Normal), "no window waits on it");
+        assert_eq!(app.job_note_for(&app.tasks[0]).as_deref(), Some("rebasing…"));
+        assert_eq!(app.job_note_for(&app.tasks[1]), None, "another task's row says nothing");
+        let (rows, _) = render(&mut app, 120, 30);
+        let screen = rows.join("\n");
+        assert!(screen.contains("↻ Rebasing billing…") && screen.contains(" under way "), "a line says what runs: {screen}");
+        let before = app.work_selected;
+        press(&mut app, key(KeyCode::Char('j')));
+        assert_ne!(app.work_selected, before, "j moves while it runs");
+        press(&mut app, key(KeyCode::Char('k')));
+        press(&mut app, key(KeyCode::Char('?')));
+        assert!(matches!(app.mode, Mode::Help(_)), "a window opens while it runs");
+        press(&mut app, key(KeyCode::Esc));
+        press(&mut app, key(KeyCode::Char('x')));
+        assert!(matches!(app.mode, Mode::Normal) && app.toast.as_ref().is_some_and(|toast| toast.notice.headline == "Already rebasing it"), "a second action on it is refused before it asks");
+        assert!(!app.may_restart(), "a rebuilt kebbie waits for it");
+        go.send(()).unwrap();
+        settle_jobs(&mut app);
+        assert!(matches!(app.mode, Mode::Normal) && app.toast.as_ref().is_some_and(|toast| toast.notice.headline.contains("Rebased billing")), "the outcome goes by as a toast");
+        assert_eq!(app.job_note_for(&app.tasks[0]), None, "the row lets go once it is done");
     }
 }

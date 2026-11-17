@@ -541,10 +541,10 @@ mod tests {
         let order: Vec<usize> = ["1  card-component", "2  fix-grid", "3  copy-typo"].iter().map(|row| find(&rows, row)[0].1).collect();
         assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{screen}");
         app.handle_key(key(KeyCode::Enter), None);
-        assert!(matches!(app.mode, Mode::Normal) && app.pushing(std::path::Path::new("/work/copy-typo")), "pushing runs in the background, the board free meanwhile");
+        assert!(matches!(app.mode, Mode::Normal) && app.doing("copy-typo", Some(std::path::Path::new("/work/copy-typo"))).is_some(), "pushing runs in the background, the board free meanwhile");
         let start = std::time::Instant::now();
         while !matches!(app.mode, Mode::Message(_)) && start.elapsed() < std::time::Duration::from_secs(10) {
-            app.poll_pushes();
+            app.poll_jobs();
         }
         assert_eq!(*tried.lock().unwrap(), [PathBuf::from("/work/card-component"), PathBuf::from("/work/fix-grid")]);
         let Mode::Message(outcome) = &app.mode else { panic!("the failure opens a window") };
@@ -620,8 +620,10 @@ mod tests {
         assert!(matches!(app.mode, Mode::Next(_)), "esc leaves it waiting under Next");
         app.mode = Mode::Device { id: phone.key(), back: Window::default() };
         app.handle_key(key(KeyCode::Char('x')), None);
-        let Mode::Working { result, .. } = &app.mode else { panic!("deciding runs in the background") };
-        let said = result.recv().unwrap().unwrap();
+        assert!(matches!(app.mode, Mode::Normal) && app.jobs.len() == 1, "deciding runs in the background");
+        app.toast = None;
+        settle_jobs(&mut app);
+        let said = app.toast.as_ref().map(|toast| toast.notice.to_string()).or_else(|| match &app.mode { Mode::Message(text) => Some(text.clone()), _ => None }).unwrap_or_default();
         assert!(said.starts_with("✓ iPhone 16 stays view only on MacBook\n  next: kebbie hub devices approve \"iPhone 16\" lets it in later."), "{said}");
         assert_eq!(crate::hub::devices::load(&phone.dir).devices[&phone.id].state, crate::hub::devices::State::Denied);
         assert!(app.devices.is_empty(), "it leaves Next at once");

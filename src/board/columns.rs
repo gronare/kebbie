@@ -335,7 +335,7 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
         let start = lines.len();
         let dot = running_dot(item);
         let marker = if item.routine.is_some() { ROUTINE_MARKER } else { "" };
-        let pushing = app.push_note_for(item);
+        let pushing = app.job_note_for(item);
         let facts = match item.parked {
             Some(parked) => format!("{} · {}", super::park::back(parked), row_facts(item, pushing.clone())),
             None => row_facts(item, pushing.clone()),

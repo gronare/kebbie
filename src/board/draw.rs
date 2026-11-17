@@ -204,9 +204,6 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Mode::Park { name, index, date, .. } => modal_hits = super::park::draw_park(frame, name, *index, date.as_deref()),
         Mode::Filter { buffer } => draw_filter(frame, app, buffer),
         Mode::ConfirmPush { .. } => modal_hits = draw_push(frame, app),
-        Mode::Working { label, .. } => {
-            modal(frame, "kebbie".to_string(), vec![Line::from(Span::styled(label.clone(), style(TEXT)))], 72);
-        }
         Mode::EditMessage(editor) => draw_editor(frame, editor),
         Mode::Input { label, buffer, .. } => draw_input(frame, label, buffer),
     }
@@ -224,13 +221,13 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     }
 }
 
-// Bottom right: the board's last toast, and above it a line for each push under way.
+// Bottom right: the board's last toast, and above it a line for each job under way.
 fn draw_corner(frame: &mut Frame, app: &mut App) {
     if app.toast.as_ref().is_some_and(|toast| toast.at.elapsed() >= TOAST_FOR) {
         app.toast = None;
     }
     let top = app.toast.as_ref().and_then(|toast| draw_toast(frame, toast));
-    super::pushing::draw_pushes(frame, app, top);
+    super::jobs::draw_jobs(frame, app, top);
 }
 
 #[cfg(test)]

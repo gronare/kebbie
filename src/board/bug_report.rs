@@ -523,14 +523,6 @@ mod tests {
         render(app, 120, 40).0.join("\n")
     }
 
-    fn settle(app: &mut App) {
-        let start = std::time::Instant::now();
-        while matches!(app.mode, Mode::Working { .. }) && start.elapsed() < std::time::Duration::from_secs(30) {
-            app.take_working_result();
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-    }
-
     fn row_of(app: &mut App, text: &str) -> String {
         let (rows, _) = render(app, 120, 40);
         let (_, y) = find(&rows, text).first().copied().unwrap_or_else(|| panic!("no {text}: {}", rows.join("\n")));
@@ -700,8 +692,8 @@ mod tests {
             render(&mut app, 120, 40);
         }
         press(&mut app, key(KeyCode::Char('y')));
-        assert!(matches!(app.mode, Mode::Working { .. }));
-        settle(&mut app);
+        assert!(matches!(app.mode, Mode::Normal) && app.jobs.len() == 1, "it sends in the background");
+        settle_jobs(&mut app);
         let sent = issues::find(&issues::dir(&state), "b2c3d4").unwrap();
         assert!(sent.report.is_some(), "the endpoint took it: {:?} {}", app.toast.as_ref().map(|toast| toast.notice.headline.clone()), screen(&mut app));
         app.offers = offers_in(&state, true, &scrub);
@@ -802,7 +794,7 @@ mod tests {
         assert!(rows.join("\n").contains("the last row"), "{}", rows.join("\n"));
         assert!(matches!(app.mode, Mode::Report { read: true, .. }));
         press(&mut app, key(KeyCode::Char('y')));
-        assert!(matches!(app.mode, Mode::Working { .. }) && app.offers.is_empty(), "y sends once the end was on screen");
+        assert!(app.jobs.len() == 1 && app.offers.is_empty(), "y sends once the end was on screen");
     }
 
     #[test]
@@ -823,7 +815,7 @@ mod tests {
         let shown = screen(&mut app);
         assert!(shown.contains("It failed in ~/work/<repo>.") && !shown.contains("<token>"), "the window keeps the text that was read: {shown}");
         press(&mut app, key(KeyCode::Char('y')));
-        settle(&mut app);
+        settle_jobs(&mut app);
         let shown = screen(&mut app);
         assert!(shown.contains("changed since you read it"), "{shown}");
         assert!(issues::find(&issues::dir(&state), "a1b2c3").unwrap().report.is_none());

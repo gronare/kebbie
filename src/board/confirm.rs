@@ -15,7 +15,7 @@ impl App {
         match key.code {
             KeyCode::Char('y') => {
                 self.about("reset", &name);
-                self.in_background("Resetting the task…".to_string(), move || tasks::reset(&path, None));
+                self.task_in_background(&name, Some(path.clone().as_path()), "resetting", format!("Resetting {name}"), move || tasks::reset(&path, None));
             }
             _ if cancels => {}
             _ => self.mode = Mode::ConfirmReset { path, name, nudged: true },
@@ -26,7 +26,7 @@ impl App {
         match key.code {
             KeyCode::Char('y') => {
                 self.about("done", &name);
-                self.in_background(format!("Closing {name}…"), move || tasks::done(&path, None));
+                self.task_in_background(&name, Some(path.clone().as_path()), "closing", format!("Closing {name}"), move || tasks::done(&path, None));
             }
             _ if cancels => {}
             _ => self.mode = Mode::ConfirmDone { path, name, nudged: true },
@@ -37,7 +37,8 @@ impl App {
         match key.code {
             KeyCode::Char('y') => {
                 self.about("ci", &name);
-                self.in_background(format!("Dismissing the CI of {name}…"), move || tasks::dismiss_ci(&path, Some(&name), None));
+                let label = format!("Dismissing the CI of {name}");
+                self.task_in_background(&name.clone(), Some(path.clone().as_path()), "dismissing its CI", label, move || tasks::dismiss_ci(&path, Some(&name), None));
             }
             _ if cancels => {}
             _ => self.mode = Mode::ConfirmDismiss { path, name, nudged: true },
@@ -48,7 +49,7 @@ impl App {
         match key.code {
             KeyCode::Char('y') if now => {
                 self.about("start", &name);
-                self.in_background(format!("Starting {name}…"), move || tasks::start_now(&name));
+                self.task_in_background(&name.clone(), None, "starting", format!("Starting {name}"), move || tasks::start_now(&name));
             }
             KeyCode::Char('y') => {
                 self.about("queued", &name);

@@ -13,6 +13,7 @@ use ratatui::text::{Line, Span};
 use crate::actions::{self, Action, Answers, Step, Work};
 use crate::areas::{self, Area, Areas};
 use crate::backlog;
+use crate::behind::Runs;
 use crate::board::keys_window;
 use crate::board::terminal;
 use crate::board::widgets::{
@@ -111,7 +112,6 @@ enum Mode {
     Input { purpose: Purpose, label: String, buffer: String },
     Confirm { title: String, lines: Vec<Line<'static>>, question: String, go: Go, nudged: bool },
     Push(PushWindow),
-    Working { label: String, result: Receiver<After> },
     Message { text: String, next: Option<Next> },
     Log { stem: String, scroll: usize },
     Help(keys_window::Scroll),
@@ -130,6 +130,7 @@ pub struct Page {
     updates: Option<(Receiver<Result<Areas>>, Sender<()>)>,
     pub hits: Vec<(Rect, Hit)>,
     sources: Vec<Source>,
+    runs: Runs<After>,
 }
 
 fn spawn_refresher() -> (Receiver<Result<Areas>>, Sender<()>) {
@@ -237,7 +238,7 @@ impl Page {
     pub fn new(sources: Vec<Source>) -> Self {
         Self {
             areas: Vec::new(), synced: None, tasks: Vec::new(), loaded: false, error: None, selected: None, focus: Focus::List, action: 0,
-            mode: Mode::Normal, updates: None, hits: Vec::new(), sources,
+            mode: Mode::Normal, updates: None, hits: Vec::new(), sources, runs: Runs::default(),
         }
     }
 
@@ -253,7 +254,11 @@ impl Page {
     }
 
     pub fn is_idle(&self) -> bool {
-        matches!(self.mode, Mode::Normal | Mode::Message { .. } | Mode::Help(_) | Mode::Log { .. })
+        matches!(self.mode, Mode::Normal | Mode::Message { .. } | Mode::Help(_) | Mode::Log { .. }) && self.runs.is_empty()
+    }
+
+    pub fn running(&self) -> Vec<String> {
+        self.runs.labels()
     }
 
     pub fn summary(&self) -> String {
@@ -276,8 +281,8 @@ impl Page {
         }
     }
 
-    // Starts gathering on the board's first tick, whichever page shows, then picks up what the background thread found and what a running action did.
-    pub fn tick(&mut self) {
+    // Starts gathering on the board's first tick, whichever page shows, then picks up what the background thread found; an action's outcome waits until this page shows with nothing open.
+    pub fn tick(&mut self, shown: bool) {
         if self.updates.is_none() {
             self.updates = Some(spawn_refresher());
         }
@@ -294,9 +299,7 @@ impl Page {
                 self.loaded = true;
             }
         }
-        if let Mode::Working { result, .. } = &self.mode
-            && let Ok(after) = result.try_recv()
-        {
+        if let Some(after) = self.runs.next(shown && self.is_normal()) {
             self.mode = match after {
                 After::Show(result, next) => Mode::Message { text: result.unwrap_or_else(|error| error), next },
                 After::Push(window) => Mode::Push(window),
@@ -398,7 +401,6 @@ impl Page {
                     self.open_next(next);
                 }
             }
-            working @ Mode::Working { .. } => self.mode = working,
             Mode::Log { stem, scroll } => match key.code {
                 KeyCode::Up | KeyCode::Char('k') => self.mode = Mode::Log { stem, scroll: scroll.saturating_sub(1) },
                 KeyCode::Down | KeyCode::Char('j') => self.mode = Mode::Log { stem, scroll: scroll + 1 },
@@ -408,13 +410,7 @@ impl Page {
             },
             Mode::Confirm { title, lines, question, go, .. } => match key.code {
                 KeyCode::Char('y') => match go {
-                    Go::Script { repo, steps, next } => {
-                        let (sender, result) = mpsc::channel();
-                        thread::spawn(move || {
-                            let _ = sender.send(run_script(repo, steps, next));
-                        });
-                        self.mode = Mode::Working { label: format!("{title}…"), result };
-                    }
+                    Go::Script { repo, steps, next } => self.runs.start(title, move || run_script(repo, steps, next)),
                     Go::Task { repo, name, prompt } => {
                         let options = tasks::Start { prompt: Some(&prompt), focus: true, from: None, mode: None, profile: None, backlog: None, note: true, anyway: false };
                         let result = terminal::outside(terminal, || tasks::start(&repo, &name, &options));
@@ -427,12 +423,8 @@ impl Page {
             },
             Mode::Push(window) => match key.code {
                 KeyCode::Char('y') => {
-                    let (sender, result) = mpsc::channel();
-                    let label = format!("Pushing {} to origin…", window.tag.as_ref().map_or(window.branch.clone(), |tag| format!("{} and {tag}", window.branch)));
-                    thread::spawn(move || {
-                        let _ = sender.send(push(window));
-                    });
-                    self.mode = Mode::Working { label, result };
+                    let label = format!("Pushing {} to origin", window.tag.as_ref().map_or(window.branch.clone(), |tag| format!("{} and {tag}", window.branch)));
+                    self.runs.start(label, move || push(window));
                 }
                 KeyCode::Char('n') | KeyCode::Esc | KeyCode::Char('q') => {
                     if !window.done.is_empty() {
@@ -889,9 +881,6 @@ impl Page {
                 }
                 lines.push(Line::from(Span::styled("any key to close", style(MUTED))));
                 modal(frame, "kebbie".to_string(), lines, 96);
-            }
-            Mode::Working { label, .. } => {
-                modal(frame, "kebbie".to_string(), vec![Line::from(Span::styled(label.clone(), style(TEXT)))], 72);
             }
             Mode::Input { label, buffer, .. } => {
                 modal(frame, label.clone(), vec![

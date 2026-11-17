@@ -29,6 +29,17 @@ pub(super) fn press(app: &mut App, event: KeyEvent) {
     app.handle_key(event, None);
 }
 
+// Waits for the board's background jobs to finish and hand over their outcomes.
+pub(super) fn settle_jobs(app: &mut App) {
+    let start = std::time::Instant::now();
+    app.poll_jobs();
+    while !app.jobs.is_empty() {
+        assert!(start.elapsed() < std::time::Duration::from_secs(30), "the background work never finished");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        app.poll_jobs();
+    }
+}
+
 pub(super) fn carded(current: bool) -> App {
     let mut app = test_app(vec![served("search-filters")]);
     with_detail(&mut app);
