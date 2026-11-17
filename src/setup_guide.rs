@@ -376,10 +376,20 @@ pub struct Answers {
 
 impl Answers {
     fn from(facts: &Facts) -> Answers {
+        let vault = Where::from(facts);
+        Answers { name: facts.name.clone(), codex: facts.codex.is_some(), sources: Answers::sources(facts, vault.chosen() != Place::None), vault, signals: usize::from(!facts.signals) }
+    }
+
+    // Sources this machine never chose follow the vault: with one, new items go to it.
+    fn sources(facts: &Facts, vault: bool) -> Vec<(Source, bool)> {
+        if !facts.sources_set {
+            let filed = if vault { Source::Vault } else { Source::Local };
+            return Source::ALL.into_iter().map(|source| (source, source == filed)).collect();
+        }
         let read = config::read_sources(&facts.sources);
         let mut sources: Vec<(Source, bool)> = facts.sources.iter().map(|source| (*source, read.contains(source))).collect();
         sources.extend(Source::ALL.into_iter().filter(|source| !facts.sources.contains(source)).map(|source| (source, false)));
-        Answers { name: facts.name.clone(), codex: facts.codex.is_some(), sources, vault: Where::from(facts), signals: usize::from(!facts.signals) }
+        sources
     }
 
     fn text(&self, field: Field) -> &str {
@@ -464,6 +474,7 @@ pub struct Guide {
     pub step: Step,
     cursor: usize,
     caret: usize,
+    sources_touched: bool,
     pub answers: Answers,
     facts: Facts,
     visited: [bool; Step::ALL.len()],
@@ -504,7 +515,7 @@ fn short(wanted: &setup::Wanted) -> String {
 impl Guide {
     pub fn new(facts: Facts, at: Step) -> Guide {
         let answers = Answers::from(&facts);
-        let mut guide = Guide { step: Step::Name, cursor: 0, caret: 0, answers, facts, visited: [false; Step::ALL.len()], skipped: [false; Step::ALL.len()], fresh: true, error: None, applied: None, done: false, ending: Vec::new() };
+        let mut guide = Guide { step: Step::Name, cursor: 0, caret: 0, sources_touched: false, answers, facts, visited: [false; Step::ALL.len()], skipped: [false; Step::ALL.len()], fresh: true, error: None, applied: None, done: false, ending: Vec::new() };
         guide.go(at);
         guide
     }
@@ -630,6 +641,10 @@ impl Guide {
     }
 
     fn go(&mut self, step: Step) {
+        if step == Step::Backlog && !self.sources_touched && !self.facts.sources_set {
+            let place = self.place().unwrap_or_else(|| Where::from(&self.facts).chosen());
+            self.answers.sources = Answers::sources(&self.facts, place != Place::None);
+        }
         self.step = step;
         self.error = None;
         self.fresh = true;
@@ -792,6 +807,7 @@ impl Guide {
             Step::Agents if Agent::ALL.get(at) == Some(&Agent::Codex) && self.facts.codex.is_some() => self.answers.codex = !self.answers.codex,
             Step::Backlog => {
                 let Some((source, on)) = self.answers.sources.get(at).copied() else { return };
+                self.sources_touched = true;
                 for (other, ticked) in &mut self.answers.sources {
                     if *other == source {
                         *ticked = !on;
@@ -2024,6 +2040,33 @@ mod tests {
     }
 
     #[test]
+    fn the_backlog_follows_the_vault_chosen_and_a_rerun_starts_from_the_vault_this_machine_uses() {
+        let lab = Lab::new("guide-backlog-follows");
+        let mut guide = fresh(&lab);
+        press(&mut guide, &[KeyCode::Enter, KeyCode::Enter]);
+        assert_eq!((guide.step, guide.answers.vault.chosen()), (Step::Vault, Place::None));
+        press(&mut guide, &[KeyCode::Up]);
+        assert_eq!(guide.answers.vault.chosen(), Place::Folder);
+        press(&mut guide, &[KeyCode::Up, KeyCode::Up]);
+        assert_eq!(guide.answers.vault.chosen(), Place::Server);
+        press(&mut guide, &[KeyCode::Down]);
+        type_text(&mut guide, "https://notes.example.org");
+        press(&mut guide, &[KeyCode::Enter]);
+        assert_eq!(guide.step, Step::Backlog);
+        assert_eq!(guide.answers.chosen_sources(), [Source::Vault], "a vault chosen a step before is where new items go");
+        assert!(screen(&guide).contains("[x] Vault  · backlog notes in your notes vault · new items go here"), "{}", screen(&guide));
+        let rerun = vault_step(&lab, vec![found("mindin on PATH", "mindin")], None);
+        assert_eq!((rerun.answers.vault.chosen(), rerun.answers.vault.address.as_str()), (Place::Server, "https://vault.example.com"), "the server mindin answers with is chosen");
+        assert_eq!(rerun.answers.chosen_sources(), [Source::Vault]);
+        let mut chosen = vault_step(&lab, vec![found("mindin on PATH", "mindin")], None);
+        chosen.facts.sources = vec![Source::Local];
+        chosen.facts.sources_set = true;
+        chosen.answers = Answers::from(&chosen.facts);
+        chosen.go(Step::Backlog);
+        assert_eq!(chosen.answers.chosen_sources(), [Source::Local], "sources this machine chose stay as they are");
+    }
+
+    #[test]
     fn a_stale_codex_plugin_shows_out_of_date_on_agents_and_apply_rewrites_it() {
         let lab = Lab::new("guide-stale-codex");
         let plugins = lab.machine.claude_dir.join("plugins");
@@ -2075,16 +2118,17 @@ mod tests {
         guide.go(Step::Vault);
         press(&mut guide, &[KeyCode::Down, KeyCode::Down, KeyCode::Char('s')]);
         assert_eq!((guide.step, guide.answers.vault.chosen()), (Step::Backlog, Place::Server), "a skip puts the step back to what the machine has");
-        press(&mut guide, &[KeyCode::Down, KeyCode::Char(' '), KeyCode::Left]);
+        assert_eq!(guide.answers.chosen_sources(), [Source::Vault], "the vault the machine keeps is where new items go");
+        press(&mut guide, &[KeyCode::Down, KeyCode::Down, KeyCode::Char(' '), KeyCode::Left]);
         assert_eq!(guide.step, Step::Vault);
         press(&mut guide, &[KeyCode::Left]);
         assert_eq!(guide.step, Step::Agents, "← goes back one step");
         guide.go(Step::Backlog);
         press(&mut guide, &[KeyCode::Enter, KeyCode::Char('s')]);
         assert_eq!(guide.step, Step::Review);
-        assert_eq!(guide.answers.chosen_sources(), [Source::Vault], "← and ⏎ keep the boxes ticked");
+        assert_eq!(guide.answers.chosen_sources(), [Source::Vault, Source::Linear], "← and ⏎ keep the boxes ticked");
         let plan = plan(&guide);
-        assert!(plan.contains(&"kebbie skipped vault stays as it is".to_string()) && plan.contains(&"kebbie skipped signals stay off".to_string()) && plan.contains(&"kebbie to do backlog vault".to_string()), "{plan:?}");
+        assert!(plan.contains(&"kebbie skipped vault stays as it is".to_string()) && plan.contains(&"kebbie skipped signals stay off".to_string()) && plan.contains(&"kebbie to do backlog vault, linear".to_string()), "{plan:?}");
         assert!(plan.iter().all(|row| !row.ends_with(" vault [mcp_servers.vault]") && !row.contains("the vault plugin")), "a skipped vault adds it to no agent: {plan:?}");
         press(&mut guide, &[KeyCode::Left]);
         assert_eq!(guide.step, Step::Signals);

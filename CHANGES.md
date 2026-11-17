@@ -29,6 +29,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - kebbie setup asks where the vault lives once, and the cursor shows while mindin runs.
 - kebbie setup's text fields take ← → Home and End, so a typo mid-word is fixed in place.
 - kebbie setup keeps this machine's name, backlog and signals answers even when mindin's setup is stopped.
+- kebbie setup files new backlog items in the vault you just chose, unless this machine already chose where they go.
 
 ## 0.39.1
 
