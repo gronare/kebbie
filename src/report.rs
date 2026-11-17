@@ -386,7 +386,10 @@ pub fn card_for(path: &Path) -> Option<(Card, bool)> {
     let repo = main_checkout(path).ok()?;
     let slot = tasks::find_task(&repo, None, path).ok()?;
     let upstream = default_branch(&repo).ok()?;
-    let card = card_in(&state_dir().ok()?, &peers::address(tasks::task_of(&slot), &name_of(&repo)))?;
+    let mut card = card_in(&state_dir().ok()?, &peers::address(tasks::task_of(&slot), &name_of(&repo)))?;
+    if let Some(data) = &card.data {
+        card.text = crate::card::render_current(data);
+    }
     let head = git(&slot.path, &["rev-parse", "HEAD"]).ok()?;
     let current = tasks::same_code(&slot.path, &upstream, &card.sha, &head);
     Some((card, current))

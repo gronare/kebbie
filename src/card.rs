@@ -482,11 +482,20 @@ fn changes(data: &Data) -> Vec<String> {
     }).collect()
 }
 
-// The card as the board draws it: the headline and its three parts in the task's own words, and what changed since the version before.
+// The card in the task's own words, with what changed since the version before.
 pub fn render(data: &Data) -> String {
+    rendered(data, true)
+}
+
+// The card as the board draws it: the headline and its three parts as they stand.
+pub fn render_current(data: &Data) -> String {
+    rendered(data, false)
+}
+
+fn rendered(data: &Data, with_changes: bool) -> String {
     let mut text = vec![format!("**{}**", data.headline)];
     let changed = changes(data);
-    if let Some(before) = &data.previous {
+    if let Some(before) = data.previous.as_ref().filter(|_| with_changes) {
         text.push(String::new());
         text.push(format!("Changed: version {} → {}", before.version, data.version));
         text.extend(if changed.is_empty() { vec!["- its lines read the same; a decision's order or decider moved".to_string()] } else { changed });
@@ -700,6 +709,8 @@ mod tests {
         assert!(third.previous.as_ref().is_some_and(|before| before.version == 2 && before.previous.is_none()), "one version back, not the whole history");
         let shown = render(&rewritten);
         assert!(shown.contains("Changed: version 1 → 2") && shown.contains("- − Built: Refunds list under each invoice.") && shown.contains("- + Built: Refunds and credits list under each invoice.") && shown.contains("- − Decisions: Per invoice"), "{shown}");
+        let current = render_current(&rewritten);
+        assert!(!current.contains("Changed:") && !current.contains("Refunds list under each invoice.") && current.contains("- Refunds and credits list under each invoice."), "the board's card is the card as it stands: {current}");
         let wired = wire(&rewritten, &[]).unwrap();
         assert_eq!((wired.version, wired.previous.as_ref().map(|before| before.version)), (2, Some(1)));
     }

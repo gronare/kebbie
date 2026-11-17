@@ -26,9 +26,6 @@ pub(super) struct Beside {
     subtask: Option<(String, super::subtasks::Loaded)>,
 }
 
-// The part of a card the version before it differs in; the card shows what it says now.
-const CHANGED: &str = "Changed";
-
 pub(super) fn section(title: &str) -> Line<'static> {
     Line::from(Span::styled(title.to_string(), bold(LAVENDER)))
 }
@@ -106,7 +103,7 @@ pub(super) fn task_card(item: Option<&Item>, detail: Option<&Detail>, width: usi
     let mut lines: Vec<Line<'static>> = item.map(|item| facts(item, detail, width)).unwrap_or_default();
     match detail.and_then(|detail| detail.card.as_ref()) {
         Some((card, _)) => {
-            for part in card_parts(&card.text).0.into_iter().filter(|part| part.label.as_deref() != Some(CHANGED)) {
+            for part in card_parts(&card.text).0 {
                 lines.push(Line::default());
                 if let Some(label) = &part.label {
                     lines.push(section(&label.to_uppercase()));
@@ -311,19 +308,19 @@ mod tests {
     }
 
     #[test]
-    fn the_column_and_the_card_window_draw_the_same_card_without_its_changed_part() {
+    fn the_column_and_the_card_window_draw_the_same_card_with_every_part_the_task_wrote() {
         let mut app = carded_app();
         let card = &mut Rc::get_mut(app.details.get_mut(Path::new("/work/wt2.web")).unwrap()).unwrap().card.as_mut().unwrap().0;
-        card.text = format!("**Filters stay in the URL**\n\nChanged: version 1 → 2\n- − Built: old line\n\n{CARD}");
+        card.text = format!("**Filters stay in the URL**\n\nChanged:\n- The filter bar moved under the search box\n\n{CARD}");
         let width = 60;
         let item = app.tasks[0].clone();
         let detail = app.details.get(Path::new("/work/wt2.web")).cloned();
         let lines: Vec<String> = task_card(Some(&item), detail.as_deref(), width).iter().map(|line| line.to_string()).collect();
-        assert!(lines[0].starts_with("ready to push · web · 1 commit") && lines.iter().any(|line| line == "BUILT") && !lines.iter().any(|line| line.contains("CHANGED") || line.contains("old line")), "{lines:#?}");
+        assert!(lines[0].starts_with("ready to push · web · 1 commit") && lines.iter().any(|line| line == "BUILT") && lines.iter().any(|line| line == "CHANGED") && lines.iter().any(|line| line.contains("filter bar moved")), "a part the task labels Changed: is its own: {lines:#?}");
         app.handle_normal(key(KeyCode::Char('s')));
         let (rows, _) = render(&mut app, 100, 40);
         let screen = rows.join("\n");
-        assert!(screen.contains("▸ search-filters") && screen.contains("ready to push · web · 1 commit") && screen.contains("BUILT") && screen.contains("a1f3c2e  Wire the price filter") && !screen.contains("CHANGED"), "{screen}");
+        assert!(screen.contains("▸ search-filters") && screen.contains("ready to push · web · 1 commit") && screen.contains("BUILT") && screen.contains("a1f3c2e  Wire the price filter") && screen.contains("CHANGED"), "{screen}");
     }
 
     #[test]
