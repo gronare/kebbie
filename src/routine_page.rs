@@ -31,6 +31,12 @@ pub enum Effect {
     Card(String),
 }
 
+// What a run on this page's runner hands back: a notice to show, or whether a run's task has a card to open.
+enum Ran {
+    Show(Result<String>),
+    Card { address: String, card: bool, report: String },
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Focus {
     List,
@@ -254,7 +260,7 @@ pub struct Page {
     repos_dir: PathBuf,
     clock: Option<(u64, Offset)>,
     width: u16,
-    runs: Runs<Result<String>>,
+    runs: Runs<Ran>,
 }
 
 impl Page {
@@ -300,7 +306,7 @@ impl Page {
     }
 
     // Starts reading the routines on the first call, so the tab's ⚠ count is there before the page is opened.
-    pub fn tick(&mut self, shown: bool) {
+    pub fn tick(&mut self, shown: bool) -> Option<Effect> {
         if self.updates.is_none() {
             self.updates = Some(spawn_refresher(self.machine.clone(), self.repos_dir.clone()));
         }
@@ -308,9 +314,12 @@ impl Page {
         for found in found {
             self.take(found);
         }
-        if let Some(result) = self.runs.next(shown && self.is_normal()) {
-            self.show(result);
+        match self.runs.next(shown && self.is_normal())? {
+            Ran::Show(result) => self.show(result),
+            Ran::Card { address, card: true, .. } => return Some(Effect::Card(address)),
+            Ran::Card { report, .. } => self.mode = Mode::Message(report),
         }
+        None
     }
 
     fn take(&mut self, found: Gathered) {
@@ -319,10 +328,13 @@ impl Page {
         self.loaded = true;
     }
 
+    // With the reader running it reads again behind the page; before it starts, as in tests, here.
     fn reload(&mut self) {
+        if self.updates.is_some() {
+            return self.refresh();
+        }
         let found = gather(&self.machine, &self.repos_dir);
         self.take(found);
-        self.refresh();
     }
 
     fn open_task(&self, state: &State) -> Option<&Item> {
@@ -387,7 +399,7 @@ impl Page {
     }
 
     fn in_background(&mut self, label: String, step: impl FnOnce() -> Result<String> + Send + 'static) {
-        self.runs.start(label, step);
+        self.runs.start(label, move || Ran::Show(step()));
         self.mode = Mode::Normal;
     }
 
@@ -552,12 +564,11 @@ impl Page {
                 None => self.show(Ok(format!("{}'s last run's task is closed.", routine.title))),
             },
             Some(Act::Card) => {
-                if let Some((address, Some(path))) = &open
-                    && crate::report::card_for(path).is_some()
-                {
-                    return Effect::Card(address.clone());
+                let report = report_text(&routine, &state, self.now());
+                match open {
+                    Some((address, Some(path))) => self.runs.start(format!("Reading {}'s card", routine.title), move || Ran::Card { card: crate::report::card_for(&path).is_some(), address, report }),
+                    _ => self.mode = Mode::Message(report),
                 }
-                self.mode = Mode::Message(report_text(&routine, &state, self.now()));
             }
             Some(Act::Go) => {
                 let id = routine.id.clone();

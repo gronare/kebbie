@@ -26,6 +26,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Moving from task to task, stepping through subtasks and opening a plan to approve draw at once: a task's agent screen, a subtask's files and a plan from the vault are read behind the board and fill in when they come, and an open backlog item's card refreshes the same way.
 - p opens its push window at once, saying it reads the task's commits until they are there, and a reword or squash saved with ctrl-s does the same while git rewrites; esc closes either.
 - Accepting a subtask, tidying, opening the review, sending to review, starting or stopping a dev server or worker, a message to a task, a paste, going to a task's Space, tab to the lead, hiding its chat, opening a comment in the browser and starting a task from the Areas page all run behind the board, which keeps taking keys meanwhile.
+- On the Areas page, opening an area's Space, its push permission and the commits its push window shows are read behind the page; on the Routines page, a run's card and the routines after a run are too.
 - After kebbie update the open board and the keeper move to the new kebbie by themselves, also when herdr installed it in a new folder.
 - In a narrow board pane the Work page shows only the tasks, and the card opens in its window from s or ⏎, as before the card column.
 - Answers to a backlog item's questions from your phone reach the lead together, and a reworded question no longer turns an answer away.

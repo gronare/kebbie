@@ -102,6 +102,7 @@ struct PushWindow {
 enum After {
     Show(Result<String>, Option<Next>),
     Push(PushWindow),
+    Left,
 }
 
 enum Mode {
@@ -280,7 +281,7 @@ impl Page {
     }
 
     // Starts gathering on the board's first tick, whichever page shows, then picks up what the background thread found; an action's outcome waits until this page shows with nothing open.
-    pub fn tick(&mut self, shown: bool) {
+    pub fn tick(&mut self, shown: bool) -> Option<Effect> {
         if self.updates.is_none() {
             self.updates = Some(spawn_refresher());
         }
@@ -297,13 +298,14 @@ impl Page {
                 self.loaded = true;
             }
         }
-        if let Some(after) = self.runs.next(shown && self.is_normal()) {
-            self.mode = match after {
-                After::Show(result, next) => Mode::Message { text: result.unwrap_or_else(|error| error), next },
-                After::Push(window) => Mode::Push(window),
-            };
-            self.refresh();
-        }
+        let after = self.runs.next(shown && self.is_normal())?;
+        self.mode = match after {
+            After::Show(result, next) => Mode::Message { text: result.unwrap_or_else(|error| error), next },
+            After::Push(window) => Mode::Push(window),
+            After::Left => return Some(Effect::Left),
+        };
+        self.refresh();
+        None
     }
 
     fn ordered(&self) -> Vec<(usize, Standing)> {
@@ -485,27 +487,30 @@ impl Page {
         };
         match act {
             Some(Act::Go) => {
-                let result = match herdr::workspace_for(&repo) {
-                    Ok(Some(workspace)) => herdr::focus_workspace(&workspace),
-                    Ok(None) => herdr::create_workspace(&repo, &area.stem).map(|_| ()),
-                    Err(error) => Err(error),
-                };
-                return match result {
-                    Ok(()) => Effect::Left,
-                    Err(error) => {
-                        self.show(Err(error));
-                        Effect::Handled
-                    }
-                };
+                let stem = area.stem.clone();
+                self.runs.start(format!("Opening {stem}'s Space"), move || {
+                    let opened = match herdr::workspace_for(&repo) {
+                        Ok(Some(workspace)) => herdr::focus_workspace(&workspace),
+                        Ok(None) => herdr::create_workspace(&repo, &stem).map(|_| ()),
+                        Err(error) => Err(error),
+                    };
+                    opened.map_or_else(|error| After::Show(Err(error), None), |_| After::Left)
+                });
             }
             Some(Act::New) => self.mode = Mode::Input { purpose: Purpose::TaskName(area.stem), label: "New task here: name".to_string(), buffer: String::new() },
             Some(Act::AreaRefresh) => self.refresh_backlog(&area),
             Some(Act::Log) => self.mode = Mode::Log { stem: area.stem, scroll: 0 },
-            Some(Act::Permit) => self.show(permit::toggle_repo(&repo::name_of(&repo))),
+            Some(Act::Permit) => {
+                let name = repo::name_of(&repo);
+                self.runs.start(format!("Changing the lead's permission in {name}"), move || After::Show(permit::toggle_repo(&name), None));
+            }
             Some(Act::Push) => match &area.git {
                 Some(git) if git.ahead > 0 => {
-                    let commits = commits_between(&repo, &format!("{}..refs/heads/{}", crate::repo::tracking(&git.upstream), git.branch));
-                    self.mode = Mode::Push(PushWindow { repo, branch: git.branch.clone(), tag: None, commits, done: Vec::new(), next: None });
+                    let (range, branch) = (format!("{}..refs/heads/{}", crate::repo::tracking(&git.upstream), git.branch), git.branch.clone());
+                    self.runs.start(format!("Reading {branch}'s commits"), move || {
+                        let commits = commits_between(&repo, &range);
+                        After::Push(PushWindow { repo, branch, tag: None, commits, done: Vec::new(), next: None })
+                    });
                 }
                 Some(git) => self.show(Ok(format!("{} is level with {}; nothing to push.", git.branch, git.upstream))),
                 None => self.show(Err(format!("Cannot read {}'s main branch.", area.stem))),

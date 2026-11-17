@@ -1379,8 +1379,12 @@ pub fn run(overlay: bool) -> Result<String> {
             changed |= app.screens.take();
             changed |= app.plan_reads.take();
             changed |= app.take_item_card_read();
-            app.areas.tick(app.page == Page::Areas);
-            app.routines.tick(app.page == Page::Routines);
+            if let Some(Effect::Left) = app.areas.tick(app.page == Page::Areas) {
+                app.quit = app.overlay;
+            }
+            if let Some(effect) = app.routines.tick(app.page == Page::Routines) {
+                app.after_routines(effect, None);
+            }
             let mut repos: Vec<PathBuf> = app.tasks.iter().filter_map(|item| item.repo.clone()).chain(app.areas.repos()).collect();
             repos.sort();
             repos.dedup();
