@@ -5,6 +5,12 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+
+### Fixed
+
+## 0.40.3
+
+### What's new
 - kebbie setup installs mindin and signs this machine in to a vault server on its own screen, asks mindin's usage question in its Signals step, and r on the done list tries only the failed steps again.
 - Releases ship prebuilt binaries for Apple silicon Macs and Linux only; an Intel Mac builds kebbie from source.
 
