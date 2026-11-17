@@ -13,7 +13,7 @@ A board you quit in the lead Space starts again the next time you press `prefix+
 | Context line, under it | While the lead's context is 85% full or more: `The lead's context is N% full · L to restart it fresh`. |
 | Hub line, under it | While the hub refuses the board because it has not enabled answering for your account: `This hub has not enabled answering for your account: <link> · H hub`. |
 | Work, left | Tasks from every repo with a worktree pool, grouped, in the order of [`board.groups`](configuration.md). |
-| Card, right | The [card](#the-card-beside-the-tasks) of the task under the cursor. |
+| Card, right | The [card](#the-card-beside-the-tasks) of the task under the cursor, or of the subtask while one is highlighted. |
 | Messages, bottom | What sessions tell each other, newest last. |
 
 The status line shows:
@@ -131,36 +131,41 @@ A task row shows its commits, uncommitted and untracked files, and how far it is
 With [`task.steps`](configuration.md) on and subtasks listed, the task's subtasks not pushed yet sit under its row, each with its number, title and how many of its files you marked read in the review, and under it, dimmed, its first commit's short sha and subject, with `+N` when it holds more. A task of a single subtask shows no subtask line: the task's own row says it all.
 
 ```
-◐ Switch the payment provider to Stripe        billing · 1 to accept
+◐ Switch the payment provider to Stripe  billing · 1 subtask to accept
 │  ↑ 1 pushed
 │  ● 2 Charge through a PaymentGateway              1/3 read
 │      2222222 Charge through a PaymentGateway  +1
 │  ◐ 3 Add Stripe as the gateway                 in progress
 │  ○ 4 Remove the old payment client
-╰ accept 2 · r review
+╰ accept “Charge through a PaymentGateway” · r review
 ```
 
 | Line or mark | Means |
 | --- | --- |
-| `N to accept`, yellow | On the row, in place of its commit count: N ready subtasks wait for you to accept them. |
+| `N subtasks to accept`, yellow | On the row: N ready subtasks wait for you to accept them. |
 | `↑ N pushed`, muted | N subtasks are on the default branch already. |
 | `○`, muted | Planned. |
 | `◐ … in progress`, blue | Its Claude is at work on it. Only the last subtask with commits is in progress, and only until the task reports ready. |
 | `N/M read` | N of the subtask's M files are marked read in the review; it stands in place of the state word once the subtask has commits, and the mark's colour keeps the state. |
 | `● … ready`, yellow | Its agent ran `kebbie subtasks done` on it, or a later subtask holds commits, or it is the last and the task reported ready: finished, waiting for you to accept it, followed by the task's rules check in short while it is not passed: `· project rules not checked`, `· checking project rules` while the reviewer or the lead checks, `· breaks N project rules` when it found some, `· pushed past the rules check by you` (or `by the lead`) after `kebbie approve`. A passed check adds nothing. |
-| `✓ … accepted`, green | You accepted every commit in it. `accepted · waits for <subtask>` when a commit of a subtask you have not accepted lies above one of its own in the push order. |
-| `accept N · r review` | Under the subtasks: the first subtask waiting for you. `r` opens the review, and [`kebbie accept`](commands.md#kebbie-accept-name-sha) accepts it. |
-| `accept subtask N · r review` | With [`task.require_accept`](configuration.md) on, a ready task with a subtask to accept waits under Needs you with this line: it cannot be pushed until subtask N is accepted. |
+| `✓ … accepted`, green | You accepted every commit in it. `waits for N · …` when a commit of subtask N, which you have not accepted, lies above one of its own in the push order. |
+| `accept “<title>” · r review` | Under the subtasks: the first ready subtask whose accepting matters, because `task.require_accept` is on or a later subtask is still being built. `r` opens the review, and [`kebbie accept`](commands.md#kebbie-accept-name-sha) accepts it. |
+| `accept “<title>” · r review`, under Needs you | With [`task.require_accept`](configuration.md) on, a ready task with a subtask to accept waits under Needs you with this line: it cannot be pushed until that subtask is accepted. |
 
-`↑` `↓` move from task to task and never stop on a subtask row; the keys line reads `↑ ↓ task · → subtasks · s card · ⏎ options`. `→` steps into the task's own rows on the board: the cursor goes onto the first subtask that waits for you, marked with the selection's background, and nothing else on the board changes; the card beside the tasks stays the task's. The keys line then reads `↑ ↓ subtask · s card · r review · a accept · ← esc back`. Inside the task:
+`↑` `↓` move from task to task and never stop on a subtask row; the keys line reads `↑ ↓ task · → subtasks · s card · ⏎ options`, `s card` only while the task has a card or a question. `→` steps into the task's own rows on the board: the cursor goes onto the first subtask that waits for you, marked with the selection's background, and the card beside the tasks becomes that subtask's card. The keys line then reads `↑ ↓ subtask · ⏎ options · s card · r review · a accept · ← esc back`, `a accept` only on a ready subtask whose accepting matters. On the collapsed parked line `→` steps into nothing. Inside the task:
 
 | Key | Action |
 | --- | --- |
 | `↑` `↓` `j` `k` | The previous or next subtask; the first and last stay where they are. |
+| `⏎` | The subtask's options: show its card, open the review, message its Claude, and accept it when that matters. |
 | `s` | Open the [subtask's card](#a-subtasks-card). |
+| `pgup` `pgdn` `space` | Scroll the subtask's card beside the tasks. |
 | `a` | Accept that subtask, as [`kebbie accept <name> --subtask <id>`](commands.md#kebbie-accept-name-sha) does. On the task's own row, `a` stays [let the lead push it](#on-a-task). |
 | `r` | Open the review on that subtask. A review already open in its Space moves to it. |
 | `←` `esc` | Back to the task's row. |
+| `?` `i` `m` | As on the task's row: help, the inbox, the messages. |
+
+A refresh that takes the highlighted subtask away puts the cursor back on the task.
 
 
 A subtask to accept leaves the task in the group its phase gives it, under Working while it builds on. The state word always shows: a long title is shortened at a word with `…` to make room, and only when the title would drop below 12 columns does the rules part shorten (`· 2 breaks`, `· checking`, `· not checked`, `· past the rules`) and then go. Without subtasks, the row is as above. See [Work in subtasks](../how-to/work-in-steps.md).
@@ -220,7 +225,7 @@ kebbie keeps one phase per task, and only what changes it writes it: its start, 
 - A task whose commits are on the default branch that kebbie does not close by itself, marked `landed on main · d closes it` beside a question (kebbie asks you whether to close it), or `landed on main, but its worktree has uncommitted changes or a stash` (see [`kebbie done`](commands.md#kebbie-done-name)).
 - A task that reported needs-you, or ready with nothing committed.
 - A task that reported ready with commits while tracked files are uncommitted, marked `2 uncommitted files hold it: a.md and b.md · p then p pushes the commits and keeps them`. The push window opens on its last commit, so `p` pushes every commit and keeps the task open with the files as they are; its approval is of the commits and stays.
-- With `task.require_accept` on, a ready task with a commit you have not accepted, marked `accept subtask N`.
+- With `task.require_accept` on, a ready task with a commit you have not accepted, marked `accept “<title>”`.
 - A task whose turn ended without a report even after kebbie asked for one.
 - A task whose CI failed after a push of only some of its commits, marked `CI failed: <workflow> · <job> · <step>`, and `its Claude says outside the code: <reason>` once its Claude has said so. `C` dismisses it.
 - A push under way whose Claude reported needs-you.
@@ -401,7 +406,7 @@ A question that asks first, as reset, drop and done do, takes `y` to go ahead an
 | `g` | Go to its Space. On a task whose Space or Claude is gone, restart it and resume its conversation. | Always. |
 | `c` | Chat: message its Claude. | Always. |
 | `r` | Open the review split next to its Claude, or go to the one already open in its Space. | Always. |
-| `s` | Show the sign-off card: Built, each decision with who took it, what became of each Also noticed line, and what changed since its last version. | It has a card and no open question. |
+| `s` | Show the sign-off card as it stands: Built, Decisions and Also noticed, in the task's words. | It has a card and no open question. |
 | `w` | Start or stop the dev server. | `worktree.dev_server` is set. |
 | `b` | Start or stop the worker. | `worktree.dev_worker` is set. |
 | `1`–`9` | Open one of its links in the browser, listed under LINKS. | It has that link. |
@@ -565,7 +570,7 @@ COMMITS
 | Part | Shows |
 | --- | --- |
 | The facts | The task's group, its repo, its commits, how many of its changed files you marked read in the review, and, for a task in subtasks, how many are accepted. `no card yet` until it wrote one, `code changed since the card` when its code moved on. |
-| The card's sections | Its [sign-off card](#the-card-window), section by section: its headline, BUILT, DECISIONS, ALSO NOTICED and the rest, as the card window shows it. A card's `Changed:` part, what differs from its version before, is left out. |
+| The card's sections | Its [sign-off card](#the-card-window), section by section: its headline, BUILT, DECISIONS, ALSO NOTICED and the rest, as the card window shows it. The card shows what it says now, never a diff against its version before; a part the task itself labels `Changed:` shows like any other. |
 | `RECIPE`, `LAST REPORT` | For a task without a card: the recipe it runs and why, and its last report with its age. |
 | `COMMITS` | Each commit's short sha and subject. |
 
@@ -606,9 +611,11 @@ FILES
 
 | Key | Action |
 | --- | --- |
+| `←` `→` | The task's previous or next subtask; the row under the window follows. |
 | `↑` `↓`, `j` `k` | Scroll. |
+| `pgup` `pgdn` `space` | Scroll a page. |
 | `r` | Open the review on this subtask. |
-| `a` | Accept this subtask. |
+| `a` | Accept this subtask, shown when its accepting matters. An accept that fails says why, then the window stays. |
 | `esc`, `q`, `s` | Back to the subtask's row. |
 
 ### The card window

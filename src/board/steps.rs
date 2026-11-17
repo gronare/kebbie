@@ -24,7 +24,7 @@ fn waiting(subtask: &Subtask) -> bool {
     subtask.state == SubtaskState::Ready
 }
 
-// Accepting a ready subtask means something when task.require_accept holds the push for it, or when the task is still building a later subtask, so the push can take this one ahead; otherwise the push takes what is committed and `a` only marks it read.
+// Accepting a ready subtask means something when task.require_accept holds the push for it, or when the task is still building a later subtask, so the push can take this one ahead; otherwise the push takes what is committed, accepted or not.
 pub(super) fn accept_matters(item: &Item, subtask: &Subtask) -> bool {
     item.to_accept.is_some() || (!item.reported_ready() && item.subtasks.items.iter().skip_while(|other| other.id != subtask.id).skip(1).any(|later| matches!(later.state, SubtaskState::Planned | SubtaskState::InProgress)))
 }

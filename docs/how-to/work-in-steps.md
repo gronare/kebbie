@@ -95,7 +95,7 @@ Turn on `task.require_accept` when no commit should leave without you accepting 
 
    Or press space on `task.require_accept` on the board's [Settings page](../reference/board.md#settings-page).
 
-2. Accept each subtask once it is ready. A ready task with a subtask to accept waits under Needs you, with `accept subtask 2 · r review` under its row, and `N` lists it under Stopped on you instead of Push, in this order.
+2. Accept each subtask once it is ready. A ready task with a subtask to accept waits under Needs you, with `accept “<title>” · r review` under its row, and `N` lists it under Stopped on you instead of Push, in this order.
 
 3. Push as before. A push that would take a commit you did not accept is refused, and says which:
 
