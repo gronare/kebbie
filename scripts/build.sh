@@ -44,7 +44,6 @@ fresh() {
 triple() {
   case "$(uname -s)-$(uname -m)" in
     Darwin-arm64 | Darwin-aarch64) echo aarch64-apple-darwin ;;
-    Darwin-x86_64) echo x86_64-apple-darwin ;;
     Linux-x86_64 | Linux-amd64) echo x86_64-unknown-linux-gnu ;;
     Linux-aarch64 | Linux-arm64) echo aarch64-unknown-linux-gnu ;;
     *) return 1 ;;

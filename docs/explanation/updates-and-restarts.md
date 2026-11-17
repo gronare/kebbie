@@ -13,7 +13,7 @@ herdr installs kebbie into a folder of its choosing, and herdr's startup links `
 herdr's install and `kebbie update` both put the binary in place with `scripts/build.sh`, in this order:
 
 1. A `target/release/kebbie` that is newer than every source file is kept.
-2. When the checkout is exactly at the `vX.Y.Z` tag of its version and the machine is not on the `main` channel, the script downloads `kebbie-<version>-<target>.tar.gz` from that tag's published GitHub Release, checks it against the release's `SHA256SUMS` and its build attestation, and renames it into place. Releases are built for macOS on Apple silicon and Intel, and for Linux on x86_64 and arm64 (glibc).
+2. When the checkout is exactly at the `vX.Y.Z` tag of its version and the machine is not on the `main` channel, the script downloads `kebbie-<version>-<target>.tar.gz` from that tag's published GitHub Release, checks it against the release's `SHA256SUMS` and its build attestation, and renames it into place. Releases are built for macOS on Apple silicon and for Linux on x86_64 and arm64 (glibc); an Intel Mac builds kebbie from source, which needs Rust.
 3. Otherwise it runs `cargo build --release`.
 
 `kebbie doctor` shows on its `plugin binary` line whether the binary was downloaded, and for which tag, or built. Its `cargo` line says whether this machine needs Rust.

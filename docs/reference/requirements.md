@@ -18,7 +18,7 @@ What kebbie needs on a machine and in a repo, and what `kebbie doctor` checks. k
 
 - Without rustup, `rustc` must be at least the `rust-version` in `Cargo.toml`.
 - Distro packages of `nvim` are often older than 0.10.
-- Rust is only needed where kebbie is built from source. A release tag installs a prebuilt binary on macOS (Apple silicon and Intel) and on Linux with glibc (x86_64 and arm64); see [Prebuilt binaries](../explanation/updates-and-restarts.md#prebuilt-binaries).
+- Rust is only needed where kebbie is built from source. A release tag installs a prebuilt binary on macOS on Apple silicon and on Linux with glibc (x86_64 and arm64); an Intel Mac builds from source; see [Prebuilt binaries](../explanation/updates-and-restarts.md#prebuilt-binaries).
 - Plan usage on the board needs a Claude.ai plan; an API key gives no usage numbers.
 
 The task sandbox (`task.sandbox`, on by default) needs Claude Code 2.1.285 or later. macOS needs nothing more. On Linux it also needs:

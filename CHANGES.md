@@ -5,6 +5,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- Releases ship prebuilt binaries for Apple silicon Macs and Linux only; an Intel Mac builds kebbie from source.
 
 ### Fixed
 

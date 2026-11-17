@@ -49,7 +49,7 @@ done
 gh run watch "$run" --exit-status >/dev/null || fail "the release workflow failed: $(gh run view "$run" --json url -q .url)"
 
 slug=$(git remote get-url origin | sed -E 's#^(git@github.com:|https://github.com/)##; s#\.git$##')
-for target in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+for target in aarch64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
   url="https://github.com/$slug/releases/download/$tag/kebbie-$version-$target.tar.gz"
   code=$(curl -sL -r 0-0 -o /dev/null -w '%{http_code}' "$url?check=$$" || true)
   case "$code" in 2*) ;; *) fail "kebbie-$version-$target.tar.gz answers $code" ;; esac

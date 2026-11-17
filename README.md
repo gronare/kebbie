@@ -43,7 +43,7 @@ You need macOS or Linux with `git`, `herdr` 0.9.0+, Claude Code, `jq` and `curl`
 curl -fsSL https://kebbie.dev/install.sh | sh
 ```
 
-The script checks those tools, installs the latest release as a herdr plugin with its prebuilt binary (macOS on Apple silicon or Intel, Linux on x86_64 or arm64), and runs `kebbie setup`. Setup is a guide of six steps: this machine's name, the agents it found, the vault, where the backlog lives and error signals, then one look at everything it writes, each tool's files and herdr's keys included, before it writes any of it. It ends with what is still yours to do and an offer to see your board on your phone, then opens your board; inside herdr, that is the lead Space with the lead beside it. It is safe to run again.
+The script checks those tools, installs the latest release as a herdr plugin with its prebuilt binary (macOS on Apple silicon, Linux on x86_64 or arm64; an Intel Mac builds it from source), and runs `kebbie setup`. Setup is a guide of six steps: this machine's name, the agents it found, the vault, where the backlog lives and error signals, then one look at everything it writes, each tool's files and herdr's keys included, before it writes any of it. It ends with what is still yours to do and an offer to see your board on your phone, then opens your board; inside herdr, that is the lead Space with the lead beside it. It is safe to run again.
 
 Installing from herdr's plugin list instead? `herdr plugin install gronare/kebbie` builds the default branch with `cargo`, so it needs Rust, and runs no setup: the first board you open starts the setup guide, and the next `kebbie update` moves you to the latest release.
 

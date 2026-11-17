@@ -104,7 +104,6 @@ pub struct Binaries {
 pub fn target_triple(os: &str, arch: &str) -> Option<&'static str> {
     match (os, arch) {
         ("macos", "aarch64") => Some("aarch64-apple-darwin"),
-        ("macos", "x86_64") => Some("x86_64-apple-darwin"),
         ("linux", "x86_64") => Some("x86_64-unknown-linux-gnu"),
         ("linux", "aarch64") => Some("aarch64-unknown-linux-gnu"),
         _ => None,
@@ -480,8 +479,9 @@ mod tests {
         assert_eq!(target_triple("macos", "aarch64"), Some("aarch64-apple-darwin"));
         assert_eq!(target_triple("linux", "x86_64"), Some("x86_64-unknown-linux-gnu"));
         assert_eq!(target_triple("freebsd", "x86_64"), None);
+        assert_eq!(target_triple("macos", "x86_64"), None, "an Intel Mac builds kebbie from source");
         let workflow = include_str!("../.github/workflows/release.yml");
-        for target in ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"] {
+        for target in ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"] {
             assert!(workflow.contains(&format!("target: {target}")), "the release workflow builds no {target}");
         }
     }
