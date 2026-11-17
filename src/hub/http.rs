@@ -42,10 +42,21 @@ impl fmt::Display for HubError {
             HubError::NotEnabled { url: Some(url) } => write!(formatter, "This hub has not enabled answering for your account: {url}"),
             HubError::NotEnabled { url: None } => formatter.write_str("This hub has not enabled answering for your account"),
             HubError::ProRequired { url } => formatter.write_str(&pro_line("That", url.as_deref())),
-            HubError::Transport(message) => write!(formatter, "could not reach the hub: {message}"),
+            HubError::Transport(message) => formatter.write_str(&unreached(std::env::consts::OS, message)),
             HubError::Redirect(message) => write!(formatter, "the hub's redirect was not followed: {message}"),
         }
     }
+}
+
+pub const LOCAL_NETWORK: &str = "macOS keeps this terminal off your local network: turn it on in System Settings → Privacy & Security → Local Network, then restart the terminal";
+
+// macOS answers EHOSTUNREACH, error 65, when the terminal app lacks Local Network permission.
+pub fn local_network(os: &str, said: &str, errno: Option<i64>) -> bool {
+    os == "macos" && (errno == Some(65) || said.contains("os error 65") || said.contains("Errno 65"))
+}
+
+pub fn unreached(os: &str, message: &str) -> String {
+    if local_network(os, message, None) { LOCAL_NETWORK.to_string() } else { format!("could not reach the hub: {message}") }
 }
 
 // What a hub on a plan without Pro says it refused, with where the plan is changed when it names one.
@@ -223,6 +234,20 @@ mod tests {
         assert!(status(400).is_final() && status(409).is_final() && status(413).is_final());
         assert!(!status(429).is_final() && !status(503).is_final() && !HubError::Transport("down".to_string()).is_final());
         assert!(HubError::ProRequired { url: None }.is_final());
+    }
+
+    #[test]
+    fn error_65_on_macos_is_the_local_network_permission() {
+        assert!(local_network("macos", "[Errno 65] No route to host", Some(65)));
+        assert!(local_network("macos", "io: No route to host (os error 65)", None));
+        assert!(!local_network("linux", "No route to host (os error 113)", None) && !local_network("linux", "[Errno 65]", Some(65)));
+    }
+
+    #[test]
+    fn error_65_on_macos_names_the_local_network_permission_instead_of_an_unreachable_hub() {
+        let said = unreached("macos", "io: No route to host (os error 65)");
+        assert!(said.contains("System Settings → Privacy & Security → Local Network, then restart the terminal") && !said.contains("could not reach the hub"), "{said}");
+        assert_eq!(unreached("linux", "io: No route to host (os error 113)"), "could not reach the hub: io: No route to host (os error 113)");
     }
 
     #[test]
