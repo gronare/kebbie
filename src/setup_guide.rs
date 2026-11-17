@@ -1172,48 +1172,56 @@ fn repair(env: &Env, repair: Repair) -> Outcome {
     }
 }
 
+// kebbie's own answers are written first, so a step outside the screen that never comes back, as a Ctrl-C in mindin's setup, cannot lose them.
 pub fn apply(planned: &[Planned], env: &Env, hooks: &mut dyn Hooks) -> Vec<(String, Outcome)> {
-    let mut done: Vec<(String, Outcome)> = Vec::new();
+    let own = |act: &Act| matches!(act, Act::Name(_) | Act::Sources(_) | Act::Signals(_));
+    let mut outcomes: Vec<Option<Outcome>> = vec![None; planned.len()];
     let mut installed = None;
-    for row in planned {
-        let outcome = match &row.act {
-            Act::Nothing => Outcome::new(row.verb, row.detail.clone()),
-            Act::Link => setup::link_binary(&env.machine.home, &env.machine.path),
-            Act::ClaudePlugin => setup::claude_plugin(env.machine),
-            Act::CodexPlugin(on) => codex_plugin(env, *on, &row.detail),
-            Act::Rules(text) => rules(env, text),
-            Act::InstallMindin => {
-                let (outcome, mindin) = install_mindin(env, hooks);
-                installed = mindin;
-                outcome
-            }
-            Act::VaultSetup(command, flags) => match resolved(command, &installed) {
-                Ok(command) => match hooks.outside(&setup_script(&command, flags)) {
-                    Ok(()) => Outcome::new("done", row.detail.clone()),
-                    Err(error) => Outcome::new("failed", format!("mindin setup stopped: {error}")),
-                },
-                Err(outcome) => outcome,
-            },
-            Act::VaultCommand(Some(command)) => match resolved(command, &installed) {
-                Ok(command) => when_done(write_key(env, "vault.command", &Set::Text(command.join(" "))), format!("vault.command = \"{}\"", command.join(" "))),
-                Err(outcome) => outcome,
-            },
-            Act::VaultCommand(None) => remove_key(env, "vault.command"),
-            Act::ClaudeVault => claude_vault(env),
-            Act::CodexVault(command) => match resolved(command, &installed) {
-                Ok(command) => codex_vault(env, &command),
-                Err(outcome) => outcome,
-            },
-            Act::Name(name) => when_done(write_key(env, "machine.name", &Set::Text(name.clone())), row.detail.clone()),
-            Act::Keys(plan, bindings) => keys(env, plan, bindings),
-            Act::Sources(sources) => when_done(write_key(env, "board.backlog.sources", &Set::List(sources.iter().map(|source| source.key().to_string()).collect())), row.detail.clone()),
-            Act::Signals(on) => when_done(write_key(env, "report.signals", &Set::Bool(*on)), row.detail.clone()),
-            Act::Repair(fix) => repair(env, *fix),
-        };
-        done.push((row.step.to_string(), outcome));
-        hooks.progress(&done);
+    for first in [true, false] {
+        for (at, row) in planned.iter().enumerate().filter(|(_, row)| own(&row.act) == first) {
+            outcomes[at] = Some(apply_row(row, env, hooks, &mut installed));
+            let shown: Vec<(String, Outcome)> = planned.iter().zip(&outcomes).map_while(|(row, outcome)| Some((row.step.to_string(), outcome.clone()?))).collect();
+            hooks.progress(&shown);
+        }
     }
-    done
+    planned.iter().zip(outcomes).filter_map(|(row, outcome)| Some((row.step.to_string(), outcome?))).collect()
+}
+
+fn apply_row(row: &Planned, env: &Env, hooks: &mut dyn Hooks, installed: &mut Option<Vec<String>>) -> Outcome {
+    match &row.act {
+        Act::Nothing => Outcome::new(row.verb, row.detail.clone()),
+        Act::Link => setup::link_binary(&env.machine.home, &env.machine.path),
+        Act::ClaudePlugin => setup::claude_plugin(env.machine),
+        Act::CodexPlugin(on) => codex_plugin(env, *on, &row.detail),
+        Act::Rules(text) => rules(env, text),
+        Act::InstallMindin => {
+            let (outcome, mindin) = install_mindin(env, hooks);
+            *installed = mindin;
+            outcome
+        }
+        Act::VaultSetup(command, flags) => match resolved(command, installed) {
+            Ok(command) => match hooks.outside(&setup_script(&command, flags)) {
+                Ok(()) => Outcome::new("done", row.detail.clone()),
+                Err(error) => Outcome::new("failed", format!("mindin setup stopped: {error}")),
+            },
+            Err(outcome) => outcome,
+        },
+        Act::VaultCommand(Some(command)) => match resolved(command, installed) {
+            Ok(command) => when_done(write_key(env, "vault.command", &Set::Text(command.join(" "))), format!("vault.command = \"{}\"", command.join(" "))),
+            Err(outcome) => outcome,
+        },
+        Act::VaultCommand(None) => remove_key(env, "vault.command"),
+        Act::ClaudeVault => claude_vault(env),
+        Act::CodexVault(command) => match resolved(command, installed) {
+            Ok(command) => codex_vault(env, &command),
+            Err(outcome) => outcome,
+        },
+        Act::Name(name) => when_done(write_key(env, "machine.name", &Set::Text(name.clone())), row.detail.clone()),
+        Act::Keys(plan, bindings) => keys(env, plan, bindings),
+        Act::Sources(sources) => when_done(write_key(env, "board.backlog.sources", &Set::List(sources.iter().map(|source| source.key().to_string()).collect())), row.detail.clone()),
+        Act::Signals(on) => when_done(write_key(env, "report.signals", &Set::Bool(*on)), row.detail.clone()),
+        Act::Repair(fix) => repair(env, *fix),
+    }
 }
 
 struct Plain;
@@ -1766,11 +1774,13 @@ mod tests {
         drawn: usize,
         ran: Vec<String>,
         installs: Option<PathBuf>,
+        config: Option<PathBuf>,
+        config_outside: Vec<String>,
     }
 
     impl Fake {
         fn new() -> Fake {
-            Fake { drawn: 0, ran: Vec::new(), installs: None }
+            Fake { drawn: 0, ran: Vec::new(), installs: None, config: None, config_outside: Vec::new() }
         }
     }
 
@@ -1781,6 +1791,9 @@ mod tests {
 
         fn outside(&mut self, script: &str) -> Result<()> {
             self.ran.push(script.to_string());
+            if let Some(config) = &self.config {
+                self.config_outside.push(std::fs::read_to_string(config).unwrap_or_default());
+            }
             if let Some(bin) = &self.installs {
                 std::fs::create_dir_all(bin).unwrap();
                 crate::executable::write(bin.join("mindin"), "#!/bin/sh\n").unwrap();
@@ -1988,6 +2001,26 @@ mod tests {
             assert!(plan.iter().any(|line| line == row), "{row} missing from {plan:?}");
         }
         assert!(plan.iter().any(|line| line.starts_with("Codex already plugin")) && plan.iter().any(|line| line.starts_with("Codex already approvals")), "{plan:?}");
+    }
+
+    #[test]
+    fn the_name_is_written_before_mindin_runs_so_a_setup_stopped_there_keeps_it_on_the_next_run() {
+        let lab = Lab::new("guide-name-first");
+        let mut guide = vault_step(&lab, vec![answering(found("kebbie's [vault] command", "/opt/old-vault"), |probe| probe.setup = false)], Some("/opt/old-vault"));
+        guide.go(Step::Name);
+        type_text(&mut guide, "work");
+        press(&mut guide, &[KeyCode::Enter, KeyCode::Enter, KeyCode::Down]);
+        type_text(&mut guide, "https://notes.example.org");
+        guide.go(Step::Review);
+        let mut fake = Fake { installs: Some(lab.machine.home.join(".local/bin")), config: Some(lab.dir.join("kebbie/config.toml")), ..Fake::new() };
+        let rows = apply(&guide.plan(), &lab.env(), &mut fake);
+        assert_eq!(fake.ran.len(), 2, "{:?}", fake.ran);
+        assert!(fake.config_outside.iter().all(|config| config.contains("[machine]\nname = \"work\"\n")), "the name is in config.toml before anything leaves the screen: {:?}", fake.config_outside);
+        assert_eq!(rows.iter().map(|(step, _)| step.as_str()).collect::<Vec<_>>(), guide.plan().iter().map(|row| row.step).collect::<Vec<_>>(), "the rows still come back in the plan's order");
+        assert_eq!(fake.drawn, rows.len());
+        let rerun = Guide::new(Facts::read(&lab.env()), Step::Name);
+        assert_eq!(rerun.answers.name, "work", "a run that starts again starts from the name this machine has");
+        assert!(plan(&rerun).iter().any(|row| row == "kebbie already machine \"work\""), "{:?}", plan(&rerun));
     }
 
     #[test]

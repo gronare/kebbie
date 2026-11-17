@@ -28,6 +28,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task's note line and the Backlog's notes stay on the board when one refresh cannot read the vault.
 - kebbie setup asks where the vault lives once, and the cursor shows while mindin runs.
 - kebbie setup's text fields take ← → Home and End, so a typo mid-word is fixed in place.
+- kebbie setup keeps this machine's name, backlog and signals answers even when mindin's setup is stopped.
 
 ## 0.39.1
 
