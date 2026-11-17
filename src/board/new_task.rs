@@ -13,7 +13,7 @@ use crate::repo::name_of;
 use crate::sh::Result;
 use super::columns::suggested_name;
 use super::input::{StartWith, start_in_background};
-use super::widgets::{MAUVE, MUTED, SURFACE, TEAL, TEXT, modal, style, wrap};
+use super::widgets::{MAUVE, MUTED, RED, SURFACE, TEAL, TEXT, modal, style, wrap};
 use super::{App, Mode};
 
 pub(super) type Start = Rc<dyn Fn(&Path, &str, &str) -> Result<String>>;
@@ -37,6 +37,8 @@ pub(super) struct NewTask {
     pub repos: Vec<PathBuf>,
     pub repo: usize,
     pub choice: Option<Choice>,
+    pub backlog: bool,
+    pub failed: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -49,9 +51,13 @@ const HEAD: &str = "New · what do you want done?";
 
 // The description started as a task, its first words kept as the row's title until the task's agent names it.
 fn start(repo: &Path, name: &str, text: &str) -> Result<String> {
-    let state = crate::lead::state_dir()?;
-    crate::status::keep_title(&state, &peers::address(name, &name_of(repo)), &backlog_file::placeholder_title(text));
-    start_in_background(repo, name, Some(text), &StartWith::default())
+    titled(&crate::lead::state_dir()?, repo, name, text, || start_in_background(repo, name, Some(text), &StartWith::default()))
+}
+
+fn titled(state: &Path, repo: &Path, name: &str, text: &str, start: impl FnOnce() -> Result<String>) -> Result<String> {
+    let started = start()?;
+    crate::status::keep_title(state, &peers::address(name, &name_of(repo)), &backlog_file::placeholder_title(text));
+    Ok(started)
 }
 
 // The description filed as the phone files an idea: a draft under its first words that the lead writes out.
@@ -101,14 +107,24 @@ pub(super) fn draw(frame: &mut Frame, new: &NewTask) {
         where_.push(said(" · tab switches"));
     }
     lines.extend([Line::default(), Line::from(where_), Line::default()]);
+    if let Some(failed) = &new.failed {
+        for line in failed.lines() {
+            lines.extend(wrap(line, width, usize::MAX).into_iter().map(|text| Line::from(Span::styled(text, style(RED)))));
+        }
+        lines.push(Line::default());
+    }
     match new.choice {
         None => lines.push(Line::from(vec![keyed("⏎"), said(" continue · "), keyed("alt-⏎"), said(" new line · "), keyed("esc"), said(" cancel")])),
-        Some(choice) => {
+        Some(choice) if new.backlog => {
             let mut row = option("s", "Start now", choice == Choice::Start);
             row.push(Span::raw("  "));
             row.extend(option("b", "Add to the backlog", choice == Choice::Backlog));
             lines.extend([Line::from(row), Line::default()]);
             lines.push(Line::from(vec![keyed("← →"), said(" choose · "), keyed("⏎"), said(" do it · "), keyed("s"), said(" / "), keyed("b"), said(" directly · "), keyed("esc"), said(" back to the text")]));
+        }
+        Some(_) => {
+            lines.extend([Line::from(option("s", "Start now", true)), Line::default()]);
+            lines.push(Line::from(vec![keyed("⏎"), said(" / "), keyed("s"), said(" start · "), keyed("esc"), said(" back to the text")]));
         }
     }
     modal(frame, HEAD.to_string(), lines, width as u16 + 4);
@@ -125,7 +141,8 @@ impl App {
                 repos.push(repo);
             }
         }
-        self.mode = Mode::NewTask(Box::new(NewTask { text: String::new(), repos, repo: 0, choice: None }));
+        let backlog = crate::config::filing(&self.sources).is_some();
+        self.mode = Mode::NewTask(Box::new(NewTask { text: String::new(), repos, repo: 0, choice: None, backlog, failed: None }));
     }
 
     pub(super) fn handle_new_task(&mut self, mut new: Box<NewTask>, key: KeyEvent) {
@@ -143,35 +160,46 @@ impl App {
                 _ => {}
             },
             Some(choice) => match key.code {
-                KeyCode::Esc => new.choice = None,
-                KeyCode::Left | KeyCode::Right | KeyCode::Tab => new.choice = Some(if choice == Choice::Start { Choice::Backlog } else { Choice::Start }),
-                KeyCode::Enter => return self.do_new_task(&new, choice),
-                KeyCode::Char('s') => return self.do_new_task(&new, Choice::Start),
-                KeyCode::Char('b') => return self.do_new_task(&new, Choice::Backlog),
+                KeyCode::Esc => {
+                    new.choice = None;
+                    new.failed = None;
+                }
+                KeyCode::Left | KeyCode::Right | KeyCode::Tab if new.backlog => new.choice = Some(if choice == Choice::Start { Choice::Backlog } else { Choice::Start }),
+                KeyCode::Enter => return self.do_new_task(new, choice),
+                KeyCode::Char('s') => return self.do_new_task(new, Choice::Start),
+                KeyCode::Char('b') if new.backlog => return self.do_new_task(new, Choice::Backlog),
                 _ => {}
             },
         }
         self.mode = Mode::NewTask(new);
     }
 
-    fn do_new_task(&mut self, new: &NewTask, choice: Choice) {
+    fn do_new_task(&mut self, mut new: Box<NewTask>, choice: Choice) {
         let Some(repo) = new.repos.get(new.repo).cloned() else { return };
         let text = new.text.trim().to_string();
-        match choice {
+        let (result, subject) = match choice {
             Choice::Start => {
                 let tasks: Vec<String> = self.tasks.iter().filter(|item| item.repo.as_ref() == Some(&repo)).map(|item| item.name.clone()).collect();
                 let name = task_name(&text, |name| tasks.iter().any(|task| task == name) || branch_exists(&repo, name));
-                self.subject = Some(super::notices::Subject { kind: "start".to_string(), title: name.clone(), task: false });
-                let result = (self.new_io.start)(&repo, &name, &text);
-                self.show(result);
+                ((self.new_io.start)(&repo, &name, &text), super::notices::Subject { kind: "start".to_string(), title: name, task: false })
             }
             Choice::Backlog => {
                 let result = (self.new_io.file)(&self.sources, &name_of(&repo), &text);
-                self.subject = Some(super::notices::Subject::plain("backlog"));
                 if result.is_ok() {
                     self.backlog = crate::backlog::load();
                 }
-                self.show(result);
+                (result, super::notices::Subject::plain("backlog"))
+            }
+        };
+        match result {
+            Ok(said) => {
+                self.subject = Some(subject);
+                self.show(Ok(said));
+            }
+            Err(error) => {
+                new.choice = Some(choice);
+                new.failed = Some(crate::notice::Notice::read(&error, true).to_string());
+                self.mode = Mode::NewTask(new);
             }
         }
     }
@@ -264,6 +292,53 @@ mod tests {
         press(&mut app, key(KeyCode::Right));
         press(&mut app, key(KeyCode::Enter));
         assert_eq!(seen.borrow().as_slice(), ["file kebbie-hub Rerun a flaky test once"]);
+    }
+
+    fn failing(app: &mut App) {
+        app.new_io = Io { start: Rc::new(|_, _, _| Err("kebbie start: no such repo".to_string())), file: Rc::new(|_, _, _| Err("the backlog file is read-only".to_string())) };
+    }
+
+    #[test]
+    fn a_start_or_filing_that_fails_keeps_the_description_and_the_choice_and_says_why() {
+        for (letter, choice, said) in [('s', Choice::Start, "no such repo"), ('b', Choice::Backlog, "read-only")] {
+            let mut app = app_on("kebbie");
+            failing(&mut app);
+            press(&mut app, key(KeyCode::Char('n')));
+            typed(&mut app, "Fix the disk warning");
+            press(&mut app, key(KeyCode::Enter));
+            press(&mut app, key(KeyCode::Char(letter)));
+            assert!(matches!(&app.mode, Mode::NewTask(new) if new.text == "Fix the disk warning" && new.choice == Some(choice)), "{letter}: the dialog stays");
+            assert!(render(&mut app, 100, 30).0.join("\n").contains(said), "{letter}: the error shows in the dialog");
+            press(&mut app, key(KeyCode::Esc));
+            assert!(matches!(&app.mode, Mode::NewTask(new) if new.choice.is_none() && new.text == "Fix the disk warning"), "{letter}: esc goes back to the text");
+        }
+    }
+
+    #[test]
+    fn with_nowhere_to_file_the_dialog_offers_only_start_now() {
+        let mut app = app_on("kebbie");
+        app.sources = Vec::new();
+        let seen = recorded(&mut app);
+        press(&mut app, key(KeyCode::Char('n')));
+        typed(&mut app, "Fix the disk warning");
+        press(&mut app, key(KeyCode::Enter));
+        let screen = render(&mut app, 100, 30).0.join("\n");
+        assert!(screen.contains("s Start now") && !screen.contains("backlog") && screen.contains("⏎ / s start · esc back to the text"), "{screen}");
+        press(&mut app, key(KeyCode::Char('b')));
+        press(&mut app, key(KeyCode::Right));
+        assert!(matches!(&app.mode, Mode::NewTask(new) if new.choice == Some(Choice::Start)) && seen.borrow().is_empty(), "b and → do nothing");
+        press(&mut app, key(KeyCode::Enter));
+        assert_eq!(seen.borrow().len(), 1);
+    }
+
+    #[test]
+    fn the_first_words_are_kept_as_the_title_only_once_the_task_started() {
+        let state = crate::sh::test_dir("new-task-title");
+        let repo = Path::new("/nowhere/kebbie");
+        assert!(titled(&state, repo, "fix-disk", "Fix the disk warning", || Err("refused".to_string())).is_err());
+        assert_eq!(crate::status::kept_title(&state, "fix-disk@kebbie"), None, "a refused start leaves no title");
+        assert!(titled(&state, repo, "fix-disk", "Fix the disk warning", || Ok("started".to_string())).is_ok());
+        assert!(crate::status::kept_title(&state, "fix-disk@kebbie").is_some());
     }
 
     #[test]
