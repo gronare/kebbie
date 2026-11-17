@@ -176,10 +176,13 @@ pub fn remote_base(repo: &Path, commit: &str) -> Option<Remote> {
     Some(Remote { url, base: newest })
 }
 
+// Network protocols only, whatever the worker's git config allows, as GIT_ALLOW_PROTOCOL overrides every protocol.*.allow there; tests stand in for origin with a local repo.
+pub const ALLOWED_PROTOCOLS: &str = if cfg!(test) { "https:http:ssh:git:file" } else { "https:http:ssh:git" };
+
 // Fetches every branch of the remote into the store, with the worker's own credentials and never a prompt.
 fn fetch_remote(store: &Path, url: &str) -> Result<()> {
     let output = crate::sh::git_command().current_dir(store).args(["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", url, &format!("+refs/heads/*:{FROM_REMOTE}/*")])
-        .env("GIT_TERMINAL_PROMPT", "0").stdin(std::process::Stdio::null()).output().map_err(|error| format!("git fetch: {error}"))?;
+        .env("GIT_TERMINAL_PROMPT", "0").env("GIT_ALLOW_PROTOCOL", ALLOWED_PROTOCOLS).stdin(std::process::Stdio::null()).output().map_err(|error| format!("git fetch: {error}"))?;
     if output.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&output.stderr).trim().to_string()) }
 }
 

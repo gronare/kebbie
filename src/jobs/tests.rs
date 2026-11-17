@@ -101,6 +101,13 @@ fn the_remote_a_worker_fetches_from_rides_in_the_command_without_credentials_and
         ("./app", None),
         ("file:///srv/git/app.git", None),
         ("ext::sh -c touch% /tmp/x", None),
+        ("ext::/tmp/x.sh", None),
+        ("fd::3", None),
+        ("helper::https://host/app.git", None),
+        ("https://host/app.git?private_token=secret", None),
+        ("https://host/app.git#secret", None),
+        ("me@ho$t:app.git", None),
+        ("a/b@host:app.git", None),
         ("-uhttps://host/app", None),
         ("https://host/app\ntouch pwned", None),
         ("", None),
@@ -405,6 +412,21 @@ fn a_worker_fetches_the_history_from_the_jobs_remote_and_asks_for_all_when_the_f
     let (end, log) = run(&unreachable);
     assert_eq!(end, JobEnd::NeedsFull {}, "a worker that cannot fetch asks for the whole history");
     assert!(log.contains(&format!("[kebbie: the fetch from {ORIGIN} failed: ")), "{log}");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn the_workers_fetch_runs_no_remote_helper_even_when_its_git_config_allows_one() {
+    let root = crate::sh::test_dir("jobs-fetch-helper");
+    let store = root.join("store");
+    let marker = root.join("ran");
+    std::fs::create_dir_all(&store).unwrap();
+    git(&store, &["init", "--quiet", "--bare"]);
+    git(&store, &["config", "protocol.ext.allow", "always"]);
+    git(&store, &["config", &format!("url.ext::sh -c touch% {}.insteadOf", marker.display()), ORIGIN]);
+    let stored = bundle::store(&store, &[], &"a".repeat(40), Some(&"b".repeat(40)), "refs/kebbie/keep", Some(ORIGIN), &mut |_| {});
+    assert_eq!(stored, Ok(bundle::Stored::NeedsFull));
+    assert!(!marker.exists(), "the ext:: helper the config rewrote origin to never ran");
     let _ = std::fs::remove_dir_all(root);
 }
 
