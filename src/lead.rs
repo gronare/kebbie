@@ -293,14 +293,14 @@ type Transcript = (std::time::SystemTime, String);
 
 fn transcripts_in(dir: &Path) -> Vec<Transcript> {
     fs::read_dir(dir).into_iter().flatten().flatten()
-        .filter(|entry| entry.path().extension().is_some_and(|extension| extension == "jsonl"))
+        .filter(|entry| entry.path().extension().is_some_and(|extension| extension == "jsonl") && crate::agent::claude::has_conversation(&entry.path()))
         .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path().file_stem()?.to_string_lossy().to_string())))
         .collect()
 }
 
 // claude --resume <id> finds a transcript in another folder's project when exactly one project holds it, and the resumed conversation goes on writing there.
 fn transcript_elsewhere(projects: &Path, id: &str) -> Option<Transcript> {
-    let mut found = fs::read_dir(projects).ok()?.flatten().filter_map(|project| fs::metadata(project.path().join(format!("{id}.jsonl"))).ok()?.modified().ok());
+    let mut found = fs::read_dir(projects).ok()?.flatten().map(|project| project.path().join(format!("{id}.jsonl"))).filter(|file| crate::agent::claude::has_conversation(file)).filter_map(|file| fs::metadata(file).ok()?.modified().ok());
     let modified = found.next()?;
     found.next().is_none().then(|| (modified, id.to_string()))
 }
@@ -321,9 +321,8 @@ fn adopt_transcript(home: &Path, id: &str, dir: &Path) -> Result<()> {
 }
 
 // A lead started fresh has no transcript until its first reply, and its start is newer than every older conversation, which it must not fall back to.
-fn unspoken(transcripts: &[Transcript], recorded: Option<&str>, recorded_at: Option<std::time::SystemTime>) -> Option<String> {
-    let (id, at) = recorded.zip(recorded_at)?;
-    (!transcripts.iter().any(|(_, stem)| stem == id) && transcripts.iter().all(|(modified, _)| *modified < at)).then(|| id.to_string())
+fn unspoken(transcripts: &[Transcript], recorded: Option<&str>, recorded_at: Option<std::time::SystemTime>) -> bool {
+    recorded.zip(recorded_at).is_some_and(|(id, at)| !transcripts.iter().any(|(_, stem)| stem == id) && transcripts.iter().all(|(modified, _)| *modified < at))
 }
 
 // The lead's conversation as Claude Code keeps it: the recorded one, or a newer one in the lead's folder, as after /clear.
@@ -381,6 +380,8 @@ fn draft_of(agent: Option<&Value>) -> Draft {
 
 pub const REFUSED: &str = "Not restarted: ";
 pub const RESTARTED: &str = "Restarted the lead";
+pub const FRESH_AFTER_FAILED_RESUME: &str = "with a new conversation, as Claude Code found none to resume";
+pub const RESUMING: &str = "resuming its conversation";
 
 fn refused(why: &str) -> String {
     format!("{REFUSED}{why}.")
@@ -451,7 +452,13 @@ fn restart_locked(anyway: bool, fresh: bool) -> Result<String> {
         Agent::Claude.end(&pane)?;
     }
     close_messages(places(&lead)?.messages.as_deref())?;
-    start_chat(&pane, session)?;
+    let how = match start_chat(&pane, session) {
+        Err(error) if error.starts_with(crate::agent::claude::RESUME_FAILED) => {
+            start_chat(&pane, Session::New(tasks::new_session_id()?))?;
+            FRESH_AFTER_FAILED_RESUME
+        }
+        other => other.map(|()| how)?,
+    };
     Ok(format!("{RESTARTED} with its current role and settings, {how}."))
 }
 
@@ -465,7 +472,10 @@ fn previous_session() -> Result<(Session, &'static str)> {
     let home = Agent::Claude.home();
     let mut transcripts: Vec<Transcript> = home.iter().flat_map(|home| own.iter().flat_map(|dir| transcripts_in(&Agent::Claude.transcripts_dir(home, dir)))).collect();
     let moved = home.as_ref().zip(recorded.as_deref()).filter(|(_, id)| !transcripts.iter().any(|(_, stem)| stem == id)).and_then(|(home, id)| transcript_elsewhere(&home.join("projects"), id));
-    if moved.is_none() && let Some(id) = unspoken(&transcripts, recorded.as_deref(), recorded_at) {
+    if moved.is_none() && let Some(id) = recorded.as_deref().filter(|_| unspoken(&transcripts, recorded.as_deref(), recorded_at)) {
+        // Claude Code refuses --session-id of an id whose file holds its bookkeeping alone, so that id gives way to a new one.
+        let taken = home.iter().any(|home| own.iter().any(|dir| Agent::Claude.transcripts_dir(home, dir).join(format!("{id}.jsonl")).exists()));
+        let id = if taken { tasks::new_session_id()? } else { id.to_string() };
         return Ok((Session::New(id), "with a new conversation, as its last start has none yet"));
     }
     transcripts.extend(moved.clone());
@@ -1095,7 +1105,8 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         assert_eq!(lead_session(&transcripts_in(&dir), Some("recorded")), None);
         let at = |name: &str, seconds: u64| {
-            let file = fs::File::create(dir.join(name)).unwrap();
+            fs::write(dir.join(name), "{\"type\":\"user\"}\n").unwrap();
+            let file = fs::File::options().write(true).open(dir.join(name)).unwrap();
             file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds)).unwrap();
         };
         at("older.jsonl", 100);
@@ -1113,10 +1124,10 @@ mod tests {
     fn a_lead_started_fresh_that_has_not_replied_yet_never_falls_back_to_its_old_conversation() {
         let at = |seconds: u64| std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds);
         let old = vec![(at(100), "old".to_string())];
-        assert_eq!(unspoken(&old, Some("fresh"), Some(at(500))).as_deref(), Some("fresh"), "the fresh start is newer than the old conversation and has no transcript yet");
-        assert_eq!(unspoken(&old, Some("fresh"), Some(at(50))), None, "a conversation newer than the start, as after /clear, wins");
-        assert_eq!(unspoken(&[(at(100), "old".to_string()), (at(600), "fresh".to_string())], Some("fresh"), Some(at(500))), None, "once it replied, its transcript is resumed as usual");
-        assert_eq!(unspoken(&old, None, Some(at(500))), None);
+        assert!(unspoken(&old, Some("fresh"), Some(at(500))), "the fresh start is newer than the old conversation and has no transcript yet");
+        assert!(!unspoken(&old, Some("fresh"), Some(at(50))), "a conversation newer than the start, as after /clear, wins");
+        assert!(!unspoken(&[(at(100), "old".to_string()), (at(600), "fresh".to_string())], Some("fresh"), Some(at(500))), "once it replied, its transcript is resumed as usual");
+        assert!(!unspoken(&old, None, Some(at(500))));
     }
 
     #[test]
@@ -1131,7 +1142,8 @@ mod tests {
         let _ = fs::remove_dir_all(&projects);
         let at = |project: &str, seconds: u64| {
             fs::create_dir_all(projects.join(project)).unwrap();
-            fs::File::create(projects.join(project).join("moved.jsonl")).unwrap().set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds)).unwrap();
+            fs::write(projects.join(project).join("moved.jsonl"), "{\"type\":\"user\"}\n").unwrap();
+            fs::File::options().write(true).open(projects.join(project).join("moved.jsonl")).unwrap().set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds)).unwrap();
         };
         assert_eq!(transcript_elsewhere(&projects, "moved"), None);
         at("-Users-ada", 500);

@@ -277,7 +277,7 @@ pub(crate) fn latest_transcript(dir: &Path, since: std::time::SystemTime) -> Opt
     std::fs::read_dir(dir).ok()?.flatten()
         .filter(|entry| entry.path().extension().is_some_and(|extension| extension == "jsonl"))
         .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
-        .filter(|(modified, _)| *modified >= since)
+        .filter(|(modified, path)| *modified >= since && crate::agent::claude::has_conversation(path))
         .max_by_key(|(modified, _)| *modified)
         .and_then(|(_, path)| path.file_stem().map(|stem| stem.to_string_lossy().to_string()))
 }
@@ -1153,15 +1153,18 @@ mod tests {
         std::fs::create_dir_all(&transcripts).unwrap();
         assert_eq!(previous_session(Agent::Claude, &dir, &slot, "billing", &home, None), None);
         let created = branch_created(&dir, "billing").unwrap();
-        let write = |id: &str, at: std::time::SystemTime| {
-            let file = std::fs::File::create(transcripts.join(format!("{id}.jsonl"))).unwrap();
-            file.set_modified(at).unwrap();
+        let write_lines = |id: &str, at: std::time::SystemTime, lines: &str| {
+            std::fs::write(transcripts.join(format!("{id}.jsonl")), lines).unwrap();
+            std::fs::File::options().write(true).open(transcripts.join(format!("{id}.jsonl"))).unwrap().set_modified(at).unwrap();
         };
+        let write = |id: &str, at: std::time::SystemTime| write_lines(id, at, "{\"type\":\"user\"}\n");
         write("previous-task", created - Duration::from_secs(60));
         assert_eq!(previous_session(Agent::Claude, &dir, &slot, "billing", &home, None), None);
         write("first", created + Duration::from_secs(10));
         write("latest", created + Duration::from_secs(20));
-        assert_eq!(previous_session(Agent::Claude, &dir, &slot, "billing", &home, None).as_deref(), Some("latest"));
+        write_lines("unspoken", created + Duration::from_secs(30), "{\"type\":\"cost-state\"}\n");
+        assert_eq!(previous_session(Agent::Claude, &dir, &slot, "billing", &home, None).as_deref(), Some("latest"), "a session nothing was said in has no conversation to resume");
+        assert_eq!(previous_session(Agent::Claude, &dir, &slot, "billing", &home, Some("unspoken".to_string())).as_deref(), Some("latest"));
         assert_eq!(previous_session(Agent::Claude, &dir, &slot, "billing", &home, Some("first".to_string())).as_deref(), Some("first"));
         assert_eq!(previous_session(Agent::Claude, &dir, &slot, "billing", &home, Some("gone".to_string())).as_deref(), Some("latest"));
         std::fs::remove_dir_all(home).unwrap();

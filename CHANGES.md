@@ -10,6 +10,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - kebbie setup waits for ⏎ after a step it ran outside its screen fails, and names why it stopped.
 - kebbie setup names each row by what it does, such as vault server, vault plugin and codex approvals.
 - kebbie setup wraps a long row under its own column, and its done list shows at most two lines of one.
+- A lead restarted before anything was said to it starts a new conversation instead of dropping to a bare shell.
 
 ## 0.40.0
 

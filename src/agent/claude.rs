@@ -57,10 +57,37 @@ pub fn start_claude(name: &str, pane: &str, args: &[&str], trusted: bool) -> Res
 }
 
 pub(crate) fn start_with(screens: &Screens, name: &str, pane: &str, args: &[&str], trusted: bool) -> Result<Started> {
-    start_twice(screens, pane, || {
+    let started = start_twice(screens, pane, || {
         wait_for_prompt(pane)?;
         type_agent(screens, name, pane, args, trusted)
-    })
+    })?;
+    if resumes(args) {
+        stays_up(|| Ok((herdr::foreground(pane)?.is_none(), herdr::read_pane(pane)?)), || std::thread::sleep(Duration::from_millis(500)), RESUME_LOOKS)?
+            .map_err(|shown| format!("{RESUME_FAILED} in pane {pane}: its shell is back at the prompt, showing \"{shown}\""))?;
+    }
+    Ok(started)
+}
+
+pub const RESUME_FAILED: &str = "The resumed conversation did not start";
+const RESUME_LOOKS: usize = 8;
+
+fn resumes(args: &[&str]) -> bool {
+    args.first() == Some(&"resume") || args.contains(&"--resume")
+}
+
+// A start is called ready as soon as the agent's process runs, and a resume that finds no conversation exits a second later, back to the shell.
+fn stays_up(mut look: impl FnMut() -> Result<(bool, String)>, mut pause: impl FnMut(), tries: usize) -> Result<std::result::Result<(), String>> {
+    let mut at_shell = 0;
+    for _ in 0..tries {
+        pause();
+        let (shell, screen) = look()?;
+        at_shell = if shell { at_shell + 1 } else { 0 };
+        if at_shell >= 2 {
+            let shown = screen.lines().map(str::trim).rfind(|line| line.contains("No conversation found")).unwrap_or_else(|| last_line(&screen));
+            return Ok(Err(shown.to_string()));
+        }
+    }
+    Ok(Ok(()))
 }
 
 // A line read away by the shell's own startup, as oh-my-zsh's update question takes its first key, leaves the shell at its prompt: one more try then lands.
@@ -359,6 +386,13 @@ pub(crate) fn transcripts_dir(claude_home: &Path, folder: &Path) -> PathBuf {
     claude_home.join("projects").join(name)
 }
 
+// Claude Code writes a session's file only once something is said, and claude --resume finds no conversation in one of its bookkeeping lines alone.
+pub fn has_conversation(path: &Path) -> bool {
+    use std::io::BufRead;
+    std::fs::File::open(path).is_ok_and(|file| std::io::BufReader::new(file).lines().map_while(std::result::Result::ok)
+        .any(|line| serde_json::from_str::<Value>(&line).is_ok_and(|entry| entry["type"] == "user" || entry["type"] == "assistant")))
+}
+
 // The model Claude Code runs when kebbie passes no --model: its settings.json's own, read, never written.
 pub fn configured_model(home: &Path) -> Option<String> {
     let settings: Value = serde_json::from_str(&std::fs::read_to_string(home.join("settings.json")).ok()?).ok()?;
@@ -585,6 +619,18 @@ mod tests {
         let answered = [(true, omz), (true, omz), (false, "git pull"), (true, "❯"), (true, "❯"), (true, "❯"), (true, "❯"), (true, "❯")];
         assert_eq!(waited(&answered, 20), (Ok(()), answered.len()), "once answered in the pane the wait goes on to the prompt");
         assert!(asks("Proceed? (y/N)") && asks("Continue [yes/no]") && !asks("~/app ❯") && !asks("% "));
+    }
+
+    #[test]
+    fn a_resume_that_finds_no_conversation_and_drops_back_to_the_shell_is_a_failed_start() {
+        let up = |looks: Vec<(bool, &str)>| {
+            let mut looks = looks.into_iter().map(|(shell, screen)| (shell, screen.to_string()));
+            stays_up(|| Ok(looks.next().unwrap_or((false, String::new()))), || {}, RESUME_LOOKS).unwrap()
+        };
+        let failed = "% claude --resume f9ae\nNo conversation found with session ID: f9ae\n%";
+        assert_eq!(up(vec![(false, ""), (true, failed), (true, failed)]), Err("No conversation found with session ID: f9ae".to_string()));
+        assert_eq!(up(vec![(true, "% claude --resume f9ae"), (false, "Claude Code"), (false, "❯")]), Ok(()), "a shell seen once while Claude starts is no failure");
+        assert!(resumes(&["--settings", "/s", "--resume", "id"]) && resumes(&["resume", "--model", "x", "019b"]) && !resumes(&["--session-id", "id"]));
     }
 
     #[test]

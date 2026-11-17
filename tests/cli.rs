@@ -945,7 +945,8 @@ fn sessions(lab: &Lab) -> Sessions {
          'pane process-info') if [ -f \"$d/ended-$4\" ]; then cat \"$d/answers/shell.json\"; elif [ -f \"$d/answers/process-$4.json\" ]; then cat \"$d/answers/process-$4.json\"; else cat \"$d/answers/process.json\"; fi; exit 0;;\n\
          'pane send-keys') touch \"$d/ended-$3\"; echo '{{\"result\":{{}}}}'; exit 0;;\n\
          'pane read') if [ -f \"$d/ended-$3\" ]; then echo 'you@host $'; else printf '%s\\n' '────────────────────' '❯ ' '────────────────────'; fi; exit 0;;\n\
-         'agent start'|'pane run') echo '{{\"result\":{{}}}}'; exit 0;;\n\
+         'agent start') rm -f \"$d/ended-$7\"; echo '{{\"result\":{{}}}}'; exit 0;;\n\
+         'pane run') echo '{{\"result\":{{}}}}'; exit 0;;\n\
          esac\n\
          key=\"$1-$2\"\nif [ -f \"$d/answers/$key.json\" ]; then cat \"$d/answers/$key.json\"; exit 0; fi\necho '{{\"error\":{{\"code\":\"not_faked\",\"message\":\"the fake herdr has no answer\"}}}}' >&2\nexit 1\n",
         lab.root.display()
@@ -1512,6 +1513,8 @@ fn lead_at_shell(lab: &Lab, in_lead: bool) -> (PathBuf, PathBuf) {
     for ok in ["pane-run", "agent-start"] {
         fs::write(answers.join(format!("{ok}.json")), r#"{"result":{}}"#).unwrap();
     }
+    fs::write(lab.root.join("live.sh"), r#"[ "$key" = agent-start ] && printf '%s' '{"result":{"process_info":{"shell_pid":1,"foreground_processes":[{"pid":2,"argv":["claude"]}]}}}' > "$d/answers/pane-process-info.json"
+"#).unwrap();
     (lab.root.join("lead's dir"), lab.root.join("claude"))
 }
 
@@ -1524,7 +1527,7 @@ fn a_lead_restart_puts_the_chat_panes_shell_in_the_leads_folder_before_claude_st
     let lab = Lab::new("lead-restart-dir");
     let (dir, claude) = lead_at_shell(&lab, true);
     fs::create_dir_all(claude.join("projects/-Users-ada")).unwrap();
-    fs::write(claude.join("projects/-Users-ada/9f1c2d3e-0000-4000-8000-000000000001.jsonl"), "{}\n").unwrap();
+    fs::write(claude.join("projects/-Users-ada/9f1c2d3e-0000-4000-8000-000000000001.jsonl"), "{\"type\":\"user\"}\n").unwrap();
     fs::write(lab.state.join("lead-session"), "9f1c2d3e-0000-4000-8000-000000000001\n").unwrap();
     let restarted = lab.command().env("KEBBIE_LEAD_DIR", &dir).env("CLAUDE_CONFIG_DIR", &claude).args(["lead", "--restart"]).output().unwrap();
     assert!(restarted.status.success(), "{}", stderr(&restarted));
@@ -1816,7 +1819,8 @@ fn idle_lead(lab: &Lab) {
          'pane process-info') if [ -f \"$d/ended-$4\" ]; then cat \"$d/answers/shell.json\"; elif [ -f \"$d/answers/process-$4.json\" ]; then cat \"$d/answers/process-$4.json\"; else cat \"$d/answers/process.json\"; fi; exit 0;;\n\
          'pane send-keys') touch \"$d/ended-$3\"; echo '{{\"result\":{{}}}}'; exit 0;;\n\
          'pane read') if [ -f \"$d/ended-$3\" ]; then echo 'you@host $'; else printf '%s\\n' '────────────────────' '❯ ' '────────────────────'; fi; exit 0;;\n\
-         'agent start'|'pane run') echo '{{\"result\":{{}}}}'; exit 0;;\n\
+         'agent start') rm -f \"$d/ended-$7\"; echo '{{\"result\":{{}}}}'; exit 0;;\n\
+         'pane run') echo '{{\"result\":{{}}}}'; exit 0;;\n\
          esac\n\
          key=\"$1-$2\"\nif [ -f \"$d/answers/$key.json\" ]; then cat \"$d/answers/$key.json\"; exit 0; fi\necho '{{\"error\":{{\"code\":\"not_faked\",\"message\":\"the fake herdr has no answer\"}}}}' >&2\nexit 1\n",
         lab.root.display()
@@ -1846,7 +1850,7 @@ fn restart_fresh_starts_the_lead_on_a_new_conversation_and_keeps_the_old_one_on_
     assert!(lead_starts(&lab)[0].windows(2).any(|pair| pair == ["--resume", "s-old"]), "plain --restart resumes: {:?}", lead_starts(&lab));
     assert!(lab.state.join("lead-context.json").exists(), "a resumed conversation keeps its context share");
 
-    fs::remove_file(lab.root.join("ended-p_lead")).unwrap();
+    let _ = fs::remove_file(lab.root.join("ended-p_lead"));
     let fresh = run(&["lead", "--restart", "--fresh"]);
     let said = stdout(&fresh);
     assert!(fresh.status.success(), "{said}\n{}", stderr(&fresh));
@@ -1865,7 +1869,7 @@ fn restart_fresh_starts_the_lead_on_a_new_conversation_and_keeps_the_old_one_on_
     let cd = calls.iter().position(|call| call[..2] == ["pane", "run"] && call.iter().any(|arg| arg.starts_with("cd ") && arg.contains(&*lead.to_string_lossy()))).expect("the pane goes to the lead's folder");
     assert!(cd < calls.iter().rposition(|call| call[..2] == ["agent", "start"]).unwrap());
 
-    fs::remove_file(lab.root.join("ended-p_lead")).unwrap();
+    let _ = fs::remove_file(lab.root.join("ended-p_lead"));
     let again = run(&["lead", "--restart"]);
     assert!(again.status.success(), "{}", stderr(&again));
     let after = lead_starts(&lab).pop().unwrap();
@@ -1874,7 +1878,7 @@ fn restart_fresh_starts_the_lead_on_a_new_conversation_and_keeps_the_old_one_on_
     let settings = fs::read_to_string(lab.state.join("roles/lead.settings.json")).unwrap();
     assert!(!settings.contains(" lead:") && !settings.contains(" lead "), "the lead may not restart itself: {settings}");
 
-    fs::remove_file(lab.root.join("ended-p_lead")).unwrap();
+    let _ = fs::remove_file(lab.root.join("ended-p_lead"));
     lab.screen("❯ half a thought");
     fs::write(lab.root.join("answers/agent-list.json"), r#"{"result":{"agents":[{"name":"lead","agent":"claude","workspace_id":"w_lead","pane_id":"p_lead","agent_status":"working","interactive_ready":true}]}}"#).unwrap();
     let refused = run(&["lead", "--restart", "--fresh"]);

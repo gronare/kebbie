@@ -430,8 +430,9 @@ pub fn background_running(lines: impl Iterator<Item = String>, since: u64, now: 
 
 pub fn transcript(home: &Path, cwd: Option<&Path>, session: &str) -> Option<PathBuf> {
     let file = format!("{session}.jsonl");
-    cwd.map(|cwd| crate::agent::claude::transcripts_dir(home, cwd).join(&file)).filter(|path| path.is_file())
-        .or_else(|| std::fs::read_dir(home.join("projects")).ok()?.flatten().map(|dir| dir.path().join(&file)).find(|path| path.is_file()))
+    let held = |path: &PathBuf| crate::agent::claude::has_conversation(path);
+    cwd.map(|cwd| crate::agent::claude::transcripts_dir(home, cwd).join(&file)).filter(held)
+        .or_else(|| std::fs::read_dir(home.join("projects")).ok()?.flatten().map(|dir| dir.path().join(&file)).find(held))
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -653,10 +654,11 @@ fn wait_for_agent(pane: &str, name: &str) -> Result<()> {
     Err(format!("{name} did not come back in pane {pane}; see what the pane shows"))
 }
 
-fn perform(pane: &Pane, own: Option<&Path>, args: Option<&[String]>, session: &str, lead: bool) -> Result<tasks::Started> {
+// The bool is whether the agent resumed its conversation, as the lead starts a new one when it has none to resume.
+fn perform(pane: &Pane, own: Option<&Path>, args: Option<&[String]>, session: &str, lead: bool) -> Result<(tasks::Started, bool)> {
     if lead {
         return match sh::attempt(&crate::peers::kebbie_command()?, &["lead", "--restart", "--anyway"], None)? {
-            Ok(_) => Ok(tasks::Started::Ready),
+            Ok(said) => Ok((tasks::Started::Ready, said.contains(crate::lead::RESUMING))),
             Err(stderr) if stderr.is_empty() => Err("kebbie lead --restart failed".to_string()),
             Err(stderr) => Err(stderr),
         };
@@ -681,7 +683,7 @@ fn perform(pane: &Pane, own: Option<&Path>, args: Option<&[String]>, session: &s
         tasks::mark_awaits_prompt(&address)?;
     }
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    match &pane.name {
+    let started = match &pane.name {
         Some(name) => pane.agent.start(name, &pane.pane, &refs, pane.cwd.as_deref().is_some_and(|cwd| pane.agent.trusted_by_user(cwd))),
         None => {
             tasks::wait_for_prompt(&pane.pane)?;
@@ -689,7 +691,8 @@ fn perform(pane: &Pane, own: Option<&Path>, args: Option<&[String]>, session: &s
             herdr::run_in_pane(&pane.pane, &line)?;
             wait_for_agent(&pane.pane, pane.agent.name()).map(|()| tasks::Started::Ready)
         }
-    }
+    };
+    started.map(|started| (started, true))
 }
 
 fn resume_command(agent: Agent) -> &'static str {
@@ -699,8 +702,9 @@ fn resume_command(agent: Agent) -> &'static str {
     }
 }
 
-fn restarted_said(label: &str, agent: Agent, reasons: &[String], started: &tasks::Started) -> String {
+fn restarted_said(label: &str, agent: Agent, reasons: &[String], started: &tasks::Started, resumed: bool) -> String {
     match started.asks() {
+        None if !resumed => format!("Restarted {label} with a new conversation, as it ran older code ({}) and had none to resume.", reasons.join(", ")),
         None => format!("Restarted {label} with {}, as it ran older code ({}).", resume_command(agent), reasons.join(", ")),
         Some(asks) => format!("Restarted {label}, as it ran older code ({}); {} there asks {asks}. Answer it there, and it resumes its conversation.", reasons.join(", "), agent.name()),
     }
@@ -813,7 +817,7 @@ fn refusal(error: &str) -> Option<&str> {
 }
 
 // A refusal leaves no record, so it holds nothing back and the next round tries again; whatever ended or started a Claude is recorded.
-pub fn note_attempt(restarted: &mut Map<String, Value>, session: &str, entry: Value, done: &Result<tasks::Started>) -> bool {
+pub fn note_attempt<T>(restarted: &mut Map<String, Value>, session: &str, entry: Value, done: &Result<T>) -> bool {
     if done.as_ref().err().is_some_and(|error| refusal(error).is_some()) {
         return false;
     }
@@ -957,11 +961,11 @@ pub fn run_counted(mode: Mode, memory: &mut Memory, only: Option<&str>, counted:
             crate::state::write(&restarted_file(&state)?, Value::Object(restarted.clone()).to_string())?;
         }
         match done {
-            Ok(started) => {
+            Ok((started, resumed)) => {
                 memory.active.insert(session.clone(), at);
                 live.remove(&session);
                 if matches!(mode, Mode::Routine { .. }) || started.asks().is_some() {
-                    tell_board(&restarted_said(&pane.label, pane.agent, &reasons, &started));
+                    tell_board(&restarted_said(&pane.label, pane.agent, &reasons, &started, resumed));
                 } else if mode == Mode::Restore {
                     tell_board(&format!("Restarted {label} with kebbie's role and settings, which herdr's own restore had left off; it resumes its conversation.", label = pane.label));
                 }
@@ -1297,11 +1301,29 @@ mod tests {
     #[test]
     fn a_restart_that_waits_at_the_trust_prompt_tells_the_board_to_answer_it_rather_than_that_it_runs() {
         let reasons = ["kebbie was rebuilt".to_string()];
-        assert_eq!(restarted_said("billing@app", Agent::Claude, &reasons, &tasks::Started::Ready), "Restarted billing@app with claude --resume, as it ran older code (kebbie was rebuilt).");
-        let waits = restarted_said("billing@app", Agent::Claude, &reasons, &tasks::Started::AwaitsTrust);
+        assert_eq!(restarted_said("billing@app", Agent::Claude, &reasons, &tasks::Started::Ready, true), "Restarted billing@app with claude --resume, as it ran older code (kebbie was rebuilt).");
+        let waits = restarted_said("billing@app", Agent::Claude, &reasons, &tasks::Started::AwaitsTrust, true);
         assert!(waits.contains("asks whether you trust its folder") && waits.contains("Answer it there, and it resumes its conversation") && !waits.contains("with claude --resume"), "{waits}");
         let source = include_str!("restart.rs").split("#[cfg(test)]").next().unwrap();
-        assert!(source.contains("Ok(started) => {") && source.contains("tell_board(&restarted_said(&pane.label, pane.agent, &reasons, &started))"), "the board hears how the restart came out");
+        assert!(source.contains("Ok((started, resumed)) => {") && source.contains("tell_board(&restarted_said(&pane.label, pane.agent, &reasons, &started, resumed))"), "the board hears how the restart came out");
+    }
+
+    #[test]
+    fn a_session_nothing_was_said_in_has_no_conversation_to_resume_and_the_lead_starts_a_new_one() {
+        let home = scratch("unspoken");
+        let dir = crate::agent::claude::transcripts_dir(&home, Path::new("/lead"));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(transcript(&home, Some(Path::new("/lead")), "f9ae"), None, "Claude Code writes no file until something is said");
+        std::fs::write(dir.join("f9ae.jsonl"), "{\"type\":\"cost-state\",\"sessionId\":\"f9ae\"}\n{\"type\":\"permission-mode\",\"permissionMode\":\"auto\",\"sessionId\":\"f9ae\"}\n").unwrap();
+        assert_eq!(transcript(&home, Some(Path::new("/lead")), "f9ae"), None, "claude --resume finds no conversation in bookkeeping lines alone");
+        assert_eq!(with_conversation(Verdict::Restart, false, false), Verdict::Skip("its conversation file is not found".to_string()), "a task without one is not resumed");
+        std::fs::write(dir.join("f9ae.jsonl"), "{\"type\":\"permission-mode\",\"sessionId\":\"f9ae\"}\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi\"},\"sessionId\":\"f9ae\"}\n").unwrap();
+        assert_eq!(transcript(&home, Some(Path::new("/lead")), "f9ae"), Some(dir.join("f9ae.jsonl")));
+        let reasons = ["Claude Code 2.1.325 → 2.1.326".to_string()];
+        assert_eq!(restarted_said("lead", Agent::Claude, &reasons, &tasks::Started::Ready, false), "Restarted lead with a new conversation, as it ran older code (Claude Code 2.1.325 → 2.1.326) and had none to resume.");
+        let lead = include_str!("lead.rs").split("\n#[cfg(test)]").next().unwrap();
+        assert!(lead.contains("Err(error) if error.starts_with(crate::agent::claude::RESUME_FAILED) => {\n            start_chat(&pane, Session::New(tasks::new_session_id()?))?;"), "a lead whose resume falls back to its shell starts a new conversation in the same pane");
+        std::fs::remove_dir_all(home).unwrap();
     }
 
     #[test]
@@ -1583,8 +1605,8 @@ mod tests {
         let approval = "  Would you like to run the following command?\n\n› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)";
         assert_eq!(with_screen(ROUTINE, Verdict::Restart, Agent::Codex, "[ ! ] Action Required | Fix the flaky checkout test | wt1.app", || false, || Some(approval.to_string())), Verdict::Busy, "herdr calls a Codex on an approval idle, and a restart would end it under the question");
         assert_eq!(with_screen(Mode::Manual { all: false }, Verdict::Restart, Agent::Codex, "[ . ] Action Required | wt1.app", || false, || None), Verdict::Busy, "even on kebbie restart by hand");
-        assert_eq!(restarted_said("flaky@app", Agent::Codex, &[KEBBIE_UPDATE.to_string()], &tasks::Started::Ready), "Restarted flaky@app with codex resume, as it ran older code (kebbie update).");
-        assert!(restarted_said("flaky@app", Agent::Codex, &[KEBBIE_UPDATE.to_string()], &tasks::Started::AwaitsHooks).contains("; Codex there asks whether to trust the hooks"));
+        assert_eq!(restarted_said("flaky@app", Agent::Codex, &[KEBBIE_UPDATE.to_string()], &tasks::Started::Ready, true), "Restarted flaky@app with codex resume, as it ran older code (kebbie update).");
+        assert!(restarted_said("flaky@app", Agent::Codex, &[KEBBIE_UPDATE.to_string()], &tasks::Started::AwaitsHooks, true).contains("; Codex there asks whether to trust the hooks"));
     }
 
     #[test]
