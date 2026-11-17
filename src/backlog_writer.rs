@@ -41,8 +41,8 @@ pub fn profile(dir: &Path, name: &str) -> Result<crate::profiles::Profile> {
     crate::profiles::load_in(dir, name).map_err(|error| format!("writer.profile: {error}"))
 }
 
-pub fn review_text(request: &str, draft: &Path, profile: &str) -> String {
-    format!("kebbie's writer ({profile}) wrote out the backlog item of this request for you to review, in {}. Do not research it again: read the draft, add what you know from your conversation with the user, take out an open question the code or the notes settle and keep each one only the user can answer, then save it as the request says and show the user the written item.\n\nThe request:\n\n{request}", draft.display())
+pub fn review_text(request: &str, draft: &str, profile: &str) -> String {
+    format!("kebbie's writer ({profile}) wrote out the backlog item of this request for you to review, below. Do not research it again: read the draft, add what you know from your conversation with the user, take out an open question the code or the notes settle and keep each one only the user can answer, then save it as the request says and show the user the written item.\n\nThe request:\n\n{request}\n\nThe draft:\n\n{draft}")
 }
 
 pub fn fallback_text(request: &str, why: &str) -> String {
@@ -108,16 +108,38 @@ fn tell_lead(text: &str) -> Result<()> {
     crate::messages::to_lead(crate::messages::ToLead::BacklogItem, text)
 }
 
+// What the lead could not take yet waits beside the queue, and the keeper hands it over again each round.
+fn hand_over(state: &Path, key: &str, text: &str, tell: &dyn Fn(&str) -> Result<()>) -> Result<()> {
+    let waiting = QUEUE.file(state, key, "tell");
+    match tell(text) {
+        Ok(()) => {
+            let _ = fs::remove_file(&waiting);
+            Ok(())
+        }
+        Err(error) => crate::state::write(&waiting, text).map_err(|kept| format!("{error}, and it could not be kept to try again ({kept})")).and(Err(error)),
+    }
+}
+
+fn hand_over_waiting(state: &Path, tell: &dyn Fn(&str) -> Result<()>) -> Vec<String> {
+    keys(state, "tell").into_iter().filter_map(|key| {
+        let text = fs::read_to_string(QUEUE.file(state, &key, "tell")).ok()?;
+        tell(&text).ok()?;
+        let _ = fs::remove_file(QUEUE.file(state, &key, "tell"));
+        Some(format!("writer: {key} handed to the lead"))
+    }).collect()
+}
+
 fn request_of(payload: &str) -> String {
     serde_json::from_str::<Ask>(payload).map(|ask| ask.request).unwrap_or_default()
 }
 
 pub fn tick(state: &Path) -> Vec<String> {
-    let mut notes: Vec<String> = QUEUE.dead(state).into_iter().map(|(key, ask)| {
+    let mut notes = hand_over_waiting(state, &tell_lead);
+    notes.extend(QUEUE.dead(state).into_iter().map(|(key, ask)| {
+        let _ = hand_over(state, &key, &fallback_text(&request_of(&ask.payload), "it stopped without a draft"), &tell_lead);
         QUEUE.done(state, &key);
-        let _ = tell_lead(&fallback_text(&request_of(&ask.payload), "it stopped without a draft"));
         format!("writer: {key} stopped without a draft; the lead writes it out")
-    }).collect();
+    }));
     let env = trusted_spawn::reviewer_env(std::env::vars());
     for key in keys(state, "wanted") {
         if QUEUE.pid(state, &key).is_some() {
@@ -129,7 +151,7 @@ pub fn tick(state: &Path) -> Vec<String> {
         notes.push(match started {
             Ok(()) => format!("writer: writing out {key}"),
             Err(error) => {
-                let _ = tell_lead(&fallback_text(&request_of(&ask.payload), &format!("it could not start: {error}")));
+                let _ = hand_over(state, &key, &fallback_text(&request_of(&ask.payload), &format!("it could not start: {error}")), &tell_lead);
                 format!("writer: {key} could not start ({error})")
             }
         });
@@ -150,17 +172,21 @@ pub fn run() -> Result<String> {
     let ask: Ask = serde_json::from_str(&payload).map_err(|error| format!("the writer's request does not read: {error}"))?;
     let name = crate::config::writer_profile();
     let written = write(&key, &ask, &name).and_then(|answer| draft_of(&answer).ok_or_else(|| "its answer has no `# <title>` line".to_string()));
+    let settled = settle(&state, &key, &ask, &name, written, &tell_lead);
     QUEUE.done(&state, &key);
+    settled
+}
+
+// The draft goes to the lead in its message, or the request goes back to the lead to write itself; either waits to be handed over again when the lead cannot take it now.
+fn settle(state: &Path, key: &str, ask: &Ask, name: &str, written: Result<String>, tell: &dyn Fn(&str) -> Result<()>) -> Result<String> {
     match written {
         Ok(draft) => {
-            let file = dir(&state).join(format!("{key}.md"));
-            crate::state::write(&file, draft + "\n")?;
-            let _ = fs::remove_file(log(&state, &key));
-            tell_lead(&review_text(&ask.request, &file, &name))?;
-            Ok(format!("The lead reviews the draft in {}", file.display()))
+            hand_over(state, key, &review_text(&ask.request, &draft, name), tell).map_err(|error| format!("the lead gets the draft once it can ({error})"))?;
+            let _ = fs::remove_file(log(state, key));
+            Ok("The lead reviews the draft".to_string())
         }
         Err(why) => {
-            tell_lead(&fallback_text(&ask.request, &why))?;
+            let _ = hand_over(state, key, &fallback_text(&ask.request, &why), tell);
             Err(why)
         }
     }
@@ -179,8 +205,12 @@ fn write(key: &str, ask: &Ask, name: &str) -> Result<String> {
     let roles = crate::lead::roles_dir()?;
     let prompt = roles.join(format!("backlog-{key}.write.md"));
     let text = fs::read_to_string(&skill).map_err(|error| format!("{}: {error}", skill.display()))?;
+    let answer = roles.join(format!("backlog-{key}.write.answer"));
     crate::state::write(&prompt, system_prompt(&text) + &crate::profiles::role_section(&profile)?)?;
-    trusted_spawn::ask_helper(crate::agent::Helper::Writer, &profile, &prompt, &roles.join(format!("backlog-{key}.write.answer")), &ask.cwd, &brief(&ask.request, &kebbie), &kebbie, TIMEOUT)
+    let asked = trusted_spawn::ask_helper(crate::agent::Helper::Writer, &profile, &prompt, &answer, &ask.cwd, &brief(&ask.request, &kebbie), &kebbie, TIMEOUT);
+    let _ = fs::remove_file(&prompt);
+    let _ = fs::remove_file(&answer);
+    asked
 }
 
 #[cfg(test)]
@@ -208,6 +238,26 @@ mod tests {
     }
 
     #[test]
+    fn what_the_lead_cannot_take_now_is_handed_over_on_a_later_round_and_leaves_no_files() {
+        let state = crate::sh::test_dir("writer-settle");
+        let told = RefCell::new(Vec::new());
+        let away = |_: &str| -> Result<()> { Err("no lead session".to_string()) };
+        let here = |text: &str| -> Result<()> { told.borrow_mut().push(text.to_string()); Ok(()) };
+        let ask = Ask { request: "Write out \"Retry\"".to_string(), cwd: state.clone() };
+        assert!(settle(&state, "k1", &ask, WRITER, Ok("# Retry".to_string()), &away).is_err());
+        assert!(settle(&state, "k2", &ask, WRITER, Err("it timed out".to_string()), &away).is_err());
+        assert!(told.borrow().is_empty());
+        let mut handed = hand_over_waiting(&state, &here);
+        handed.sort();
+        assert_eq!(handed, ["writer: k1 handed to the lead", "writer: k2 handed to the lead"]);
+        let mut texts = told.borrow().clone();
+        texts.sort();
+        assert_eq!(texts, [review_text(&ask.request, "# Retry", WRITER), fallback_text(&ask.request, "it timed out")]);
+        assert!(hand_over_waiting(&state, &here).is_empty(), "handed over once");
+        assert!(fs::read_dir(dir(&state)).map_or(true, |mut files| files.next().is_none()), "no draft and nothing waiting is left behind");
+    }
+
+    #[test]
     fn the_draft_is_the_written_item_from_its_title_on() {
         assert_eq!(draft_of("I read the code.\n\n```markdown\n# Retry flaky runs\n\n## Goal\n\nRerun once.\n```\n").as_deref(), Some("# Retry flaky runs\n\n## Goal\n\nRerun once."));
         assert_eq!(draft_of("No item here."), None);
@@ -215,8 +265,8 @@ mod tests {
 
     #[test]
     fn the_lead_reviews_the_draft_and_saves_it_as_the_request_says() {
-        let text = review_text("The user asks you to write out \"Retry\".", Path::new("/s/write-out/ab.md"), WRITER);
-        assert!(text.starts_with("kebbie's writer (writer) wrote out the backlog item of this request for you to review, in /s/write-out/ab.md.") && text.contains("keep each one only the user can answer") && text.ends_with("The request:\n\nThe user asks you to write out \"Retry\"."), "{text}");
+        let text = review_text("The user asks you to write out \"Retry\".", "# Retry\n\nRerun once.", WRITER);
+        assert!(text.starts_with("kebbie's writer (writer) wrote out the backlog item of this request for you to review, below.") && text.contains("keep each one only the user can answer") && text.ends_with("The request:\n\nThe user asks you to write out \"Retry\".\n\nThe draft:\n\n# Retry\n\nRerun once."), "{text}");
         assert!(brief("Write out \"Retry\"", "/k").contains("Save nothing and mark nothing"));
     }
 
