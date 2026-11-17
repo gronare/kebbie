@@ -134,6 +134,7 @@ enum Mode {
     Fullscreen { path: PathBuf, name: String, scroll: u16, index: usize },
     ConfirmPush { path: PathBuf, commits: Vec<tasks::Commit>, selected: usize, card: Option<(report::Card, bool)>, tests: Option<evidence::Shown>, marks: push::Marks, scroll: push::Scroll },
     EditMessage(Box<MessageEditor>),
+    PushOpening { path: PathBuf, label: String, read: Receiver<push::Opening> },
     Questions(Box<QuestionWindow>),
     Report { id: String, shown: Box<BugReport>, scroll: u16, read: bool, nudged: bool },
     ReportAll { shown: Vec<bug_report::Offer>, scroll: u16, read: bool, nudged: bool },
@@ -774,6 +775,9 @@ impl App {
             Mode::Filter { buffer } => self.handle_filter(buffer, key),
             Mode::ConfirmPush { path, commits, selected, card, tests, marks, scroll } => self.handle_push(path, commits, selected, (card, tests, marks), scroll, key),
             Mode::EditMessage(editor) => self.handle_editor(editor, key, terminal),
+            opening @ Mode::PushOpening { .. } => if !cancels {
+                self.mode = opening;
+            },
             Mode::Input { purpose, label, buffer } => self.handle_input(purpose, label, buffer, key, terminal),
         }
     }
@@ -1082,24 +1086,7 @@ impl App {
                     Act::Push | Act::Done | Act::Drop => {
                         let Some(path) = item.path.clone() else { return };
                         match act {
-                            Act::Push => match tasks::commits(&path) {
-                                Ok(commits) if commits.is_empty() => {
-                                    self.about("push", &item.name);
-                                    self.show(Notice::new(Tone::NotNow, "Nothing to push: it has no commits yet").ok());
-                                }
-                                Ok(commits) => {
-                                    let marks = push::Marks::read(&path, &commits, item.turn_under_way()).while_working(busy(&item));
-                                    if busy(&item) && marks.through().is_none() {
-                                        self.about("push", &item.name);
-                                        self.show(Notice::new(Tone::NotNow, "Not yet: its Claude is still working").next("This opens once it reports, or once you accept its first subtask.").ok());
-                                        return;
-                                    }
-                                    let (card, tests) = (report::card_for(&path), evidence::for_path(&path));
-                                    let selected = if item.held_by_uncommitted().is_some() { commits.len() - 1 } else { marks.start() };
-                                    self.mode = Mode::ConfirmPush { path, commits, selected, card, tests, marks, scroll: push::Scroll::default() };
-                                }
-                                Err(error) => self.show(Err(error)),
-                            },
+                            Act::Push => self.open_push(&item, path),
                             Act::Done => self.mode = Mode::ConfirmDone { path, name: item.name, nudged: false },
                             _ => self.mode = Mode::ConfirmDrop { path, name: item.name, force: false, nudged: false },
                         }
@@ -1310,6 +1297,7 @@ pub fn run(overlay: bool) -> Result<String> {
             app.poll_answer();
             app.poll_sending();
             app.poll_jobs();
+            app.poll_push_opening();
             app.poll_hub();
             app.poll_update();
             app.poll_agent_install();

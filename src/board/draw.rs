@@ -205,6 +205,9 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Mode::Filter { buffer } => draw_filter(frame, app, buffer),
         Mode::ConfirmPush { .. } => modal_hits = draw_push(frame, app),
         Mode::EditMessage(editor) => draw_editor(frame, editor),
+        Mode::PushOpening { label, .. } => {
+            modal(frame, "push".to_string(), vec![Line::from(Span::styled(label.clone(), style(TEXT))), Line::from(Span::styled("esc closes", style(MUTED)))], 72);
+        }
         Mode::Input { label, buffer, .. } => draw_input(frame, label, buffer),
     }
     if matches!(app.mode, Mode::Normal) {

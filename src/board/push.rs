@@ -10,6 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::Frame;
 
 use crate::evidence;
+use crate::notice::{Notice, Tone};
 use crate::report;
 use crate::tasks;
 use super::card::{indented, push_card_lines};
@@ -283,6 +284,68 @@ pub(crate) struct Scroll {
     free: bool,
 }
 
+// What p finds on its thread: the commits to offer with their marks, card and tests, or why there is nothing to push yet.
+pub(super) enum Opening {
+    Window(Box<Opened>),
+    Said(crate::sh::Result<String>),
+}
+
+pub(super) struct Opened {
+    pub commits: Vec<tasks::Commit>,
+    pub selected: usize,
+    pub card: Option<(report::Card, bool)>,
+    pub tests: Option<evidence::Shown>,
+    pub marks: Marks,
+    pub scroll: Scroll,
+}
+
+fn opening(path: &Path, busy: bool, turn: bool, held: bool) -> Opening {
+    let commits = match tasks::commits(path) {
+        Ok(commits) if commits.is_empty() => return Opening::Said(Notice::new(Tone::NotNow, "Nothing to push: it has no commits yet").ok()),
+        Ok(commits) => commits,
+        Err(error) => return Opening::Said(Err(error)),
+    };
+    let marks = Marks::read(path, &commits, turn).while_working(busy);
+    if busy && marks.through().is_none() {
+        return Opening::Said(Notice::new(Tone::NotNow, "Not yet: its Claude is still working").next("This opens once it reports, or once you accept its first subtask.").ok());
+    }
+    let selected = if held { commits.len() - 1 } else { marks.start() };
+    Opening::Window(Box::new(Opened { selected, card: report::card_for(path), tests: evidence::for_path(path), marks, commits, scroll: Scroll::default() }))
+}
+
+impl App {
+    // p reads the task's commits on a thread while a small window says so; esc closes it and what the thread finds is dropped.
+    pub(super) fn open_push(&mut self, item: &crate::status::Item, path: PathBuf) {
+        let (busy, turn, held) = (super::options::busy(item), item.turn_under_way(), item.held_by_uncommitted().is_some());
+        let (sender, read) = mpsc::channel();
+        let reading = path.clone();
+        thread::spawn(move || {
+            let _ = sender.send(opening(&reading, busy, turn, held));
+        });
+        self.mode = Mode::PushOpening { path, label: format!("Reading {}'s commits…", item.name), read };
+    }
+
+    pub(super) fn poll_push_opening(&mut self) {
+        let Mode::PushOpening { read, .. } = &self.mode else { return };
+        let opened = match read.try_recv() {
+            Ok(opened) => opened,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => Opening::Said(Err("Reading its commits stopped without an answer.".to_string())),
+        };
+        let Mode::PushOpening { path, .. } = std::mem::replace(&mut self.mode, Mode::Normal) else { return };
+        match opened {
+            Opening::Window(opened) => {
+                let Opened { commits, selected, card, tests, marks, scroll } = *opened;
+                self.mode = Mode::ConfirmPush { path, commits, selected, card, tests, marks, scroll };
+            }
+            Opening::Said(said) => {
+                self.about_path("push", &path);
+                self.show(said);
+            }
+        }
+    }
+}
+
 impl App {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn handle_push(&mut self, path: PathBuf, commits: Vec<tasks::Commit>, selected: usize, (card, tests, marks): (Option<(report::Card, bool)>, Option<evidence::Shown>, Marks), scroll: Scroll, key: KeyEvent) {
@@ -402,6 +465,27 @@ mod tests {
     use crate::evidence;
     use crate::report;
     use crate::tasks;
+
+    #[test]
+    fn p_reads_the_commits_behind_a_small_window_that_esc_closes() {
+        use crate::board::test_support::*;
+        use ratatui::crossterm::event::KeyCode;
+        let mut item = served("billing");
+        item.path = Some(PathBuf::from("/nowhere/kebbie-push-opening"));
+        let mut app = test_app(vec![item]);
+        app.act(crate::keys::Act::Push);
+        assert!(matches!(app.mode, Mode::PushOpening { .. }), "p opens at once");
+        assert!(render(&mut app, 100, 30).0.join("\n").contains("Reading billing's commits…"));
+        press(&mut app, key(KeyCode::Esc));
+        assert!(matches!(app.mode, Mode::Normal), "esc closes it");
+        app.act(crate::keys::Act::Push);
+        let start = std::time::Instant::now();
+        while matches!(app.mode, Mode::PushOpening { .. }) {
+            assert!(start.elapsed() < std::time::Duration::from_secs(10), "the read never came");
+            app.poll_push_opening();
+        }
+        assert!(matches!(app.mode, Mode::Message(_)), "what it found shows once read");
+    }
 
     #[test]
     fn the_push_dialog_parts_the_card_tests_commits_and_message_under_their_own_headers() {
