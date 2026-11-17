@@ -135,6 +135,7 @@ enum Mode {
     ConfirmPush { path: PathBuf, commits: Vec<tasks::Commit>, selected: usize, card: Option<(report::Card, bool)>, tests: Option<evidence::Shown>, marks: push::Marks, scroll: push::Scroll },
     EditMessage(Box<MessageEditor>),
     PushOpening { path: PathBuf, label: String, read: Receiver<push::Opening> },
+    CheckingLead(Receiver<Result<()>>),
     Questions(Box<QuestionWindow>),
     Report { id: String, shown: Box<BugReport>, scroll: u16, read: bool, nudged: bool },
     ReportAll { shown: Vec<bug_report::Offer>, scroll: u16, read: bool, nudged: bool },
@@ -522,13 +523,28 @@ impl App {
         self.page = Page::Settings;
     }
 
-    // A restart the user asks for always runs; only the lead's own state, or a restart already under way, refuses it before the question opens.
+    // A restart the user asks for always runs; only the lead's own state, read on a thread, or a restart already under way, refuses it before the question opens.
     fn restart_lead(&mut self) {
         if let Some(doing) = self.doing(LEAD_JOB, None) {
             self.subject = Some(notices::Subject::plain("lead"));
             return self.already(doing);
         }
-        match (self.lead_checker)() {
+        let (checker, (sender, read)) = (self.lead_checker.clone(), std::sync::mpsc::channel());
+        std::thread::spawn(move || {
+            let _ = sender.send(checker());
+        });
+        self.mode = Mode::CheckingLead(read);
+    }
+
+    pub(super) fn poll_lead_check(&mut self) {
+        let Mode::CheckingLead(read) = &self.mode else { return };
+        let checked = match read.try_recv() {
+            Ok(checked) => checked,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("the check stopped without an answer".to_string()),
+        };
+        self.mode = Mode::Normal;
+        match checked {
             Ok(()) => {
                 let (index, why) = crate::lead_restart::preset(&self.tasks, &self.messages);
                 self.restart_why = why;
@@ -775,6 +791,9 @@ impl App {
             Mode::EditMessage(editor) => self.handle_editor(editor, key, terminal),
             opening @ Mode::PushOpening { .. } => if !cancels {
                 self.mode = opening;
+            },
+            checking @ Mode::CheckingLead(_) => if !cancels {
+                self.mode = checking;
             },
             Mode::Input { purpose, label, buffer } => self.handle_input(purpose, label, buffer, key, terminal),
         }
@@ -1296,6 +1315,7 @@ pub fn run(overlay: bool) -> Result<String> {
             app.poll_sending();
             app.poll_jobs();
             app.poll_push_opening();
+            app.poll_lead_check();
             app.poll_hub();
             app.poll_update();
             app.poll_agent_install();
@@ -1703,6 +1723,40 @@ mod tests {
         assert!(redraw_due(false, false, Some(at(0)), at(10)), "a window or another page draws on every pass, as its countdowns and waits need");
     }
 
+    fn ask_restart(app: &mut App) {
+        app.handle_normal(key(KeyCode::Char('L')));
+        let started = Instant::now();
+        while matches!(app.mode, Mode::CheckingLead(_)) {
+            assert!(started.elapsed() < Duration::from_secs(10), "the lead check never answered");
+            app.poll_lead_check();
+        }
+    }
+
+    #[test]
+    fn l_checks_the_lead_on_a_thread_behind_a_small_window_and_asks_once_it_answers() {
+        let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
+        let (go, wait) = std::sync::mpsc::channel::<()>();
+        let wait = std::sync::Arc::new(std::sync::Mutex::new(wait));
+        app.lead_checker = std::sync::Arc::new(move || {
+            let _ = wait.lock().unwrap().recv();
+            Ok(())
+        });
+        app.handle_normal(key(KeyCode::Char('L')));
+        assert!(matches!(app.mode, Mode::CheckingLead(_)), "L answers at once");
+        assert!(render(&mut app, 120, 30).0.join("\n").contains("Checking the lead…"));
+        press(&mut app, key(KeyCode::Esc));
+        assert!(matches!(app.mode, Mode::Normal), "esc closes it");
+        go.send(()).unwrap();
+        app.handle_normal(key(KeyCode::Char('L')));
+        go.send(()).unwrap();
+        let started = Instant::now();
+        while matches!(app.mode, Mode::CheckingLead(_)) {
+            assert!(started.elapsed() < Duration::from_secs(10), "the lead check never answered");
+            app.poll_lead_check();
+        }
+        assert!(matches!(app.mode, Mode::RestartLead(_)), "the question opens once the check answers");
+    }
+
     #[test]
     fn while_the_lead_runs_an_older_kebbie_one_line_says_so_and_l_asks_how_to_restart_it() {
         let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
@@ -1716,7 +1770,7 @@ mod tests {
             Ok("Restarted the lead with its current role and settings, resuming its conversation.".to_string())
         });
         app.lead_fresh_starter = std::sync::Arc::new(|| panic!("2 never starts fresh"));
-        app.handle_normal(key(KeyCode::Char('L')));
+        ask_restart(&mut app);
         assert!(matches!(app.mode, Mode::RestartLead(0)), "L asks for a lead kebbie counts as current too");
         press(&mut app, key(KeyCode::Char('2')));
         assert!(matches!(app.mode, Mode::Normal) && app.jobs.len() == 1, "2 resumes it in the background");
@@ -1750,7 +1804,7 @@ mod tests {
         let stale = || vec!["billing@app: restarts when idle".to_string(), format!("lead: {}", crate::restart::Verdict::Focused.words(true))];
         app.take_stale(100, stale());
         assert!(app.lead_line().is_some_and(|line| line.contains("when you leave")), "the keeper's round says the lead waits for you to leave it");
-        app.handle_normal(key(KeyCode::Char('L')));
+        ask_restart(&mut app);
         press(&mut app, key(KeyCode::Char('2')));
         settle_jobs(&mut app);
         let restarted = app.lead_restarted.load(std::sync::atomic::Ordering::SeqCst);
@@ -1765,7 +1819,7 @@ mod tests {
         refused.lead_checker = std::sync::Arc::new(|| Ok(()));
         refused.lead_restarter = std::sync::Arc::new(|| crate::lead_restart::outcome(Err("Not restarted: the lead is working.".to_string())));
         refused.take_stale(100, stale());
-        refused.handle_normal(key(KeyCode::Char('L')));
+        ask_restart(&mut refused);
         press(&mut refused, key(KeyCode::Char('2')));
         settle_jobs(&mut refused);
         assert!(refused.lead_line().is_some(), "a refused restart leaves the line");
@@ -1788,7 +1842,7 @@ mod tests {
             Ok("Restarted the lead with its current role and settings, resuming its conversation.".to_string())
         });
         let count = |counter: &std::sync::Arc<std::sync::atomic::AtomicUsize>| counter.load(std::sync::atomic::Ordering::SeqCst);
-        app.handle_normal(key(KeyCode::Char('L')));
+        ask_restart(&mut app);
         let (rows, _) = render(&mut app, 120, 30);
         let screen = rows.join("\n");
         assert!(screen.contains("Restart the lead") && screen.contains("▸ New conversation") && screen.contains("Resume this conversation") && screen.contains("from its role and the vault"), "{screen}");
@@ -1802,19 +1856,19 @@ mod tests {
         }
         press(&mut app, key(KeyCode::Esc));
         assert!(matches!(app.mode, Mode::Normal) && count(&calls) + count(&resumed) == 0, "esc cancels and starts nothing");
-        app.handle_normal(key(KeyCode::Char('L')));
+        ask_restart(&mut app);
         press(&mut app, key(KeyCode::Enter));
         assert!(matches!(app.mode, Mode::Normal) && app.jobs.len() == 1, "enter on the first row starts it fresh in the background");
         settle_jobs(&mut app);
         assert_eq!((count(&calls), count(&resumed)), (1, 0));
         assert!(app.toast.as_ref().is_some_and(|toast| toast.notice.headline.contains("with a new conversation")), "the result goes by as a toast");
         app.mode = Mode::Normal;
-        app.handle_normal(key(KeyCode::Char('L')));
+        ask_restart(&mut app);
         press(&mut app, key(KeyCode::Char('1')));
         settle_jobs(&mut app);
         assert_eq!((count(&calls), count(&resumed)), (2, 0), "1 starts it fresh");
         app.mode = Mode::Normal;
-        app.handle_normal(key(KeyCode::Char('L')));
+        ask_restart(&mut app);
         let (rows, _) = render(&mut app, 120, 30);
         let (x, y) = find(&rows, "Resume this conversation")[0];
         click(&mut app, x as u16, y as u16);
@@ -1836,7 +1890,7 @@ mod tests {
         app.lead_context = Some(91.2);
         let (rows, _) = render(&mut app, 170, 30);
         assert!(rows.join("\n").contains("The lead's context is 91% full · L to restart it fresh"), "a full context still points at L");
-        app.handle_normal(key(KeyCode::Char('L')));
+        ask_restart(&mut app);
         assert!(matches!(app.mode, Mode::RestartLead(1)), "resume is preselected");
         let (rows, _) = render(&mut app, 120, 30);
         let screen = rows.join("\n");
@@ -1851,7 +1905,7 @@ mod tests {
         for tasks in [Vec::new(), vec![crate::status::tests::task(Some("idle"), None, 0)]] {
             let mut app = test_app(tasks);
             app.lead_checker = std::sync::Arc::new(|| Ok(()));
-            app.handle_normal(key(KeyCode::Char('L')));
+            ask_restart(&mut app);
             assert!(matches!(app.mode, Mode::RestartLead(0)), "fresh is preselected");
             let (rows, _) = render(&mut app, 120, 30);
             let screen = rows.join("\n");
@@ -1872,10 +1926,10 @@ mod tests {
         });
         app.lead_restarter = std::sync::Arc::new(|| panic!("a refused restart never runs"));
         app.lead_fresh_starter = std::sync::Arc::new(|| panic!("a refused restart never runs"));
-        app.handle_normal(key(KeyCode::Char('L')));
+        ask_restart(&mut app);
         assert!(matches!(app.mode, Mode::Normal), "no question opens");
         assert!(app.toast.as_ref().is_some_and(|toast| toast.notice.headline == "Not restarted: the lead's input box holds text you have not sent." && toast.notice.tone == Tone::NotNow), "the plain reason as a toast, not an error");
-        app.handle_normal(key(KeyCode::Char('L')));
+        ask_restart(&mut app);
         assert_eq!(checked.load(std::sync::atomic::Ordering::SeqCst), 2, "a refused restart can be pressed again");
     }
 
