@@ -69,7 +69,11 @@ fn kept_file(state: &Path, address: &str) -> PathBuf {
 }
 
 fn load(state: &Path, address: &str) -> Option<Kept> {
-    let value: Value = serde_json::from_str(&std::fs::read_to_string(kept_file(state, address)).ok()?).ok()?;
+    load_from(&kept_file(state, address))
+}
+
+fn load_from(file: &Path) -> Option<Kept> {
+    let value: Value = serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()?;
     let field = |name: &str| value[name].as_str().map(str::to_string);
     Some(Kept { key: field("key")?, up: field("up")?, title: field("title")?, text: field("text")?, push: field("push")? })
 }
@@ -83,6 +87,26 @@ fn save(state: &Path, address: &str, kept: &Kept) {
 
 fn forget(state: &Path, address: &str) {
     let _ = std::fs::remove_file(kept_file(state, address));
+    let _ = std::fs::remove_file(said_file(state, address));
+}
+
+fn ended_dir(state: &Path) -> PathBuf {
+    state.join("vault-cards").join("ended")
+}
+
+// A record whose task ended without its card archived moves aside for the cards routine, so a later task at the same address starts without it.
+fn retire(state: &Path, address: &str) {
+    let from = kept_file(state, address);
+    if !from.is_file() {
+        return;
+    }
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_nanos());
+    let to = ended_dir(state).join(format!("{address}.{nanos}.json"));
+    let moved = std::fs::create_dir_all(ended_dir(state)).and_then(|_| std::fs::rename(&from, &to));
+    if let Err(error) = moved {
+        crate::vault_cli::warn_log(state, &format!("{address}: the card's vault record could not be set aside ({error}), so it was dropped"));
+        let _ = std::fs::remove_file(&from);
+    }
     let _ = std::fs::remove_file(said_file(state, address));
 }
 
@@ -203,6 +227,9 @@ fn once(state: &Path, address: &str, line: String) -> Option<String> {
 fn wanted_for(item: &Item, state: &Path, note: &str, card: impl Fn(&str) -> Option<String>) -> Option<(Kept, bool)> {
     let address = crate::peers::address(&item.name, &item.place);
     let push = Push::of(item.group());
+    if load(state, &address).is_some_and(|kept| kept.up != note) {
+        retire(state, &address);
+    }
     let kept = load(state, &address);
     if push == Push::Ready {
         let text = card(&address).filter(|text| !text.trim().is_empty())?;
@@ -233,12 +260,45 @@ fn due(items: &[Item], state: &Path) -> bool {
     })
 }
 
+fn kept_addresses(state: &Path) -> Vec<String> {
+    std::fs::read_dir(state.join("vault-cards")).into_iter().flatten().flatten().filter_map(|entry| entry.file_name().to_str()?.strip_suffix(".json").map(str::to_string)).collect()
+}
+
+fn ended(state: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(ended_dir(state)).into_iter().flatten().flatten().map(|entry| entry.path()).filter(|path| path.extension().is_some_and(|ext| ext == "json")).collect()
+}
+
+// Records of tasks that no longer exist go aside; each set-aside card still as kebbie wrote it goes to the archive, and a record is dropped once its note is archived, gone or not kebbie's.
+fn archive_ended(store: &dyn Store, state: &Path, linked: impl Fn(&str) -> Option<String>) -> Vec<String> {
+    for address in kept_addresses(state) {
+        if linked(&address).is_none() {
+            retire(state, &address);
+        }
+    }
+    ended(state).into_iter().filter_map(|file| {
+        let name = file.file_name()?.to_string_lossy().strip_suffix(".json")?.to_string();
+        let address = name.rsplit_once('.').map_or(name.as_str(), |(address, _)| address).to_string();
+        let kept = load_from(&file)?;
+        match close_kept(store, &kept, &address, true) {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&file);
+                let _ = std::fs::remove_file(said_file(state, &name));
+                None
+            }
+            Err(line) => once(state, &name, format!("{address}: {line}")),
+        }
+    }).collect()
+}
+
 pub fn sync_with(state: &Path, items: &[Item]) -> Vec<String> {
-    if !due(items, state) {
+    let linked = |address: &str| crate::task_note::linked(state, address);
+    let leftover = !ended(state).is_empty() || kept_addresses(state).iter().any(|address| linked(address).is_none());
+    if !leftover && !due(items, state) {
         return Vec::new();
     }
     let Some(cli) = crate::vault_cli::detect().filter(writes) else { return Vec::new() };
-    let lines = sync_items(&cli, state, items, |address| crate::task_note::linked(state, address), |address| crate::report::card_in(state, address).map(|card| card.text));
+    let mut lines = archive_ended(&cli, state, linked);
+    lines.extend(sync_items(&cli, state, items, linked, |address| crate::report::card_in(state, address).map(|card| card.text)));
     for line in &lines {
         crate::vault_cli::warn_log(state, line);
     }
@@ -261,18 +321,41 @@ pub fn tick(state: &Path) -> Vec<String> {
     sync_with(state, &crate::status::gather().unwrap_or_default())
 }
 
-// A task that ends takes its card note with it into the vault's archive; None when there was nothing to archive or it went.
+// Ok once the note is archived, gone or not kebbie's card; a set-aside record closes only a card still as kebbie wrote it, never a later task's at the same path.
+fn close_kept(store: &dyn Store, kept: &Kept, address: &str, as_written: bool) -> Result<(), String> {
+    match store.read(&kept.key) {
+        Ok((stored, _)) if ours(&stored, address) && (!as_written || body(&stored) == kept.text.trim()) => store.close(&kept.key).map(|_| ()).map_err(|error| format!("{} was not archived ({error})", kept.key)),
+        Ok(_) => Ok(()),
+        Err(error) if error.contains("no such note") => Ok(()),
+        Err(error) => Err(format!("{} was not archived, as kebbie could not read it ({error})", kept.key)),
+    }
+}
+
+// A task that ends takes its card note with it into the vault's archive; None when there was nothing to archive or it went, and a record not settled goes aside for the cards routine.
 pub fn archive(store: &dyn Store, state: &Path, address: &str) -> Option<String> {
     let kept = load(state, address)?;
-    forget(state, address);
-    let said = match store.read(&kept.key) {
-        Ok((stored, _)) if ours(&stored, address) => store.close(&kept.key).err().map(|error| format!("{} was not archived ({error})", kept.key)),
-        _ => None,
-    };
-    if let Some(line) = &said {
-        crate::vault_cli::warn_log(state, &format!("{address}: {line}"));
+    match close_kept(store, &kept, address, false) {
+        Ok(()) => {
+            forget(state, address);
+            None
+        }
+        Err(line) => {
+            retire(state, address);
+            crate::vault_cli::warn_log(state, &format!("{address}: {line}"));
+            Some(line)
+        }
     }
-    said
+}
+
+// The end of a task: its card is archived with the vault, and set aside for the cards routine without one.
+pub fn end(vault: Option<&Cli>, state: &Path, address: &str) -> Option<String> {
+    match vault {
+        Some(cli) => archive(cli, state, address),
+        None => {
+            retire(state, address);
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -486,6 +569,72 @@ mod tests {
         assert!(vault.read("Archive/web-billing-card.md").unwrap().0.contains("status: complete"));
         assert_eq!(archive(&vault, &state, "billing@web"), None, "nothing kept, nothing to archive");
         assert_eq!(vault.closed.borrow().len(), 1);
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    struct Down<'a>(&'a Vault, &'static str);
+
+    impl Store for Down<'_> {
+        fn read(&self, key: &str) -> Result<(String, String), String> {
+            if self.1 == "read" { Err("mindin: connection refused".to_string()) } else { self.0.read(key) }
+        }
+
+        fn write(&self, key: &str, etag: &str, text: &str) -> Result<Wrote, String> {
+            self.0.write(key, etag, text)
+        }
+
+        fn close(&self, key: &str) -> Result<String, String> {
+            if self.1 == "close" { Err("mindin: connection refused".to_string()) } else { self.0.close(key) }
+        }
+    }
+
+    #[test]
+    fn a_failed_archive_keeps_the_record_for_the_cards_routine_and_a_later_task_starts_clean() {
+        for failing in ["read", "close"] {
+            let (vault, state) = (Vault::default(), state(&format!("archive-{failing}")));
+            run(&vault, &state, &ready(), "## Built\nX.");
+            assert!(archive(&Down(&vault, failing), &state, "billing@web").is_some());
+            assert!(vault.closed.borrow().is_empty() && load(&state, "billing@web").is_none(), "{failing}: the next task at this address inherits nothing");
+            assert_eq!(ended(&state).len(), 1, "{failing}: the record waits aside");
+            assert!(archive_ended(&vault, &state, |_| Some(NOTE.to_string())).is_empty());
+            assert_eq!((vault.closed.borrow().clone(), ended(&state).len()), (vec![KEY.to_string()], 0), "{failing}: the cards routine archives it");
+            let _ = std::fs::remove_dir_all(&state);
+        }
+    }
+
+    #[test]
+    fn a_task_that_ends_with_the_vault_off_leaves_its_card_to_the_cards_routine() {
+        let (vault, state) = (Vault::default(), state("vault-off"));
+        run(&vault, &state, &ready(), "## Built\nOld task.");
+        assert_eq!(end(None, &state, "billing@web"), None);
+        assert!(load(&state, "billing@web").is_none());
+        assert!(archive_ended(&vault, &state, |_| Some(NOTE.to_string())).is_empty());
+        assert_eq!(*vault.closed.borrow(), [KEY]);
+        run(&vault, &state, &ready(), "## Built\nNew task.");
+        assert!(vault.read(KEY).unwrap().0.ends_with("New task.\n"), "a later task at the same address writes its own card");
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn a_set_aside_record_never_archives_a_later_tasks_card_at_the_same_path() {
+        let (vault, state) = (Vault::default(), state("later"));
+        run(&vault, &state, &ready(), "## Built\nOld task.");
+        retire(&state, "billing@web");
+        let later = vault.read(KEY).unwrap().0.replace("Old task.", "New task.");
+        vault.notes.borrow_mut().insert(KEY.to_string(), (later, 9));
+        assert!(archive_ended(&vault, &state, |_| Some(NOTE.to_string())).is_empty());
+        assert!(vault.closed.borrow().is_empty() && ended(&state).is_empty());
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn a_record_whose_task_is_gone_is_archived_by_the_cards_routine() {
+        let (vault, state) = (Vault::default(), state("gone"));
+        run(&vault, &state, &ready(), "## Built\nX.");
+        assert!(archive_ended(&vault, &state, |_| Some(NOTE.to_string())).is_empty());
+        assert!(vault.closed.borrow().is_empty(), "a running task keeps its card");
+        assert!(archive_ended(&vault, &state, |_| None).is_empty());
+        assert_eq!((vault.closed.borrow().clone(), load(&state, "billing@web")), (vec![KEY.to_string()], None));
         let _ = std::fs::remove_dir_all(&state);
     }
 
