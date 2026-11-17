@@ -5,37 +5,27 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
-- kebbie keeps its backlog style in the vault, where every agent that files a backlog item there gets it; your own .vault/styles/backlog.override.md replaces it, and kebbie backlog template shows the one that applies.
-- A backlog item is written in the short backlog style and keeps the shape it was written in; it is to write only while it is a draft, and its questions are read under Open questions whatever its shape.
-- A task's edits no longer wait for its vault note, and kebbie done closes the note whatever it holds: the note is the task's own memory.
-- A ready task's card opens with what changes for you when you push it and what proves it, and a question to you opens with the question.
-- A plan to approve opens with a short brief for you, in your vault's language.
-- The board's ↑ ↓ move task to task, and → steps onto the task's own subtask rows, where r opens the review on one and a accepts it; s there opens that subtask's card with its commits and files read or not.
-- A subtask row shows how many of its files you read and, under it, its first commit's subject.
-- The card beside the tasks and the card window are one card, with the read count on its first line.
-- n on the board asks only what you want done and in which repo, then starts it as a task named from your first words or adds it to the backlog.
-- kebbie job run builds or tests a task's worktree on another machine of your hub account, as an Xcode build on a Mac, once worker.enabled is on there.
-- A task ready to push keeps its card in your vault, in the Kebbie folder, linked up to its task note and archived with it when the task ends.
-- Tasks on one machine take turns to build: a build waits for a free one of builds.slots, the board shows "waiting for a build slot, 2nd" on a waiting task, kebbie tells it when its turn comes, and cargo runs with sccache so each dependency compiles once per machine.
-- kebbie job run takes a repo too big for the hub once its branch is on origin: the worker fetches the history from origin itself, and only what is not pushed goes through the hub.
+- The board stays usable while anything runs: a task's row says what runs and a toast says when it is done.
+- kebbie job run builds or tests a task's worktree on another machine of your hub account, such as an Xcode build on a Mac.
+- kebbie job run takes a repo too big for the hub once its branch is on origin.
+- Tasks on one machine take turns to build, and cargo runs with sccache so each dependency compiles once.
+- n on the board asks only what you want done, then starts it as a task or adds it to the backlog.
+- ↑ ↓ move task to task, and → steps onto a task's subtask rows, each showing its first commit and how much you read.
+- The card beside the tasks and the card window are one card, with your read count on its first line.
+- A ready task's card opens with what changes for you when you push and what proves it.
+- A ready task keeps its card in your vault's Kebbie folder, archived with the task.
+- A plan to approve opens with a short brief in your vault's language.
+- Backlog items follow a short style kept in your vault, which your own backlog.override.md replaces.
+- A task's edits no longer wait for its vault note, and kebbie done closes the note whatever it holds.
 
 ### Fixed
-- The board keeps taking keys while a task is reset, closed, rebased, staged, restarted or started and while the lead restarts: the task's row says what runs, a line bottom right says it too, a toast says when it is done, and an outcome that needs you waits until you close the window you have open. The Areas and Routines pages run their scripts, pushes and runs the same way.
-- Dropping a task, or the wait of a queued one, runs behind the board too; a drop that needs your yes to throw work away asks once you close the window you have open.
-- Whatever the board tells the lead or a running task, such as a push permission, away, a backlog line, an answer to an item's question, a write-out, a found item for a running task, a reopened review comment or new drafts in the backlog file, goes from behind the board, which keeps taking keys while the lead's box is busy.
-- Moving from task to task, stepping through subtasks and opening a plan to approve draw at once: a task's agent screen, a subtask's files and a plan from the vault are read behind the board and fill in when they come, and an open backlog item's card refreshes the same way.
-- p opens its push window at once, saying it reads the task's commits until they are there, and a reword or squash saved with ctrl-s does the same while git rewrites; esc closes either.
-- Accepting a subtask, tidying, opening the review, sending to review, starting or stopping a dev server or worker, a message to a task, a paste, going to a task's Space, tab to the lead, hiding its chat, opening a comment in the browser and starting a task from the Areas page all run behind the board, which keeps taking keys meanwhile.
-- On the Areas page, opening an area's Space, its push permission and the commits its push window shows are read behind the page; on the Routines page, a run's card and the routines after a run are too.
-- L answers at once: a small window says it checks the lead, and the restart question opens when the lead answers.
-- n and , open at once: the repos of herdr's Spaces are read behind the board and join the new task dialog's list when they come, and a new task's name is checked against the repo's branches as it starts.
-- A backlog item's card opens at once with a line saying it reads the item, and fills in when the read comes.
-- After kebbie update the open board and the keeper move to the new kebbie by themselves, also when herdr installed it in a new folder.
-- In a narrow board pane the Work page shows only the tasks, and the card opens in its window from s or ⏎, as before the card column.
-- Answers to a backlog item's questions from your phone reach the lead together, and a reworded question no longer turns an answer away.
-- The questions window sends no answer you did not pick, and approving a plan waits for you to press y, so stray Enters or arrow keys can no longer approve a plan.
-- A task's note line and the Backlog's ongoing notes stay on the board when one refresh cannot read the vault.
-- The board takes ↑ ↓ at once, without stalling for seconds while it reads the backlog.
+- Dropping, resetting, restarting and rebasing a task no longer freeze the board until they finish.
+- Moving between tasks and subtasks no longer stalls while a task's screen, files or plan are read.
+- After kebbie update the open board and the keeper move to the new kebbie by themselves.
+- In a narrow board pane the Work page shows only the tasks, and s or ⏎ opens the card.
+- Answers to a backlog item's questions from your phone reach the lead together.
+- Stray Enters or arrow keys in the questions window can no longer approve a plan or send an answer.
+- A task's note line and the Backlog's notes stay on the board when one refresh cannot read the vault.
 
 ## 0.39.1
 
