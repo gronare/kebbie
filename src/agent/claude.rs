@@ -465,12 +465,39 @@ pub(crate) fn reviewer_args(reviewer: &super::Reviewer) -> Vec<String> {
 const INVESTIGATOR_ALLOWED: [&str; 10] = ["Read", "Grep", "Glob", "WebSearch", "WebFetch", "mcp__plugin_vault_vault", "Bash(git log:*)", "Bash(git diff:*)", "Bash(git show:*)", "Bash(git grep:*)"];
 const INVESTIGATOR_KEBBIE: [&str; 10] = ["status", "messages", "obstacles", "subtasks", "steps", "backlog", "found", "peers", "docs", "areas"];
 
-// The investigator runs with the user's own settings, plugins and MCP servers, as every agent here does: the code, the vault and the web, and kebbie's reading commands.
-pub(crate) fn investigator_args(reviewer: &super::Reviewer, kebbie: &str) -> Vec<String> {
+const WRITER_ALLOWED: [&str; 16] = [
+    "Read", "Grep", "Glob", "WebSearch", "WebFetch",
+    "mcp__plugin_vault_vault__search", "mcp__plugin_vault_vault__read_file", "mcp__plugin_vault_vault__context", "mcp__plugin_vault_vault__template", "mcp__plugin_vault_vault__backlog", "mcp__plugin_vault_vault__list_files", "mcp__plugin_vault_vault__rules",
+    "Bash(git log:*)", "Bash(git diff:*)", "Bash(git show:*)", "Bash(git grep:*)",
+];
+const WRITER_KEBBIE: [&str; 3] = ["backlog", "backlog template", "areas"];
+const VAULT_WRITES: [&str; 9] = ["write_file", "append_file", "delete_file", "move_file", "close", "set_status", "backlog_add", "log_append", "init"];
+const KEBBIE_BACKLOG_WRITES: [&str; 4] = ["add", "filed", "write", "save"];
+
+// The writer's deny list holds even where the user's own settings allow these tools.
+fn writer_denied(kebbie: &str) -> Vec<String> {
+    let mut denied: Vec<String> = ["Edit", "Write", "NotebookEdit"].map(str::to_string).to_vec();
+    denied.extend(["mcp__plugin_vault_vault", "mcp__claude_ai_Vault"].iter().flat_map(|server| VAULT_WRITES.map(|tool| format!("{server}__{tool}"))));
+    denied.extend(KEBBIE_BACKLOG_WRITES.map(|command| format!("Bash({kebbie} backlog {command}:*)")));
+    denied
+}
+
+// A helper runs with the user's own settings, plugins and MCP servers, as every agent here does: the investigator gets the code, the vault and the web and kebbie's reading commands, the writer only what reads.
+pub(crate) fn investigator_args(reviewer: &super::Reviewer, kebbie: &str, helper: super::Helper) -> Vec<String> {
     let super::Reviewer { model, effort, prompt, .. } = *reviewer;
     let mut args: Vec<String> = ["-p", "--output-format", "text", "--no-session-persistence", "--permission-mode", "dontAsk", "--allowedTools"].map(str::to_string).to_vec();
-    args.extend(INVESTIGATOR_ALLOWED.map(str::to_string));
-    args.extend(INVESTIGATOR_KEBBIE.map(|command| format!("Bash({kebbie} {command}:*)")));
+    match helper {
+        super::Helper::Investigator => {
+            args.extend(INVESTIGATOR_ALLOWED.map(str::to_string));
+            args.extend(INVESTIGATOR_KEBBIE.map(|command| format!("Bash({kebbie} {command}:*)")));
+        }
+        super::Helper::Writer => {
+            args.extend(WRITER_ALLOWED.map(str::to_string));
+            args.extend(WRITER_KEBBIE.map(|command| format!("Bash({kebbie} {command})")));
+            args.push("--disallowedTools".to_string());
+            args.extend(writer_denied(kebbie));
+        }
+    }
     args.extend(["--append-system-prompt-file".to_string(), prompt.to_string_lossy().to_string()]);
     if let Some(model) = model {
         args.extend(["--model".to_string(), model.to_string()]);

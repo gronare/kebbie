@@ -250,12 +250,13 @@ impl Queue {
     }
 }
 
-// A helper the keeper started (the investigator, the writer) runs the profile's agent with the investigator's tools in cwd; its answer is Claude's output or Codex's last message.
-pub fn ask_helper(profile: &crate::profiles::Profile, prompt: &Path, answer: &Path, cwd: &Path, brief: &str, kebbie: &str, timeout: std::time::Duration) -> Result<String> {
+// A helper the keeper started (the investigator, the writer) runs the profile's agent with that helper's tools in cwd; its answer is Claude's output or Codex's last message.
+#[allow(clippy::too_many_arguments)]
+pub fn ask_helper(helper: crate::agent::Helper, profile: &crate::profiles::Profile, prompt: &Path, answer: &Path, cwd: &Path, brief: &str, kebbie: &str, timeout: std::time::Duration) -> Result<String> {
     let _ = fs::remove_file(answer);
     let agent = profile.agent;
     let reader = crate::agent::Reviewer { model: profile.model.as_deref(), effort: profile.effort.as_deref(), settings: prompt, prompt, rules: None, docs: None, answer };
-    let (program, args) = agent.investigator_command(&reader, kebbie);
+    let (program, args) = agent.investigator_command(&reader, kebbie, helper);
     let bin = match agent {
         crate::agent::Agent::Codex => codex_from_keeper()?,
         crate::agent::Agent::Claude => claude_from_keeper()?,

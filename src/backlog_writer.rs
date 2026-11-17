@@ -166,6 +166,12 @@ pub fn run() -> Result<String> {
     }
 }
 
+const WRITER_ROLE: &str = "You are kebbie's writer. You write nothing: no vault note, no file, no backlog item, no status, no `kebbie backlog add`, `filed`, `write` or `save`. The skill's steps that mark an item drafting or save it are the lead's, never yours. Search, read and research as the skill says, then return the written item as your answer, `# <title>` on its first line and its body after it; the lead saves it.";
+
+fn system_prompt(skill: &str) -> String {
+    format!("{WRITER_ROLE}\n\n{}", skill.trim_end())
+}
+
 fn write(key: &str, ask: &Ask, name: &str) -> Result<String> {
     let profile = profile(&crate::profiles::dir(), name)?;
     let kebbie = crate::peers::kebbie_command()?;
@@ -173,8 +179,8 @@ fn write(key: &str, ask: &Ask, name: &str) -> Result<String> {
     let roles = crate::lead::roles_dir()?;
     let prompt = roles.join(format!("backlog-{key}.write.md"));
     let text = fs::read_to_string(&skill).map_err(|error| format!("{}: {error}", skill.display()))?;
-    crate::state::write(&prompt, text.trim_end().to_string() + &crate::profiles::role_section(&profile)?)?;
-    trusted_spawn::ask_helper(&profile, &prompt, &roles.join(format!("backlog-{key}.write.answer")), &ask.cwd, &brief(&ask.request, &kebbie), &kebbie, TIMEOUT)
+    crate::state::write(&prompt, system_prompt(&text) + &crate::profiles::role_section(&profile)?)?;
+    trusted_spawn::ask_helper(crate::agent::Helper::Writer, &profile, &prompt, &roles.join(format!("backlog-{key}.write.answer")), &ask.cwd, &brief(&ask.request, &kebbie), &kebbie, TIMEOUT)
 }
 
 #[cfg(test)]
@@ -212,6 +218,24 @@ mod tests {
         let text = review_text("The user asks you to write out \"Retry\".", Path::new("/s/write-out/ab.md"), WRITER);
         assert!(text.starts_with("kebbie's writer (writer) wrote out the backlog item of this request for you to review, in /s/write-out/ab.md.") && text.contains("keep each one only the user can answer") && text.ends_with("The request:\n\nThe user asks you to write out \"Retry\"."), "{text}");
         assert!(brief("Write out \"Retry\"", "/k").contains("Save nothing and mark nothing"));
+    }
+
+    #[test]
+    fn the_writer_can_only_read_and_is_told_it_writes_nothing() {
+        let prompt = Path::new("/state/roles/backlog-ab.write.md");
+        let reader = crate::agent::Reviewer { model: None, effort: None, settings: prompt, prompt, rules: None, docs: None, answer: Path::new("/a") };
+        let (_, args) = crate::agent::Agent::Claude.investigator_command(&reader, "/bin/kebbie", crate::agent::Helper::Writer);
+        let split = args.iter().position(|arg| arg == "--disallowedTools").expect("a deny list");
+        let (allowed, denied) = (&args[..split], &args[split..]);
+        for wanted in ["mcp__plugin_vault_vault__search", "mcp__plugin_vault_vault__read_file", "WebFetch", "WebSearch", "Bash(git log:*)", "Bash(/bin/kebbie backlog)", "Bash(/bin/kebbie backlog template)", "Bash(/bin/kebbie areas)"] {
+            assert!(allowed.iter().any(|arg| arg == wanted), "{wanted}: {args:?}");
+        }
+        assert!(!allowed.iter().any(|arg| arg == "mcp__plugin_vault_vault" || arg.contains("write_file") || arg.contains("set_status") || arg.ends_with(":*)") && arg.contains("kebbie")), "{allowed:?}");
+        for refused in ["mcp__plugin_vault_vault__write_file", "mcp__plugin_vault_vault__close", "mcp__plugin_vault_vault__set_status", "Bash(/bin/kebbie backlog add:*)", "Bash(/bin/kebbie backlog filed:*)", "Write", "Edit"] {
+            assert!(denied.iter().any(|arg| arg == refused), "{refused}: {denied:?}");
+        }
+        let text = system_prompt("# Write a backlog item\n");
+        assert!(text.starts_with("You are kebbie's writer. You write nothing") && text.contains("return the written item") && text.ends_with("# Write a backlog item"), "{text}");
     }
 
     #[test]

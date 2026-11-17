@@ -57,6 +57,12 @@ pub struct TaskFiles<'a> {
     pub codex_roots: &'a [String],
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Helper {
+    Investigator,
+    Writer,
+}
+
 pub struct Reviewer<'a> {
     pub model: Option<&'a str>,
     pub effort: Option<&'a str>,
@@ -242,9 +248,9 @@ impl Agent {
         }
     }
 
-    pub fn investigator_command(self, reviewer: &Reviewer, kebbie: &str) -> (&'static str, Vec<String>) {
+    pub fn investigator_command(self, reviewer: &Reviewer, kebbie: &str, helper: Helper) -> (&'static str, Vec<String>) {
         match self {
-            Agent::Claude => ("claude", claude::investigator_args(reviewer, kebbie)),
+            Agent::Claude => ("claude", claude::investigator_args(reviewer, kebbie, helper)),
             Agent::Codex => ("codex", codex::investigator_args(reviewer)),
         }
     }
