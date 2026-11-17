@@ -275,6 +275,7 @@ struct App {
     subtask_io: subtasks::Io,
     reads: subtasks::Reads,
     loads: subtasks::Loads,
+    space_repos: crate::behind::Reader<Vec<PathBuf>>,
     new_io: new_task::Io,
     beside: beside::Beside,
 }
@@ -479,15 +480,20 @@ impl App {
         self.backlog_rows().len()
     }
 
-    fn repo_named(&self, name: &str) -> Option<PathBuf> {
+    fn repo_named(&mut self, name: &str) -> Option<PathBuf> {
         self.tasks.iter().filter_map(|item| item.repo.clone()).find(|repo| name_of(repo) == name)
-            .or_else(|| herdr::workspaces().ok()?.iter().filter_map(|workspace| workspace["worktree"]["repo_root"].as_str())
-                .map(PathBuf::from).find(|repo| name_of(repo) == name))
+            .or_else(|| self.space_repos(Duration::from_secs(60)).into_iter().find(|repo| name_of(repo) == name))
     }
 
-    fn any_repo(&self) -> PathBuf {
+    // The repos of herdr's Spaces, read on a thread; until the first read answers there are none.
+    fn space_repos(&mut self, wait: Duration) -> Vec<PathBuf> {
+        self.space_repos.get("spaces", wait, || herdr::workspaces().map(|workspaces| workspaces.iter().filter_map(|workspace| workspace["worktree"]["repo_root"].as_str()).map(PathBuf::from).collect()).unwrap_or_default()).unwrap_or_default()
+    }
+
+    fn any_repo(&mut self) -> PathBuf {
+        let first = self.checkouts.first().map(|checkout| checkout.name.clone());
         self.selected_task().and_then(|item| item.repo)
-            .or_else(|| self.checkouts.first().and_then(|checkout| self.repo_named(&checkout.name)))
+            .or_else(|| first.and_then(|name| self.repo_named(&name)))
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
     }
 
@@ -518,7 +524,8 @@ impl App {
     }
 
     fn open_settings(&mut self) {
-        let repo = self.selected_task().and_then(|item| item.repo).or_else(|| self.checkouts.first().and_then(|checkout| self.repo_named(&checkout.name)));
+        let first = self.checkouts.first().map(|checkout| checkout.name.clone());
+        let repo = self.selected_task().and_then(|item| item.repo).or_else(|| first.and_then(|name| self.repo_named(&name)));
         self.settings.open(repo);
         self.page = Page::Settings;
     }
@@ -1244,7 +1251,7 @@ impl App {
             agent_offer: None, agent_mode: std::sync::Arc::new(|| config::agent_updates_in(&config::path())), installer: agent_updates::default_install(),
             filter: None, ctrl_c: None, go_again: None, notice: None, lead_chat: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), lead_fresh_starter: std::sync::Arc::new(crate::lead_restart::fresh_now), lead_checker: std::sync::Arc::new(crate::lead::restart_refusal), lead_restarted: std::sync::Arc::default(), lead_context: None, restart_why: String::new(), devices: Vec::new(), subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
             comments: Vec::new(), comment_panel: Default::default(), comment_dir: None, copier: comments::default_copier(), reopener: comments::default_reopener(), pusher: jobs::live_pusher(), jobs: Vec::new(), outcomes: Vec::new(), dropper: jobs::live_dropper(), lead_teller: std::sync::Arc::new(crate::backlog_file::tell_lead), telling_drafts: Default::default(),
-            subtask_row: None, subtask_io: Default::default(), reads: Default::default(), loads: Default::default(), new_io: Default::default(), beside: Default::default(),
+            subtask_row: None, subtask_io: Default::default(), reads: Default::default(), loads: Default::default(), space_repos: Default::default(), new_io: Default::default(), beside: Default::default(),
         }
     }
 }
@@ -1272,6 +1279,8 @@ pub fn run(overlay: bool) -> Result<String> {
     app.reads.spawn();
     app.loads.spawn();
     app.screens.spawn();
+    app.space_repos.spawn();
+    app.space_repos(Duration::ZERO);
     app.plan_reads.spawn();
     app.detail_results = Some(results);
     (app.image_requests, app.image_results) = spawn_decoder().map_or((None, None), |(requests, results)| (Some(requests), Some(results)));
@@ -1397,6 +1406,10 @@ pub fn run(overlay: bool) -> Result<String> {
             changed |= app.reads.take();
             changed |= app.loads.take();
             changed |= app.screens.take();
+            if app.space_repos.take() {
+                app.add_space_repos();
+                changed = true;
+            }
             changed |= app.plan_reads.take();
             changed |= app.take_item_card_read();
             if let Some(Effect::Left) = app.areas.tick(app.page == Page::Areas) {

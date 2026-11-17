@@ -133,16 +133,24 @@ pub(super) fn draw(frame: &mut Frame, new: &NewTask) {
 impl App {
     // n on the Work page: the dialog opens on the selected task's repo, else the one a new task starts in today.
     pub(super) fn open_new_task(&mut self) {
+        self.space_repos(std::time::Duration::ZERO);
         let first = self.any_repo();
-        let mut repos = vec![first.clone()];
-        let known = self.tasks.iter().filter_map(|item| item.repo.clone()).chain(self.checkouts.iter().filter_map(|checkout| self.repo_named(&checkout.name)));
+        let backlog = crate::config::filing(&self.sources).is_some();
+        self.mode = Mode::NewTask(Box::new(NewTask { text: String::new(), repos: vec![first], repo: 0, choice: None, backlog, failed: None }));
+        self.add_space_repos();
+    }
+
+    // The dialog opens at once; the repos of the board's checkouts join its list as herdr's Spaces are read.
+    pub(super) fn add_space_repos(&mut self) {
+        let checkouts: Vec<String> = self.checkouts.iter().map(|checkout| checkout.name.clone()).collect();
+        let mut known: Vec<PathBuf> = self.tasks.iter().filter_map(|item| item.repo.clone()).collect();
+        known.extend(checkouts.iter().filter_map(|name| self.repo_named(name)));
+        let Mode::NewTask(new) = &mut self.mode else { return };
         for repo in known {
-            if !repos.contains(&repo) {
-                repos.push(repo);
+            if !new.repos.contains(&repo) {
+                new.repos.push(repo);
             }
         }
-        let backlog = crate::config::filing(&self.sources).is_some();
-        self.mode = Mode::NewTask(Box::new(NewTask { text: String::new(), repos, repo: 0, choice: None, backlog, failed: None }));
     }
 
     pub(super) fn handle_new_task(&mut self, mut new: Box<NewTask>, key: KeyEvent) {
@@ -180,10 +188,12 @@ impl App {
         let job = match choice {
             Choice::Start => {
                 let tasks: Vec<String> = self.tasks.iter().filter(|item| item.repo.as_ref() == Some(&repo)).map(|item| item.name.clone()).collect();
-                let name = task_name(&text, |name| tasks.iter().any(|task| task == name) || branch_exists(&repo, name));
-                self.subject = Some(super::notices::Subject { kind: "start".to_string(), title: name.clone(), task: false });
-                let (start, started) = (self.new_io.start.clone(), name.clone());
-                self.task_in_background(&name, None, "starting", format!("Starting {name}"), move || start(&repo, &started, &text))
+                let (shown, start) = (task_name(&text, |name| tasks.iter().any(|task| task == name)), self.new_io.start.clone());
+                self.subject = Some(super::notices::Subject { kind: "start".to_string(), title: shown.clone(), task: false });
+                self.task_in_background(&shown, None, "starting", format!("Starting {shown}"), move || {
+                    let name = task_name(&text, |name| tasks.iter().any(|task| task == name) || branch_exists(&repo, name));
+                    start(&repo, &name, &text)
+                })
             }
             Choice::Backlog => {
                 self.subject = Some(super::notices::Subject::plain("backlog"));
