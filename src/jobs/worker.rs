@@ -94,6 +94,11 @@ fn all_queued(dir: &Path) -> Vec<(PathBuf, Queued)> {
     }).collect()
 }
 
+// A job that waited in the queue longer than the protocol lets a job live is refused, not run long after its master stopped asking.
+pub fn stale(queued: &Queued, now: u64) -> bool {
+    now.saturating_sub(queued.at) > kebbie_hub_protocol::Kind::Job.max_ttl()
+}
+
 pub fn next_queued(dir: &Path) -> Option<(PathBuf, Queued)> {
     all_queued(dir).into_iter().next()
 }
@@ -527,7 +532,10 @@ fn serve(state: &Path) {
                 Err(error) => log(&format!("jobs: the hub did not take worker.enabled = {enabled}: {error}")),
             }
             if let Some((file, queued)) = next_queued(&dir) {
-                let note = if enabled { run_one(&dir, &identity, &account, &client, &super::data_dir(), &file, &queued, &halted) } else { refuse(&dir, &identity, &account, &client, &queued, &format!("{} runs no jobs: worker.enabled is off there", identity.name)) };
+                let now = crate::messages::now();
+                let note = if stale(&queued, now) {
+                    refuse(&dir, &identity, &account, &client, &queued, &format!("it waited {} hours in {}'s queue, past the day a job lives", now.saturating_sub(queued.at) / 3_600, identity.name))
+                } else if enabled { run_one(&dir, &identity, &account, &client, &super::data_dir(), &file, &queued, &halted) } else { refuse(&dir, &identity, &account, &client, &queued, &format!("{} runs no jobs: worker.enabled is off there", identity.name)) };
                 let _ = std::fs::remove_file(file);
                 log(&note);
             }

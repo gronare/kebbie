@@ -224,6 +224,14 @@ fn a_job_that_could_not_be_queued_is_queued_when_the_inbox_hands_it_over_again()
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[test]
+fn a_job_that_waited_in_the_queue_past_the_day_a_job_lives_is_refused_not_run() {
+    let job = Job { repo: "app".into(), name: "build".into(), command: "true".into(), task: "billing".into(), commit: "a".repeat(40), base: None, bundle: Vec::new(), on: None };
+    let queued = Queued { from: machine(1), from_name: "devbox".into(), id: cluster::new_id().unwrap(), job, at: 1_000, seq: 0 };
+    assert!(!worker::stale(&queued, 1_000 + 86_400));
+    assert!(worker::stale(&queued, 1_001 + 86_400));
+}
+
 fn sent(worker: Id) -> Sent {
     Sent { id: cluster::new_id().unwrap(), worker, worker_name: "studio".into(), repo: "app".into(), name: "build".into(), commit: "a".repeat(40), base: None, blobs: Vec::new(), at: 100, pid: std::process::id() }
 }
