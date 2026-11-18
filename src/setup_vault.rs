@@ -1,8 +1,9 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
+use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Instant;
 
@@ -116,7 +117,10 @@ struct Running {
     receiver: Receiver<Msg>,
     answers: Sender<String>,
     child: Arc<AtomicU32>,
+    cancelled: Arc<AtomicBool>,
 }
+
+static INSTALLING: Mutex<()> = Mutex::new(());
 
 pub struct Job {
     pub plan: Plan,
@@ -143,11 +147,12 @@ impl Job {
         let (sender, receiver) = mpsc::channel();
         let (answers, asked) = mpsc::channel();
         let child = Arc::new(AtomicU32::new(0));
+        let cancelled = Arc::new(AtomicBool::new(false));
         let plan = self.plan.clone();
-        let pid = child.clone();
-        std::thread::spawn(move || work(&plan, &sender, &asked, &pid));
+        let (pid, stop) = (child.clone(), cancelled.clone());
+        std::thread::spawn(move || work(&plan, &sender, &asked, &pid, &stop));
         self.state = if self.plan.install.is_some() { State::Installing } else { State::Starting };
-        self.running = Some(Running { receiver, answers, child });
+        self.running = Some(Running { receiver, answers, child, cancelled });
     }
 
     pub fn poll(&mut self) {
@@ -201,12 +206,28 @@ impl Job {
     }
 }
 
+impl Job {
+    fn cancel(&mut self) {
+        let Some(running) = &self.running else { return };
+        running.cancelled.store(true, Ordering::SeqCst);
+        let pid = running.child.load(Ordering::SeqCst);
+        if pid != 0 && !matches!(self.state, State::Done | State::Failed(_)) {
+            stop(pid);
+        }
+    }
+}
+
 impl Drop for Job {
     fn drop(&mut self) {
-        let pid = self.running.as_ref().map_or(0, |running| running.child.load(Ordering::SeqCst));
-        if pid != 0 && !matches!(self.state, State::Done | State::Failed(_)) {
-            unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
-        }
+        self.cancel();
+    }
+}
+
+// The installer leads its own process group, so its curl and sh go with it; mindin's sign-in is a plain child.
+fn stop(pid: u32) {
+    unsafe {
+        libc::kill(-(pid as libc::pid_t), libc::SIGTERM);
+        libc::kill(pid as libc::pid_t, libc::SIGTERM);
     }
 }
 
@@ -247,7 +268,20 @@ fn version(program: &str) -> String {
 }
 
 pub fn install(install: &Install, said: &dyn Fn(String)) -> Result<Mindin, String> {
-    let mut child = Command::new("sh").args(["-c", &format!("({}) 2>&1", install.script)]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().map_err(|error| format!("sh: {error}"))?;
+    install_watched(install, said, &AtomicU32::new(0), &AtomicBool::new(false))
+}
+
+// One installer at a time: one a cancelled job left behind is waited out before the next starts.
+fn install_watched(install: &Install, said: &dyn Fn(String), pid: &AtomicU32, cancelled: &AtomicBool) -> Result<Mindin, String> {
+    let _alone = INSTALLING.lock().unwrap_or_else(PoisonError::into_inner);
+    if cancelled.load(Ordering::SeqCst) {
+        return Err("mindin's install was cancelled".to_string());
+    }
+    let mut child = Command::new("sh").args(["-c", &format!("({}) 2>&1", install.script)]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).process_group(0).spawn().map_err(|error| format!("sh: {error}"))?;
+    pid.store(child.id(), Ordering::SeqCst);
+    if cancelled.load(Ordering::SeqCst) {
+        stop(child.id());
+    }
     let mut last = String::new();
     if let Some(stdout) = child.stdout.take() {
         for line in BufReader::new(stdout).lines().map_while(std::result::Result::ok) {
@@ -258,7 +292,9 @@ pub fn install(install: &Install, said: &dyn Fn(String)) -> Result<Mindin, Strin
             }
         }
     }
-    let status = child.wait().map_err(|error| format!("sh: {error}"))?;
+    let status = child.wait().map_err(|error| format!("sh: {error}"));
+    pid.store(0, Ordering::SeqCst);
+    let status = status?;
     if !status.success() {
         let cause = if last.is_empty() { format!("it exited with status {}", status.code().unwrap_or(-1)) } else { last };
         return Err(format!("mindin's installer stopped: {cause}"));
@@ -268,8 +304,11 @@ pub fn install(install: &Install, said: &dyn Fn(String)) -> Result<Mindin, Strin
     Ok(Mindin { version: version(&program), command: vec![program] })
 }
 
-fn sign_in(command: &[String], flags: &[String], sender: &Sender<Msg>, asked: &Receiver<String>, pid: &AtomicU32) {
+fn sign_in(command: &[String], flags: &[String], sender: &Sender<Msg>, asked: &Receiver<String>, pid: &AtomicU32, cancelled: &AtomicBool) {
     let Some((program, rest)) = command.split_first() else { return };
+    if cancelled.load(Ordering::SeqCst) {
+        return;
+    }
     let spawned = Command::new(program).args(rest).arg("setup").args(flags).arg("--json").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
     let mut child = match spawned {
         Ok(child) => child,
@@ -279,6 +318,9 @@ fn sign_in(command: &[String], flags: &[String], sender: &Sender<Msg>, asked: &R
         }
     };
     pid.store(child.id(), Ordering::SeqCst);
+    if cancelled.load(Ordering::SeqCst) {
+        stop(child.id());
+    }
     let stderr = child.stderr.take().map(|mut stderr| std::thread::spawn(move || {
         let mut said = String::new();
         let _ = stderr.read_to_string(&mut said);
@@ -305,12 +347,15 @@ fn sign_in(command: &[String], flags: &[String], sender: &Sender<Msg>, asked: &R
     let _ = sender.send(Msg::Ended { code, stderr });
 }
 
-fn work(plan: &Plan, sender: &Sender<Msg>, asked: &Receiver<String>, pid: &AtomicU32) {
+fn work(plan: &Plan, sender: &Sender<Msg>, asked: &Receiver<String>, pid: &AtomicU32, cancelled: &AtomicBool) {
     let mut command = plan.command.clone();
     if let Some(script) = &plan.install {
-        let installed = install(script, &|line| {
+        let installed = install_watched(script, &|line| {
             let _ = sender.send(Msg::Installing(line));
-        });
+        }, pid, cancelled);
+        if cancelled.load(Ordering::SeqCst) {
+            return;
+        }
         command = installed.as_ref().ok().map(|mindin| mindin.command.clone()).or(command);
         let failed = installed.is_err();
         let _ = sender.send(Msg::Installed(installed));
@@ -319,7 +364,7 @@ fn work(plan: &Plan, sender: &Sender<Msg>, asked: &Receiver<String>, pid: &Atomi
         }
     }
     if let (Some(flags), Some(command)) = (&plan.sign_in, command) {
-        sign_in(&command, flags, sender, asked, pid);
+        sign_in(&command, flags, sender, asked, pid, cancelled);
     }
 }
 
@@ -364,6 +409,36 @@ mod tests {
         assert_eq!(job.mindin.as_ref().map(|mindin| mindin.version.as_str()), Some("0.21.0"));
         assert_eq!((job.signed.as_ref().map(|signed| signed.vault_name.as_str()), job.moved), (Some("Work"), Some(4)));
         assert_eq!(std::fs::read_to_string(dir.join("answer")).unwrap().trim(), "yes");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_job_left_during_its_install_never_signs_in_and_reports_nothing() {
+        let dir = crate::sh::test_dir("setup-vault-cancel");
+        let bin = dir.join("bin");
+        let (signed, began) = (dir.join("signed"), dir.join("began"));
+        let fake = format!("#!/bin/sh\n[ \"$1\" = --version ] && echo 'mindin 0.21.0' && exit 0\ntouch '{}'\n", signed.display());
+        let script = format!("trap '' TERM; touch '{began}'; echo installing; sleep 1; mkdir -p '{0}' && cat > '{0}/mindin' <<'EOF'\n{fake}EOF\nchmod +x '{0}/mindin'", bin.display(), began = began.display());
+        let mut job = Job::new(Plan { install: Some(Install { script, lookup: vec![bin.clone()] }), command: None, sign_in: Some(vec!["--server".to_string(), "https://old.example".to_string()]) });
+        job.launch();
+        let waited = Instant::now();
+        while !began.exists() {
+            assert!(waited.elapsed().as_secs() < 20, "the installer never started");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        job.cancel();
+        let running = job.running.take().expect("it runs");
+        let mut said = Vec::new();
+        loop {
+            match running.receiver.recv_timeout(std::time::Duration::from_secs(20)) {
+                Ok(msg) => said.push(msg),
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => panic!("the work never ended"),
+            }
+        }
+        assert!(bin.join("mindin").exists(), "the installer that ignores the stop runs to its end");
+        assert!(!signed.exists(), "the cancelled job never signs in");
+        assert!(!said.iter().any(|msg| matches!(msg, Msg::Installed(_) | Msg::Said(_))), "nothing settles after it was left: {said:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
