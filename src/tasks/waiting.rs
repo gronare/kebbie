@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -23,6 +23,8 @@ pub(crate) struct Waiting {
     pub by: String,
     pub at: u64,
     pub gone_since: Option<u64>,
+    pub unlisted_since: Option<u64>,
+    pub unlisted_told: bool,
 }
 
 impl Waiting {
@@ -31,6 +33,7 @@ impl Waiting {
             "address": self.address, "repo": self.repo,
             "on": self.on.iter().map(|dep| json!({ "address": dep.address, "repo": dep.repo })).collect::<Vec<_>>(),
             "then": self.then, "by": self.by, "at": self.at, "gone_since": self.gone_since,
+            "unlisted_since": self.unlisted_since, "unlisted_told": self.unlisted_told,
         })
     }
 
@@ -45,6 +48,8 @@ impl Waiting {
             by,
             at: value["at"].as_u64()?,
             gone_since: value["gone_since"].as_u64(),
+            unlisted_since: value["unlisted_since"].as_u64(),
+            unlisted_told: value["unlisted_told"].as_bool().unwrap_or(false),
         })
     }
 
@@ -160,7 +165,7 @@ pub(crate) fn wait_in(state: &Path, caller: &Caller, asked: &Asked, known: &Know
         return Err(format!("{address} cannot wait in a circle: {}", path.join(" → ")));
     }
     let then = then.map(str::trim).filter(|then| !then.is_empty()).map(str::to_string);
-    let wait = Waiting { address: address.to_string(), repo: repo.to_path_buf(), on: deps, then, by: by.to_string(), at: now, gone_since: None };
+    let wait = Waiting { address: address.to_string(), repo: repo.to_path_buf(), on: deps, then, by: by.to_string(), at: now, gone_since: None, unlisted_since: None, unlisted_told: false };
     save(state, &wait)?;
     let main = default_branch(repo).map_or("the default branch".to_string(), |branch| branch.trim_start_matches("origin/").to_string());
     let then = wait.then.as_deref().map_or(String::new(), |then| format!(" Once they land: {then}."));
@@ -232,10 +237,22 @@ pub(crate) fn tick_in(state: &Path, facts: &Facts, now: u64, resume: Resume, tel
     let Some(_lock) = Lock::in_dir(&dir(state), false) else { return Vec::new() };
     let mut notes = Vec::new();
     for wait in all(state) {
+        if !facts.open.contains(&wait.address) && facts.unlisted.contains(&wait.repo) {
+            unlisted(state, wait, now, tell, &mut notes);
+            continue;
+        }
         if !facts.open.contains(&wait.address) {
             forget(state, &wait);
             continue;
         }
+        let wait = match wait.unlisted_since {
+            Some(_) => {
+                let listed = Waiting { unlisted_since: None, unlisted_told: false, ..wait };
+                let _ = save(state, &listed);
+                listed
+            }
+            None => wait,
+        };
         match next(&wait, facts, now) {
             Next::Wait if wait.gone_since.is_some() => {
                 let _ = save(state, &Waiting { gone_since: None, ..wait });
@@ -271,6 +288,21 @@ pub(crate) fn tick_in(state: &Path, facts: &Facts, now: u64, resume: Resume, tel
         }
     }
     notes
+}
+
+// A repo git cannot list says nothing about whether the waiter is gone, so its wait stays; the lead hears once it outlasts the grace a task waited for gets.
+fn unlisted(state: &Path, wait: Waiting, now: u64, tell: &mut dyn FnMut(Told), notes: &mut Vec<String>) {
+    match wait.unlisted_since {
+        None => {
+            let _ = save(state, &Waiting { unlisted_since: Some(now), ..wait });
+        }
+        Some(since) if !wait.unlisted_told && now.saturating_sub(since) >= after::GRACE => {
+            tell(Told::Lead { text: format!("kebbie has not been able to list the worktrees of {} for {} seconds, so it cannot tell whether {} is still open. It keeps its wait for {} until it can; `git worktree list` in that repo shows what fails.", wait.repo.display(), now.saturating_sub(since), wait.address, wait.names()), asks: true });
+            notes.push(format!("waiting: {}: its repo cannot be listed", wait.address));
+            let _ = save(state, &Waiting { unlisted_told: true, ..wait });
+        }
+        Some(_) => {}
+    }
 }
 
 fn main_of(repo: &Path) -> String {
@@ -402,10 +434,10 @@ pub(crate) fn mark(state: &Path, log: &[Message], items: &mut [crate::status::It
     let address = |item: &crate::status::Item| peers::address(&item.name, &item.place);
     let waits = all(state);
     if !waits.is_empty() {
-        let open: std::collections::HashSet<String> = items.iter().filter(|item| item.git.is_some()).map(address).collect();
+        let open: HashSet<String> = items.iter().filter(|item| item.git.is_some()).map(address).collect();
         let queued = items.iter().filter(|item| item.queued.is_some()).map(address).collect();
         let ci = crate::ci::all(state).into_iter().map(|watch| (watch.address.clone(), watch.running())).collect();
-        let facts = Facts { ends: after::latest_ends(log), open, queued, ci };
+        let facts = Facts { ends: after::latest_ends(log), open, queued, ci, unlisted: HashSet::new() };
         let shown: Vec<(String, WaitsOn)> = waits.iter().map(|wait| {
             let deps: Vec<(String, String, String)> = wait.on.iter().map(|dep| {
                 let item = items.iter().find(|item| item.git.is_some() && address(item) == dep.address);
@@ -458,7 +490,7 @@ mod tests {
     }
 
     fn facts(ends: &[Message], open: &[&str]) -> Facts {
-        Facts { ends: latest_ends(ends), open: open.iter().map(|address| address.to_string()).collect(), queued: HashSet::new(), ci: HashMap::new() }
+        Facts { ends: latest_ends(ends), open: open.iter().map(|address| address.to_string()).collect(), queued: HashSet::new(), ci: HashMap::new(), unlisted: HashSet::new() }
     }
 
     fn asked<'a>(address: &'a str, on: &'a [&'a str], then: Option<&'a str>) -> Asked<'a> {
@@ -501,7 +533,7 @@ mod tests {
         use crate::next::tests::{asking, named, queued_after, ready};
         use crate::status::Group;
         let state = crate::sh::test_dir("waiting-shown");
-        save(&state, &Waiting { address: "billing@web".to_string(), repo: PathBuf::from("/repos/web"), on: vec![Dep { address: "rounding@web".to_string(), repo: PathBuf::from("/repos/web") }], then: Some("use the rounding field".to_string()), by: "lead".to_string(), at: 100, gone_since: None }).unwrap();
+        save(&state, &Waiting { address: "billing@web".to_string(), repo: PathBuf::from("/repos/web"), on: vec![Dep { address: "rounding@web".to_string(), repo: PathBuf::from("/repos/web") }], then: Some("use the rounding field".to_string()), by: "lead".to_string(), at: 100, gone_since: None, unlisted_since: None, unlisted_told: false }).unwrap();
         crate::status::keep_title(&state, "rounding@web", "Rounding field");
         let mut rounding = ready("rounding", "web", 10);
         rounding.title = Some("Rounding field".to_string());
@@ -529,7 +561,7 @@ mod tests {
     fn a_waiting_task_is_pushed_only_when_asked_for_anyway() {
         let state = crate::sh::test_dir("waiting-push");
         assert_eq!(refuse_push(&state, "billing@web", "billing"), Ok(()));
-        save(&state, &Waiting { address: "billing@web".to_string(), repo: PathBuf::from("/repos/web"), on: vec![dep("rounding@api")], then: None, by: "user".to_string(), at: 100, gone_since: None }).unwrap();
+        save(&state, &Waiting { address: "billing@web".to_string(), repo: PathBuf::from("/repos/web"), on: vec![dep("rounding@api")], then: None, by: "user".to_string(), at: 100, gone_since: None, unlisted_since: None, unlisted_told: false }).unwrap();
         let refused = refuse_push(&state, "billing@web", "billing").unwrap_err();
         assert!(refused.contains("Not pushed: it waits for rounding@api") && refused.contains("kebbie push billing --anyway pushes it before them"), "{refused}");
         fs::remove_dir_all(state).unwrap();
@@ -557,7 +589,7 @@ mod tests {
     #[test]
     fn once_every_task_it_waits_for_lands_the_waiter_is_rebased_and_told_what_landed_and_what_to_do() {
         let state = crate::sh::test_dir("waiting-landed");
-        save(&state, &Waiting { address: "billing@web".to_string(), repo: PathBuf::from("/repos/web"), on: vec![dep("rounding@api"), dep("totals@web")], then: Some("use the rounding field".to_string()), by: "lead".to_string(), at: 100, gone_since: None }).unwrap();
+        save(&state, &Waiting { address: "billing@web".to_string(), repo: PathBuf::from("/repos/web"), on: vec![dep("rounding@api"), dep("totals@web")], then: Some("use the rounding field".to_string()), by: "lead".to_string(), at: 100, gone_since: None, unlisted_since: None, unlisted_told: false }).unwrap();
         let open = ["billing@web", "totals@web"];
         let (notes, tasks, lead) = told(&state, &facts(&[end("rounding@api", 200, "done", Some("Add the rounding field"))], &open), 300, Some("kebbie rebased this task onto origin/main."));
         assert!(notes.is_empty() && tasks.is_empty() && lead.is_empty(), "one of two landed: it waits on");
@@ -578,7 +610,7 @@ mod tests {
     #[test]
     fn a_task_waited_for_that_is_dropped_tells_the_waiter_and_the_lead_and_leaves_the_rest_of_the_wait() {
         let state = crate::sh::test_dir("waiting-lost");
-        save(&state, &Waiting { address: "billing@web".to_string(), repo: PathBuf::from("/repos/web"), on: vec![dep("rounding@api"), dep("totals@web")], then: None, by: "user".to_string(), at: 100, gone_since: None }).unwrap();
+        save(&state, &Waiting { address: "billing@web".to_string(), repo: PathBuf::from("/repos/web"), on: vec![dep("rounding@api"), dep("totals@web")], then: None, by: "user".to_string(), at: 100, gone_since: None, unlisted_since: None, unlisted_told: false }).unwrap();
         let (_, tasks, lead) = told(&state, &facts(&[end("rounding@api", 200, "dropped", None)], &["billing@web", "totals@web"]), 300, Some("unused"));
         assert!(tasks[0].1.starts_with("This task waited for rounding@api, which was dropped. That will not land as this task needs, so this task waits only for totals@web now."), "{}", tasks[0].1);
         assert_eq!(lead, [("billing@web waited for rounding@api, which was dropped; kebbie told it, and it waits only for totals@web now.".to_string(), true)]);
@@ -588,9 +620,34 @@ mod tests {
         let (_, tasks, _) = told(&state, &facts(&[], &["billing@web"]), 300 + after::GRACE, Some("unused"));
         assert!(tasks[0].1.contains("totals@web, which is gone without being done") && tasks[0].1.contains("so this task waits for nothing now"), "{}", tasks[0].1);
         assert_eq!(load(&state, "billing@web"), None);
-        save(&state, &Waiting { address: "search@web".to_string(), repo: PathBuf::from("/repos/web"), on: vec![dep("totals@web")], then: None, by: "user".to_string(), at: 100, gone_since: None }).unwrap();
+        save(&state, &Waiting { address: "search@web".to_string(), repo: PathBuf::from("/repos/web"), on: vec![dep("totals@web")], then: None, by: "user".to_string(), at: 100, gone_since: None, unlisted_since: None, unlisted_told: false }).unwrap();
         let (notes, tasks, _) = told(&state, &facts(&[], &["totals@web"]), 300, Some("unused"));
         assert!(notes.is_empty() && tasks.is_empty() && load(&state, "search@web").is_none(), "a waiter that ended takes its wait along");
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_wait_whose_repo_cannot_be_listed_stays_and_the_lead_hears_once_it_outlasts_the_grace() {
+        let state = crate::sh::test_dir("waiting-unlisted");
+        let repo = state.join("web");
+        fs::create_dir_all(&repo).unwrap();
+        let unlisted = Facts::with_repos(&state, &[], std::slice::from_ref(&repo));
+        assert!(unlisted.unlisted.contains(&repo) && unlisted.open.is_empty(), "a folder git cannot list is unlisted, not empty");
+        save(&state, &Waiting { address: "billing@web".to_string(), repo: repo.clone(), on: vec![dep("rounding@api")], then: None, by: "user".to_string(), at: 100, gone_since: None, unlisted_since: None, unlisted_told: false }).unwrap();
+        let (notes, tasks, lead) = told(&state, &unlisted, 300, Some("unused"));
+        assert!(notes.is_empty() && tasks.is_empty() && lead.is_empty(), "nothing is said within the grace");
+        assert_eq!(load(&state, "billing@web").and_then(|wait| wait.unlisted_since), Some(300), "the wait stays, its grace started");
+        let (_, _, lead) = told(&state, &unlisted, 300 + after::GRACE - 1, Some("unused"));
+        assert!(lead.is_empty());
+        let (notes, tasks, lead) = told(&state, &unlisted, 300 + after::GRACE, Some("unused"));
+        assert!(tasks.is_empty() && notes == ["waiting: billing@web: its repo cannot be listed"], "{notes:?}");
+        assert!(lead.len() == 1 && lead[0].1 && lead[0].0.contains("cannot tell whether billing@web is still open. It keeps its wait for rounding@api until it can"), "{lead:?}");
+        let (_, _, lead) = told(&state, &unlisted, 300 + after::GRACE + 15, Some("unused"));
+        assert!(lead.is_empty() && load(&state, "billing@web").is_some(), "the lead hears it once, and the wait still stays");
+        told(&state, &facts(&[], &["billing@web", "rounding@api"]), 400, Some("unused"));
+        assert_eq!(load(&state, "billing@web").map(|wait| (wait.unlisted_since, wait.unlisted_told)), Some((None, false)), "listed again, the grace is over");
+        told(&state, &facts(&[], &["rounding@api"]), 400, Some("unused"));
+        assert_eq!(load(&state, "billing@web"), None, "a listed repo without the waiter still ends its wait");
         fs::remove_dir_all(state).unwrap();
     }
 }

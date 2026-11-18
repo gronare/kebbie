@@ -231,6 +231,7 @@ pub(crate) struct Facts {
     pub open: HashSet<String>,
     pub queued: HashSet<String>,
     pub ci: HashMap<String, bool>,
+    pub unlisted: HashSet<PathBuf>,
 }
 
 pub(crate) fn latest_ends(log: &[Message]) -> HashMap<String, Message> {
@@ -246,13 +247,20 @@ impl Facts {
         let mut queued: HashSet<String> = waits.iter().map(Wait::address).collect();
         queued.extend(waits.iter().flat_map(|wait| wait.after.iter()).filter(|dep| starting(state, &dep.address)).map(|dep| dep.address.clone()));
         let ci = crate::ci::all(state).into_iter().map(|watch| (watch.address.clone(), watch.running())).collect();
-        Facts { ends: latest_ends(log), open, queued, ci }
+        Facts { ends: latest_ends(log), open, queued, ci, unlisted: HashSet::new() }
     }
 
     // A running task's wait reads the same facts, with the open tasks of the repos it and the tasks it waits for are in.
     pub(super) fn with_repos(state: &Path, log: &[Message], repos: &[PathBuf]) -> Facts {
         let mut facts = Facts::read(state, log, &all(state));
-        facts.open.extend(repos.iter().flat_map(|repo| open_in(repo)));
+        for repo in repos {
+            match listed(repo) {
+                Some(open) => facts.open.extend(open),
+                None => {
+                    facts.unlisted.insert(repo.clone());
+                }
+            }
+        }
         facts
     }
 
@@ -280,7 +288,16 @@ impl Facts {
 
 // git lists a worktree mid-rebase as detached, so a task resolving a conflict is found by the branch its rebase names.
 fn open_in(repo: &Path) -> Vec<String> {
-    slots(repo).unwrap_or_default().into_iter().filter_map(|slot| slot.task.clone().or_else(|| rebasing(&slot.path))).map(|task| peers::address(&task, &name_of(repo))).collect()
+    listed(repo).unwrap_or_default()
+}
+
+// None for a repo that is there but whose worktrees git cannot list right now, which says nothing about whether its tasks are gone.
+fn listed(repo: &Path) -> Option<Vec<String>> {
+    match slots(repo) {
+        Ok(slots) => Some(slots.into_iter().filter_map(|slot| slot.task.clone().or_else(|| rebasing(&slot.path))).map(|task| peers::address(&task, &name_of(repo))).collect()),
+        Err(_) if repo.exists() => None,
+        Err(_) => Some(Vec::new()),
+    }
 }
 
 fn rebasing(worktree: &Path) -> Option<String> {
