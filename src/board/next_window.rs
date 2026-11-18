@@ -346,13 +346,16 @@ impl App {
         self.mode = Mode::Next(window);
     }
 
-    // The row's task selected on the board, then what it needs: its question, its push, its card, else its options.
+    // The row's task selected on the board, then what it needs: its note when its report sends you there, its question, its push, its card, else its options.
     fn open_row(&mut self, row: Option<&Row>) {
         self.mode = Mode::Normal;
         let Some(row) = row else { return };
         let Some(index) = self.tasks.iter().position(|item| peers::address(&item.name, &item.place) == row.address) else { return };
         (self.page, self.column, self.work_selected, self.filter, self.in_messages, self.offer_panel.focused, self.comment_panel.focused) = (Page::Work, Column::Work, index, None, false, false, false);
         let item = self.tasks[index].clone();
+        if super::note_window::reads_note(&item) && super::detail::note_of(self, &item).is_some() {
+            return self.open_task_note(&item);
+        }
         match row.part {
             Part::Stopped => match self.question_of(&item) {
                 Some(at) => self.open_questions(Some(at)),

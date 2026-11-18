@@ -7,7 +7,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::status::Item;
+use crate::phase::{Phase, Why};
+use crate::status::{Group, Item};
 use super::detail::note_of;
 use super::widgets::{MANTLE, MAUVE, MUTED, bold, centered, fit, style};
 use super::{App, Mode};
@@ -58,6 +59,13 @@ fn shown(inner: &str) -> String {
         Some(heading) => format!("{stem} › {heading}"),
         None => stem.to_string(),
     }
+}
+
+// A task stopped on you whose report sends you to its note, as an investigation's "read the findings in the task note" does.
+pub(super) fn reads_note(item: &Item) -> bool {
+    let stopped = item.group() == Group::NeedsYou && matches!(item.phase.as_ref().map(|record| &record.phase), Some(Phase::NeedsYou(Why::Report | Why::NothingToPush)));
+    let names_note = item.report.as_ref().is_some_and(|report| report.text.split(|character: char| !character.is_alphanumeric()).any(|word| matches!(word.to_lowercase().as_str(), "note" | "notes" | "noten")));
+    stopped && item.question.is_none() && names_note
 }
 
 impl App {
@@ -133,7 +141,7 @@ mod tests {
     fn stopped(report: &str) -> Item {
         let mut item = named(crate::status::tests::task(Some("idle"), Some("needs-you"), 0), "auth-audit", "web");
         item.report.as_mut().unwrap().text = report.to_string();
-        crate::status::tests::in_phase(&mut item, crate::phase::Phase::NeedsYou(crate::phase::Why::Report));
+        crate::status::tests::in_phase(&mut item, Phase::NeedsYou(Why::Report));
         item
     }
 
@@ -182,10 +190,27 @@ mod tests {
     }
 
     #[test]
+    fn a_report_that_sends_you_to_the_note_points_its_row_options_and_next_straight_at_it() {
+        let mut app = with_note(stopped("Read the findings in the task note and pick a fix."));
+        assert_eq!(app.choices()[0].label, "Read its note", "⏎ on the row opens the options at the note");
+        assert!(screen(&mut app, 110, 50).contains("V read its note"), "the selected row names the key");
+        app.open_next();
+        app.handle_key(key(KeyCode::Enter), None);
+        assert!(matches!(&app.mode, Mode::TaskNote { key, .. } if key == KEY), "⏎ in Next opens the note");
+        let mut other = with_note(stopped("Blocked on the staging credentials."));
+        assert!(other.choices()[0].label != "Read its note" && other.choices().iter().any(|choice| choice.label == "Read its note"), "a report about something else keeps the note among the options");
+        assert!(screen(&mut other, 110, 50).contains("V its note"));
+    }
+
+    #[test]
     fn without_a_vault_note_nothing_offers_one_and_the_key_does_nothing() {
         let mut app = test_app(vec![stopped("Read the findings in the task note.")]);
         let board = screen(&mut app, 110, 50);
         assert!(!board.contains("its note") && !app.choices().iter().any(|choice| choice.act == Some(Act::Note)), "no row or menu offers a note there is none of:\n{board}");
+        app.open_next();
+        app.handle_key(key(KeyCode::Enter), None);
+        assert!(!matches!(app.mode, Mode::TaskNote { .. }), "Next opens what it opened before");
+        app.mode = Mode::Normal;
         press(&mut app, key(KeyCode::Char(crate::keys::key(Act::Note))));
         assert!(matches!(app.mode, Mode::Normal) && app.toast.is_none(), "the key does nothing where there is no note, as a key with nothing to act on does");
     }

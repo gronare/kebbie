@@ -202,8 +202,12 @@ impl App {
                 }
                 if let Some(item) = item.filter(|item| super::detail::note_of(self, item).is_some()) {
                     let read = choice(Act::Note, "Read its note", "the task's vault note in a window, rendered");
-                    let after = choices.iter().rposition(|choice| menu_group(choice.act) == "SESSION").map_or(0, |at| at + 1);
-                    choices.insert(after, read);
+                    if super::note_window::reads_note(item) && self.s_question(item).is_none() {
+                        choices.insert(0, read);
+                    } else {
+                        let after = choices.iter().rposition(|choice| menu_group(choice.act) == "SESSION").map_or(0, |at| at + 1);
+                        choices.insert(after, read);
+                    }
                 }
                 if let Some(item) = item {
                     let after = choices.iter().rposition(|choice| matches!(menu_group(choice.act), "SESSION" | "DEV")).map_or(0, |at| at + 1);

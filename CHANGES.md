@@ -6,6 +6,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 
 ### What's new
 - V on a task opens its vault note in a window over the board, with its markdown rendered.
+- A task whose report sends you to its vault note opens the note from ⏎ on its row and from Next.
 
 ### Fixed
 
