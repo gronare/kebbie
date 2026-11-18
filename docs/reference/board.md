@@ -620,7 +620,7 @@ FILES
 
 ### The card window
 
-Opened by `s` on a task with a sign-off card and no open question, in a narrow board and a wide one alike. The title names the task, `▸ <title>`, and the window shows the same card as [the column beside the tasks](#the-card-beside-the-tasks): the facts line first, with the read count and whether the code changed since the card, then the card's parts and its commits.
+Opened by `s` on a task with a sign-off card and no open question, in a narrow board and a wide one alike. A task with nothing to push, such as a research task, opens its card here too while kebbie's offer to close it waits: the card starts with `CLOSE IT?`, and `d` closes the task in place of `p`. The title names the task, `▸ <title>`, and the window shows the same card as [the column beside the tasks](#the-card-beside-the-tasks): the facts line first, with the read count and whether the code changed since the card, then the card's parts and its commits.
 
 A paragraph that opens with a short label and a colon, such as `Built:` or `Decisions:`, starts a part of its own headed by that label; the text before the first label, the headline, opens the card. `**bold**` shows bold.
 
@@ -641,7 +641,8 @@ How an image shows depends on the terminal. `KEBBIE_IMAGES` picks the protocol b
 | `↑` `↓`, `j` `k` | Scroll the text. `PageUp`, `PageDown` scroll by ten lines. | Always. |
 | `f` | Fullscreen: the selected image alone over the whole board, as large as it fits. | The card has an image and images are on. |
 | `o` | Open the selected image in the system viewer: `open` on macOS, `xdg-open` on Linux. | See below. |
-| `p` | Go on to the push window. | Always. |
+| `p` | Go on to the push window. | The task has something to push. |
+| `d` | Close the task as done, asking first. | kebbie offers to close it: it has nothing to push. |
 | `esc`, `q` | Close. | Always. |
 
 - In fullscreen, `←` `→` go between the card's images, `esc`, `q` or `f` go back to the card, and `o` opens the image shown.

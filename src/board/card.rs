@@ -19,21 +19,31 @@ use super::subtasks::card_window;
 use super::images::{Shown, image_shown, preview_note, render_image};
 use super::link::file_link;
 use super::{App, Column, Hit, Mode};
-use super::widgets::{FAINT, GREEN, MANTLE, MAUVE, MUTED, SURFACE, TEAL, TEXT, YELLOW, bold, fill, fit, plural, section_header, style, text_width};
+use super::widgets::{FAINT, GREEN, MANTLE, MAUVE, MUTED, PEACH, SURFACE, TEAL, TEXT, YELLOW, bold, fill, fit, plural, section_header, style, text_width};
 
 impl App {
     pub(super) fn card_of(&self, item: &Item) -> Option<std::rc::Rc<Detail>> {
         self.details.get(item.path.as_ref()?).filter(|detail| detail.card.is_some()).cloned()
     }
 
+    // kebbie's offer to close a task with nothing to push, which the card window carries beside the card.
+    pub(super) fn close_offer(&self, item: &Item) -> Option<usize> {
+        self.question_of(item).filter(|at| self.questions[*at].kind.as_deref() == Some(crate::kebbie_questions::CLOSE_KIND))
+    }
+
+    // The question s opens on a task: its waiting one, unless that is the offer to close it and it has a card to show with the offer.
+    pub(super) fn s_question(&self, item: &Item) -> Option<usize> {
+        self.question_of(item).filter(|_| self.close_offer(item).is_none() || self.card_of(item).is_none())
+    }
+
     // What s opens on a task: its waiting question before its card, since the question waits on the user.
     pub(super) fn s_opens(&self, item: &Item) -> Option<&'static str> {
-        if self.question_of(item).is_some() { Some("question") } else if self.card_of(item).is_some() { Some("card") } else { None }
+        if self.s_question(item).is_some() { Some("question") } else if self.card_of(item).is_some() { Some("card") } else { None }
     }
 
     // What s gives on a task, said on its unfolded row: the question or plan waiting, else the card.
     pub(super) fn s_gives(&self, item: &Item) -> Option<String> {
-        if let Some(index) = self.question_of(item) {
+        if let Some(index) = self.s_question(item) {
             let question = self.questions[index].question.as_ref()?;
             return Some(if question.plan.is_some() { "the plan".to_string() } else { format!("the question · {}", plural(question.options.len(), "answer")) });
         }
@@ -238,7 +248,12 @@ pub(super) fn draw_card(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit)> {
         (text, Some(pane))
     };
     let width = text_area.width as usize;
+    let closing = item.as_ref().is_some_and(|item| app.close_offer(item).is_some());
     let mut lines = task_card(item.as_ref(), Some(&detail), width);
+    if closing {
+        let offer = format!("Nothing to push: {} closes it as done and frees the worktree.", keys::map().label(Act::Done));
+        lines.splice(0..0, [Line::default(), super::beside::section("CLOSE IT?")].into_iter().chain(rich_wrap(&offer, width.saturating_sub(2), usize::MAX, PEACH).into_iter().map(|line| indented(line, 2))));
+    }
     let mut list = None;
     if wide {
         lines.push(Line::default());
@@ -273,7 +288,7 @@ pub(super) fn draw_card(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit)> {
     if let (Some(pane), Some(shown)) = (image_area, images.get(image)) {
         draw_card_image(frame, app, &path.join(&shown.path), shown, (image, images.len()), pane, wide);
     }
-    let keys = card_keys(images.len() > 1, !images.is_empty() && app.protocol().is_some(), !images.is_empty() && app.viewer.is_some());
+    let keys = card_keys(images.len() > 1, !images.is_empty() && app.protocol().is_some(), !images.is_empty() && app.viewer.is_some(), closing);
     frame.render_widget(Paragraph::new(fit(vec![Span::styled(keys, style(MUTED))], foot.width as usize)), foot);
     hits
 }
@@ -302,7 +317,7 @@ fn draw_card_image(frame: &mut Frame, app: &mut App, file: &Path, shown: &CardIm
     }
 }
 
-fn card_keys(switch: bool, fullscreen: bool, open: bool) -> String {
+fn card_keys(switch: bool, fullscreen: bool, open: bool, closing: bool) -> String {
     let map = keys::map();
     let mut keys = Vec::new();
     if switch {
@@ -315,7 +330,7 @@ fn card_keys(switch: bool, fullscreen: bool, open: bool) -> String {
     if open {
         keys.push(format!("{} open", map.label(Act::OpenImage)));
     }
-    keys.push(format!("{} push", map.label(Act::Push)));
+    keys.push(if closing { format!("{} done", map.label(Act::Done)) } else { format!("{} push", map.label(Act::Push)) });
     keys.push(format!("{} close", map.label(Act::Back)));
     keys.join(" · ")
 }
@@ -438,6 +453,7 @@ impl App {
             Some(Act::Move) => scroll = scroll.saturating_add(1),
             Some(Act::Switch) if count > 0 => image = if key.code == KeyCode::Left { (image + count - 1) % count } else { (image + 1) % count },
             Some(Act::Push) => return self.act(Act::Push),
+            Some(Act::Done) => return self.act(Act::Done),
             Some(Act::Back | Act::Close) => return,
             Some(Act::Fullscreen) if count > 0 && self.protocol().is_some() => {
                 self.mode = Mode::Fullscreen { path, name, scroll, index: image };
@@ -576,6 +592,29 @@ mod tests {
         assert!(matches!(app.mode, Mode::Questions(_)), "s opens the question window, not the card");
         let (rows, _) = render(&mut app, 112, 40);
         assert!(rows.join("\n").contains("question 2/2"), "{}", rows.join("\n"));
+    }
+
+    #[test]
+    fn s_on_a_task_with_nothing_to_push_opens_its_card_with_kebbies_offer_to_close_it_and_d_closes_it() {
+        let mut app = carded(true);
+        let address = crate::peers::address(&app.tasks[0].name, &app.tasks[0].place);
+        let offer = format!(r#"{{"id":"c1","at":30,"from":"{address}","to":"you","kind":"{}","text":"search-filters says it is done: research. Close it?","state":"asked","question":{{"options":[{{"label":"Close","meaning":"kebbie closes the task as done"}},{{"label":"Not yet","meaning":"The task stays open"}}],"recommend":0}}}}"#, crate::kebbie_questions::CLOSE_KIND);
+        app.questions = crate::messages::fold(&offer);
+        assert_eq!(app.question_of(&app.tasks[0].clone()), Some(0));
+        assert_eq!(app.s_opens(&app.tasks[0].clone()), Some("card"), "the card carries the offer");
+        assert!(app.choices().iter().any(|choice| choice.act == Some(Act::Card) && choice.label == "Show the card"));
+        app.handle_normal(key(KeyCode::Char('s')));
+        assert!(matches!(app.mode, Mode::Card { .. }), "s opens the card window, not the question");
+        let (rows, _) = render(&mut app, 170, 40);
+        let screen = rows.join("\n");
+        assert!(screen.contains("CLOSE IT?") && screen.contains("Nothing to push: d closes it as done"), "{screen}");
+        assert!(screen.contains("A third line stays in the window.") && screen.contains("▸ ▣ filters.png  the filters"), "the card's text and images: {screen}");
+        assert!(screen.contains("← → image · ↑ ↓ scroll · d done · esc close") && !screen.contains("p push"), "{screen}");
+        press(&mut app, key(KeyCode::Char('d')));
+        assert!(matches!(app.mode, Mode::ConfirmDone { .. }), "d asks to close it");
+        let mut bare = test_app(vec![served("search-filters")]);
+        bare.questions = crate::messages::fold(&offer);
+        assert_eq!(bare.s_opens(&bare.tasks[0].clone()), Some("question"), "without a card the offer opens as a question");
     }
 
     #[test]

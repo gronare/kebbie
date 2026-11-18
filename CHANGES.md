@@ -14,6 +14,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### Fixed
 
 - A Mac worker on the WireGuard app links directly, and a logged-out Tailscale no longer fills the keeper log.
+- s on a task with nothing to push shows its card and images beside the offer to close it.
 
 ## 0.41.1
 

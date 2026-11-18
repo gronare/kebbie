@@ -1064,7 +1064,7 @@ impl App {
                         }
                     }
                     Act::Review => self.open_review(&item),
-                    Act::Card => match (item.path.clone(), self.card_of(&item), self.question_of(&item)) {
+                    Act::Card => match (item.path.clone(), self.card_of(&item), self.s_question(&item)) {
                         (_, _, Some(at)) => self.open_questions(Some(at)),
                         (Some(path), Some(_), None) => self.mode = Mode::Card { path, name: item.name.clone(), scroll: 0, image: 0 },
                         _ => {

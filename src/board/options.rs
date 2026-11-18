@@ -194,7 +194,7 @@ impl App {
                     let after = choices.iter().position(|choice| choice.act == Some(Act::Push)).map_or(choices.len(), |at| at + 1);
                     choices.insert(after, staging);
                 }
-                if item.is_some_and(|item| self.question_of(item).is_some()) {
+                if item.is_some_and(|item| self.s_question(item).is_some()) {
                     choices.insert(0, choice(Act::Card, "Answer its question", "the questions window, at this task's question"));
                 } else if item.is_some_and(|item| self.card_of(item).is_some()) {
                     let after = choices.iter().position(|choice| choice.act == Some(Act::Review)).map_or(choices.len(), |at| at + 1);
