@@ -43,7 +43,7 @@ impl Watch {
     }
 }
 
-// One per GitHub repo: its comments come oldest first, so the cursor is the last page read, where the next ones arrive.
+// One per GitHub repo: its comments come oldest first, so the cursor is the last page read, where the next ones arrive; judged is the highest comment id a pooled repo's own arms have judged, so none is judged twice and a first round judges none.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Cursor {
     pub slug: String,
@@ -52,17 +52,18 @@ pub struct Cursor {
     pub failures: u32,
     pub error: Option<String>,
     pub threads_since: Option<u64>,
+    pub judged: Option<u64>,
 }
 
 impl Cursor {
     fn to_json(&self) -> Value {
-        json!({ "slug": self.slug, "page": self.page, "checked_at": self.checked_at, "failures": self.failures, "error": self.error, "threads_since": self.threads_since })
+        json!({ "slug": self.slug, "page": self.page, "checked_at": self.checked_at, "failures": self.failures, "error": self.error, "threads_since": self.threads_since, "judged": self.judged })
     }
 
     fn from_json(value: &Value) -> Option<Cursor> {
         Some(Cursor {
             slug: value["slug"].as_str()?.to_string(), page: value["page"].as_u64(), checked_at: value["checked_at"].as_u64(), failures: value["failures"].as_u64().unwrap_or(0) as u32,
-            error: value["error"].as_str().map(str::to_string), threads_since: value["threads_since"].as_u64(),
+            error: value["error"].as_str().map(str::to_string), threads_since: value["threads_since"].as_u64(), judged: value["judged"].as_u64(),
         })
     }
 
@@ -79,7 +80,7 @@ fn cursor_file(state: &Path, slug: &str) -> PathBuf {
 
 fn load_cursor(state: &Path, slug: &str) -> Cursor {
     fs::read_to_string(cursor_file(state, slug)).ok().and_then(|text| serde_json::from_str(&text).ok()).and_then(|value| Cursor::from_json(&value))
-        .unwrap_or(Cursor { slug: slug.to_string(), page: None, checked_at: None, failures: 0, error: None, threads_since: None })
+        .unwrap_or(Cursor { slug: slug.to_string(), page: None, checked_at: None, failures: 0, error: None, threads_since: None, judged: None })
 }
 
 fn save_cursor(state: &Path, cursor: &Cursor) {
@@ -318,12 +319,17 @@ fn poll(state: &Path, gh: &str, now: u64, repos: &[(PathBuf, String)]) -> Vec<St
         match round {
             Ok((owner, page, found)) => {
                 (cursor.page, cursor.failures, cursor.error) = (Some(page), 0, None);
+                let judged = cursor.judged;
+                if whole {
+                    cursor.judged = Some(found.iter().map(|item| item.id).chain(judged).max().unwrap_or(0));
+                }
+                let unjudged = |item: &Found| whole && judged.is_some_and(|judged| item.id > judged);
                 let new = |item: &Found| !item.bot && !item.author.eq_ignore_ascii_case(&owner) && !exists(state, item.id);
                 for item in found.into_iter().filter(|item| new(item)) {
                     let origin = match watched.iter().find(|watch| !item.commit.is_empty() && watch.sha.starts_with(&item.commit)) {
                         Some(watch) => Origin::of_watch(watch),
-                        None if whole && mentions(&item.body, &owner) => Origin::owner(&repo, &slug, true),
-                        None if whole && mine(&repo, &item.commit) => Origin::owner(&repo, &slug, false),
+                        None if unjudged(&item) && mentions(&item.body, &owner) => Origin::owner(&repo, &slug, true),
+                        None if unjudged(&item) && mine(&repo, &item.commit) => Origin::owner(&repo, &slug, false),
                         None => continue,
                     };
                     notes.extend(keep(state, comment_of(&origin, item, now)));
@@ -547,33 +553,38 @@ mod tests {
         fs::remove_dir_all(state).unwrap();
     }
 
-    fn own_gh(state: &Path, mine: &str, bos: &str) -> String {
+    fn own_gh(state: &Path, mine: &str, bos: &str, later: bool) -> String {
         let gh = state.join("gh");
         let log = state.join("gh.log");
-        let commits = format!(r#"[{{"id":301,"commit_id":"{mine}","html_url":"https://github.com/acme/app/commit/{mine}#commitcomment-301","user":{{"login":"johan","type":"User"}},"body":"Could this be split?"}},{{"id":302,"commit_id":"{bos}","user":{{"login":"olle","type":"User"}},"body":"Bo's commit, nothing for Ada"}}]"#);
-        let more = format!(r#"[{{"id":303,"commit_id":"{bos}","user":{{"login":"olle","type":"User"}},"body":"@Ada, does this match the spec?"}}]"#);
+        let first = format!(r#"[{{"id":301,"commit_id":"{mine}","html_url":"https://github.com/acme/app/commit/{mine}#commitcomment-301","user":{{"login":"johan","type":"User"}},"body":"Could this be split?"}},{{"id":302,"commit_id":"{bos}","user":{{"login":"olle","type":"User"}},"body":"Bo's commit, nothing for Ada"}}]"#);
+        let old = format!(r#"{{"id":303,"commit_id":"{bos}","user":{{"login":"olle","type":"User"}},"body":"@Ada, does this match the spec?"}}"#);
+        let second = if later { format!(r#"[{old},{{"id":304,"commit_id":"{mine}","html_url":"https://github.com/acme/app/commit/{mine}#commitcomment-304","user":{{"login":"johan","type":"User"}},"body":"Could this be split?"}}]"#) } else { format!("[{old}]") };
+        let third = format!(r#"[{{"id":305,"commit_id":"{bos}","user":{{"login":"olle","type":"User"}},"body":"@Ada, does this match the spec?"}},{{"id":306,"commit_id":"{bos}","user":{{"login":"olle","type":"User"}},"body":"Bo's commit, nothing for Ada"}}]"#);
         let issues = r#"[{"id":401,"html_url":"https://github.com/acme/app/pull/42#issuecomment-401","user":{"login":"johan","type":"User"},"body":"@ada can you take the retry part?"},{"id":402,"html_url":"https://github.com/acme/app/issues/7#issuecomment-402","user":{"login":"johan","type":"User"},"body":"mail ada@ada.dev or @adam"}]"#;
         let pulls = r#"[{"id":501,"commit_id":"feedbeef","html_url":"https://github.com/acme/app/pull/42#discussion_r501","path":"lib/retry.rb","line":3,"diff_hunk":"@@ -1,2 +1,3 @@\n def retry\n+  sleep 1","user":{"login":"anna","type":"User"},"body":"@ada why a fixed sleep?"}]"#;
         let answer = |text: &str| format!("cat <<'JSON'\n{text}\nJSON\n");
-        crate::executable::write(&gh, format!("#!/bin/sh\necho \"$*\" >> '{}'\ncase \"$*\" in\n*\" user \"*) echo ada ;;\n*--include*) printf 'HTTP/2.0 200 OK\\n\\n[]\\n' ;;\n*\"issues/comments\"*\"page=1\") {};;\n*\"pulls/comments\"*\"page=1\") {};;\n*\"app/comments?per_page=2&page=1\") {};;\n*\"app/comments?per_page=2&page=2\") {};;\n*) echo '[]' ;;\nesac\n", log.display(), answer(issues), answer(pulls), answer(&commits), answer(&more))).unwrap();
+        crate::executable::write(&gh, format!("#!/bin/sh\necho \"$*\" >> '{}'\ncase \"$*\" in\n*\" user \"*) echo ada ;;\n*--include*) printf 'HTTP/2.0 200 OK\\n\\n[]\\n' ;;\n*\"issues/comments\"*\"page=1\") {};;\n*\"pulls/comments\"*\"page=1\") {};;\n*\"app/comments?per_page=2&page=1\") {};;\n*\"app/comments?per_page=2&page=2\") {};;\n*\"app/comments?per_page=2&page=3\") {};;\n*) echo '[]' ;;\nesac\n", log.display(), answer(issues), answer(pulls), answer(&first), answer(&second), answer(if later { &third } else { "[]" }))).unwrap();
         gh.to_string_lossy().to_string()
     }
 
     #[test]
-    fn a_pooled_repo_keeps_comments_on_the_owners_own_commits_and_every_mention_of_them_with_no_push_of_kebbies() {
+    fn a_pooled_repo_keeps_comments_on_the_owners_own_commits_and_every_mention_of_them_from_its_second_round_with_no_push_of_kebbies() {
         let (dir, origin, slot, _) = crate::tasks::test_support::task_with_a_commit("own-commits");
         crate::tasks::test_support::upstream_commit(&dir, "e", "e", "Bo's change");
         let bos = crate::repo::git(&dir, &["rev-parse", "HEAD"]).unwrap();
         let mine = crate::repo::git(&dir, &["rev-parse", "HEAD~1"]).unwrap();
         let state = crate::sh::test_dir("comments-own");
-        let gh = own_gh(&state, &mine, &bos);
+        let gh = own_gh(&state, &mine, &bos, false);
         let repos = [(dir.clone(), "acme/app".to_string())];
         let notes = tick_with(&state, &gh, 1_000_000, &[], &repos);
-        assert_eq!(open(&state).iter().map(|comment| (comment.id, comment.whose())).collect::<Vec<_>>(), [(301, "your commit".to_string()), (303, "mentions you".to_string())], "a comment on Ada's commit on main and one naming @Ada are kept, one on Bo's commit is not: {notes:?}");
-        assert!(notes.iter().any(|note| note.starts_with("comments: johan commented on ") && note.ends_with("(your commit); reading it")), "{notes:?}");
+        assert!(open(&state).is_empty(), "a first round keeps no comment from before it, on the owner's commit or naming @Ada: {notes:?}");
         assert!(!calls(&state).iter().any(|call| call.contains("issues/") || call.contains("pulls/")), "a first round reads no history of the threads");
+        assert_eq!(load_cursor(&state, "acme/app").judged, Some(303));
         let later = 1_000_000 + POLL;
-        tick_with(&state, &gh, later, &[], &repos);
+        let gh = own_gh(&state, &mine, &bos, true);
+        let notes = tick_with(&state, &gh, later, &[], &repos);
+        assert_eq!(open(&state).iter().map(|comment| (comment.id, comment.whose())).collect::<Vec<_>>(), [(304, "your commit".to_string()), (305, "mentions you".to_string()), (401, "mentions you".to_string()), (501, "mentions you".to_string())], "a new comment on Ada's commit on main and new ones naming @Ada are kept; one on Bo's commit and those the first round judged are not: {notes:?}");
+        assert!(notes.iter().any(|note| note.starts_with("comments: johan commented on ") && note.ends_with("(your commit); reading it")), "{notes:?}");
         let since = crate::keeper::stamp(1_000_000 - THREAD_SLACK).replace(' ', "T");
         let threads: Vec<String> = calls(&state).into_iter().filter(|call| call.contains("issues/") || call.contains("pulls/")).collect();
         assert_eq!(threads, [format!("api repos/acme/app/issues/comments?since={since}&sort=updated&direction=asc&per_page=2&page=1"), format!("api repos/acme/app/issues/comments?since={since}&sort=updated&direction=asc&per_page=2&page=2"), format!("api repos/acme/app/pulls/comments?since={since}&sort=updated&direction=asc&per_page=2&page=1")], "one round asks for the thread comments since the last");
@@ -582,7 +593,8 @@ mod tests {
         assert!(load(&state, 402).is_none(), "an address and a longer login are no mention");
         let review = load(&state, 501).unwrap();
         assert_eq!((review.short(), review.place(), review.hunk.as_str()), ("#42", "lib/retry.rb:3".to_string(), "@@ -1,2 +1,3 @@\n def retry\n+  sleep 1"), "a review line comment keeps its pull request, its line and its hunk");
-        assert_eq!(load_cursor(&state, "acme/app").threads_since, Some(later));
+        let cursor = load_cursor(&state, "acme/app");
+        assert_eq!((cursor.threads_since, cursor.judged), (Some(later), Some(306)));
         crate::tasks::test_support::cleanup(dir, origin, &slot);
         fs::remove_dir_all(state).unwrap();
     }
