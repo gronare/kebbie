@@ -314,7 +314,7 @@ mod tests {
         let began = crate::messages::now();
         crate::board::clock::pin(began, 0);
         app.updater = std::sync::Arc::new(move || {
-            let mut tracker = Tracker::start(&file, "Fetching main", "Build kebbie", began);
+            let mut tracker = Tracker::start(&file, "Fetching main", "Build kebbie", true, began);
             tracker.done(progress::FETCH, "Fetched main (3 new commits)");
             tracker.begin(progress::BUILD, "Building kebbie", began);
             tracker.meter(Meter::Build { done: 212, total: Some(348), compiling: None });
@@ -463,7 +463,7 @@ mod tests {
         let file = crate::sh::test_dir("board-update-failed").join(progress::FILE);
         app.progress_file = Some(file.clone());
         app.updater = std::sync::Arc::new(move || {
-            let mut tracker = Tracker::start(&file, "Fetching main", "Build kebbie", crate::messages::now());
+            let mut tracker = Tracker::start(&file, "Fetching main", "Build kebbie", true, crate::messages::now());
             tracker.done(progress::FETCH, "Fetched main (1 new commit)");
             tracker.begin(progress::BUILD, "Building kebbie", crate::messages::now());
             tracker.fail_current();

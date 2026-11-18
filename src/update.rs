@@ -47,7 +47,7 @@ pub fn run(claude_dir: &Path, visible: bool, request: &Request) -> Result<Outcom
     let path = progress::file(&state);
     let (fetch, build) = labels(channel, request, release::read_override(&state).as_ref());
     let weighed = build_mode(channel, release::read_override(&state).is_some());
-    let mut tracker = Tracker::start(&path, &fetch, build, now());
+    let mut tracker = Tracker::start(&path, &fetch, build, vault_cli::installed(claude_dir).is_some(), now());
     tracker.progress.weights = progress::weights(&state, weighed);
     tracker.save();
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -214,7 +214,7 @@ fn finish_in(claude_dir: &Path, state: &Path, tracker: &mut Option<Tracker>) -> 
     let running = release::read_override(state);
     let vault_installed = vault_cli::installed(claude_dir).is_some();
     let plugins = 1 + usize::from(vault_installed);
-    step(tracker, progress::PLUGINS, "Claude Code and vault plugins", false);
+    step(tracker, progress::PLUGINS, progress::plugins_label(vault_installed), false);
     count(tracker, "plugins", 0, plugins);
     let (claude, updated) = updated_claude_plugin(claude_dir, &setup::claude_bin(), root.as_deref(), channel == Channel::Main && running.is_none());
     count(tracker, "plugins", 1, plugins);

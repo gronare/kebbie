@@ -83,15 +83,20 @@ pub fn load(path: &Path) -> Option<Progress> {
     serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
 }
 
+// The plugins step names the vault plugin only where it is installed.
+pub fn plugins_label(vault: bool) -> &'static str {
+    if vault { "Claude Code and vault plugins" } else { "Claude Code plugin" }
+}
+
 pub struct Tracker {
     pub path: PathBuf,
     pub progress: Progress,
 }
 
 impl Tracker {
-    pub fn start(path: &Path, fetch: &str, build: &str, now: u64) -> Tracker {
+    pub fn start(path: &Path, fetch: &str, build: &str, vault: bool, now: u64) -> Tracker {
         let step = |label: &str| Step { label: label.to_string(), state: State::Pending, since: 0, took: 0 };
-        let steps = vec![step(fetch), step(build), step("Claude Code and vault plugins"), step("Restart sessions")];
+        let steps = vec![step(fetch), step(build), step(plugins_label(vault)), step("Restart sessions")];
         let mut tracker = Tracker { path: path.to_path_buf(), progress: Progress { started: now, steps, ..Progress::default() } };
         tracker.begin(FETCH, fetch, now);
         tracker
@@ -463,7 +468,7 @@ mod tests {
 
     fn progress() -> Progress {
         let dir = crate::sh::test_dir("progress");
-        let mut tracker = Tracker::start(&dir.join(FILE), "Fetching main", "Build kebbie", 100);
+        let mut tracker = Tracker::start(&dir.join(FILE), "Fetching main", "Build kebbie", true, 100);
         tracker.done(FETCH, "Fetched main (3 new commits)");
         tracker.begin(BUILD, "Building kebbie", 100);
         tracker.meter(Meter::Build { done: 212, total: Some(348), compiling: Some("serde".to_string()) });
@@ -474,6 +479,8 @@ mod tests {
     fn the_steps_show_done_current_and_pending_with_a_bar_and_the_time_on_the_running_one() {
         let shown: Vec<String> = lines(&progress(), 202, 60).into_iter().map(|(_, text)| text).collect();
         assert_eq!(shown, ["✓ Fetched main (3 new commits)", "▸ Building kebbie  ████████████░░░░░░░░  212/348 crates 1:42", "  Claude Code and vault plugins", "  Restart sessions"]);
+        let without = Tracker::start(&crate::sh::test_dir("progress-no-vault").join(FILE), "Fetching main", "Build kebbie", false, 100);
+        assert_eq!(lines(&without.progress, 100, 60)[PLUGINS].1, "  Claude Code plugin", "no vault plugin installed, so the step names none");
         let narrow = lines(&progress(), 202, 40)[BUILD].1.clone();
         assert!(narrow.ends_with("212/348 crates 1:42") && narrow.chars().count() <= 40, "a narrow width shortens the bar first: {narrow}");
     }
@@ -593,7 +600,7 @@ mod tests {
     fn the_watcher_moves_from_the_fetch_to_the_build_once_cargo_writes_and_meters_it() {
         let state = crate::sh::test_dir("progress-watch");
         let dir = prepare_dir(&state);
-        let tracker = Tracker::start(&file(&state), "Fetching main", "Build kebbie", 100);
+        let tracker = Tracker::start(&file(&state), "Fetching main", "Build kebbie", true, 100);
         let watch = watch(tracker, dir.clone(), state.clone(), "Building kebbie".to_string(), || 100);
         std::fs::write(dir.join("cargo.jsonl"), "{\"reason\":\"compiler-artifact\"}\n").unwrap();
         std::fs::write(dir.join("cargo.log"), "   Compiling kebbie v0.27.0\n").unwrap();
