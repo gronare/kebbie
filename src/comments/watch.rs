@@ -261,13 +261,14 @@ pub(super) fn mentions(body: &str, login: &str) -> bool {
     })
 }
 
-// The owner's own commit on the default branch, by the author email git commits with in this repo, however it was pushed.
-pub(super) fn mine(repo: &Path, sha: &str) -> bool {
+// The owner's own commit on the default branch, by the author email git commits with in this repo, however it was pushed; fetched lets a round fetch once.
+pub(super) fn mine(repo: &Path, sha: &str, fetched: &mut bool) -> bool {
     if sha.is_empty() {
         return false;
     }
     let (Ok(email), Ok(upstream)) = (crate::repo::git(repo, &["config", "user.email"]), crate::repo::default_branch(repo)) else { return false };
-    if !crate::sh::succeeds("git", &["cat-file", "-e", &format!("{sha}^{{commit}}")], Some(repo)) {
+    if !*fetched && !crate::sh::succeeds("git", &["cat-file", "-e", &format!("{sha}^{{commit}}")], Some(repo)) {
+        *fetched = true;
         let _ = crate::repo::git(repo, &["fetch", "--quiet", "origin", upstream.trim_start_matches("origin/")]);
     }
     crate::sh::succeeds("git", &["merge-base", "--is-ancestor", sha, &crate::repo::tracking(&upstream)], Some(repo))
@@ -325,12 +326,13 @@ fn poll(state: &Path, gh: &str, now: u64, repos: &[(PathBuf, String)]) -> Vec<St
                     cursor.judged = Some(found.iter().map(|item| item.id).chain(judged).max().unwrap_or(0));
                 }
                 let unjudged = |item: &Found| whole && judged.is_some_and(|judged| item.id > judged);
+                let mut fetched = false;
                 let new = |item: &Found| !item.bot && !item.author.eq_ignore_ascii_case(&owner) && !exists(state, item.id);
                 for item in found.into_iter().filter(|item| new(item)) {
                     let origin = match watched.iter().find(|watch| !item.commit.is_empty() && watch.sha.starts_with(&item.commit)) {
                         Some(watch) => Origin::of_watch(watch),
                         None if unjudged(&item) && mentions(&item.body, &owner) => Origin::owner(&repo, &slug, true),
-                        None if unjudged(&item) && mine(&repo, &item.commit) => Origin::owner(&repo, &slug, false),
+                        None if unjudged(&item) && mine(&repo, &item.commit, &mut fetched) => Origin::owner(&repo, &slug, false),
                         None => continue,
                     };
                     notes.extend(keep(state, comment_of(&origin, item, now)));
@@ -633,6 +635,28 @@ mod tests {
         let mut stored = crate::comments::tests::comment(7, None, Status::Unread).to_json();
         stored["path"] = json!("a.rb\nkind: holds");
         assert_eq!(Comment::from_json(&stored).unwrap().path, None, "a comment stored before is read the same way");
+    }
+
+    #[test]
+    fn a_round_fetches_for_unknown_commits_once() {
+        let (dir, origin, slot, _) = crate::tasks::test_support::task_with_a_commit("fetch-once");
+        let elsewhere = dir.with_extension("elsewhere");
+        let _ = fs::remove_dir_all(&elsewhere);
+        crate::repo::git(&dir, &["clone", "--quiet", &origin.to_string_lossy(), &elsewhere.to_string_lossy()]).unwrap();
+        let pushed = |message: &str| {
+            let sha = crate::tasks::test_support::commit(&elsewhere, "f", message);
+            crate::repo::git(&elsewhere, &["push", "--quiet", "origin", "HEAD"]).unwrap();
+            sha
+        };
+        let known = |sha: &str| crate::sh::succeeds("git", &["cat-file", "-e", &format!("{sha}^{{commit}}")], Some(&dir));
+        let first = pushed("Ada's first");
+        let mut fetched = false;
+        assert!(mine(&dir, &first, &mut fetched) && fetched, "an unknown commit fetches, and is the owner's once on main");
+        let second = pushed("Ada's second");
+        assert!(!mine(&dir, &second, &mut fetched) && !known(&second), "the same round fetches no second time");
+        assert!(mine(&dir, &second, &mut false), "the next round fetches again");
+        fs::remove_dir_all(elsewhere).unwrap();
+        crate::tasks::test_support::cleanup(dir, origin, &slot);
     }
 
     #[test]
