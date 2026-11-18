@@ -203,3 +203,15 @@ fn the_push_summary_and_the_decision_lines_are_written_for_a_reader_without_cont
     says(&decision, &["would weigh", "mechanics", "the decision it settled", "never the question and his answer pasted in"], "a card listed internal mechanics and pasted the user's answer with the whole English question");
     says(&crate::peers::steps_section(true, "/bin/kebbie"), &["vault's language", "never by a file, a path or a word from the code", "do not repeat the title"], "subtask titles read \"Roles/lead.md task titles\"");
 }
+
+#[test]
+fn a_task_cuts_its_work_into_increments_that_each_go_out_alone_and_checks_its_branch_before_ready() {
+    let rules = file("skills/work-rules/SKILL.md");
+    says(&rules, &["5. **Green alone.**", "6. **Safe to deploy alone.**", "7. **Easy first, risky last.**", "8. **Written for its own commit.**", "[CUT.md](CUT.md)", "by the task itself before it reports ready", "rules 1, 2 and 5 to 8"], "a task finished as commits that only worked together");
+    says(&rules, &["With subtasks off, the commits alone carry the cut"], "a repo with task.steps off");
+    let cut = file("skills/work-rules/CUT.md");
+    says(section(&cut, "## Plan the cut"), &["Done when", "a data migration, a merge of identities, a deletion", "expand, migrate and contract", "With subtasks on", "with them off"], "the cut is planned before the first line of code");
+    says(section(&cut, "## Check the branch"), &["(rule 5)", "(rule 2)", "(rules 1 and 8)", "(rule 6)", "(rule 7)", "Done when each commit has a verdict on each question", "kebbie order move"], "the branch is judged commit by commit");
+    says(section(&cut, "## Worked example: anonymous tracking"), &["six increments", "1. **Move the tracking code**", "6. **Record anonymous page views**", "What a re-cut like this costs"], "the example shows a re-cut");
+    says(section(&cut, "## Sources"), &["KentBeck/status/250733358307500032", "preparatory-refactoring-example", "ParallelChange", "DarkLaunching", "feature-toggles"], "the method is grounded");
+}

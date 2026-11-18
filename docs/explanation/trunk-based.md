@@ -55,7 +55,7 @@ The gate is the push itself, so nothing waits on a web page.
 
 ## Each commit stands on its own
 
-Without a merge to group them, each commit on the default branch is read on its own. So kebbie leaves commit style to a skill (`task.rules_skill`) that the task follows, the reviewer checks, and `kebbie tidy` and the push window's edit and squash keys help you fix. The default, `kebbie:work-rules`, asks for one logical change per commit with a body that says why, preparatory commits first and the change itself last, so each commit can go out as soon as you accept it. Replace it with your own team's rules.
+Without a merge to group them, each commit on the default branch is read on its own. So kebbie leaves commit style to a skill (`task.rules_skill`) that the task follows, the reviewer checks, and `kebbie tidy` and the push window's edit and squash keys help you fix. The default, `kebbie:work-rules`, asks for one logical change per commit with a body that says why, each commit green and safe to deploy on its own, preparatory commits first, the change itself after them and a risky step last and alone, so each commit can go out as soon as you accept it. Replace it with your own team's rules.
 
 ## CI after the push
 

@@ -13,6 +13,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - kebbie records each test command in a chained line, such as bin/rspec; npm test, as a run of its own with its own result.
 - A task hears at once when a test command another command launches, such as spring rspec, goes unrecorded, with the line that asks the lead to list it.
 - kebbie doctor warns when a repo's own test script, such as script/test, is missing from task.test_commands.
+- The work-rules skill teaches a task to cut its work into commits that each go out alone, and to check its branch commit by commit before it reports ready.
 
 ### Fixed
 

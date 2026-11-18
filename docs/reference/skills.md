@@ -29,7 +29,9 @@ The skills the Claude Code plugin `kebbie@kebbie` ships, and the hooks kebbie gi
 
 `kebbie:work-rules`:
 
-- Its rules: subtasks in the order they go out, each a slice of the work in small commits, preparatory commits (a migration, an interface, a move, a rename) first and the change itself last, each one finished and pushable on its own; a subject and a body that says why, one logical change per commit, staging by explicit file list, the push left to you.
+- Its rules: the work cut into small commits, each green and safe to deploy on its own and written so it reads alone, preparatory commits (a move, a rename, an interface) first, the change itself after them and a risky step (a data migration, a merge of identities, a deletion) last and alone; with subtasks on, those commits grouped into subtasks in the order they go out; a subject and a body that says why, one logical change per commit, staging by explicit file list, the push left to you.
+- Its page `CUT.md` holds a checklist for planning the cut before any code, one for judging a finished branch commit by commit, the techniques that keep a commit safe (preparatory refactoring, parallel change, dark launches and flags) and a worked example.
+- The task checks its own branch by it before it reports ready.
 - The reviewer runs it in the rules check on a ready report and in `kebbie review`. The lead runs it when that check gives no verdict.
 
 `kebbie:review`: the rules check on a ready report does only its commit, rules and docs steps.
