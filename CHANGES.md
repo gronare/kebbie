@@ -10,6 +10,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - COMMENTS also catches comments on your own commits on the default branch, however you pushed them, and comments that mention your GitHub handle on commits, pull requests and issues in the repos kebbie keeps worktrees for.
 - A repo config unsets a command config.toml sets, such as dev_worker, by setting it to "", and kebbie config shows it as unset for that repo.
 - worktree.release_command runs the repo's own command when a worktree goes back to the pool, such as one that removes the worktree's database copy, and the freed line says how it went.
+- kebbie records each test command in a chained line, such as bin/rspec; npm test, as a run of its own with its own result.
 
 ### Fixed
 

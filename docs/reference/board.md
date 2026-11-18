@@ -183,7 +183,7 @@ While Claude waits on a prompt of its own, such as a permission or trust questio
 
 The selected task opens in place with its review progress, its question and options, its report, its latest test run, and a warning about files changed in a main checkout outside any task.
 
-The `tests` line shows the last test command the task's Claude ran, as kebbie recorded it (see [`kebbie evidence`](commands.md#kebbie-evidence-name---json)). The wide panel shows the same line. No line means no test run is recorded.
+The `tests` line shows the last test command the task's Claude ran, as kebbie recorded it, or the failed one when a line ran several (see [`kebbie evidence`](commands.md#kebbie-evidence-name---json)). The wide panel shows the same line. No line means no test run is recorded.
 
 When the task's Claude runs a command that looks like a test run but is not in the list kebbie records, such as `script/test` or `make test`, the row says `script/test is not recorded as a test run: add it to task.test_commands`. Once you add it to [`task.test_commands`](configuration.md#keys), the next run is recorded and the note goes.
 

@@ -169,8 +169,7 @@ fn ask_to_close(cwd: &Path, state: &Path, me: &str, report: &Report, summary: &s
 // A ready report over a red test run names the cause found, the line that fails and why; one that names a cause for a run that passed is refused too.
 pub fn red_gate(runs: &[crate::evidence::Run], cause: Option<&str>) -> Result<Option<String>> {
     let cause = cause.map(|cause| cause.split_whitespace().collect::<Vec<_>>().join(" "));
-    let latest = runs.last();
-    let red = latest.filter(|run| run.result == crate::evidence::Outcome::Failed);
+    let red = crate::evidence::latest(runs).filter(|run| run.result == crate::evidence::Outcome::Failed);
     match (red, cause) {
         (Some(run), None) => Err(format!(
             "Your latest test run is red: `{}` failed at {}. Find its cause, the line that fails and why, before you report ready: fix it when your change caused it; raise it with kebbie obstacle when it did not and it blocks your work; or, once the cause is found and it stays red, report ready again with --red-cause \"<the line that fails and why>\", which the card shows as your decision.",
@@ -749,7 +748,7 @@ mod tests {
 
     #[test]
     fn a_ready_report_over_a_red_run_names_its_cause_and_one_over_a_green_run_names_none() {
-        let run = |result: crate::evidence::Outcome| crate::evidence::Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result, why: String::new(), exit: None, duration_ms: None, summary: String::new(), sha: "abcdef0".to_string(), dirty: false, code: String::new(), at: 1, background: String::new(), transcript: String::new(), says: None, worktree: String::new(), read_to: 0, sandboxed: true };
+        let run = |result: crate::evidence::Outcome| crate::evidence::Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result, why: String::new(), exit: None, duration_ms: None, summary: String::new(), sha: "abcdef0".to_string(), dirty: false, code: String::new(), at: 1, background: String::new(), transcript: String::new(), says: None, worktree: String::new(), read_to: 0, sandboxed: true, in_line: 1 };
         let red = [run(crate::evidence::Outcome::Passed), run(crate::evidence::Outcome::Failed)];
         let refused = red_gate(&red, None).unwrap_err();
         assert!(refused.contains("`cargo test` failed at abcdef0") && refused.contains("kebbie obstacle") && refused.contains("--red-cause"), "{refused}");
@@ -760,6 +759,8 @@ mod tests {
         assert!(red_gate(&green, Some("x")).unwrap_err().contains("it is not red"));
         assert_eq!(red_gate(&[], None), Ok(None));
         assert_eq!(red_gate(&[run(crate::evidence::Outcome::Unknown)], None), Ok(None), "a result kebbie could not read is not red");
+        let line = [crate::evidence::Run { in_line: 2, ..run(crate::evidence::Outcome::Failed) }, crate::evidence::Run { in_line: 2, ..run(crate::evidence::Outcome::Passed) }];
+        assert!(red_gate(&line, None).is_err(), "a green run later in the same line leaves the red one the latest");
     }
 
     #[test]
