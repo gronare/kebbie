@@ -295,7 +295,7 @@ fn a_symlinked_repo_config_loads_and_shows_its_target() {
 #[test]
 fn unknown_keys_are_named_with_the_file_and_ignored_while_bad_values_still_fail() {
     let warned = |text: &str| unknown_in_file(text, "/home/u/.config/kebbie/config.toml", &MACHINE_KEYS);
-    let all = "board, worktree, task, review, investigate, writer, notify, vault, update, restart, keeper, builds, recover, machine, hub, keys, ci, tests, comments, routines, report, issues, lead, worker";
+    let all = "board, worktree, task, review, investigate, writer, notify, vault, update, restart, keeper, builds, recover, machine, hub, keys, ci, tests, comments, routines, report, issues, lead, worker, link";
     assert_eq!(warned("colour = 1
 "), [format!("/home/u/.config/kebbie/config.toml: colour: unknown key; known keys here: {all}")]);
     assert_eq!(warned("[backlog]\nsources = []\n"), [format!("/home/u/.config/kebbie/config.toml: backlog: unknown key; known keys here: {all}")]);
@@ -549,6 +549,22 @@ fn hub_commands_takes_every_kind_unless_the_machine_config_lists_some_and_still_
 }
 
 #[test]
+fn link_networks_lists_tailscale_and_wireguard_in_the_order_to_try_them_and_refuses_any_other() {
+    use LinkNetwork::{Tailscale, Wireguard};
+    assert_eq!(settings(&Worktree::default(), &Machine::default()).link_networks, Setting { value: vec![Tailscale, Wireguard], layer: Layer::Default });
+    assert_eq!(settings(&Worktree::default(), &machine("[link]\nnetworks = [\"wireguard\", \"tailscale\"]\n")).link_networks, Setting { value: vec![Wireguard, Tailscale], layer: Layer::Machine });
+    assert_eq!(machine("[link]\nnetworks = [\"wireguard\"]\n").link_networks, Some(vec![Wireguard]));
+    assert_eq!(machine("[link]\nnetworks = []\n").link_networks, Some(vec![]), "[] is the relay only");
+    assert!(parse_machine("[link]\nnetworks = [\"zerotier\"]\n", "config.toml").unwrap_err().contains("link.networks: \"zerotier\" is no private network kebbie links on; list \"tailscale\", \"wireguard\" or both"));
+    assert!(parse_machine("[link]\nnetworks = [\"wireguard\", \"wireguard\"]\n", "config.toml").unwrap_err().contains("link.networks: \"wireguard\" is listed twice"));
+    assert!(parse_machine("[link]\nnetworks = \"wireguard\"\n", "config.toml").unwrap_err().contains("link.networks: must be a list of strings"));
+    assert!(unknown_machine("[link]\nnetworks = [\"tailscale\"]\n").is_empty());
+    assert!(unknown_machine("[link]\nport = 1\n").contains("link.port: unknown key; known keys here: networks"));
+    let entry = entries(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) }).into_iter().find(|entry| entry.key == "link.networks").expect("kebbie config lists link.networks");
+    assert_eq!((entry.value.as_str(), entry.kind, entry.scope), ("[\"tailscale\", \"wireguard\"]", Kind::List, Scope::Machine));
+}
+
+#[test]
 fn hub_trust_takes_approved_devices_and_auto_approves_after_a_day_unless_the_machine_config_says_otherwise() {
     let defaults = settings(&Worktree::default(), &Machine::default());
     assert_eq!((defaults.hub_trust.clone(), defaults.hub_auto_approve.clone()), (Setting { value: HubTrust::Device, layer: Layer::Default }, Setting { value: AutoApprove::Day, layer: Layer::Default }));
@@ -689,7 +705,7 @@ fn sample(entry: &Entry) -> String {
 fn each_keys_scope_is_the_files_that_take_it_and_what_its_text_says() {
     let loaded = Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
     let all = entries(&loaded);
-    assert_eq!(all.len(), 59);
+    assert_eq!(all.len(), 60);
     for entry in all {
         let (section, field) = entry.key.rsplit_once('.').unwrap();
         let text = format!("[{section}]\n{field} = {}\n", sample(&entry));

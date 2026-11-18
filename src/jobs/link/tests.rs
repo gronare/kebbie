@@ -19,6 +19,7 @@ use super::wire::Link;
 use super::wire::{Ask, Frame, Said};
 use super::unanswered::Unanswered;
 use super::{addresses, relay, tls};
+use crate::config::LinkNetwork;
 use crate::hub::tests::{member, open_hub};
 
 fn host(machine: &Machine, data: &Path) -> Arc<Host> {
@@ -46,7 +47,7 @@ fn listen(host: Arc<Host>) -> Listening {
 }
 
 fn target(of: &Machine, name: &str, address: SocketAddr) -> Target {
-    Target { machine: of.identity.machine.clone(), name: name.to_string(), keys: of.identity.public(), addresses: vec![address], no_address: None }
+    Target { machine: of.identity.machine.clone(), name: name.to_string(), keys: of.identity.public(), tiers: vec![vec![address]], no_address: None }
 }
 
 fn unanswered(machine: &Machine) -> Unanswered {
@@ -54,7 +55,7 @@ fn unanswered(machine: &Machine) -> Unanswered {
 }
 
 fn handshake_as(secret: &SecretKeys, peer: &Target) -> Result<(), String> {
-    let mut tcp = TcpStream::connect(peer.addresses[0]).unwrap();
+    let mut tcp = TcpStream::connect(peer.addresses()[0]).unwrap();
     tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     let mut connection = ClientConnection::new(tls::client(secret, peer.machine.clone(), peer.keys.signing).unwrap(), tls::name()).unwrap();
     while connection.is_handshaking() {
@@ -97,6 +98,42 @@ fn private_addresses_are_tailnet_and_wireguard_only_with_the_tailnet_first() {
 }
 
 #[test]
+fn a_worker_listens_on_and_announces_only_the_networks_link_networks_lists_in_its_order() {
+    let found = vec![LinkAddress { network: Network::Tailscale, ip: "100.101.102.103".into() }, LinkAddress { network: Network::Wireguard, ip: "10.8.0.2".into() }, LinkAddress { network: Network::Tailscale, ip: "fd7a:115c:a1e0::1".into() }];
+    let ips = |kept: Vec<LinkAddress>| kept.into_iter().map(|address| address.ip).collect::<Vec<_>>();
+    assert_eq!(ips(addresses::on_networks(found.clone(), &LinkNetwork::ALL)), ["100.101.102.103", "fd7a:115c:a1e0::1", "10.8.0.2"], "the default keeps both, the tailnet first");
+    assert_eq!(ips(addresses::on_networks(found.clone(), &[LinkNetwork::Wireguard, LinkNetwork::Tailscale])), ["10.8.0.2", "100.101.102.103", "fd7a:115c:a1e0::1"]);
+    let wireguard = addresses::on_networks(found.clone(), &[LinkNetwork::Wireguard]);
+    assert_eq!(super::listening(&wireguard), [SocketAddr::from(([127, 0, 0, 1], super::PORT)), SocketAddr::from(([10, 8, 0, 2], super::PORT))], "no listening on the tailnet it leaves out");
+    assert_eq!(super::listening(&addresses::on_networks(found, &[])), [SocketAddr::from(([127, 0, 0, 1], super::PORT))], "[] keeps loopback only, so the others link through the hub");
+}
+
+#[test]
+fn the_dialing_machine_tries_link_networks_in_its_order_and_never_a_network_it_leaves_out() {
+    let both = Addresses { port: 47_011, addresses: vec![LinkAddress { network: Network::Tailscale, ip: "100.101.102.103".into() }, LinkAddress { network: Network::Wireguard, ip: "10.8.0.2".into() }] };
+    let (tailnet, wireguard) = ("100.101.102.103:47011".parse::<SocketAddr>().unwrap(), "10.8.0.2:47011".parse::<SocketAddr>().unwrap());
+    assert_eq!(client::dialable("laptop", Some(&both), &[LinkNetwork::Wireguard, LinkNetwork::Tailscale]).unwrap(), [vec![wireguard], vec![tailnet]]);
+    assert_eq!(client::dialable("laptop", Some(&both), &[LinkNetwork::Wireguard]).unwrap(), [vec![wireguard]]);
+    let tailnet_only = Addresses { port: 47_011, addresses: vec![LinkAddress { network: Network::Tailscale, ip: "100.101.102.103".into() }] };
+    assert_eq!(client::dialable("laptop", Some(&tailnet_only), &[LinkNetwork::Wireguard]).unwrap_err(), "laptop is on Tailscale only, which link.networks on this machine leaves out");
+    let laptop = Target::of(cluster::new_id().unwrap(), "laptop".into(), SecretKeys::generate().public(), client::dialable("laptop", Some(&both), &[]));
+    assert!(laptop.tiers.is_empty() && laptop.no_address.is_some(), "[] dials nothing, so the link goes through the hub");
+}
+
+#[test]
+fn a_dial_gives_the_first_network_its_head_start_and_moves_on_at_once_when_it_fails() {
+    let (first, second) = (TcpListener::bind("127.0.0.1:0").unwrap(), TcpListener::bind("127.0.0.1:0").unwrap());
+    let (first, second) = (first.local_addr().unwrap(), second.local_addr().unwrap());
+    let long = Duration::from_secs(30);
+    let started = Instant::now();
+    assert_eq!(client::dial(&[vec![first], vec![second]], Duration::from_secs(2), long).unwrap().1, first, "the first network answers within its head start");
+    let closed = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
+    assert_eq!(client::dial(&[vec![closed], vec![second]], Duration::from_secs(2), long).unwrap().1, second, "a refused first network hands over to the next");
+    assert!(started.elapsed() < long, "neither waited out the head start: {:?}", started.elapsed());
+    assert!(client::dial(&[vec![closed]], Duration::from_secs(2), long).unwrap_err().contains(&closed.to_string()));
+}
+
+#[test]
 fn a_machine_announces_its_addresses_to_the_others_on_the_account_and_they_trust_only_what_it_signed() {
     let hub = open_hub(|_| {});
     let mut browser = member(&hub);
@@ -108,22 +145,22 @@ fn a_machine_announces_its_addresses_to_the_others_on_the_account_and_they_trust
     let seen = cluster::fetch(&devbox.dir, &devbox.client(), &devbox.account).unwrap();
     let read = addresses::announced(&devbox.identity, &devbox.client(), &seen, now).unwrap();
     assert_eq!(read.get(&studio.identity.machine), Some(&announced));
-    assert_eq!(client::dialable("studio", read.get(&studio.identity.machine)).unwrap(), ["100.101.102.103:47011".parse::<SocketAddr>().unwrap(), "10.8.0.2:47011".parse().unwrap()]);
+    assert_eq!(client::dialable("studio", read.get(&studio.identity.machine), &LinkNetwork::ALL).unwrap(), [vec!["100.101.102.103:47011".parse::<SocketAddr>().unwrap()], vec!["10.8.0.2:47011".parse().unwrap()]]);
     let mut unlisted = seen.clone();
     unlisted.keys.remove(&studio.identity.machine);
     assert!(addresses::announced(&devbox.identity, &devbox.client(), &unlisted, now).unwrap().is_empty(), "an announcement from a machine not on the list is dropped");
     addresses::announce(&studio.identity, &studio.account, &studio.client(), &listed, &Addresses { port: 0, addresses: Vec::new() }, now).unwrap();
     let read = addresses::announced(&devbox.identity, &devbox.client(), &seen, now).unwrap();
-    assert!(client::dialable("studio", read.get(&studio.identity.machine)).unwrap_err().contains("studio takes no links: [worker] enabled is off there"));
-    assert!(client::dialable("mac", None).unwrap_err().contains("announced no address"));
+    assert!(client::dialable("studio", read.get(&studio.identity.machine), &LinkNetwork::ALL).unwrap_err().contains("studio takes no links: [worker] enabled is off there"));
+    assert!(client::dialable("mac", None, &LinkNetwork::ALL).unwrap_err().contains("announced no address"));
 }
 
 #[test]
 fn an_address_on_a_network_a_newer_kebbie_announced_is_skipped_not_dialed() {
     let mixed = Addresses { port: 47_011, addresses: vec![LinkAddress { network: Network::Other, ip: "100.64.9.9".into() }, LinkAddress { network: Network::Wireguard, ip: "10.8.0.2".into() }] };
-    assert_eq!(client::dialable("studio", Some(&mixed)).unwrap(), ["10.8.0.2:47011".parse::<SocketAddr>().unwrap()]);
+    assert_eq!(client::dialable("studio", Some(&mixed), &LinkNetwork::ALL).unwrap(), [vec!["10.8.0.2:47011".parse::<SocketAddr>().unwrap()]]);
     let only_other = Addresses { port: 47_011, addresses: vec![LinkAddress { network: Network::Other, ip: "100.64.9.9".into() }] };
-    assert!(client::dialable("studio", Some(&only_other)).unwrap_err().contains("studio is on no private network kebbie knows"), "and with nothing else it has no address, so the hub relays");
+    assert!(client::dialable("studio", Some(&only_other), &LinkNetwork::ALL).unwrap_err().contains("studio is on no private network kebbie knows"), "and with nothing else it has no address, so the hub relays");
 }
 
 #[test]
@@ -512,13 +549,13 @@ fn a_link_takes_the_relay_without_waiting_out_an_address_that_never_answers_and_
     let (_, route) = client::connect(&devbox.identity, &at, Duration::from_secs(2), &unanswered(&devbox)).unwrap();
     assert_eq!(route, client::Route::Relay);
     assert!(started.elapsed() < Duration::from_secs(2), "the relay does not wait out the dial: {:?}", started.elapsed());
-    assert!(unanswered(&devbox).lately(&at.machine, &at.addresses), "the address that lost to the relay is remembered");
+    assert!(unanswered(&devbox).lately(&at.machine, &at.addresses()), "the address that lost to the relay is remembered");
     let listening = listen(host(&studio, &root.join("data")));
     let reachable = target(&studio, "studio", listening.address);
-    assert!(!unanswered(&devbox).lately(&reachable.machine, &reachable.addresses), "an address announced since gets its head start again");
+    assert!(!unanswered(&devbox).lately(&reachable.machine, &reachable.addresses()), "an address announced since gets its head start again");
     let (_, route) = client::connect(&devbox.identity, &reachable, Duration::from_secs(2), &unanswered(&devbox)).unwrap();
     assert_eq!(route, client::Route::Direct(listening.address));
-    assert!(!unanswered(&devbox).lately(&at.machine, &at.addresses), "a direct link clears what was remembered");
+    assert!(!unanswered(&devbox).lately(&at.machine, &at.addresses()), "a direct link clears what was remembered");
     stop.store(true, Ordering::SeqCst);
     waiting.join().unwrap();
     let _ = std::fs::remove_dir_all(root);

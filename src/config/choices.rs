@@ -80,6 +80,23 @@ impl AgentUpdates {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkNetwork {
+    Tailscale,
+    Wireguard,
+}
+
+impl LinkNetwork {
+    pub const ALL: [LinkNetwork; 2] = [LinkNetwork::Tailscale, LinkNetwork::Wireguard];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            LinkNetwork::Tailscale => "tailscale",
+            LinkNetwork::Wireguard => "wireguard",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum HubCommand {
     Answer,

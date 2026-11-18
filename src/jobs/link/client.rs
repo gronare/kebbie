@@ -7,6 +7,8 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use kebbie_hub_protocol::{AccountKey, Addresses, Id, Network, PublicKeys, is_commit};
+
+use crate::config::LinkNetwork;
 use rustls::{ClientConnection, StreamOwned};
 
 use super::super::cluster::{self, Cluster};
@@ -22,54 +24,86 @@ use crate::sh::Result;
 const DIAL: Duration = Duration::from_secs(2);
 const HANDSHAKE: Duration = Duration::from_secs(5);
 const HEAD_START: Duration = Duration::from_millis(300);
+pub const STAGGER: Duration = Duration::from_millis(150);
 const ESCALATION: [i32; 3] = [libc::SIGINT, libc::SIGTERM, libc::SIGKILL];
 
-// The machine a link goes to: its key on the account's list and the addresses it announced, or loopback when it is this machine.
+// The machine a link goes to: its key on the account's list and the addresses it announced by network, most wanted first, or loopback when it is this machine.
 #[derive(Clone, Debug)]
 pub struct Target {
     pub machine: Id,
     pub name: String,
     pub keys: PublicKeys,
-    pub addresses: Vec<SocketAddr>,
+    pub tiers: Vec<Vec<SocketAddr>>,
     pub no_address: Option<String>,
 }
 
 impl Target {
-    pub fn of(machine: Id, name: String, keys: PublicKeys, dialed: Result<Vec<SocketAddr>>) -> Target {
+    pub fn of(machine: Id, name: String, keys: PublicKeys, dialed: Result<Vec<Vec<SocketAddr>>>) -> Target {
         match dialed {
-            Ok(addresses) => Target { machine, name, keys, addresses, no_address: None },
-            Err(why) => Target { machine, name, keys, addresses: Vec::new(), no_address: Some(why) },
+            Ok(tiers) => Target { machine, name, keys, tiers, no_address: None },
+            Err(why) => Target { machine, name, keys, tiers: Vec::new(), no_address: Some(why) },
         }
+    }
+
+    pub fn addresses(&self) -> Vec<SocketAddr> {
+        self.tiers.concat()
     }
 }
 
-// The announced addresses to dial, tailnet first; why there are none when there are none.
-pub fn dialable(name: &str, announced: Option<&Addresses>) -> Result<Vec<SocketAddr>> {
+fn shown(network: Network) -> &'static str {
+    match network {
+        Network::Tailscale => "Tailscale",
+        Network::Wireguard => "WireGuard",
+        _ => "a network this kebbie does not know",
+    }
+}
+
+// The announced addresses to dial, one tier per network in link.networks' order, skipping a network it leaves out; why there are none when there are none.
+pub fn dialable(name: &str, announced: Option<&Addresses>, networks: &[LinkNetwork]) -> Result<Vec<Vec<SocketAddr>>> {
     let announced = announced.ok_or_else(|| format!("{name} announced no address for a link: is [worker] enabled = true there, and its kebbie new enough to take links?"))?;
     if announced.port == 0 {
         return Err(format!("{name} takes no links: [worker] enabled is off there"));
     }
-    let known = announced.addresses.iter().filter(|address| address.network != Network::Other);
-    let mut listed: Vec<_> = known.filter_map(|address| address.ip.parse().ok().map(|ip| (address.network != Network::Tailscale, SocketAddr::new(ip, announced.port)))).collect();
-    if listed.is_empty() {
+    let known: Vec<_> = announced.addresses.iter().filter(|address| address.network != Network::Other).collect();
+    if known.is_empty() {
         return Err(format!("{name} is on no private network kebbie knows (Tailscale or WireGuard), so it has no address to take a link on"));
     }
-    listed.sort_by_key(|(later, _)| *later);
-    Ok(listed.into_iter().map(|(_, address)| address).collect())
+    let tiers: Vec<Vec<SocketAddr>> = networks.iter().map(|wanted| known.iter().filter(|address| address.network == addresses::network_of(*wanted)).filter_map(|address| address.ip.parse().ok().map(|ip| SocketAddr::new(ip, announced.port))).collect::<Vec<_>>()).filter(|tier| !tier.is_empty()).collect();
+    if tiers.is_empty() {
+        let mut on: Vec<&str> = known.iter().map(|address| shown(address.network)).collect();
+        on.dedup();
+        return Err(format!("{name} is on {} only, which link.networks on this machine leaves out", on.join(" and ")));
+    }
+    Ok(tiers)
 }
 
-fn dial(addresses: &[SocketAddr], wait: Duration) -> Result<(TcpStream, SocketAddr)> {
+// Each tier's addresses at once, the next tier after stagger or as soon as every address dialed so far failed, and the first to answer wins.
+pub fn dial(tiers: &[Vec<SocketAddr>], wait: Duration, stagger: Duration) -> Result<(TcpStream, SocketAddr)> {
     let (sender, dialed) = mpsc::channel();
-    for address in addresses {
-        let (sender, address) = (sender.clone(), *address);
-        std::thread::spawn(move || {
-            let _ = sender.send((address, TcpStream::connect_timeout(&address, wait)));
-        });
-    }
-    drop(sender);
-    let mut failed = Vec::new();
-    for (address, dialed) in dialed {
-        match dialed {
+    let (mut next, mut pending, mut failed) = (0, 0usize, Vec::new());
+    loop {
+        let heard = match (pending, next < tiers.len()) {
+            (0, false) => break,
+            (0, true) => None,
+            (_, true) => dialed.recv_timeout(stagger).ok(),
+            (_, false) => match dialed.recv() {
+                Ok(heard) => Some(heard),
+                Err(_) => break,
+            },
+        };
+        let Some((address, result)) = heard else {
+            for address in &tiers[next] {
+                let (sender, address) = (sender.clone(), *address);
+                pending += 1;
+                std::thread::spawn(move || {
+                    let _ = sender.send((address, TcpStream::connect_timeout(&address, wait)));
+                });
+            }
+            next += 1;
+            continue;
+        };
+        pending -= 1;
+        match result {
             Ok(tcp) => return Ok((tcp, address)),
             Err(error) => failed.push(format!("{address} ({error})")),
         }
@@ -104,10 +138,10 @@ fn secure<T: std::io::Read + std::io::Write + super::wire::Timed + Send + 'stati
 }
 
 pub fn direct(identity: &Identity, target: &Target, wait: Duration) -> Result<(Link, Route)> {
-    if target.addresses.is_empty() {
+    if target.tiers.is_empty() {
         return Err(target.no_address.clone().unwrap_or_else(|| format!("{} announced no address", target.name)));
     }
-    let (tcp, address) = dial(&target.addresses, wait)?;
+    let (tcp, address) = dial(&target.tiers, wait, STAGGER)?;
     tcp.set_nodelay(true).map_err(|error| error.to_string())?;
     keep_alive(&tcp);
     let path = Route::Direct(address);
@@ -136,8 +170,8 @@ pub fn connect(identity: &Identity, target: &Target, wait: Duration, unanswered:
         return direct(identity, target, wait);
     }
     let (sender, linked) = mpsc::channel();
-    let dialing = !target.addresses.is_empty();
-    let lost_lately = dialing && unanswered.lately(&target.machine, &target.addresses);
+    let dialing = !target.tiers.is_empty();
+    let lost_lately = dialing && unanswered.lately(&target.machine, &target.addresses());
     let mut why_direct = target.no_address.clone().unwrap_or_else(|| format!("{} announced no address", target.name));
     let mut why_relay = None::<String>;
     if dialing {
@@ -162,7 +196,7 @@ pub fn connect(identity: &Identity, target: &Target, wait: Duration, unanswered:
             }
             (Racer::Relay, Ok(linked)) => {
                 if dialing {
-                    unanswered.remember(&target.machine, &target.addresses);
+                    unanswered.remember(&target.machine, &target.addresses());
                 }
                 return Ok(linked);
             }
@@ -343,12 +377,12 @@ fn target(here: &Here, client: &Client, cluster: &Cluster, on: Option<&str>) -> 
             return Err(format!("{} is this machine, and its [worker] enabled is off, so it takes no links", row.name));
         }
         let keys = *cluster.keys.get(me).ok_or("this machine is not on the account's list")?;
-        return Ok(Target { machine: me.clone(), name: row.name.clone(), keys, addresses: super::listening(&[]).into_iter().take(1).collect(), no_address: None });
+        return Ok(Target { machine: me.clone(), name: row.name.clone(), keys, tiers: vec![super::listening(&[]).into_iter().take(1).collect()], no_address: None });
     }
     let now = crate::messages::now();
     let row = cluster::pick(cluster, me, on, now).ok_or_else(|| super::super::master::no_live_worker(cluster, me, on, now))?;
     let keys = *cluster.keys.get(&row.machine).ok_or("the worker is not on the account's list")?;
-    let dialed = addresses::announced(&here.identity, client, cluster, now).and_then(|announced| dialable(&row.name, announced.get(&row.machine)));
+    let dialed = addresses::announced(&here.identity, client, cluster, now).and_then(|announced| dialable(&row.name, announced.get(&row.machine), &super::networks()));
     Ok(Target::of(row.machine.clone(), row.name.clone(), keys, dialed))
 }
 
@@ -420,14 +454,15 @@ pub fn list_cli() -> Result<String> {
     let client = Client::new(&here.identity.url, Some(here.identity.token()), CALL);
     let cluster = cluster::fetch(&here.dir, &client, &here.account).map_err(|error| format!("the hub's list of your machines was not read: {error}"))?;
     let announced = addresses::announced(&here.identity, &client, &cluster, crate::messages::now());
+    let networks = super::networks();
     let mut lines = Vec::new();
     for row in &cluster.rows {
         let Some(keys) = cluster.keys.get(&row.machine).copied() else { continue };
         let me = row.machine == here.identity.machine;
         let target = if me {
-            if crate::config::worker_enabled().unwrap_or(false) { Ok(Target::of(row.machine.clone(), row.name.clone(), keys, Ok(vec![SocketAddr::from(([127, 0, 0, 1], PORT))]))) } else { Err("this machine; its [worker] enabled is off, so it takes no links".to_string()) }
+            if crate::config::worker_enabled().unwrap_or(false) { Ok(Target::of(row.machine.clone(), row.name.clone(), keys, Ok(vec![vec![SocketAddr::from(([127, 0, 0, 1], PORT))]]))) } else { Err("this machine; its [worker] enabled is off, so it takes no links".to_string()) }
         } else {
-            Ok(Target::of(row.machine.clone(), row.name.clone(), keys, announced.as_ref().map_err(Clone::clone).and_then(|announced| dialable(&row.name, announced.get(&row.machine)))))
+            Ok(Target::of(row.machine.clone(), row.name.clone(), keys, announced.as_ref().map_err(Clone::clone).and_then(|announced| dialable(&row.name, announced.get(&row.machine), &networks))))
         };
         let path = target.and_then(|target| {
             let (mut link, route) = connect(&here.identity, &target, DIAL, &here.unanswered())?;

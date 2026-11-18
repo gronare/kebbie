@@ -294,6 +294,7 @@ commands = ["answer", "prompt", "idea"]
 | `restart.idle_minutes` | `10` | config.toml only | How long, an integer from 1 to 1440 minutes, a session on older code waits to be idle and out of focus before that restart. |
 | `keeper.enabled` | `true` | config.toml only | Whether the keeper, one background kebbie per machine, runs the routines. |
 | `worker.enabled` | `false` | config.toml only | Whether this machine runs [jobs](#jobs) and [`kebbie run`](commands.md#commands-on-another-machine) commands for the other machines of its hub account. |
+| `link.networks` | `["tailscale", "wireguard"]` | config.toml only | The private networks [`kebbie run`](commands.md#commands-on-another-machine) links over, in the order to try them: `"tailscale"` and `"wireguard"`. |
 | `recover.enabled` | `true` | config.toml only | Whether kebbie resumes a task whose Claude an API error stopped, and puts a Codex task an API error stopped under Needs you. |
 | `builds.slots` | `1` | config.toml only | How many task builds run at once on this machine, a whole number from 1 to 64. See [Builds](#builds). |
 | `builds.commands` | `["cargo"]` | config.toml only | The commands that take a build slot: a program, and the words its arguments start with, such as `"npm run build"`. |
@@ -316,6 +317,13 @@ full_command = "cargo test --locked"
 `restart.auto`: each restarted session resumes its conversation, and `kebbie update` restarts the idle ones at once. A session mid-turn, the pane you are in and one with background work running are never restarted on their own. `false` restarts nothing on its own; the board still marks the sessions on older code.
 
 `worker.enabled`: the keeper tells the hub this machine is a worker, takes the jobs the other machines on your account's signed list send, and runs them one at a time, in your user account, each in a folder of its task's own under `~/.local/share/kebbie/worker`. Turning it on is your yes to every one of those machines. Jobs come through the hub; for [`kebbie run`](commands.md#commands-on-another-machine) the keeper also listens on port 47011, on loopback and this machine's Tailscale and WireGuard addresses only, and tells the account's other machines those addresses through the hub, and it keeps a WebSocket to the hub open to be rung for a relayed link. Turning it off, or stopping the keeper, tells the hub it is no worker any more and stops the listening. See [Run a job on another machine](../how-to/run-a-job-on-another-machine.md) and [Run a command on another machine](../how-to/run-a-command-on-another-machine.md).
+
+`link.networks`: on a worker, the keeper listens on and announces only its addresses on the networks listed. On the machine that runs `kebbie run`, it dials the listed networks in this order, each next one 150 ms after the one before unless that one failed first, and never an address on a network the list leaves out. `[]` links only through the hub's relay. Any other word is refused. A laptop with both Tailscale and the WireGuard app, whose workstation reaches it only over WireGuard, can keep both, and the workstation sets `["wireguard"]`:
+
+```toml
+[link]
+networks = ["wireguard"]
+```
 
 `keeper.enabled`: the keeper's routines then go on with the board closed. `false` runs them in an open board instead, and the board then posts the hub's board once a minute. See [The keeper](../explanation/updates-and-restarts.md#the-keeper). The routines are:
 

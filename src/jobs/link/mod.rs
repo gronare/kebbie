@@ -32,6 +32,11 @@ const ANNOUNCE_EVERY: Duration = Duration::from_secs(6 * 3_600);
 static HALT: AtomicBool = AtomicBool::new(false);
 static THREAD: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
 
+// link.networks as config.toml has it, and both networks, Tailscale first, while it does not parse.
+pub fn networks() -> Vec<crate::config::LinkNetwork> {
+    crate::config::link_networks().unwrap_or_else(|_| crate::config::LinkNetwork::ALL.to_vec())
+}
+
 fn halted() -> bool {
     crate::keeper::stopping() || HALT.load(Ordering::SeqCst)
 }
@@ -107,7 +112,7 @@ fn serve(state: &Path) {
                 listeners.drop_all_but(&[], &log);
             }
             if let Some((identity, account)) = loaded {
-                let local = if enabled { addresses::local() } else { Vec::new() };
+                let local = if enabled { addresses::on_networks(addresses::local(), &networks()) } else { Vec::new() };
                 let announced = Addresses { port: if enabled { PORT } else { 0 }, addresses: local.clone() };
                 let host = Arc::new(serve::Host { state: state.to_path_buf(), dir: dir.clone(), identity: identity.clone(), account: account.clone(), data: super::data_dir() });
                 listeners.keep(&host, &if enabled { listening(&local) } else { Vec::new() }, &log);

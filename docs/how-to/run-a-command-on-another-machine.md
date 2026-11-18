@@ -9,6 +9,7 @@ Run one command on another machine of your hub account as if it ran here: `kebbi
 - Both machines connected to the same hub account, as for [jobs](run-a-job-on-another-machine.md#what-you-need), with the keeper running on both.
 - For a direct link, both machines on one Tailscale tailnet or one WireGuard network. Without one, the link goes through the hub. kebbie finds the addresses itself: Tailscale's from `tailscale ip` when an interface holds them, and from addresses in 100.64.0.0/10 and fd7a:115c:a1e0::/48 on an interface named `tailscale…` or `utun…`, and WireGuard's from interfaces named `wg…` or that the system calls WireGuard, and from a `utun…` interface outside Tailscale's ranges, as the WireGuard app on macOS makes, only on a private address (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 or fc00::/7).
 - For a direct link, TCP port 47011 open between them on that network.
+- On a machine on both Tailscale and WireGuard, `link.networks` picks which a link uses first, or only; see [Pick the network](#pick-the-network).
 
 ## 1. Turn the other machine on as a worker
 
@@ -57,6 +58,17 @@ The command runs on the worktree as it stands, uncommitted and untracked files i
 stdout and stderr come back apart and as they are written. `kebbie run` exits with the command's own exit code: 128 plus the signal's number when a signal ended it, and 255 when no link could be made or the link was lost. Ctrl-C sends SIGINT to the command's process group on the worker, a second sends SIGTERM and a third SIGKILL; a fourth quits `kebbie run` at once. Ctrl-C before the command has started stops the run there and then, and the command never starts. SIGTERM or SIGHUP to `kebbie run`, as when its terminal closes, counts as two Ctrl-C. The command runs with `sh -c`, with `KEBBIE_RUN_TASK` and `KEBBIE_RUN_FROM` set to the task and the asking machine's name, and stdin closed. Whatever the command left in the background is stopped when it ends.
 
 Both sides send a beat every 10 s when they have nothing else to send. When the other machine sends nothing for 45 s, `kebbie run` stops waiting, says so and exits 255; the worker stops the command the same way when the asker goes silent. A send the other side does not take within 45 s fails the link too. A direct link also has TCP keepalive. A keeper that stops gives its running commands SIGTERM and waits up to 15 s for them.
+
+## Pick the network
+
+When the two machines share both networks, a link tries Tailscale first and WireGuard 150 ms later. To have a link take WireGuard first, or only, set `link.networks` in `~/.config/kebbie/config.toml`:
+
+```toml
+[link]
+networks = ["wireguard", "tailscale"]
+```
+
+On the worker, the list limits the addresses its keeper listens on and announces. On the machine that runs `kebbie run`, it sets the order the announced addresses are tried in, and a network the list leaves out is never dialed. `["wireguard"]` on the workstation suits a laptop that is on Tailscale for one network and WireGuard for the workstation. `[]` makes every link go through the hub's relay.
 
 ## What can go wrong
 

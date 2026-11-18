@@ -23,10 +23,11 @@ pub(super) fn warn_once<T>(value: T, unknown: &[String]) -> T {
     value
 }
 
-pub(super) const MACHINE_KEYS: [&str; 24] = ["board", "worktree", "task", "review", "investigate", "writer", "notify", "vault", "update", "restart", "keeper", "builds", "recover", "machine", "hub", "keys", "ci", "tests", "comments", "routines", "report", "issues", "lead", "worker"];
+pub(super) const MACHINE_KEYS: [&str; 25] = ["board", "worktree", "task", "review", "investigate", "writer", "notify", "vault", "update", "restart", "keeper", "builds", "recover", "machine", "hub", "keys", "ci", "tests", "comments", "routines", "report", "issues", "lead", "worker", "link"];
 pub(super) const REPO_KEYS: [&str; 11] = ["actions", "worktree", "task", "review", "investigate", "ci", "tests", "comments", "docs", "routines", "jobs"];
-const SECTION_KEYS: [(&str, &[&str]); 24] = [
+const SECTION_KEYS: [(&str, &[&str]); 25] = [
     ("worker", &["enabled"]),
+    ("link", &["networks"]),
     ("board", &["groups", "backlog"]),
     ("board.backlog", &["sources", "ongoing", "template"]),
     ("update", &["channel", "agents"]),

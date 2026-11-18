@@ -2,7 +2,7 @@ use std::path::Path;
 
 use toml::Table;
 
-use super::{parse_machine, parse_repo, path, read, short_hostname, unknown_in_file, update, warn_once, AgentUpdates, ApproveFrom, AutoApprove, Channel, HubCommands, HubTrust, Machine, Report, Worktree, DEFAULT_KEEPER, DEFAULT_PROPOSE_ISSUES, DEFAULT_RECOVER, MACHINE_KEYS, REPO_KEYS};
+use super::{parse_machine, parse_repo, path, read, short_hostname, unknown_in_file, update, warn_once, AgentUpdates, ApproveFrom, AutoApprove, Channel, HubCommands, HubTrust, LinkNetwork, Machine, Report, Worktree, DEFAULT_KEEPER, DEFAULT_PROPOSE_ISSUES, DEFAULT_RECOVER, MACHINE_KEYS, REPO_KEYS};
 use crate::sh::Result;
 
 pub fn load_machine(path: &Path) -> Result<Machine> {
@@ -59,6 +59,11 @@ pub fn keeper_enabled() -> Result<bool> {
 
 pub fn worker_enabled() -> Result<bool> {
     Ok(load_machine(&path())?.worker.unwrap_or(false))
+}
+
+// The private networks a link uses, in the order a dialing machine tries them.
+pub fn link_networks() -> Result<Vec<LinkNetwork>> {
+    Ok(load_machine(&path())?.link_networks.unwrap_or_else(|| LinkNetwork::ALL.to_vec()))
 }
 
 pub fn recover_enabled() -> Result<bool> {

@@ -6,6 +6,8 @@ What each kebbie release brings, one line per change, as you would tell someone 
 
 ### What's new
 
+- link.networks picks which private network kebbie run links over first, or only: Tailscale, WireGuard or both.
+
 ### Fixed
 
 - A Mac worker on the WireGuard app links directly, and a logged-out Tailscale no longer fills the keeper log.

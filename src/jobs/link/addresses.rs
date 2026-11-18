@@ -7,6 +7,7 @@ use kebbie_hub_api::{AnnouncedAddresses, MessageUpload};
 use kebbie_hub_protocol::{AccountKey, Addresses, Id, LinkAddress, Network, Payload};
 
 use super::super::cluster::{self, Cluster};
+use crate::config::LinkNetwork;
 use crate::hub::http::{Client, HubError};
 use crate::hub::identity::Identity;
 use crate::sh::Result;
@@ -49,6 +50,20 @@ pub fn classify(interfaces: &[(String, IpAddr)], wireguard: &BTreeSet<String>, t
     }
     let mut seen = BTreeSet::new();
     found.into_iter().filter(|(_, ip)| seen.insert(*ip)).map(|(network, ip)| LinkAddress { network, ip: ip.to_string() }).take(kebbie_hub_protocol::MAX_LINK_ADDRESSES).collect()
+}
+
+pub fn network_of(network: LinkNetwork) -> Network {
+    match network {
+        LinkNetwork::Tailscale => Network::Tailscale,
+        LinkNetwork::Wireguard => Network::Wireguard,
+    }
+}
+
+// The found addresses on the networks link.networks lists, in its order.
+pub fn on_networks(found: Vec<LinkAddress>, networks: &[LinkNetwork]) -> Vec<LinkAddress> {
+    let mut kept: Vec<(usize, LinkAddress)> = found.into_iter().filter_map(|address| networks.iter().position(|network| network_of(*network) == address.network).map(|rank| (rank, address))).collect();
+    kept.sort_by_key(|(rank, _)| *rank);
+    kept.into_iter().map(|(_, address)| address).collect()
 }
 
 fn interfaces() -> Vec<(String, IpAddr)> {
