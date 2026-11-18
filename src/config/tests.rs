@@ -423,9 +423,19 @@ fn board_groups_take_the_listed_order_and_the_rest_follow_by_default() {
     assert_eq!(settings(&Worktree::default(), &Machine::default()).groups.value, Group::ALL, "no list keeps today's order");
     assert_eq!(error("[board]\ngroups = [\"needs-me\"]\n"), "/home/u/.config/kebbie/config.toml: board.groups: \"needs-me\" is not a group; use \"needs-you\", \"working\", \"in-review\", \"ready-to-push\", \"ci-running\", \"waiting-for-work\", \"queued\"");
     assert!(error("[board]\ngroups = [\"queued\", \"queued\"]\n").contains("board.groups: \"queued\" is listed twice"));
-    assert!(unknown_machine("[board]\ncolumns = []\n").contains("board.columns: unknown key; known keys here: groups, backlog"));
+    assert!(unknown_machine("[board]\ncolumns = []\n").contains("board.columns: unknown key; known keys here: groups, next_question, backlog"));
     let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: set });
     assert!(shown.contains("board.groups = [\"ready-to-push\", \"waiting-for-work\", \"needs-you\", \"working\", \"in-review\", \"ci-running\", \"queued\"]  (machine config)\n  The order of the Work column's groups"), "{shown}");
+}
+
+#[test]
+fn next_question_is_on_unless_config_toml_turns_it_off() {
+    assert!(settings(&Worktree::default(), &Machine::default()).next_question.value, "unset keeps the window moving on");
+    let off = settings(&Worktree::default(), &machine("[board]\nnext_question = false\n"));
+    assert!(!off.next_question.value && off.next_question.layer == Layer::Machine);
+    assert!(parse_machine("[board]\nnext_question = \"no\"\n", "config.toml").unwrap_err().contains("board.next_question"));
+    let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: off });
+    assert!(shown.contains("board.next_question = false  (machine config)\n  Whether the questions window moves on"), "{shown}");
 }
 
 #[test]

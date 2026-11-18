@@ -28,7 +28,7 @@ pub(super) const REPO_KEYS: [&str; 11] = ["actions", "worktree", "task", "review
 const SECTION_KEYS: [(&str, &[&str]); 25] = [
     ("worker", &["enabled"]),
     ("link", &["networks"]),
-    ("board", &["groups", "backlog"]),
+    ("board", &["groups", "next_question", "backlog"]),
     ("board.backlog", &["sources", "ongoing", "template"]),
     ("update", &["channel", "agents"]),
     ("restart", &["idle_minutes", "auto"]),

@@ -60,7 +60,7 @@ fn board_keys(loaded: &Loaded) -> (crate::keys::Keys, Vec<String>) {
 }
 
 fn entries_with(loaded: &Loaded, board_keys: &crate::keys::Keys) -> Vec<Entry> {
-    let Settings { sources, groups, ongoing, backlog_template, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, steps, require_accept, review_model, review_auto, review_profile, review_second, investigate_profile, notify_command, vault_command, server_name, worker_name, channel, agent_updates, idle_minutes, auto_restart, ci_watch, ci_deploy, tests_per_commit, tests_before_push, tests_full_command, comments_watch, comments_days, clean_on_release, release_command, docs_required, keeper, worker, link_networks, build_slots, build_commands, recover, machine_name, hub_url, hub_commands, hub_trust, hub_auto_approve, hub_approve_from, report_signals, report_text, report_inbox, propose_issues, lead_profile, writer_profile, ideas_machine } = &loaded.settings;
+    let Settings { sources, groups, ongoing, backlog_template, next_question, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, steps, require_accept, review_model, review_auto, review_profile, review_second, investigate_profile, notify_command, vault_command, server_name, worker_name, channel, agent_updates, idle_minutes, auto_restart, ci_watch, ci_deploy, tests_per_commit, tests_before_push, tests_full_command, comments_watch, comments_days, clean_on_release, release_command, docs_required, keeper, worker, link_networks, build_slots, build_commands, recover, machine_name, hub_url, hub_commands, hub_trust, hub_auto_approve, hub_approve_from, report_signals, report_text, report_inbox, propose_issues, lead_profile, writer_profile, ideas_machine } = &loaded.settings;
     let names: Vec<&str> = sources.value.iter().map(|source| source.key()).collect();
     let (server_key, worker_key) = (board_keys.char(crate::keys::Act::Server), board_keys.char(crate::keys::Act::Worker));
     let mut entries = Vec::new();
@@ -76,6 +76,8 @@ fn entries_with(loaded: &Loaded, board_keys: &crate::keys::Keys) -> Vec<Entry> {
     let order: Vec<&str> = groups.value.iter().map(|group| group.key()).collect();
     key("board.groups", quoted(&order), groups.layer, Kind::List, Scope::Machine,
         &format!("The order of the Work column's groups, by name: {}; groups the list leaves out follow in this default order, so a partial list moves only the ones it names; config.toml only.", quoted(&Group::ALL.map(Group::key))));
+    key("board.next_question", next_question.value.to_string(), next_question.layer, Kind::Bool, Scope::Machine,
+        "Whether the questions window moves on to the next waiting question after an answer is sent; false closes it back to the board with the answer's notice. config.toml only.");
     key("worktree.setup_skill", format!("{:?}", setup_skill.value), setup_skill.layer, Kind::Skill, Scope::Either,
         "The skill a task's Claude runs first to make its worktree runnable: kebbie's own, a skill of yours by name (<skill> or <plugin>:<skill>), or a Markdown file by an absolute or ~ path, whose text the task gets in its role.");
     key("worktree.setup_command", or_unset(setup_command), setup_command.layer, Kind::Text, Scope::Either,

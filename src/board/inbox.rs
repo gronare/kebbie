@@ -331,7 +331,7 @@ impl App {
             return;
         };
         let text = result.unwrap_or_default();
-        if self.questions.is_empty() {
+        if self.questions.is_empty() || !self.next_question {
             self.subject = Some(super::notices::Subject::plain("answer"));
             self.show(Ok(text));
             return;
@@ -1229,6 +1229,25 @@ mod tests {
         app.mode = Mode::Normal;
         crate::board::test_support::press(&mut app, KeyEvent::from(KeyCode::Char('i')));
         assert!(!matches!(app.mode, Mode::Questions(_)), "an empty inbox never opens an empty window");
+    }
+
+    #[test]
+    fn a_sent_answer_moves_on_to_the_next_question_unless_next_question_is_off() {
+        for next_question in [true, false] {
+            let mut app = test_app(vec![served("search-filters")]);
+            app.next_question = next_question;
+            app.questions = three_questions();
+            app.open_questions(Some(0));
+            let (sender, receiver) = mpsc::channel();
+            app.answering = Some(("a".to_string(), receiver));
+            sender.send(Ok("Answered.".to_string())).unwrap();
+            app.poll_answer();
+            let shown = app.toast.as_ref().map(|toast| toast.notice.headline.clone());
+            match &app.mode {
+                Mode::Questions(window) => assert!(next_question && window.id == "b" && shown.is_none(), "on: the window opens the next question"),
+                _ => assert!(!next_question && shown.as_deref() == Some("Answered."), "off: back on the board with the answer's notice, {shown:?}"),
+            }
+        }
     }
 
     #[test]
