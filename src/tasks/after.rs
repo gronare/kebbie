@@ -129,7 +129,7 @@ fn starting(state: &Path, address: &str) -> bool {
     fs::metadata(claimed_file(state, address)).and_then(|metadata| metadata.modified()).is_ok_and(|at| at.elapsed().unwrap_or_default().as_secs() < CLAIM_HOLDS)
 }
 
-struct Lock(fs::File);
+pub(super) struct Lock(fs::File);
 
 impl Drop for Lock {
     fn drop(&mut self) {
@@ -140,8 +140,12 @@ impl Drop for Lock {
 
 impl Lock {
     fn take(state: &Path, wait: bool) -> Option<Lock> {
-        crate::state::private_dir(&dir(state)).ok()?;
-        let file = crate::state::append_to(&dir(state).join(".lock")).ok()?;
+        Lock::in_dir(&dir(state), wait)
+    }
+
+    pub(super) fn in_dir(dir: &Path, wait: bool) -> Option<Lock> {
+        crate::state::private_dir(dir).ok()?;
+        let file = crate::state::append_to(&dir.join(".lock")).ok()?;
         let operation = if wait { libc::LOCK_EX } else { libc::LOCK_EX | libc::LOCK_NB };
         // SAFETY: flock on a descriptor this File owns.
         (unsafe { libc::flock(file.as_raw_fd(), operation) } == 0).then_some(Lock(file))
@@ -198,7 +202,11 @@ pub fn refuse_queued_name(name: &str) -> Result<()> {
 
 // A failed CI watch kept for a wait that is gone now has no one to tell.
 fn release_watches(state: &Path, waits: &[Wait]) {
-    for dep in waits.iter().flat_map(|wait| wait.after.iter()) {
+    release_deps(state, waits.iter().flat_map(|wait| wait.after.iter()));
+}
+
+pub(super) fn release_deps<'a>(state: &Path, deps: impl Iterator<Item = &'a Dep>) {
+    for dep in deps {
         let leftover = crate::ci::load(state, &dep.address).filter(|watch| !watch.close && !watch.running() && !open_in(&watch.repo).contains(&dep.address));
         if leftover.is_some() && !waited_on(state, &dep.address) {
             crate::ci::forget(state, &dep.address);
@@ -318,7 +326,7 @@ pub(super) fn red_ci_superseded(state: &Path, address: &str) -> Vec<String> {
 const SUBJECTS_SHOWN: usize = 20;
 
 // The subjects are the other task's words, so they are quoted apart from kebbie's own sentence.
-fn landed_lines(address: &str, end: Option<&Message>) -> String {
+pub(super) fn landed_lines(address: &str, end: Option<&Message>) -> String {
     let lines: Vec<&str> = end.and_then(|end| end.landed.as_deref()).map(|landed| landed.lines().map(str::trim).filter(|line| !line.is_empty()).collect()).unwrap_or_default();
     if lines.is_empty() {
         return format!("This task waited for {address}, which is done; kebbie did not record its commits.");
@@ -500,6 +508,22 @@ pub(crate) fn plan(me: &str, prompt: &str, asked: &[&str], known: &Known) -> Res
     if prompt.trim().is_empty() {
         return Err(format!("{me} needs its prompt to wait: kebbie start {} \"<prompt>\" --after <task>", task_part(me)));
     }
+    let deps = resolve(me, asked, known)?;
+    if let Some(path) = deps.iter().find_map(|dep| circle(me, &dep.address, &known.waits, vec![me.to_string()])) {
+        return Err(format!("{me} cannot wait in a circle: {}", path.join(" → ")));
+    }
+    let mine = task_part(me);
+    if let Some(running) = known.open.iter().find(|dep| task_part(&dep.address) == mine) {
+        return Err(format!("{mine} is already running ({}), so it cannot wait", running.address));
+    }
+    if let Some(queued) = known.waits.iter().find(|wait| wait.task == mine) {
+        return Err(format!("{mine} is already queued ({}): kebbie after {mine} shows what it waits for", queued.address()));
+    }
+    Ok(if deps.is_empty() { Plan::Now } else { Plan::Queue(deps) })
+}
+
+// The tasks asked for, open or queued, each half of one; a task done already needs no wait and is left out.
+pub(super) fn resolve(me: &str, asked: &[&str], known: &Known) -> Result<Vec<Dep>> {
     let mut deps: Vec<Dep> = Vec::new();
     for asked in asked {
         let (task, repo) = match asked.split_once('@') {
@@ -526,17 +550,7 @@ pub(crate) fn plan(me: &str, prompt: &str, asked: &[&str], known: &Known) -> Res
             }
         }
     }
-    if let Some(path) = deps.iter().find_map(|dep| circle(me, &dep.address, &known.waits, vec![me.to_string()])) {
-        return Err(format!("{me} cannot wait in a circle: {}", path.join(" → ")));
-    }
-    let mine = task_part(me);
-    if let Some(running) = known.open.iter().find(|dep| task_part(&dep.address) == mine) {
-        return Err(format!("{mine} is already running ({}), so it cannot wait", running.address));
-    }
-    if let Some(queued) = known.waits.iter().find(|wait| wait.task == mine) {
-        return Err(format!("{mine} is already queued ({}): kebbie after {mine} shows what it waits for", queued.address()));
-    }
-    Ok(if deps.is_empty() { Plan::Now } else { Plan::Queue(deps) })
+    Ok(deps)
 }
 
 fn circle(me: &str, address: &str, waits: &[Wait], mut path: Vec<String>) -> Option<Vec<String>> {
@@ -551,7 +565,7 @@ fn circle(me: &str, address: &str, waits: &[Wait], mut path: Vec<String>) -> Opt
     wait.after.iter().find_map(|dep| circle(me, &dep.address, waits, path.clone()))
 }
 
-fn known(state: &Path, repos: &[PathBuf]) -> Known {
+pub(super) fn known(state: &Path, repos: &[PathBuf]) -> Known {
     let waits = all(state);
     let mut every: Vec<PathBuf> = crate::status::known_repos(&crate::herdr::workspaces().unwrap_or_default(), crate::repo::pooled_checkouts()).into_iter().collect();
     every.extend(repos.iter().cloned());

@@ -185,7 +185,7 @@ fn stale(repo: &Path) -> bool {
 }
 
 // Some(true) idle at its prompt, Some(false) mid-turn or asking, None no Claude in the task's Space.
-fn waiting_of(path: &Path, workspaces: &[Value], agents: &[Value]) -> Option<bool> {
+pub(super) fn waiting_of(path: &Path, workspaces: &[Value], agents: &[Value]) -> Option<bool> {
     let workspace = workspaces.iter().find(|workspace| workspace["worktree"]["checkout_path"].as_str() == path.to_str())?["workspace_id"].as_str()?;
     let agent = agents.iter().find(|agent| agent["workspace_id"].as_str() == Some(workspace))?;
     crate::restart::Pane::from_agent(agent).map(|pane| pane.waiting)
