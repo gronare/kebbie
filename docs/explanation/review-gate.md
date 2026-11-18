@@ -76,7 +76,7 @@ A task's Claude runs the tests related to its change before it reports ready; th
 
 The reviewer gets every run on the code under review in its brief, one line per command and test command in it, with how many runs passed and failed and the newest result. Only when none ran on that code does it get the newest older ones instead. It treats a failed run, or no passing run on the reviewed code, as a finding. A run whose result kebbie could not see counts as no run.
 
-The brief also tells a missing record from a missing run. When the task's hooks run a kebbie that is no longer installed, or the hook that records runs never ran in the task, the reviewer is told the record is missing, so it does not take that as proof that no test ran. A command that looks like a test run but is not in [`task.test_commands`](../reference/configuration.md#keys) is named too.
+The brief also tells a missing record from a missing run. When the task's hooks run a kebbie that is no longer installed, or the hook that records runs never ran in the task, the reviewer is told the record is missing, so it does not take that as proof that no test ran. A command that looks like a test run but is not in [`task.test_commands`](../reference/configuration.md#keys) is named too. When the repo lists its test commands there, the brief names them, so a finding that asks for a test run asks for it through them.
 
 A review that asked for tests does not wait for a code change. When the task records a passing run on the reviewed code after the verdict, it goes back to the reviewer by itself, and the lead hears the new verdict.
 

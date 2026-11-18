@@ -92,7 +92,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 | Key | Default | Where | What it does |
 | --- | --- | --- | --- |
 | `task.rules_skill` | `"kebbie:work-rules"` | either | The skill with the rules for how work is planned, built and committed, or a Markdown file of rules. |
-| `task.test_commands` | `[]` | either | Test commands kebbie records when a task's Claude runs them, on top of the built-in ones. |
+| `task.test_commands` | `[]` | either | This repo's test commands: kebbie records them when a task's Claude runs them, on top of the built-in ones, and names them to every agent that runs or asks for tests. |
 | `task.also_noticed` | `"backlog"` | either | What a task's Claude does with what it notices outside its task: `"backlog"`, `"fix"` or `"ask"`. |
 | `task.profile` | none | either | The [profile](#profiles) a task starts with when `kebbie start` names none with `--profile`. |
 | `task.sandbox` | `true` | either | Whether a task's and the reviewer's shell commands run in Claude Code's sandbox. |
@@ -103,7 +103,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 
 `task.rules_skill`: a task's Claude follows it, the reviewer checks a ready task against it, and `tidy` reshapes commits by it. It names a skill as `worktree.setup_skill` does, or a Markdown file by an absolute or `~` path, such as `"~/code/team/RULES.md"`: the task gets the file's text in its role and the reviewer in its brief. With the default, kebbie also refuses a ready report while a commit lacks a subject, a blank line and a body.
 
-`task.test_commands`: the built-in ones are `cargo test`, `bin/rails test`, `pytest`, `npm test`, `go test` and others; `kebbie config` lists them. A command counts when one of these, whole words, starts it or any part of its `;`, `&&` or `||` chain, after `cd`, `export`, `VAR=value` and wrappers such as `timeout` or `nice`, and each one in the chain is recorded as a run of its own. `kebbie doctor` warns when the repo has `script/test`, `bin/test`, `scripts/test`, `script/spec` or `bin/spec` and the list leaves it out. See [`kebbie evidence`](commands.md#kebbie-evidence-name---json).
+`task.test_commands`: the built-in ones are `cargo test`, `bin/rails test`, `pytest`, `npm test`, `go test` and others; `kebbie config` lists them. A command counts when one of these, whole words, starts it or any part of its `;`, `&&` or `||` chain, after `cd`, `export`, `VAR=value` and wrappers such as `timeout` or `nice`, and each one in the chain is recorded as a run of its own. `kebbie doctor` warns when the repo has `script/test`, `bin/test`, `scripts/test`, `script/spec` or `bin/spec` and the list leaves it out. See [`kebbie evidence`](commands.md#kebbie-evidence-name---json). The commands listed here are the ones kebbie names to its agents: a task's role tells its Claude to run its tests through them and start no other test setup, the reviewer's and the investigator's briefs name them for any test run they ask for or make, the assessor's brief names them, and the lead's role tells it to run a task's tests through them.
 
 `task.also_noticed` covers things such as a bug nearby, a stale doc or a refactor. See [Decide what a task does with what it notices](../how-to/decide-what-a-task-does-with-what-it-notices.md).
 

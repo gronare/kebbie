@@ -15,6 +15,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - kebbie doctor warns when a repo's own test script, such as script/test, is missing from task.test_commands.
 - The work-rules skill teaches a task to cut its work into commits that each go out alone, and to check its branch commit by commit before it reports ready.
 - board.next_question = false closes the questions window after each answer instead of opening the next question.
+- Every agent that runs or asks for tests, a task, the reviewer, the assessor, the investigator and the lead, is told the repo's task.test_commands, so none starts a test setup of its own.
 
 ### Fixed
 - The questions window sends the selected answer on Enter, the recommended one included, once it has been open half a second; a plan's approve still waits for y.
