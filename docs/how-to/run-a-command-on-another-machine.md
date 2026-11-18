@@ -7,7 +7,7 @@ Run one command on another machine of your hub account as if it ran here: `kebbi
 ## What you need
 
 - Both machines connected to the same hub account, as for [jobs](run-a-job-on-another-machine.md#what-you-need), with the keeper running on both.
-- For a direct link, both machines on one Tailscale tailnet or one WireGuard network. Without one, the link goes through the hub. kebbie finds the addresses itself: Tailscale's from `tailscale ip` and from addresses in 100.64.0.0/10 and fd7a:115c:a1e0::/48 on an interface named `tailscale…` or `utun…`, and WireGuard's from interfaces named `wg…` or that the system calls WireGuard, only on a private address (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 or fc00::/7).
+- For a direct link, both machines on one Tailscale tailnet or one WireGuard network. Without one, the link goes through the hub. kebbie finds the addresses itself: Tailscale's from `tailscale ip` when an interface holds them, and from addresses in 100.64.0.0/10 and fd7a:115c:a1e0::/48 on an interface named `tailscale…` or `utun…`, and WireGuard's from interfaces named `wg…` or that the system calls WireGuard, and from a `utun…` interface outside Tailscale's ranges, as the WireGuard app on macOS makes, only on a private address (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 or fc00::/7).
 - For a direct link, TCP port 47011 open between them on that network.
 
 ## 1. Turn the other machine on as a worker

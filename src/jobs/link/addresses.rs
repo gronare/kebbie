@@ -35,14 +35,16 @@ fn usable(ip: &IpAddr) -> bool {
     !ip.is_loopback() && !ip.is_unspecified() && !ip.is_multicast() && !link_local
 }
 
-// The private-network addresses among this machine's interfaces: Tailscale's as tailscale ip says or by their ranges on a tailscale or utun interface, WireGuard's by interface and only in a private range; tailnet first.
+// The private-network addresses among this machine's interfaces: Tailscale's as tailscale ip says, held by an interface, or by their ranges on a tailscale or utun interface; WireGuard's by interface, or on a utun outside Tailscale's ranges as the WireGuard app on macOS makes, only in a private range; tailnet first.
 pub fn classify(interfaces: &[(String, IpAddr)], wireguard: &BTreeSet<String>, tailnet: &[IpAddr]) -> Vec<LinkAddress> {
     let mut found: Vec<(Network, IpAddr)> = Vec::new();
+    let held = |ip: &&IpAddr| interfaces.iter().any(|(_, own)| own == *ip);
     let on_tailscale = interfaces.iter().filter(|(name, ip)| tailscale_interface(name) && tailscale(ip)).map(|(_, ip)| ip);
-    for ip in tailnet.iter().filter(|ip| private(ip)).chain(on_tailscale).filter(|ip| usable(ip)) {
+    for ip in tailnet.iter().filter(held).filter(|ip| private(ip)).chain(on_tailscale).filter(|ip| usable(ip)) {
         found.push((Network::Tailscale, *ip));
     }
-    for (_, ip) in interfaces.iter().filter(|(name, ip)| usable(ip) && private(ip) && (wireguard.contains(name) || name.starts_with("wg"))) {
+    let wireguard_interface = |name: &str, ip: &IpAddr| wireguard.contains(name) || name.starts_with("wg") || (name.starts_with("utun") && !tailscale(ip));
+    for (_, ip) in interfaces.iter().filter(|(name, ip)| usable(ip) && private(ip) && wireguard_interface(name, ip)) {
         found.push((Network::Wireguard, *ip));
     }
     let mut seen = BTreeSet::new();

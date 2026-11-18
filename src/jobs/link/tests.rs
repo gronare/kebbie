@@ -89,6 +89,9 @@ fn private_addresses_are_tailnet_and_wireguard_only_with_the_tailnet_first() {
     assert!(addresses::classify(&[("wg1".to_string(), ip("203.0.113.5")), ("wg2".to_string(), ip("2001:db8::5"))], &BTreeSet::new(), &[]).is_empty(), "a WireGuard interface on a public address is never bound");
     let utun: Vec<String> = addresses::classify(&[("utun3".to_string(), ip("100.100.1.1"))], &BTreeSet::new(), &[]).into_iter().map(|address| address.ip).collect();
     assert_eq!(utun, ["100.100.1.1"], "the tailnet range on macOS's utun counts without tailscale ip");
+    let app = addresses::classify(&[("en0".to_string(), ip("192.168.1.20")), ("utun12".to_string(), ip("10.7.0.3")), ("utun12".to_string(), ip("fe80::3"))], &BTreeSet::new(), &[ip("100.87.204.108"), ip("fd7a:115c:a1e0::9")]);
+    let app: Vec<(Network, &str)> = app.iter().map(|address| (address.network, address.ip.as_str())).collect();
+    assert_eq!(app, [(Network::Wireguard, "10.7.0.3")], "the WireGuard app's utun counts, and a tailscale ip no interface holds is skipped");
     let listened = super::listening(&found);
     assert!(listened.iter().all(|address| !address.ip().is_unspecified()) && listened[0] == SocketAddr::from(([127, 0, 0, 1], super::PORT)), "loopback for this machine, the private addresses for the others, never 0.0.0.0: {listened:?}");
 }
