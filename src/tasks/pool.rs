@@ -100,20 +100,30 @@ pub fn list(cwd: &Path) -> Result<Vec<Value>> {
 pub(super) fn release(repo: &Path, slot: &Slot, upstream: &str) -> Result<Option<String>> {
     let settings = config::resolve(Some(repo)).map(|loaded| loaded.settings);
     let folders = settings.as_ref().map(|settings| settings.clean_on_release.value.clone()).unwrap_or_else(|_| vec!["target".to_string()]);
-    let command = settings.ok().and_then(|settings| config::setup_command_in(settings.release_command.value, &slot.path));
-    release_with(repo, slot, upstream, &folders, command.as_deref())
+    let command = settings.ok().and_then(|settings| settings.release_command.value);
+    release_with(repo, slot, upstream, &folders, command, crate::repo::sandboxed_worktree(&slot.path))
 }
 
-// The release command runs first, in the worktree as the task left it, so what it gives back is what that worktree's setup made.
-pub(super) fn release_with(repo: &Path, slot: &Slot, upstream: &str, folders: &[String], command: Option<&str>) -> Result<Option<String>> {
-    let ran = command.map(|command| run_release(command, &slot.path, RELEASE_CEILING));
+// The worktree is back on upstream before the release command runs, so the repo's own version of it runs and never one the task changed; in a sandboxed worktree a program path git does not track as upstream has it is not run at all.
+pub(super) fn release_with(repo: &Path, slot: &Slot, upstream: &str, folders: &[String], command: Option<String>, sandboxed: bool) -> Result<Option<String>> {
     git_writing(&slot.path, &["switch", "--quiet", "--detach", &crate::repo::tracking(upstream)])?;
+    let ran = config::setup_command_in(command, &slot.path).map(|command| match foreign_program(&command, &slot.path).filter(|_| sandboxed) {
+        Some(program) => format!("{command} not run: {program} is not {upstream}'s own"),
+        None => run_release(&command, &slot.path, RELEASE_CEILING),
+    });
     clear_tmp(&slot.path);
     git(repo, &["branch", "-D", task_of(slot)])?;
     let removed = clean_build_output(&slot.path, folders);
     let freed = (!removed.is_empty()).then(|| format!("removed {}", removed.iter().map(|(folder, bytes)| format!("{folder}/ ({})", size(*bytes))).collect::<Vec<_>>().join(", ")));
     let said: Vec<String> = ran.into_iter().chain(freed).collect();
     Ok((!said.is_empty()).then(|| said.join("; ")))
+}
+
+fn foreign_program(command: &str, worktree: &Path) -> Option<String> {
+    let program = command.split_whitespace().next().filter(|program| program.contains('/'))?;
+    let tracked = git(worktree, &["ls-files", "--error-unmatch", "--", program]).is_ok();
+    let unchanged = git(worktree, &["status", "--porcelain", "--ignored", "--", program]).is_ok_and(|status| status.is_empty());
+    (!tracked || !unchanged).then(|| program.to_string())
 }
 
 const RELEASE_CEILING: std::time::Duration = std::time::Duration::from_secs(120);
@@ -330,17 +340,40 @@ mod tests {
     }
 
     #[test]
-    fn the_release_command_runs_in_the_worktree_as_the_task_left_it_and_a_failure_is_said_but_frees_it_all_the_same() {
+    fn the_release_command_runs_in_the_worktree_back_on_upstream_and_a_failure_is_said_but_frees_it_all_the_same() {
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         let marker = dir.with_extension("released");
-        let command = format!("printf '%s' \"$(git rev-parse --abbrev-ref HEAD)\" > {}", crate::sh::quote(&marker.to_string_lossy()));
-        let freed = release_with(&dir, &slot, &upstream, &[], Some(&command)).unwrap();
+        let command = format!("git rev-parse HEAD > {}", crate::sh::quote(&marker.to_string_lossy()));
+        let freed = release_with(&dir, &slot, &upstream, &[], Some(command.clone()), false).unwrap();
         assert_eq!(freed, Some(format!("ran {command}")));
-        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "billing", "it ran on the task's branch, before the worktree went back");
+        assert_eq!(std::fs::read_to_string(&marker).unwrap().trim(), git(&dir, &["rev-parse", &upstream]).unwrap(), "it ran with the worktree back on upstream");
         let again = find_free(&dir, &slot);
-        assert_eq!(release_with(&dir, &again, &upstream, &[], Some("echo no such database >&2; exit 3")).unwrap().as_deref(), Some("echo no such database >&2; exit 3 failed (exit 3): no such database"));
+        assert_eq!(release_with(&dir, &again, &upstream, &[], Some("echo no such database >&2; exit 3".to_string()), false).unwrap().as_deref(), Some("echo no such database >&2; exit 3 failed (exit 3): no such database"));
         assert!(find_task(&dir, Some("again"), &dir).is_err(), "the worktree was freed after the failure");
         assert_eq!(run_release("sleep 5", &slot.path, std::time::Duration::from_secs(1)), "sleep 5 stopped after 1 s");
+        let _ = std::fs::remove_file(marker);
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_sandboxed_task_never_has_its_own_version_of_the_release_program_run() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let marker = dir.with_extension("released");
+        let script = |who: &str| format!("#!/bin/sh\nprintf {who} > {}\n", crate::sh::quote(&marker.to_string_lossy()));
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        upstream_commit(&dir, "bin/x", &script("upstream"), "the repo's release program");
+        upstream_commit(&dir, ".gitignore", "bin/y\n", "ignore bin/y");
+        git(&slot.path, &["rebase", "--quiet", &upstream]).unwrap();
+        std::fs::write(slot.path.join("bin/x"), script("task")).unwrap();
+        git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "-am", "the task's own bin/x"]).unwrap();
+        let freed = release_with(&dir, &slot, &upstream, &[], Some("sh bin/x".to_string()), true).unwrap();
+        assert_eq!(freed.as_deref(), Some("ran sh bin/x"));
+        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "upstream", "the task's committed bin/x is not the one run");
+        let again = find_free(&dir, &slot);
+        std::fs::write(again.path.join("bin/y"), script("task")).unwrap();
+        let freed = release_with(&dir, &again, &upstream, &[], Some("bin/y".to_string()), true).unwrap();
+        assert_eq!(freed, Some(format!("bin/y not run: bin/y is not {upstream}'s own")), "a program upstream does not track is not run in a sandboxed worktree");
+        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "upstream");
         let _ = std::fs::remove_file(marker);
         cleanup(dir, origin, &slot);
     }
