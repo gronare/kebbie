@@ -7,16 +7,16 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### What's new
 - V on a task opens its vault note in a window over the board, with its markdown rendered.
 - A task whose report sends you to its vault note opens the note from ⏎ on its row and from Next.
-- COMMENTS also catches comments on your own commits on the default branch, however you pushed them, and comments that mention your GitHub handle on commits, pull requests and issues in the repos kebbie keeps worktrees for.
-- A repo config unsets a command config.toml sets, such as dev_worker, by setting it to "", and kebbie config shows it as unset for that repo.
-- worktree.release_command runs the repo's own command, as the default branch has it, when a worktree goes back to the pool, such as one that removes the worktree's database copy, and the freed line says how it went.
+- COMMENTS also catches comments on your own default-branch commits and mentions of your GitHub handle in your repos.
+- A repo config unsets a command from config.toml, such as dev_worker, by setting it to "".
+- worktree.release_command runs the repo's own cleanup command when a worktree goes back to the pool.
 - kebbie records each test command in a chained line, such as bin/rspec; npm test, as a run of its own with its own result.
 - A task hears at once when a test command another command launches, such as spring rspec, goes unrecorded, with the line that asks the lead to list it.
 - kebbie doctor warns when a repo's own test script, such as script/test, is missing from task.test_commands.
 - The work-rules skill teaches a task to cut its work into commits that each go out alone, and to check its branch commit by commit before it reports ready.
 - board.next_question = false closes the questions window after each answer instead of opening the next question.
-- Every agent that runs or asks for tests, a task, the reviewer, the assessor, the investigator and the lead, is told the repo's task.test_commands, so none starts a test setup of its own.
-- kebbie wait makes a running task wait for other tasks: it shows under Waiting on, each task it waits for shows blocks, and once they land the keeper rebases it and tells its Claude what landed and what to do.
+- Every agent that runs or asks for tests is told the repo's task.test_commands, so none starts its own test setup.
+- kebbie wait makes a task wait for other tasks, then rebases it and tells its Claude once they land.
 - kebbie push refuses a task that waits for another unless asked with --anyway, and the board's push window says what it waits for.
 - A waiting task's Claude and the lead hear it when a task it waits for is dropped, reset or lands with red CI.
 - kebbie peers shows each task's board title after its state, and the lead names tasks to you by those titles.
