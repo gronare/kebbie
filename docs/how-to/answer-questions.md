@@ -6,7 +6,7 @@ Answer the questions your tasks ask through the board, each with options and a r
 
 1. Press `i` on the board. The inbox opens with the waiting questions on the left and the selected question's detail or plan in the middle.
 
-2. Pick an option with `↑` `↓` or `j` `k`. In a plan, `←` `→` pick too. The cursor starts on the recommended one, marked `recommended`, but `⏎` sends nothing until you have picked one.
+2. Pick an option with `↑` `↓` or `j` `k`. In a plan, `←` `→` pick too. The cursor starts on the recommended one, marked `recommended`, so `⏎` alone sends it once the window has been open half a second.
 
 3. To add a comment, start typing, or press `tab` to reach the comment field.
 

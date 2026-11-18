@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -33,6 +33,7 @@ pub(super) struct QuestionWindow {
     notice: Option<(bool, String)>,
     picked: bool,
     confirming: bool,
+    opened: Instant,
 }
 
 fn comment_field() -> TextArea<'static> {
@@ -45,7 +46,7 @@ fn comment_field() -> TextArea<'static> {
 
 impl QuestionWindow {
     fn new(questions: &[Message], selected: usize) -> Self {
-        let mut window = Self { id: String::new(), selected: 0, option: 0, scroll: 0, shift: 0, typing: false, comment: comment_field(), notice: None, picked: false, confirming: false };
+        let mut window = Self { id: String::new(), selected: 0, option: 0, scroll: 0, shift: 0, typing: false, comment: comment_field(), notice: None, picked: false, confirming: false, opened: super::clock::instant() };
         window.select(questions, selected);
         window
     }
@@ -86,6 +87,11 @@ impl QuestionWindow {
         if let Some(answer) = answers.get(index).filter(|answer| answer.takes_comment) {
             self.open_comment(answer);
         }
+    }
+
+    // The Enters that opened the window (Needs-you row, menu) must not also send the answer under the cursor.
+    fn settled(&self) -> bool {
+        self.picked || super::clock::instant().saturating_duration_since(self.opened) >= SETTLE
     }
 
     fn pick(&mut self, option: usize) {
@@ -234,8 +240,7 @@ impl App {
             KeyCode::Right if planned => window.pick((window.option + 1) % count_answers),
             KeyCode::PageUp => window.page(planned, -PAGE),
             KeyCode::PageDown => window.page(planned, PAGE),
-            KeyCode::Enter if !busy && !window.picked => window.notice = Some((false, "Pick an answer first: ↑ ↓ or its key, then ⏎.".to_string())),
-            KeyCode::Enter if !busy => self.choose(&mut window, &answers),
+            KeyCode::Enter if !busy && window.settled() => self.choose(&mut window, &answers),
             KeyCode::Char(character) if character == keys::key(Act::Go) => {
                 let workspace = self.questions.get(window.selected).and_then(|message| self.task_of(&message.from)).and_then(|item| item.workspace.clone());
                 match workspace {
@@ -437,12 +442,12 @@ fn answer_row(answers: &[Answer], option: usize, area: Rect, hits: &mut Vec<(Rec
     fit(spans, area.width as usize)
 }
 
-fn question_keys(typing: bool, picked: bool, plan: bool, several: bool, open: bool) -> String {
+fn question_keys(typing: bool, plan: bool, several: bool, open: bool) -> String {
     let map = keys::map();
     if typing {
         return format!("{} send · pgup pgdn scroll · {} back to the answers", map.label(Act::Options), map.label(Act::Back));
     }
-    let mut keys = pick_hints(if plan { format!("↑ ↓ {} pick", map.label(Act::Switch)) } else { "↑ ↓ pick".to_string() }, picked);
+    let mut keys = pick_hints(if plan { format!("↑ ↓ {} pick", map.label(Act::Switch)) } else { "↑ ↓ pick".to_string() });
     if several {
         keys.push(format!("{} next", map.label(Act::Lead)));
     }
@@ -579,21 +584,21 @@ pub(super) fn draw_questions(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit
         keys.push(Span::styled(format!("{} {} · ", if *ok { "✓" } else { "!" }, notice.split_whitespace().collect::<Vec<_>>().join(" ")), style(if *ok { GREEN } else { RED })));
     }
     let open = viewer && plan_file(message).is_some();
-    keys.push(Span::styled(question_keys(window.typing, window.picked, planned, questions.len() > 1, open), style(MUTED)));
+    keys.push(Span::styled(question_keys(window.typing, planned, questions.len() > 1, open), style(MUTED)));
     frame.render_widget(Paragraph::new(fit(keys, foot.width as usize)), foot);
     hits
 }
 
 const ASK_WIDTH: u16 = 80;
 const PAGE: i32 = 10;
+const SETTLE: Duration = Duration::from_millis(500);
 const INDENT: usize = 5;
 
-fn pick_hints(pick: String, picked: bool) -> Vec<String> {
-    let enter = keys::map().label(Act::Options);
-    if picked { vec![pick, "pgup pgdn scroll".to_string(), format!("{enter} send")] } else { vec![format!("{pick}, {enter} send"), "pgup pgdn scroll".to_string()] }
+fn pick_hints(pick: String) -> Vec<String> {
+    vec![pick, format!("{} send", keys::map().label(Act::Options)), "pgup pgdn scroll".to_string()]
 }
 
-fn ask_keys(typing: bool, picked: bool, options: usize, several: bool, wide: bool) -> String {
+fn ask_keys(typing: bool, options: usize, several: bool, wide: bool) -> String {
     let map = keys::map();
     if typing {
         return format!("{} send · pgup pgdn scroll · {} back to the answers", map.label(Act::Options), map.label(Act::Back));
@@ -601,7 +606,7 @@ fn ask_keys(typing: bool, picked: bool, options: usize, several: bool, wide: boo
     let range = if options > 1 { format!("1–{options}") } else { "1".to_string() };
     let mut keys = vec![format!("{range} answer"), "w own words".to_string()];
     if wide {
-        keys.extend(pick_hints("↑ ↓ pick".to_string(), picked));
+        keys.extend(pick_hints("↑ ↓ pick".to_string()));
     }
     if several {
         keys.push(format!("{} next", map.label(Act::Lead)));
@@ -727,7 +732,7 @@ fn draw_ask(frame: &mut Frame, window: &mut QuestionWindow, message: &Message, c
         keys.push(Span::styled(format!("{} {} · ", if *ok { "✓" } else { "!" }, notice.split_whitespace().collect::<Vec<_>>().join(" ")), style(if *ok { GREEN } else { RED })));
     }
     let options = answers.iter().filter(|answer| answer.choice.is_some()).count();
-    keys.push(Span::styled(ask_keys(window.typing, window.picked, options, count > 1, inner_width >= 70), style(MUTED)));
+    keys.push(Span::styled(ask_keys(window.typing, options, count > 1, inner_width >= 70), style(MUTED)));
     frame.render_widget(Paragraph::new(fit(keys, foot.width as usize)), foot);
 }
 
@@ -801,7 +806,7 @@ mod tests {
         assert!(rows[answers].contains("c comment") && rows[answers].contains("r changes"), "{screen}");
         assert_eq!(row_of(&rows, "recommended · build it as planned"), answers + 1, "the selected answer's meaning under the row");
         assert!(rows[answers].contains("x reject w own words"), "every answer fits a 60-column window: {screen}");
-        assert!(rows[answers + 2].contains("────") && rows[answers + 3].contains("│ ↑ ↓ ← → pick, ⏎ send · pgup pgdn scroll"), "the footer: a rule, then the keys: {screen}");
+        assert!(rows[answers + 2].contains("────") && rows[answers + 3].contains("│ ↑ ↓ ← → pick · ⏎ send · pgup pgdn scroll"), "the footer: a rule, then the keys: {screen}");
         assert!(rows[answers + 4].contains("╰"), "the keys are the window's last inner row: {screen}");
         assert_eq!(row_of(&rows, "ANSWER ─"), answers - 1);
         assert_eq!(app.hits.iter().filter(|(_, hit)| matches!(hit, Hit::Question(_))).count(), 0, "no list in a narrow window");
@@ -1286,9 +1291,17 @@ mod tests {
 
     #[test]
     fn enters_and_arrows_on_a_plans_row_never_approve_it() {
+        let opened = std::time::Instant::now();
+        crate::board::clock::pin_instant(opened);
         let mut app = planned_row();
         feed(&mut app, &[KeyCode::Enter, KeyCode::Enter, KeyCode::Enter, KeyCode::Enter]);
-        assert!(matches!(app.mode, Mode::Questions(_)) && app.answering.is_none(), "Enter on the row, the menu and the window sends nothing unpicked");
+        let Mode::Questions(window) = &app.mode else { panic!("the burst opens the window") };
+        assert!(app.answering.is_none() && !window.confirming && window.notice.is_none(), "Enters right after the window opens do nothing");
+        crate::board::clock::pin_instant(opened + SETTLE);
+        feed(&mut app, &[KeyCode::Enter]);
+        let Mode::Questions(window) = &app.mode else { panic!() };
+        assert!(app.answering.is_none() && window.confirming, "an Enter once the window settled takes the highlighted approve, which still waits for y");
+        crate::board::clock::pin_instant(opened);
         let mut app = planned_row();
         feed(&mut app, &[KeyCode::Enter, KeyCode::Enter, KeyCode::Down, KeyCode::Up, KeyCode::Enter, KeyCode::Enter, KeyCode::Right, KeyCode::Left, KeyCode::Enter]);
         assert!(app.answering.is_none(), "arrows onto Approve and Enter only ask for the confirm");
@@ -1319,13 +1332,28 @@ mod tests {
     }
 
     #[test]
-    fn enter_sends_a_questions_answer_only_once_one_is_picked() {
+    fn enter_sends_the_highlighted_answer_once_the_window_has_been_open_half_a_second() {
+        let opened = std::time::Instant::now();
+        crate::board::clock::pin_instant(opened);
         let mut app = test_app(Vec::new());
         app.questions = messages::fold(crate::board::test_support::QUESTION);
         app.open_questions(Some(0));
+        crate::board::clock::pin_instant(opened + SETTLE - Duration::from_millis(1));
         press(&mut app, KeyCode::Enter);
-        let (_, sent, notice) = typing(&app);
-        assert!(!sent && notice.is_some_and(|notice| notice.starts_with("Pick an answer first")), "the recommended answer is shown, not chosen");
+        assert_eq!(typing(&app), (false, false, None), "an Enter before 500 ms does nothing and says nothing");
+        crate::board::clock::pin_instant(opened + SETTLE);
+        press(&mut app, KeyCode::Enter);
+        let Mode::Questions(window) = &app.mode else { panic!() };
+        let recommended = app.questions[0].question.as_ref().map(|question| question.recommend.saturating_sub(1));
+        assert!(typing(&app).1 && Some(window.option) == recommended, "the preselected, recommended answer goes on Enter");
+    }
+
+    #[test]
+    fn a_picked_answer_goes_on_enter_at_once() {
+        crate::board::clock::pin_instant(std::time::Instant::now());
+        let mut app = test_app(Vec::new());
+        app.questions = messages::fold(crate::board::test_support::QUESTION);
+        app.open_questions(Some(0));
         press(&mut app, KeyCode::Down);
         press(&mut app, KeyCode::Enter);
         assert!(typing(&app).1, "a picked answer goes on Enter");

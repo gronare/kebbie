@@ -16,6 +16,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The work-rules skill teaches a task to cut its work into commits that each go out alone, and to check its branch commit by commit before it reports ready.
 
 ### Fixed
+- The questions window sends the selected answer on Enter, the recommended one included, once it has been open half a second; a plan's approve still waits for y.
 
 ## 0.41.2
 
