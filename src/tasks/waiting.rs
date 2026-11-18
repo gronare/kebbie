@@ -12,6 +12,8 @@ use crate::repo::{default_branch, main_checkout, name_of};
 use crate::sh::Result;
 use super::after::{self, Dep, DepState, Facts, Known, Lock, and_list};
 use super::follow::Step;
+use super::intent::{self, Work};
+use super::line::Turnstile;
 use super::pool::{find_task, slots, task_of};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -167,6 +169,7 @@ pub(crate) fn wait_in(state: &Path, caller: &Caller, asked: &Asked, known: &Know
     let then = then.map(str::trim).filter(|then| !then.is_empty()).map(str::to_string);
     let wait = Waiting { address: address.to_string(), repo: repo.to_path_buf(), on: deps, then, by: by.to_string(), at: now, gone_since: None, unlisted_since: None, unlisted_told: false };
     save(state, &wait)?;
+    let push = cancel_push(state, &wait);
     let main = default_branch(repo).map_or("the default branch".to_string(), |branch| branch.trim_start_matches("origin/").to_string());
     let then = wait.then.as_deref().map_or(String::new(), |then| format!(" Once they land: {then}."));
     tell(address, &format!(
@@ -175,7 +178,24 @@ pub(crate) fn wait_in(state: &Path, caller: &Caller, asked: &Asked, known: &Know
     ));
     Notice::new(Tone::Done, format!("It waits for {}", wait.names()))
         .next(format!("It shows under Waiting on. kebbie rebases it and tells its Claude once {} {} pushed and CI is green; kebbie wait {} --off ends the wait.", wait.names(), wait.is_are(), task_part(address)))
-        .detail("task", address).ok()
+        .detail("task", address).detail("push", push.unwrap_or_default()).ok()
+}
+
+// A push already in its repo's line would go out before what the task now waits for; a red CI's fix is on main's side already and stays.
+fn cancel_push(state: &Path, wait: &Waiting) -> Option<String> {
+    let task = task_part(&wait.address);
+    intent::load(state, &wait.address).filter(|pending| pending.work != Work::Ci)?;
+    let Some(_turnstile) = Turnstile::try_take(state, &wait.repo) else {
+        return Some(format!("kebbie is pushing it right now, so that push may still go out; kebbie push {task} --cancel takes it out if it has not"));
+    };
+    match find_task(&wait.repo, Some(task), &wait.repo) {
+        Ok(slot) => super::push::leave_line(state, &wait.repo, &slot, &wait.address),
+        Err(_) => {
+            intent::forget(state, &wait.address);
+            super::line::restamp(state, &wait.repo);
+        }
+    }
+    Some(format!("its push in the line is cancelled, unpushed; kebbie push {task} --anyway pushes it before them"))
 }
 
 pub(crate) fn off_in(state: &Path, caller: &Caller, address: &str, tell: &mut dyn FnMut(&str, &str)) -> Result<String> {
@@ -682,5 +702,27 @@ mod tests {
         assert!(shown.contains(&format!("waits for {waited} (open)")), "the task in the other repo is open, not gone: {shown}");
         cleanup(web, web_origin, &billing);
         cleanup(api, api_origin, &rounding);
+    }
+
+    #[test]
+    fn a_wait_takes_the_waiters_push_out_of_the_line_and_says_so() {
+        use super::super::intent::{Intent, Through};
+        use super::super::test_support::{cleanup, state_of, task_with_a_commit};
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let address = peers::address("billing", &name_of(&dir));
+        let pending = |work: Work| Intent { by: By::User, work, address: address.clone(), repo: dir.clone(), task: "billing".to_string(), fingerprint: "abc".to_string(), through: Through::All, at: 90, seen: None, hand: None, queued: (work != Work::Ci).then_some(90) };
+        intent::save(&state, &pending(Work::Turn)).unwrap();
+        let known = known(&[address.as_str(), "rounding@api"], Vec::new(), &[]);
+        let ask = Asked { address: &address, repo: &dir, on: &["rounding@api"], then: None };
+        let done = wait_in(&state, &Caller::Lead, &ask, &known, 100, &mut |_, _| {}).unwrap();
+        assert!(done.contains("its push in the line is cancelled, unpushed; kebbie push billing --anyway pushes it before them"), "{done}");
+        assert!(intent::load(&state, &address).is_none(), "the push it had in the line will not go out before what it waits for");
+        let again = wait_in(&state, &Caller::Lead, &ask, &known, 100, &mut |_, _| {}).unwrap();
+        assert!(!again.contains("cancelled"), "with nothing in the line there is nothing to say: {again}");
+        intent::save(&state, &pending(Work::Ci)).unwrap();
+        let red = wait_in(&state, &Caller::Lead, &ask, &known, 100, &mut |_, _| {}).unwrap();
+        assert!(!red.contains("cancelled") && intent::load(&state, &address).is_some(), "a red CI's fix push stays: {red}");
+        cleanup(dir, origin, &slot);
     }
 }

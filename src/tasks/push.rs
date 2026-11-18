@@ -433,6 +433,9 @@ fn through_head(state: &Path, slot: &Slot, address: &str, upstream: &str, head: 
 pub(super) fn device_push(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, head: Option<&str>, read: super::line::Read, push: super::line::Push) -> DevicePush {
     let task = task_of(slot);
     let address = peers::address(task, &name_of(repo));
+    if let Err(refused) = super::waiting::refuse_push(state, &address, task) {
+        return DevicePush::Refused(refused);
+    }
     let upstream = match default_branch(repo) {
         Ok(upstream) => upstream,
         Err(error) => return DevicePush::Failed(error),
@@ -1716,6 +1719,23 @@ mod tests {
             let upstream = default_branch(&intent.repo)?;
             push_task_with(state, &intent.by.caller(), &intent.repo, slot, intent.through, intent.queued, hand, &mut |_, out| push_prefix(&slot.path, &upstream, &out.sha, state).map(|count| format!("pushed {count}")))
         }
+    }
+
+    #[test]
+    fn a_device_push_of_a_waiting_task_is_refused_as_kebbie_push_refuses_it() {
+        use crate::permit::Caller;
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        let pushing = Pushing::new(&dir);
+        let known = super::super::after::Known { open: vec![super::super::after::Dep { address: "rounding@api".to_string(), repo: std::path::PathBuf::from("/repos/api") }], waits: Vec::new(), ends: Default::default() };
+        let ask = super::super::waiting::Asked { address: &pushing.address, repo: &dir, on: &["rounding@api"], then: None };
+        super::super::waiting::wait_in(&pushing.state, &Caller::User, &ask, &known, 100, &mut |_, _| {}).unwrap();
+        let (typed, hand) = handed();
+        let pushed = device_push(&pushing.state, &Caller::hub("acc_01"), &dir, &slot, None, &|_, _| None, &mut device_pushes(&pushing.state, &hand));
+        let said = super::super::waiting::refuse_push(&pushing.state, &pushing.address, "billing").unwrap_err();
+        assert_eq!(pushed, DevicePush::Refused(said), "the phone's push gets the words kebbie push gives");
+        assert!(typed.borrow().is_empty() && intent::load(&pushing.state, &pushing.address).is_none(), "nothing joined the line");
+        super::super::waiting::off_in(&pushing.state, &Caller::User, &pushing.address, &mut |_, _| {}).unwrap();
+        cleanup(dir, origin, &slot);
     }
 
     #[test]
