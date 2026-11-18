@@ -14,6 +14,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A restarted task gets its prompt even when Claude goes busy as it resumes: kebbie sends the prompt before telling the task about its new role, and holds the prompt for the end of the turn when the input box does not show it.
 - A rebuilt kebbie takes over the board only once every job's outcome has been shown, so a failure that waited for you to close a window is no longer lost.
 - Two jobs or runs storing into one repo on a worker at the same moment no longer overwrite each other's bundle.
+- kebbie hub connect keeps the error it got on macOS when it adds that the Local Network permission may be why.
 - Closing the board in a popup while something runs behind it waits until that is done, with a line naming what still runs; esc again closes it at once.
 - Squashing or rewording commits from the push window runs behind the board with the task's row saying so, and tells you how it went; esc no longer looks like it cancels a rewrite that goes on.
 - kebbie setup stops mindin's install when you press e to pick another vault server, so it never signs in to the old address afterwards, and two installs never run at once.

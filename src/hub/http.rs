@@ -56,7 +56,7 @@ pub fn local_network(os: &str, said: &str, errno: Option<i64>) -> bool {
 }
 
 pub fn unreached(os: &str, message: &str) -> String {
-    if local_network(os, message, None) { LOCAL_NETWORK.to_string() } else { format!("could not reach the hub: {message}") }
+    if local_network(os, message, None) { format!("could not reach the hub: {message}. It may be that {LOCAL_NETWORK}") } else { format!("could not reach the hub: {message}") }
 }
 
 // What a hub on a plan without Pro says it refused, with where the plan is changed when it names one.
@@ -244,9 +244,9 @@ mod tests {
     }
 
     #[test]
-    fn error_65_on_macos_names_the_local_network_permission_instead_of_an_unreachable_hub() {
+    fn error_65_on_macos_keeps_the_error_and_names_the_local_network_permission_as_a_possibility() {
         let said = unreached("macos", "io: No route to host (os error 65)");
-        assert!(said.contains("System Settings → Privacy & Security → Local Network, then restart the terminal") && !said.contains("could not reach the hub"), "{said}");
+        assert!(said.starts_with("could not reach the hub: io: No route to host (os error 65). It may be that macOS keeps") && said.ends_with("Local Network, then restart the terminal"), "the error stays and the permission is a possibility: {said}");
         assert_eq!(unreached("linux", "io: No route to host (os error 113)"), "could not reach the hub: io: No route to host (os error 113)");
     }
 
