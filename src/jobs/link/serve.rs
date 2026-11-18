@@ -88,12 +88,17 @@ pub struct Deadline<'a, T> {
 
 impl<T: Read + Timed> Read for Deadline<'_, T> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let too_long = || std::io::Error::new(std::io::ErrorKind::TimedOut, "the handshake took too long");
         let left = self.until.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "the handshake took too long"));
+        if left < Duration::from_millis(1) {
+            return Err(too_long());
         }
         self.inner.wait_at_most(Some(left))?;
-        self.inner.read(buffer)
+        // A socket read timeout surfaces as WouldBlock on Unix, not TimedOut.
+        self.inner.read(buffer).map_err(|error| match error.kind() {
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => too_long(),
+            _ => error,
+        })
     }
 }
 
