@@ -59,6 +59,7 @@ impl QuestionWindow {
         if id != self.id {
             self.comment = comment_field();
             self.typing = false;
+            self.opened = super::clock::instant();
         }
         self.id = id;
         self.option = message.and_then(|message| message.question.as_ref()).map_or(0, |question| question.recommend.saturating_sub(1));
@@ -1365,6 +1366,32 @@ mod tests {
         let Mode::Questions(window) = &app.mode else { panic!() };
         let recommended = app.questions[0].question.as_ref().map(|question| question.recommend.saturating_sub(1));
         assert!(typing(&app).1 && Some(window.option) == recommended, "the preselected, recommended answer goes on Enter");
+    }
+
+    #[test]
+    fn an_enter_right_after_the_next_question_opens_waits_half_a_second() {
+        let answered = std::time::Instant::now();
+        crate::board::clock::pin_instant(answered - SETTLE);
+        let mut app = test_app(vec![served("search-filters")]);
+        app.next_question = true;
+        app.questions = three_questions();
+        app.open_questions(Some(0));
+        crate::board::clock::pin_instant(answered);
+        let (sender, receiver) = mpsc::channel();
+        app.answering = Some(("a".to_string(), receiver));
+        sender.send(Ok("Answered.".to_string())).unwrap();
+        app.poll_answer();
+        press(&mut app, KeyCode::Enter);
+        let Mode::Questions(window) = &app.mode else { panic!("the next question is open") };
+        assert!(window.id == "b" && app.answering.is_none(), "an Enter right after the advance sends nothing");
+        crate::board::clock::pin_instant(answered + SETTLE);
+        press(&mut app, KeyCode::Enter);
+        assert!(typing(&app).1, "an Enter 500 ms later sends the second question's answer");
+        crate::board::clock::pin_instant(answered + SETTLE * 2);
+        app.answering = None;
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.answering.is_none(), "Tab to another question settles again too");
     }
 
     #[test]
