@@ -110,6 +110,14 @@ fn a_machine_announces_its_addresses_to_the_others_on_the_account_and_they_trust
 fn a_link_opens_only_between_keys_on_the_accounts_list_as_it_is_now() {
     let hub = open_hub(|_| {});
     let mut browser = member(&hub);
+#[test]
+fn an_address_on_a_network_a_newer_kebbie_announced_is_skipped_not_dialed() {
+    let mixed = Addresses { port: 47_011, addresses: vec![LinkAddress { network: Network::Other, ip: "100.64.9.9".into() }, LinkAddress { network: Network::Wireguard, ip: "10.8.0.2".into() }] };
+    assert_eq!(client::dialable("studio", Some(&mixed)).unwrap(), ["10.8.0.2:47011".parse::<SocketAddr>().unwrap()]);
+    let only_other = Addresses { port: 47_011, addresses: vec![LinkAddress { network: Network::Other, ip: "100.64.9.9".into() }] };
+    assert!(client::dialable("studio", Some(&only_other)).unwrap_err().contains("studio is on no private network kebbie knows"), "and with nothing else it has no address, so the hub relays");
+}
+
     let (devbox, studio, laptop) = (Machine::connected(&hub, &mut browser, "devbox"), Machine::connected(&hub, &mut browser, "studio"), Machine::connected(&hub, &mut browser, "laptop"));
     let root = crate::sh::test_dir("link-pinning");
     let listening = listen(host(&studio, &root.join("data")));

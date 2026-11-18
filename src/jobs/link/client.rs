@@ -47,10 +47,11 @@ pub fn dialable(name: &str, announced: Option<&Addresses>) -> Result<Vec<SocketA
     if announced.port == 0 {
         return Err(format!("{name} takes no links: [worker] enabled is off there"));
     }
-    if announced.addresses.is_empty() {
+    let known = announced.addresses.iter().filter(|address| address.network != Network::Other);
+    let mut listed: Vec<_> = known.filter_map(|address| address.ip.parse().ok().map(|ip| (address.network != Network::Tailscale, SocketAddr::new(ip, announced.port)))).collect();
+    if listed.is_empty() {
         return Err(format!("{name} is on no private network kebbie knows (Tailscale or WireGuard), so it has no address to take a link on"));
     }
-    let mut listed: Vec<_> = announced.addresses.iter().filter_map(|address| address.ip.parse().ok().map(|ip| (address.network != Network::Tailscale, SocketAddr::new(ip, announced.port)))).collect();
     listed.sort_by_key(|(later, _)| *later);
     Ok(listed.into_iter().map(|(_, address)| address).collect())
 }
