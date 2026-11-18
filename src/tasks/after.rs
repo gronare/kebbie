@@ -554,7 +554,8 @@ pub(super) fn resolve(me: &str, asked: &[&str], known: &Known) -> Result<Vec<Dep
             Some((task, repo)) => (slug(task)?, Some(repo.to_string())),
             None => (slug(asked)?, None),
         };
-        if task == task_part(me) {
+        let my_repo = me.split_once('@').map(|(_, repo)| repo);
+        if task == task_part(me) && (repo.is_none() || repo.as_deref() == my_repo) {
             return Err(format!("{me} cannot wait for itself"));
         }
         let matches = |address: &str| task_part(address) == task && repo.as_deref().is_none_or(|repo| address.split_once('@').map(|(_, name)| name) == Some(repo));
@@ -1579,9 +1580,10 @@ mod tests {
     #[test]
     fn a_wait_on_itself_is_refused() {
         let known = known(&["web-billing@api"], Vec::new(), &[]);
-        for asked in ["web-billing", "web-billing@api", "Web Billing"] {
+        for asked in ["web-billing", "web-billing@web", "Web Billing"] {
             assert_eq!(plan("web-billing@web", "Use it", &[asked], &known).unwrap_err(), "web-billing@web cannot wait for itself", "{asked}");
         }
+        assert_eq!(plan("web-billing@web", "Use it", &["web-billing@api"], &known).unwrap_err(), "web-billing is already running (web-billing@api), so it cannot wait", "its half in another repo is not itself, and a task of that name running still keeps it from queuing");
     }
 
     #[test]

@@ -155,7 +155,7 @@ pub(crate) fn wait_in(state: &Path, caller: &Caller, asked: &Asked, known: &Know
     if on.is_empty() {
         return Err(format!("kebbie wait needs a task to wait for: kebbie wait {} --on <task[@repo]> \"<what to do once it lands>\"", task_part(address)));
     }
-    let deps: Vec<Dep> = after::resolve(address, on, known)?.into_iter().filter(|dep| dep.address != address).collect();
+    let deps = after::resolve(address, on, known)?;
     if deps.is_empty() {
         return Notice::new(Tone::NotNow, "Nothing to wait for: what it names is done already").detail("task", address).err();
     }
@@ -648,6 +648,19 @@ mod tests {
         assert_eq!(load(&state, "billing@web").map(|wait| (wait.unlisted_since, wait.unlisted_told)), Some((None, false)), "listed again, the grace is over");
         told(&state, &facts(&[], &["rounding@api"]), 400, Some("unused"));
         assert_eq!(load(&state, "billing@web"), None, "a listed repo without the waiter still ends its wait");
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_task_can_wait_for_its_own_half_in_another_repo_but_not_for_itself() {
+        let state = crate::sh::test_dir("waiting-half");
+        let known = known(&["billing@web", "billing@api"], Vec::new(), &[]);
+        let nothing = |_: &str, _: &str| {};
+        for itself in ["billing", "billing@web"] {
+            assert!(wait_in(&state, &Caller::User, &asked("billing@web", &[itself], None), &known, 100, &mut nothing.clone()).unwrap_err().contains("billing@web cannot wait for itself"), "{itself}");
+        }
+        wait_in(&state, &Caller::User, &asked("billing@web", &["billing@api"], None), &known, 100, &mut nothing.clone()).unwrap();
+        assert_eq!(load(&state, "billing@web").map(|wait| wait.on), Some(vec![dep("billing@api")]), "its half in api is another task to wait for");
         fs::remove_dir_all(state).unwrap();
     }
 }
