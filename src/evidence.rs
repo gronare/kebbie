@@ -635,7 +635,7 @@ pub fn outcome(input: &Value, listed: &[String]) -> Vec<Ended> {
     }
     let Some((exit, finished, output, background)) = ending(input) else { return Vec::new() };
     let found_count = found.len();
-    let parts = if found_count > 1 { parts(&output, found_count) } else { Some(vec![output]) };
+    let parts = if found_count > 1 { parts(&output, found_count).or_else(|| summary(&output).filter(|summary| summary.failed).map(|_| vec![output.clone(); found_count])) } else { Some(vec![output]) };
     found.iter().enumerate().map(|(at, found)| Ended {
         command: command.to_string(), runner: found.runner.to_string(), exit, finished, says: found.exit, background: background.clone(), in_line: found_count,
         output: parts.as_ref().map(|parts| parts[at].clone()).unwrap_or_default(),
@@ -1136,6 +1136,17 @@ mod tests {
         cargo["tool_response"]["stdout"] = json!("test result: ok. 2 passed; 0 failed\ntest result: ok. 1 passed; 0 failed");
         let unsure = record_in(&state, "billing@app", &dir, &list, &cargo, 2);
         assert_eq!(unsure.iter().map(|run| (run.result, run.summary.as_str())).collect::<Vec<_>>(), [(Outcome::Unknown, ""), (Outcome::Passed, "")], "result lines that do not count out per run decide nothing, and only the last run's exit is its own");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_failure_in_output_that_cannot_be_cut_per_run_fails_every_run_of_the_line() {
+        let dir = repo();
+        let state = dir.join("state");
+        let mut cargo = passed("cargo test -p a; cargo test -p b");
+        cargo["tool_response"]["stdout"] = json!("test result: FAILED. 1 passed; 1 failed\ntest result: ok. 3 passed; 0 failed");
+        let runs = record_in(&state, "billing@app", &dir, &listed(&[]), &cargo, 1);
+        assert_eq!(runs.iter().map(|run| run.result).collect::<Vec<_>>(), [Outcome::Failed, Outcome::Failed], "which run failed is unknown, so none of them is green");
         fs::remove_dir_all(dir).unwrap();
     }
 
