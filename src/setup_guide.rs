@@ -902,8 +902,7 @@ impl Guide {
             }
             (KeyCode::Char('o'), State::Code(code)) => {
                 if let (Some(program), Some(job)) = (crate::hub::connect::opener(), &mut self.vault_job) {
-                    std::thread::spawn(move || crate::issues::open_url(program, &code.link));
-                    job.opened = true;
+                    job.open(program, code.link);
                 }
             }
             (KeyCode::Char('c'), State::Code(code)) => {

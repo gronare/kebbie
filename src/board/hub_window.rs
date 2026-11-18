@@ -57,6 +57,7 @@ pub(super) struct Flow {
     pub(super) copied: Option<Copied>,
     events: Receiver<Event>,
     stop: Arc<AtomicBool>,
+    opening: Option<Receiver<bool>>,
 }
 
 impl Drop for Flow {
@@ -90,7 +91,7 @@ fn spawn(title: &'static str, waiting: String, step: impl FnOnce(&Sender<Event>,
         let last = step(&sender, &stop);
         let _ = sender.send(last);
     });
-    Flow { title, waiting, card: None, copied: None, events, stop }
+    Flow { title, waiting, card: None, copied: None, events, stop, opening: None }
 }
 
 const CHOICES: [(&str, &str); 2] = [("k", "kebbie hub"), ("o", "your own hub")];
@@ -173,6 +174,12 @@ impl Window {
             }
         }
         let View::Running(flow) = &mut self.view else { return };
+        if let Some(opened) = flow.opening.as_ref().and_then(|opening| opening.try_recv().ok()) {
+            flow.opening = None;
+            if let Some(waiting) = &mut flow.card {
+                waiting.opened = opened;
+            }
+        }
         let mut next = None;
         while let Ok(event) = flow.events.try_recv() {
             match event {
@@ -259,9 +266,11 @@ impl Window {
                 (KeyCode::Char('c'), Some(waiting)) => flow.copied = (self.paths.copy)(&waiting.link).ok().or(flow.copied),
                 (KeyCode::Enter, Some(waiting)) => {
                     if let Some(program) = self.paths.opener {
-                        let link = waiting.link.clone();
-                        std::thread::spawn(move || crate::issues::open_url(program, &link));
-                        waiting.opened = true;
+                        let (link, (sender, opening)) = (waiting.link.clone(), mpsc::channel());
+                        thread::spawn(move || {
+                            let _ = sender.send(crate::issues::open_url(program, &link).is_ok());
+                        });
+                        flow.opening = Some(opening);
                     }
                 }
                 _ => return !escape,
@@ -802,8 +811,23 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert_eq!(std::fs::read_to_string(&opened).unwrap(), LINK, "⏎ opens the whole link");
+        until(&mut app, "the opener's answer", |window| matches!(&window.view, View::Running(flow) if flow.card.as_ref().is_some_and(|card| card.opened)));
         let shown = screen(&mut app, 110, 50);
         assert!(shown.contains("✓ Opened in your browser") && !shown.contains("open in browser · or scan"), "{shown}");
+    }
+
+    #[test]
+    fn a_browser_that_fails_to_open_is_never_claimed_opened() {
+        let dir = crate::sh::test_dir("board-hub-open-fails");
+        let (opener, ran) = (dir.join("open"), dir.join("ran"));
+        crate::executable::write(&opener, format!("#!/bin/sh\ntouch '{}'\nexit 1\n", ran.display())).unwrap();
+        let mut app = test_app(Vec::new());
+        waiting_with(&mut app, Duration::from_secs(530), Paths { opener: Some(Box::leak(opener.display().to_string().into_boxed_str())), ..paths("") });
+        press(&mut app, key(KeyCode::Enter));
+        until(&mut app, "the opener's answer", |window| matches!(&window.view, View::Running(flow) if flow.opening.is_none()));
+        assert!(ran.exists(), "the opener ran");
+        let shown = screen(&mut app, 110, 50);
+        assert!(!shown.contains("Opened") && shown.contains("⏎ open in browser"), "{shown}");
     }
 
     #[test]

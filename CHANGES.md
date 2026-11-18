@@ -19,6 +19,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - An action on the Areas or Routines page that crashes says it stopped without an answer, instead of vanishing.
 - An Areas action still running in a repo, such as a release or a push, is refused a second start there until it is done.
 - An answer you give on a backlog item's card stays on it, even when a read of the item was under way as you answered.
+- The hub's connect card and kebbie setup say the browser opened only once it did.
 
 ## 0.40.3
 

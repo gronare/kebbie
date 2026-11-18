@@ -132,12 +132,13 @@ pub struct Job {
     pub started: Instant,
     pub copied: bool,
     pub opened: bool,
+    opening: Option<Receiver<bool>>,
     running: Option<Running>,
 }
 
 impl Job {
     pub fn new(plan: Plan) -> Job {
-        Job { plan, state: State::Waiting, progress: String::new(), mindin: None, signed: None, moved: None, started: Instant::now(), copied: false, opened: false, running: None }
+        Job { plan, state: State::Waiting, progress: String::new(), mindin: None, signed: None, moved: None, started: Instant::now(), copied: false, opened: false, opening: None, running: None }
     }
 
     pub fn launch(&mut self) {
@@ -155,7 +156,19 @@ impl Job {
         self.running = Some(Running { receiver, answers, child, cancelled });
     }
 
+    // The browser opens on a thread; the guide says it opened only once the opener said so.
+    pub fn open(&mut self, program: &'static str, link: String) {
+        let (sender, opening) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(crate::issues::open_url(program, &link).is_ok());
+        });
+        self.opening = Some(opening);
+    }
+
     pub fn poll(&mut self) {
+        if let Some(opened) = self.opening.as_ref().and_then(|opening| opening.try_recv().ok()) {
+            (self.opened, self.opening) = (opened, None);
+        }
         let Some(running) = &self.running else { return };
         let said: Vec<Msg> = running.receiver.try_iter().collect();
         for msg in said {
@@ -439,6 +452,27 @@ mod tests {
         assert!(bin.join("mindin").exists(), "the installer that ignores the stop runs to its end");
         assert!(!signed.exists(), "the cancelled job never signs in");
         assert!(!said.iter().any(|msg| matches!(msg, Msg::Installed(_) | Msg::Said(_))), "nothing settles after it was left: {said:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_browser_counts_as_opened_only_once_the_opener_succeeded() {
+        let dir = crate::sh::test_dir("setup-vault-open");
+        let (works, fails) = (dir.join("open"), dir.join("refuse"));
+        crate::executable::write(&works, "#!/bin/sh\nexit 0\n").unwrap();
+        crate::executable::write(&fails, "#!/bin/sh\nexit 1\n").unwrap();
+        for (opener, opened) in [(fails, false), (works, true)] {
+            let mut job = Job::new(Plan { install: None, command: None, sign_in: None });
+            job.open(Box::leak(opener.display().to_string().into_boxed_str()), "https://v.example/device".to_string());
+            assert!(!job.opened, "nothing is claimed before the opener ran");
+            let waited = Instant::now();
+            while job.opening.is_some() {
+                assert!(waited.elapsed().as_secs() < 10, "the opener never answered");
+                job.poll();
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert_eq!(job.opened, opened, "{}", opener.display());
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
