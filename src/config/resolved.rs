@@ -123,15 +123,16 @@ fn or_default<T>(setting: Option<Setting<T>>, value: T) -> Setting<T> {
 
 pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
     let optional = |setting: Option<Setting<String>>| or_default(setting.map(|setting| Setting { value: Some(setting.value), layer: setting.layer }), None);
+    let unset = |setting: Option<Setting<String>>| optional(setting).map(|value| value.filter(|value| !value.is_empty()));
     Settings {
         sources: or_default(pick(None, machine.sources.as_ref()).map(|setting| Setting { value: read_sources(&setting.value), layer: setting.layer }), vec![Source::Local]),
         groups: pick(None, machine.groups.as_ref()).map_or(Setting { value: Group::ALL.to_vec(), layer: Layer::Default }, |setting| Setting { value: group_order(&setting.value), layer: setting.layer }),
         ongoing: or_default(pick(None, machine.ongoing.as_ref()), OngoingAt::default()),
         backlog_template: optional(pick(None, machine.template.as_ref())),
         setup_skill: or_default(pick(repo.setup_skill.as_ref(), machine.worktree.setup_skill.as_ref()), DEFAULT_SETUP_SKILL.to_string()),
-        setup_command: optional(pick(repo.setup_command.as_ref(), machine.worktree.setup_command.as_ref())),
-        dev_server: optional(pick(repo.dev_server.as_ref(), machine.worktree.dev_server.as_ref())),
-        dev_worker: optional(pick(repo.dev_worker.as_ref(), machine.worktree.dev_worker.as_ref())),
+        setup_command: unset(pick(repo.setup_command.as_ref(), machine.worktree.setup_command.as_ref())),
+        dev_server: unset(pick(repo.dev_server.as_ref(), machine.worktree.dev_server.as_ref())),
+        dev_worker: unset(pick(repo.dev_worker.as_ref(), machine.worktree.dev_worker.as_ref())),
         dev_url: or_default(pick(repo.dev_url.as_ref(), machine.worktree.dev_url.as_ref())
             .map(|setting| Setting { value: Some(setting.value).filter(|url| !url.is_empty()), layer: setting.layer }), Some(DEFAULT_DEV_URL.to_string())),
         dev_route: or_default(pick(repo.dev_route.as_ref(), None), false),
@@ -144,7 +145,7 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         sandbox: or_default(pick(repo.sandbox.as_ref(), machine.worktree.sandbox.as_ref()), true),
         steps: or_default(pick(repo.steps.as_ref(), machine.worktree.steps.as_ref()), true),
         require_accept: or_default(pick(repo.require_accept.as_ref(), machine.worktree.require_accept.as_ref()), false),
-        review_model: optional(pick(repo.review_model.as_ref(), machine.worktree.review_model.as_ref())),
+        review_model: unset(pick(repo.review_model.as_ref(), machine.worktree.review_model.as_ref())),
         review_auto: or_default(pick(repo.review_auto.as_ref(), machine.worktree.review_auto.as_ref()), ReviewAuto::default()),
         review_profile: or_default(pick(repo.review_profile.as_ref(), machine.worktree.review_profile.as_ref()), crate::profiles::REVIEWER.to_string())
             .map(|name| if name == NONE { crate::profiles::REVIEWER.to_string() } else { name }),
@@ -159,7 +160,7 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         idle_minutes: or_default(pick(None, machine.restart.idle_minutes.as_ref()), DEFAULT_IDLE_MINUTES),
         auto_restart: or_default(pick(None, machine.restart.auto.as_ref()), true),
         ci_watch: or_default(pick(repo.ci_watch.as_ref(), machine.worktree.ci_watch.as_ref()), true),
-        ci_deploy: optional(pick(repo.ci_deploy.as_ref(), machine.worktree.ci_deploy.as_ref())),
+        ci_deploy: unset(pick(repo.ci_deploy.as_ref(), machine.worktree.ci_deploy.as_ref())),
         tests_per_commit: or_default(pick(repo.tests_per_commit.as_ref(), machine.worktree.tests_per_commit.as_ref()), true),
         tests_before_push: or_default(pick(repo.tests_before_push.as_ref(), machine.worktree.tests_before_push.as_ref()), BeforePush::default()),
         tests_full_command: optional(pick(repo.tests_full_command.as_ref(), None)),

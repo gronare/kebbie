@@ -20,6 +20,14 @@ pub(super) fn text(table: &Table, field: &str, key: &str) -> Result<Option<Strin
     }
 }
 
+// A repo config's "" unsets the key for that repo, over config.toml's value.
+pub(super) fn unsettable(table: &Table, field: &str, key: &str) -> Result<Option<String>> {
+    match table.get(field).and_then(Value::as_str) {
+        Some("") => Ok(Some(String::new())),
+        _ => text(table, field, key),
+    }
+}
+
 pub(super) fn flag(table: &Table, field: &str, key: &str) -> Result<Option<bool>> {
     table.get(field).map(|value| value.as_bool().ok_or(format!("{key}: must be true or false"))).transpose()
 }

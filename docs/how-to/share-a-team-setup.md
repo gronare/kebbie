@@ -46,3 +46,4 @@ Keep your team's kebbie repo configs in a team repo, so one pull updates everyon
 
 - If you want to differ from the team for one repo, replace the link with your own file. A linked file is the team's.
 - If you want machine-wide values, use `~/.config/kebbie/config.toml`. A repo config wins over it key by key.
+- If one repo should not have a command config.toml sets for every repo, such as a `dev_worker` for an app without a worker, set it to `""` in that repo's config. `kebbie config --repo` then shows it as `unset (repo config)`. See [Files and layers](../reference/configuration.md#files-and-layers) for the keys that take it.

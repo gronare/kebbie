@@ -2,7 +2,7 @@ use std::path::{Component, Path};
 
 use toml::{Table, Value};
 
-use super::{flag, path, permission_mode, skill, strings, subtable, table, template, text, AlsoNoticed, BeforePush, ReviewAuto, Second, NONE};
+use super::{flag, path, permission_mode, skill, strings, subtable, table, template, text, unsettable, AlsoNoticed, BeforePush, ReviewAuto, Second, NONE};
 use crate::sh::Result;
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -46,9 +46,9 @@ fn worktree(table: &Table) -> Result<Worktree> {
     let Some(worktree) = subtable(table, "worktree", "worktree")? else { return Ok(Worktree::default()) };
     Ok(Worktree {
         setup_skill: skill(worktree, "setup_skill", "worktree.setup_skill")?,
-        setup_command: text(worktree, "setup_command", "worktree.setup_command")?,
-        dev_server: text(worktree, "dev_server", "worktree.dev_server")?,
-        dev_worker: text(worktree, "dev_worker", "worktree.dev_worker")?,
+        setup_command: unsettable(worktree, "setup_command", "worktree.setup_command")?,
+        dev_server: unsettable(worktree, "dev_server", "worktree.dev_server")?,
+        dev_worker: unsettable(worktree, "dev_worker", "worktree.dev_worker")?,
         dev_url: template(worktree, "dev_url", "worktree.dev_url")?,
         dev_route: flag(worktree, "dev_route", "worktree.dev_route")?,
         stage_on_main: flag(worktree, "stage_on_main", "worktree.stage_on_main")?,
@@ -132,7 +132,7 @@ fn test_commands(value: &Value) -> Result<Vec<String>> {
 
 fn with_review(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     if let Some(review) = subtable(table, "review", "review")? {
-        worktree.review_model = text(review, "model", "review.model")?;
+        worktree.review_model = unsettable(review, "model", "review.model")?;
         worktree.review_auto = review_auto(review)?;
         worktree.review_profile = profile(review, "review.profile")?;
         worktree.review_second = text(review, "second", "review.second")?.map(|text| Second::parse(&text)).transpose()?;
@@ -166,7 +166,7 @@ fn with_vault(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
 fn with_ci(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     if let Some(ci) = subtable(table, "ci", "ci")? {
         worktree.ci_watch = flag(ci, "watch", "ci.watch")?;
-        worktree.ci_deploy = text(ci, "deploy", "ci.deploy")?;
+        worktree.ci_deploy = unsettable(ci, "deploy", "ci.deploy")?;
     }
     if let Some(tests) = subtable(table, "tests", "tests")? {
         worktree.tests_per_commit = flag(tests, "per_commit", "tests.per_commit")?;
@@ -195,6 +195,14 @@ fn with_docs(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
         worktree.docs_required = flag(docs, "required", "docs.required")?;
     }
     Ok(worktree)
+}
+
+const UNSETTABLE: [&str; 5] = ["worktree.setup_command", "worktree.dev_server", "worktree.dev_worker", "review.model", "ci.deploy"];
+
+// The keys a repo config may set to "" to unset, by name, as layers read them.
+pub(super) fn unset_keys(worktree: &Worktree) -> Vec<&'static str> {
+    let values = [&worktree.setup_command, &worktree.dev_server, &worktree.dev_worker, &worktree.review_model, &worktree.ci_deploy];
+    UNSETTABLE.into_iter().zip(values).filter(|(_, value)| value.as_deref() == Some("")).map(|(key, _)| key).collect()
 }
 
 pub(super) fn layers(table: &Table) -> Result<Worktree> {

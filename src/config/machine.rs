@@ -1,6 +1,6 @@
 use toml::{Table, Value};
 
-use super::{flag, layers, repos_dir, strings, subtable, table, text, AgentUpdates, ApproveFrom, AutoApprove, Channel, HubCommands, HubTrust, LinkNetwork, OngoingAt, ReportText, Source, Worktree};
+use super::{flag, layers, unset_keys, repos_dir, strings, subtable, table, text, AgentUpdates, ApproveFrom, AutoApprove, Channel, HubCommands, HubTrust, LinkNetwork, OngoingAt, ReportText, Source, Worktree};
 use crate::sh::Result;
 use crate::status::Group;
 
@@ -324,6 +324,9 @@ pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
         return Err(fail(if required { per_repo("docs.required") } else { format!("docs: [docs] is a repo config's table, with the one key required; set it in {}/<repo>.toml", repos_dir().display()) }));
     }
     let worktree = layers(&table).map_err(fail)?;
+    if let Some(key) = unset_keys(&worktree).first() {
+        return Err(fail(format!("{key}: must not be empty; leave it out of config.toml, and set it to \"\" in a repo config to unset it for that repo")));
+    }
     if worktree.dev_route.is_some() {
         return Err(fail(per_repo("worktree.dev_route")));
     }

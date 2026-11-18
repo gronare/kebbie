@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::{load_machine, repos_dir, resolve, shown, AgentUpdates, AlsoNoticed, ApproveFrom, AutoApprove, BeforePush, Channel, HubTrust, Layer, Loaded, OngoingAt, ReportText, ReviewAuto, Second, Settings, PERMISSION_MODES};
+use super::{load_machine, repos_dir, resolve, shown, AgentUpdates, AlsoNoticed, ApproveFrom, AutoApprove, BeforePush, Channel, HubTrust, Layer, Loaded, OngoingAt, ReportText, ReviewAuto, Second, Setting, Settings, PERMISSION_MODES};
 use crate::repo::main_checkout;
 use crate::sh::Result;
 use crate::status::Group;
@@ -41,6 +41,11 @@ fn or_none(value: Option<&String>) -> String {
     value.map_or("none".to_string(), |value| format!("{value:?}"))
 }
 
+// A repo config's "" shows as unset, so it reads apart from a key nobody set.
+fn or_unset(setting: &Setting<Option<String>>) -> String {
+    if setting.value.is_none() && setting.layer == Layer::Repo { "unset".to_string() } else { or_none(setting.value.as_ref()) }
+}
+
 fn quoted(items: &[&str]) -> String {
     format!("[{}]", items.iter().map(|item| format!("{item:?}")).collect::<Vec<_>>().join(", "))
 }
@@ -73,11 +78,11 @@ fn entries_with(loaded: &Loaded, board_keys: &crate::keys::Keys) -> Vec<Entry> {
         &format!("The order of the Work column's groups, by name: {}; groups the list leaves out follow in this default order, so a partial list moves only the ones it names; config.toml only.", quoted(&Group::ALL.map(Group::key))));
     key("worktree.setup_skill", format!("{:?}", setup_skill.value), setup_skill.layer, Kind::Skill, Scope::Either,
         "The skill a task's Claude runs first to make its worktree runnable: kebbie's own, a skill of yours by name (<skill> or <plugin>:<skill>), or a Markdown file by an absolute or ~ path, whose text the task gets in its role.");
-    key("worktree.setup_command", or_none(setup_command.value.as_ref()), setup_command.layer, Kind::Text, Scope::Either,
+    key("worktree.setup_command", or_unset(setup_command), setup_command.layer, Kind::Text, Scope::Either,
         "The repo's own command that prepares an existing worktree, run from inside it; the setup skill runs it. A path applies only in a repo that has the file; elsewhere, and when none, bin/setup-worktree when the repo has one.");
-    key("worktree.dev_server", or_none(dev_server.value.as_ref()), dev_server.layer, Kind::Text, Scope::Either,
+    key("worktree.dev_server", or_unset(dev_server), dev_server.layer, Kind::Text, Scope::Either,
         &format!("The shell command the board's {server_key} key runs in a server tab of the task's Space, with PORT set to the worktree's port; without one there is no {server_key}."));
-    key("worktree.dev_worker", or_none(dev_worker.value.as_ref()), dev_worker.layer, Kind::Text, Scope::Either,
+    key("worktree.dev_worker", or_unset(dev_worker), dev_worker.layer, Kind::Text, Scope::Either,
         &format!("A second command, such as a job runner, the board's {worker_key} key runs in a worker tab of the task's Space, with the same PORT; without one there is no {worker_key}."));
     key("worktree.dev_url", dev_url.value.as_ref().map_or("\"\" (no link)".to_string(), |url| format!("{url:?}")), dev_url.layer, Kind::Text, Scope::Either,
         "The running dev server's address, shown on the board as a link: {worktree} (the worktree's folder), {repo}, {number} (its pool number) and {port} (its port) are filled in; a worktree without what it names gets no link, and \"\" turns the link off.");
@@ -109,7 +114,7 @@ fn entries_with(loaded: &Loaded, board_keys: &crate::keys::Keys) -> Vec<Entry> {
         "Tasks work in subtasks, each a titled part of the work in small commits, listed with kebbie subtasks before they write code and marked ready with kebbie subtasks done: you accept each subtask and push the accepted run from the top while the task builds on. Off, a task commits its own way and kebbie subtasks refuses. New tasks follow it; a running task once it restarts.");
     key("task.require_accept", require_accept.value.to_string(), require_accept.layer, Kind::Bool, Scope::Either,
         "Whether every commit must be accepted before it can be pushed: kebbie push, the board's push and push in order refuse while a commit they would take is not accepted, and a ready task with one waits under Needs you to have its next subtask accepted. Off, a push takes what is committed and accepting is yours to use or skip. Only with task.steps on; with it off this has no effect.");
-    key("review.model", or_none(review_model.value.as_ref()), review_model.layer, Kind::Text, Scope::Either,
+    key("review.model", or_unset(review_model), review_model.layer, Kind::Text, Scope::Either,
         "The model the default reviewer (review.profile) runs on, ahead of its profile's model; none leaves it to that profile, then to its agent's default.");
     key("review.profile", format!("{:?}", review_profile.value), review_profile.layer, Kind::ReviewProfile, Scope::Either,
         "The review profile kebbie review runs by default, and whose verdict holds a task's push until it passes: the built-in reviewer, or a profile of yours with kind = \"review\". Only a review profile can be named; the Settings page picks from them.");
@@ -125,7 +130,7 @@ fn entries_with(loaded: &Loaded, board_keys: &crate::keys::Keys) -> Vec<Entry> {
         "The vault command kebbie runs for task notes, log lines and the board's snapshot, before its own arguments (about --json, task open, log append, ...), such as \"uvx mindin\"; it is kebbie's own, whatever agent runs the task. kebbie setup finds the candidates on this machine and writes your choice. None falls back to the Claude vault plugin's pinned command; config.toml only.");
     key("ci.watch", ci_watch.value.to_string(), ci_watch.layer, Kind::Bool, Scope::Either,
         "Whether kebbie watches GitHub Actions after a push and keeps the task open under CI running until every run for the pushed commit is green; a failed run moves the task to Needs you and its Claude gets the failing job's log. Needs origin on GitHub and gh logged in; false closes the task right after the push. A repo config can turn it off for one repo.");
-    key("ci.deploy", or_none(ci_deploy.value.as_ref()), ci_deploy.layer, Kind::Text, Scope::Either,
+    key("ci.deploy", or_unset(ci_deploy), ci_deploy.layer, Kind::Text, Scope::Either,
         "The name of the GitHub Actions workflow that deploys this repo, for a task in stages (kebbie stages): a stage whose requirement is deploy is met once a run of this workflow on its pushed commit is green. None takes CI green on the pushed commit as the deploy. Needs ci.watch on.");
     key("tests.per_commit", tests_per_commit.value.to_string(), tests_per_commit.layer, Kind::Bool, Scope::Either,
         "Whether kebbie tests each of a task's unpushed commits on its own once the task reports ready: the keeper runs the test commands the task's own recorded test runs used (else task.test_commands) on one commit at a time, in a throwaway worktree of kebbie's, and remembers each commit's result by its sha, so a commit is tested once. A commit the task's own recorded runs already tested is not run again, and a task in the sandbox gets only those. The throwaway worktree is first prepared with the repo's setup (worktree.setup_command, else bin/setup-worktree), and a setup that fails leaves the commits not tested. The push order on the board and the phone marks each commit passed or failed; nothing waits on it. Left at its default it runs only in a repo with such a setup; true runs it without one, false runs none. With a slow suite this costs a suite run per commit.");

@@ -20,6 +20,7 @@ kebbie reads each key from the first layer that sets it:
 Rules:
 
 - A key marked **config.toml only** in a repo config is an error that says so.
+- In a repo config, `""` unsets `worktree.setup_command`, `worktree.dev_server`, `worktree.dev_worker`, `review.model` and `ci.deploy` for that repo, so config.toml's value does not apply there, and `kebbie config` shows the key as `unset (repo config)`. In config.toml, `""` for these is an error: leave the key out. Other keys are turned off by a value of their own, such as `false`, `[]`, `"none"` for a profile, or `""` for `worktree.dev_url`.
 - An unknown key or table in either file is ignored, with one line on stderr that names the file and the key, so a key from a newer kebbie never stops this one. `kebbie doctor` lists them as warnings.
 - A known key with a value of the wrong type is an error that names the file and the key.
 - Unknown keys inside an `[[actions]]` or `[[routines]]` entry are errors, since that entry says what kebbie runs.
@@ -67,7 +68,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 | `worktree.setup_skill` | `"kebbie:set-up-worktree"` | either | The skill a task's Claude runs first to make its worktree runnable, or a Markdown file of steps. |
 | `worktree.setup_command` | none | either | The repo's own command that prepares a worktree, run from inside it by the setup skill. |
 | `worktree.dev_server` | none | either | The command the board's `w` runs in a server tab of the task's Space. Unset, there is no `w`. |
-| `worktree.dev_worker` | none | either | A second command, such as a job runner, that `b` runs in a worker tab. Unset, there is no `b`. |
+| `worktree.dev_worker` | none | either | A second command, such as a job runner, that `b` runs in a worker tab. Unset, there is no `b`; `""` in a repo config unsets config.toml's for that repo. |
 | `worktree.dev_url` | `"http://localhost:{port}"` | either | The running dev server's address, shown on the board as a link. `""` turns the link off. |
 | `worktree.dev_route` | `false` | repo config only | Whether [`kebbie routes`](commands.md#setup-and-maintenance) writes a Caddy site for each of this repo's worktrees. |
 | `worktree.stage_on_main` | `false` | repo config only | Whether [`kebbie try`](commands.md#kebbie-try-name) (`M` on the board) may put a ready task's commits on this repo's local default branch. |

@@ -750,6 +750,23 @@ fn dev_url_gives_no_link_when_the_worktree_lacks_what_it_names() {
 }
 
 #[test]
+fn a_repo_configs_empty_text_unsets_config_tomls_value_for_that_repo_and_config_toml_cannot_set_one() {
+    let team = machine("[worktree]\nsetup_command = \"bin/prepare\"\ndev_server = \"bin/dev\"\ndev_worker = \"bin/jobs\"\n[review]\nmodel = \"opus\"\n[ci]\ndeploy = \"Deploy\"\n");
+    let own = repo("[worktree]\nsetup_command = \"\"\ndev_server = \"\"\ndev_worker = \"\"\n[review]\nmodel = \"\"\n[ci]\ndeploy = \"\"\n");
+    let unset = settings(&own, &team);
+    for (key, setting) in [("setup_command", &unset.setup_command), ("dev_server", &unset.dev_server), ("dev_worker", &unset.dev_worker), ("review_model", &unset.review_model), ("ci_deploy", &unset.ci_deploy)] {
+        assert_eq!(*setting, Setting { value: None, layer: Layer::Repo }, "{key}");
+    }
+    assert_eq!(settings(&Worktree::default(), &team).dev_worker, Setting { value: Some("bin/jobs".to_string()), layer: Layer::Machine }, "another repo keeps the team's worker");
+    let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: unset });
+    assert!(shown.contains("worktree.dev_worker = unset  (repo config)\n"), "{shown}");
+    assert!(shown.contains("ci.deploy = unset  (repo config)\n"), "{shown}");
+    assert!(parse_repo("[worktree]\ndev_worker = \" \"\n", "app.toml").unwrap_err().contains("worktree.dev_worker: must not be empty"), "only \"\" unsets, so a stray space is still a mistake");
+    let refused = parse_machine("[worktree]\ndev_worker = \"\"\n", "config.toml").unwrap_err();
+    assert!(refused.contains("worktree.dev_worker: must not be empty; leave it out of config.toml, and set it to \"\" in a repo config to unset it for that repo"), "{refused}");
+}
+
+#[test]
 fn an_empty_dev_url_turns_the_link_off_in_either_file() {
     let off = settings(&repo("[worktree]\ndev_url = \"\"\n"), &machine("[worktree]\ndev_url = \"https://{worktree}.dev\"\n"));
     assert_eq!(off.dev_url, Setting { value: None, layer: Layer::Repo });
@@ -855,7 +872,6 @@ fn setup_command_layers_like_setup_skill() {
 fn dev_worker_layers_like_dev_server() {
     let both = settings(&repo("[worktree]\ndev_worker = \"bin/jobs\"\n"), &machine("[worktree]\ndev_worker = \"npm run worker\"\n"));
     assert_eq!(both.dev_worker, Setting { value: Some("bin/jobs".to_string()), layer: Layer::Repo });
-    assert!(parse_repo("[worktree]\ndev_worker = \"\"\n", "app.toml").unwrap_err().contains("worktree.dev_worker: must not be empty"));
     let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: both });
     assert!(shown.contains("worktree.dev_worker = \"bin/jobs\"  (repo config)\n  A second command"), "{shown}");
     assert!(shown.contains("worktree.dev_url = \"http://localhost:{port}\"  (default)"), "{shown}");

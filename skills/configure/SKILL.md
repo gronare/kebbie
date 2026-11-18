@@ -44,7 +44,7 @@ When the user wants a task's builds or tests to run on another machine of their 
 
 1. Run `kebbie config --repo <main checkout>` and find the key. Done when you know the key, its value in effect and the file it comes from.
 2. Pick the file. A key marked config.toml only, or one the user wants for every repo, goes in config.toml; a value for one repo goes in its repo config. When `kebbie config` shows the file as a link (`<file> -> <target>`), the target belongs to a team repo: edit the target when the user wants the team's value changed, and leave the commit there to the user; when the user wants a value of their own, ask before replacing the link with a file. Done when you have one file path and the user's intent fits it.
-3. Edit the TOML, keeping every other line. Create the file, and the repos folder with `mkdir -p`, when missing. Done when the key holds the new value.
+3. Edit the TOML, keeping every other line. To take away a command config.toml sets (`worktree.setup_command`, `dev_server`, `dev_worker`, `review.model`, `ci.deploy`) for one repo, write `""` for it in that repo's config; removing the key there leaves config.toml's value in effect. Create the file, and the repos folder with `mkdir -p`, when missing. Done when the key holds the new value.
 4. Verify with `kebbie doctor`, which checks config.toml and every file in the repos folder. Done when the line for each file you touched reads `ok` and ends `parses`, and `kebbie config --repo <main checkout>` shows the new value with the layer you wrote. An error names the file and the key: fix it and run both again.
 
 ## Adopt a team's setup
