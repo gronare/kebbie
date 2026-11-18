@@ -229,6 +229,7 @@ pub(super) struct Found {
     pub path: Option<String>,
     pub line: Option<u64>,
     pub created_at: String,
+    pub updated_at: String,
     pub hunk: Option<String>,
 }
 
@@ -243,7 +244,7 @@ pub(super) fn parse_comments(text: &str) -> Result<Vec<Found>> {
             Some(Found {
                 id: item["id"].as_u64()?, commit: text("commit_id").unwrap_or_default(), url: text("html_url").unwrap_or_default(), author: item["user"]["login"].as_str()?.to_string(),
                 bot: item["user"]["type"].as_str() == Some("Bot"), body: text("body").unwrap_or_default(), path: text("path").and_then(|path| file_path(&path)),
-                line: item["line"].as_u64(), created_at: text("created_at").unwrap_or_default(), hunk: text("diff_hunk").filter(|hunk| !hunk.is_empty()),
+                line: item["line"].as_u64(), created_at: text("created_at").unwrap_or_default(), updated_at: text("updated_at").unwrap_or_default(), hunk: text("diff_hunk").filter(|hunk| !hunk.is_empty()),
             })
         }));
     }
@@ -341,8 +342,8 @@ fn poll(state: &Path, gh: &str, now: u64, repos: &[(PathBuf, String)]) -> Vec<St
                     match cursor.threads_since {
                         None => cursor.threads_since = Some(now),
                         Some(since) => match read_threads(gh, &slug, &repo, since) {
-                            Ok(found) => {
-                                cursor.threads_since = Some(now);
+                            Ok((found, cut)) => {
+                                cursor.threads_since = Some(cut.unwrap_or(now));
                                 let mentioned: Vec<Found> = found.into_iter().filter(|item| new(item) && mentions(&item.body, &owner)).collect();
                                 if mentioned.len() > THREAD_CAP {
                                     notes.push(format!("comments: {} mentions of you in {slug}'s threads this round; kept the first {THREAD_CAP}, the other {} are left unread", mentioned.len(), mentioned.len() - THREAD_CAP));
@@ -395,22 +396,35 @@ fn read_pages(gh: &str, slug: &str, repo: &Path, from: Option<u64>) -> Result<(u
     Ok((page, found))
 }
 
-// The conversation comments on pull requests and issues, and the line comments of pull request reviews, changed since the last round, which a comment already kept repeats harmlessly.
-fn read_threads(gh: &str, slug: &str, repo: &Path, since: u64) -> Result<Vec<Found>> {
+// The conversation comments on pull requests and issues, and the line comments of pull request reviews, changed since the last round, which a comment already kept repeats harmlessly; a list cut at MAX_PAGES gives the update time of its last item, where the next round goes on.
+fn read_threads(gh: &str, slug: &str, repo: &Path, since: u64) -> Result<(Vec<Found>, Option<u64>)> {
     let from = crate::keeper::stamp(since.saturating_sub(THREAD_SLACK)).replace(' ', "T");
     let mut found = Vec::new();
+    let mut cut: Option<u64> = None;
     for kind in ["issues", "pulls"] {
         let base = format!("repos/{}/{kind}/comments?since={from}&sort=updated&direction=asc&per_page={PER_PAGE}", api_path(slug));
         for page in 1..=MAX_PAGES {
             let items = parse_comments(&gh_api(gh, slug, &format!("{base}&page={page}"), false, repo)?)?;
             let full = items.len() >= PER_PAGE;
+            let last = items.last().and_then(|item| epoch_of(&item.updated_at));
             found.extend(items);
             if !full {
                 break;
             }
+            if page == MAX_PAGES {
+                cut = Some(cut.map_or(last.unwrap_or(since), |cut| cut.min(last.unwrap_or(since))));
+            }
         }
     }
-    Ok(found)
+    Ok((found, cut))
+}
+
+// Seconds since 1970 of a GitHub time such as 2026-10-30T10:00:00Z.
+pub(super) fn epoch_of(stamp: &str) -> Option<u64> {
+    let day = u64::try_from(crate::backlog::epoch_day(stamp.get(..10)?)?).ok()?;
+    let mut clock = stamp.get(11..19)?.split(':').map(|part| part.parse::<u64>().ok());
+    let (hours, minutes, seconds) = (clock.next()??, clock.next()??, clock.next()??);
+    Some(day * 86_400 + hours * 3600 + minutes * 60 + seconds)
 }
 
 // The pull request or issue a comment's link names, as the card says it.
@@ -657,6 +671,20 @@ mod tests {
         assert!(mine(&dir, &second, &mut false), "the next round fetches again");
         fs::remove_dir_all(elsewhere).unwrap();
         crate::tasks::test_support::cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn threads_cut_at_the_page_limit_go_on_next_round_from_the_last_item_read() {
+        let state = crate::sh::test_dir("comments-cut");
+        let item = |id: u64| format!(r#"{{"id":{id},"html_url":"https://github.com/acme/app/issues/3#issuecomment-{id}","user":{{"login":"olle","type":"User"}},"body":"no mention","updated_at":"1970-01-12T14:00:00Z"}}"#);
+        let gh = answering_gh(&state, &[("*\"issues/comments\"*".to_string(), format!("[{},{}]", item(701), item(702)))]);
+        let repos = [(state.clone(), "acme/app".to_string())];
+        tick_with(&state, &gh, 1_000_000, &[], &repos);
+        tick_with(&state, &gh, 1_000_000 + POLL, &[], &repos);
+        assert_eq!(calls(&state).iter().filter(|call| call.contains("issues/comments")).count(), MAX_PAGES as usize);
+        assert_eq!(load_cursor(&state, "acme/app").threads_since, Some(1_000_800), "the next round reads on from 14:00:00, not from now");
+        assert_eq!((epoch_of("1970-01-12T13:46:40Z"), epoch_of("2026-10-30")), (Some(1_000_000), None));
+        fs::remove_dir_all(state).unwrap();
     }
 
     #[test]
