@@ -25,7 +25,7 @@ The view, top to bottom:
 
 | Part | Shows |
 | --- | --- |
-| Header | `review <task> · since <default branch>`, then `N accepted` in green and `N to accept` in yellow for a task's commits. |
+| Header | `review <task> · since <default branch>`, then, with `task.steps` on, `N accepted` in green and `N to accept` in yellow for the task's subtasks. |
 | Tabs | `all`, `↑ N pushed`, then each subtask with `task.steps` on, or each unpushed commit without, numbered, with its mark. The selected subtask's commits follow it as tabs of their own, by short sha. |
 | Message | On a subtask, its title and its commits, each short sha and subject. On a commit, its message: subject and short sha, then the body. On `all`, which subtasks or commits the diff covers. `m` hides it. |
 | Files | `+N -N path` for the selected subtask, from its first commit's parent to its last commit, for the selected commit alone, or for the whole branch on `all`. `✓ read` marks a read file. |

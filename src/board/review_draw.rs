@@ -167,7 +167,7 @@ pub fn reflow(body: &[&str]) -> Vec<Para> {
 
 fn header(view: &View, width: usize) -> Line<'static> {
     let mut spans = vec![Span::styled("review", bold(MAUVE)), Span::styled(format!(" {}", view.branch), style(SUBTEXT)), Span::styled(format!(" · {}", view.since), style(MUTED))];
-    if view.entries.task.is_some() {
+    if view.entries.task.is_some() && view.entries.steps {
         let (accepted, waiting) = (view.entries.count(Mark::Accepted), view.entries.count(Mark::Ready));
         if accepted > 0 {
             spans.push(Span::styled(" · ", style(MUTED)));
@@ -216,9 +216,9 @@ fn keys(view: &View) -> Line<'static> {
     let pairs: &[(&str, &str)] = if view.typing {
         &[("type", "to filter"), ("!word", "hides"), ("enter", "keeps it"), ("esc", "clears")]
     } else if view.focus == Panel::Diff {
-        &[("tab", "back to the subtasks"), ("shift-tab", "the files"), ("q", "closes")]
+        &[("tab", if view.entries.steps { "back to the subtasks" } else { "back to the commits" }), ("shift-tab", "the files"), ("q", "closes")]
     } else {
-        &[("← →", "subtask"), ("↑ ↓", "file"), ("a", "accept"), ("r", "read"), ("/", "filter"), ("tab", "to the diff")]
+        &[("← →", if view.entries.steps { "subtask" } else { "commit" }), ("↑ ↓", "file"), ("a", "accept"), ("r", "read"), ("/", "filter"), ("tab", "to the diff")]
     };
     let mut spans = Vec::new();
     for (index, (key, label)) in pairs.iter().enumerate() {
@@ -235,20 +235,20 @@ fn panel(focused: bool) -> Block<'static> {
     Block::bordered().border_type(BorderType::Rounded).border_style(style(if focused { BLUE } else { FAINT }))
 }
 
-fn help() -> Vec<Line<'static>> {
+fn help(steps: bool) -> Vec<Line<'static>> {
     let heading = |text: &str| Line::from(Span::styled(text.to_string(), bold(MAUVE)));
     let key = |key: &str, about: &str| Line::from(vec![Span::styled(format!("  {key:<11}"), bold(TEXT)), Span::styled(about.to_string(), style(SUBTEXT))]);
     vec![
-        heading("Subtasks and files"),
-        key("← →  h l", "the previous or next subtask, or a commit of the subtask picked; all is the whole branch"),
+        heading(if steps { "Subtasks and files" } else { "Commits and files" }),
+        key("← →  h l", if steps { "the previous or next subtask, or a commit of the subtask picked; all is the whole branch" } else { "the previous or next commit; all is the whole branch" }),
         key("↑ ↓  j k", "the previous or next file; the diff shows it at once"),
-        key("a", "accept the subtask, or the commit picked in it; on one accepted, withdraw it"),
+        key("a", if steps { "accept the subtask, or the commit picked in it; on one accepted, withdraw it" } else { "accept the commit; on one accepted, withdraw it" }),
         key("r", "mark the file read, or unread"),
         key("/", "filter the files: words to keep, !word to hide; esc clears"),
         key("m", "hide or show the commit message"),
-        key("tab", "the next panel: subtasks, files, diff; shift-tab goes back"),
+        key("tab", if steps { "the next panel: subtasks, files, diff; shift-tab goes back" } else { "the next panel: commits, files, diff; shift-tab goes back" }),
         key("enter", "to the diff"),
-        key("mouse", "click a subtask or a file; the wheel scrolls the files"),
+        key("mouse", if steps { "click a subtask or a file; the wheel scrolls the files" } else { "click a commit or a file; the wheel scrolls the files" }),
         key("q", "close the review"),
         Line::default(),
         heading("Diff (nvim)"),
@@ -258,7 +258,7 @@ fn help() -> Vec<Line<'static>> {
         key("o", "edit the file over the diff; ctrl-q back, leader m comments"),
         key("-", "open the file's folder over the diff"),
         key("u  w", "reload the diff when the file changed; line wrap"),
-        key("tab", "back to the subtasks; shift-tab to the files"),
+        key("tab", if steps { "back to the subtasks; shift-tab to the files" } else { "back to the commits; shift-tab to the files" }),
         key("q", "close the review"),
         Line::default(),
         Line::from(Span::styled("Comments wait in Claude's input box until you press Enter there.", style(MUTED))),
@@ -331,6 +331,6 @@ pub fn draw(frame: &mut Frame, view: &mut View) {
     }
     frame.render_widget(Paragraph::new(fill(rows, list.width as usize)), list);
     if view.help {
-        modal(frame, "keys".to_string(), help(), 78);
+        modal(frame, "keys".to_string(), help(view.entries.steps), 78);
     }
 }

@@ -19,6 +19,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The card beside the tasks lists the card's images, and s on it shows them even while a question waits.
 - A task's server and worker lines show only in repos that have the dev server or worker command.
 - → on the board reaches the card of a task with subtasks too, and ← or esc step back one pane at a time.
+- The review split of a task without subtasks speaks of its commits: the arrows move between commits, tab goes back to the commits, and the header no longer counts commits to accept.
 
 ## 0.41.1
 

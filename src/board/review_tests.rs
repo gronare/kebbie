@@ -215,6 +215,7 @@ fn a_wide_review_without_steps_names_its_tabs_after_the_commits_and_the_whole_br
     let screen = opened.screen(160, 30);
     assert!(row(&screen, "all").contains("▕ all ▏ ▕ ✓ 1 ▏ ▕ ● 2 ▏ ▕ ● 3 ▏") && !row(&screen, "all").contains("pushed"), "{}", screen.join("\n"));
     assert!(row(&screen, "FILES").contains("FILES 1 · commit 2"));
+    assert!(!row(&screen, "review").contains("accept") && screen.iter().any(|line| line.starts_with("← → commit · ↑ ↓ file")) && !screen.join("\n").contains("subtask"), "without steps the view speaks of commits and counts no accepting: {}", screen.join("\n"));
     opened.press(KeyCode::Left);
     opened.press(KeyCode::Left);
     let screen = opened.screen(160, 30);
@@ -282,7 +283,7 @@ fn tab_moves_focus_from_the_steps_to_the_files_to_nvim_and_back_and_shift_tab_go
     opened.press(KeyCode::Tab);
     assert_eq!(opened.sent("pane focus"), [focus_argv("p_view", "right")], "beside the view on a wide review");
     let screen = opened.screen(80, 20);
-    assert!(row(&screen, "tab").contains("tab back to the subtasks"), "{}", screen.join("\n"));
+    assert!(row(&screen, "tab").contains("tab back to the commits"), "without steps the diff goes back to the commits: {}", screen.join("\n"));
 }
 
 #[test]
@@ -322,7 +323,7 @@ fn a_accepts_the_selected_commit_through_kebbie_moves_to_the_next_waiting_and_wi
     opened.clear();
     opened.press(KeyCode::Char('a'));
     assert!(opened.sent("accept billing").is_empty(), "nothing is accepted on all");
-    assert!(opened.screen(80, 20).iter().any(|line| line.contains("Pick a subtask first")));
+    assert!(opened.screen(80, 20).iter().any(|line| line.contains("Pick a commit first")));
 }
 
 #[test]

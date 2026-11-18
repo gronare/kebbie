@@ -361,7 +361,7 @@ impl View {
             return;
         };
         let Some((index, entry)) = self.selected_entry().map(|(index, entry)| (index, entry.clone())) else {
-            self.note = Some(("Pick a subtask first: ← →".to_string(), YELLOW));
+            self.note = Some((format!("Pick a {} first: ← →", if self.entries.steps { "subtask" } else { "commit" }), YELLOW));
             return;
         };
         let (target, what, withdraw) = match self.selected_commit() {
