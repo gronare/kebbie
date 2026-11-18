@@ -12,6 +12,7 @@ mod backlog_writer;
 mod backlog_kept;
 mod backlog_style;
 mod card;
+mod card_images;
 mod changes;
 mod board;
 mod ci;

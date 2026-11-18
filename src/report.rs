@@ -339,10 +339,15 @@ fn unnamed_answers(left_out: &[crate::card::Decision], before: Option<&crate::ca
 // An untracked card left in the worktree would count as an uncommitted change and stop the push, so kebbie keeps the card and removes the file; its Also noticed lines are filed as it is taken, and a sign-off card is kept as data with who took each decision from kebbie's own records.
 fn take_card(cwd: &Path, file: &Path, state: &Path, address: &str, text: &str, sign_off: bool, red: Option<&str>) -> Result<String> {
     let now = messages::now();
-    let filed = crate::found::file_card(state, address, text, now)?;
+    let top = git(cwd, &["rev-parse", "--show-toplevel"])?;
+    let images = crate::card_images::keep(state, address, Path::new(&top), text);
+    let filed = crate::found::file_card(state, address, &images.text, now)?;
     let text = filed.text;
     save_card(state, address, &git(cwd, &["rev-parse", "HEAD"])?, &text)?;
     let mut said = String::new();
+    if !images.missing.is_empty() {
+        said.push_str(&format!(" kebbie found no file at {}, so the card shows only the path; save the image there, or fix the line, and report ready again.", images.missing.join(", ")));
+    }
     if sign_off {
         let parsed = crate::card::parse(&text)?;
         let crate::card::Taken { decisions, unbacked, left_out } = crate::card::decisions(&parsed.decisions, &crate::card::records(state, address), red);
@@ -369,7 +374,6 @@ fn take_card(cwd: &Path, file: &Path, state: &Path, address: &str, text: &str, s
         }
     }
     let untracked = !crate::sh::succeeds("git", &["ls-files", "--error-unmatch", &file.to_string_lossy()], Some(cwd));
-    let top = git(cwd, &["rev-parse", "--show-toplevel"])?;
     let inside = file.canonicalize().is_ok_and(|file| Path::new(&top).canonicalize().is_ok_and(|top| file.starts_with(top)));
     if untracked && inside {
         fs::remove_file(file).map_err(|error| format!("{}: {error}", file.display()))?;
@@ -412,6 +416,7 @@ pub fn forget_card_in(state: &Path, address: &str) {
     let _ = fs::remove_file(card_file(state, address));
     let _ = fs::remove_file(ready_notice_file(state, address));
     crate::card::forget(state, address);
+    crate::card_images::forget(state, address);
 }
 
 // herdr's sidebar shows the same as the board: the next step as $next, and the state in place of idle or done.
@@ -640,6 +645,28 @@ mod tests {
         assert!(card_in(&state, "billing@web").is_none());
         forget_card_in(&state, "billing@app");
         assert!(card_in(&state, "billing@app").is_none());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_card_taken_in_keeps_a_copy_of_each_image_it_names_until_the_card_is_dropped() {
+        let dir = crate::sh::test_dir("card-taken-images");
+        let (worktree, scratch, state) = (dir.join("wt1.app"), dir.join("kebbie-1000/scratchpad"), dir.join("state"));
+        fs::create_dir_all(&worktree).unwrap();
+        fs::create_dir_all(&scratch).unwrap();
+        git(&worktree, &["init", "--quiet"]).unwrap();
+        git(&worktree, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--allow-empty", "-m", "first"]).unwrap();
+        fs::write(scratch.join("booted.png"), "png").unwrap();
+        let source = worktree.join("card.md");
+        fs::write(&source, format!("The simulator boots on the worker.\n![booted]({})\n![lost](/nowhere/lost.png)", scratch.join("booted.png").display())).unwrap();
+        let said = take_card(&worktree, &source, &state, "ios-sim@app", &read_card(&source).unwrap(), false, None).unwrap();
+        assert!(said.contains("kebbie found no file at /nowhere/lost.png, so the card shows only the path"), "{said}");
+        fs::remove_dir_all(&scratch).unwrap();
+        let copy = state.canonicalize().unwrap().join("cards/ios-sim@app/booted.png");
+        assert_eq!(card_in(&state, "ios-sim@app").unwrap().text, format!("The simulator boots on the worker.\n![booted]({})\n![lost](/nowhere/lost.png)", copy.display()));
+        assert_eq!(fs::read_to_string(&copy).unwrap(), "png", "the image outlives the scratchpad it was made in");
+        forget_card_in(&state, "ios-sim@app");
+        assert!(!copy.exists(), "dropping the card drops its copies");
         fs::remove_dir_all(dir).unwrap();
     }
 
