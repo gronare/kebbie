@@ -314,13 +314,13 @@ fn resume_live(state: &Path, wait: &Waiting, log: &[Message]) -> Option<String> 
     let upstream = main_of(&wait.repo);
     let yourself = |why: &str| format!("kebbie left the rebase to you ({why}): once your work is committed, rebase onto {upstream} (`git rebase {upstream}`, fetched already).");
     let slot = slots(&wait.repo).ok()?.into_iter().find(|slot| slot.task.as_deref() == Some(task_part(&wait.address)))?;
-    if super::fetch(&wait.repo).is_err() {
-        return Some(yourself("its fetch failed"));
-    }
     let (Ok(workspaces), Ok(agents)) = (crate::herdr::workspaces(), crate::herdr::agents()) else { return None };
     let idle = super::follow::waiting_of(&slot.path, &workspaces, &agents);
     if idle == Some(false) {
         return None;
+    }
+    if super::fetch(&wait.repo).is_err() {
+        return Some(format!("kebbie left the rebase to you (its fetch failed): once your work is committed, fetch and rebase onto {upstream} (`git fetch && git rebase {upstream}`)."));
     }
     let asks = crate::questions::open_now(log).iter().any(|question| question.from == wait.address);
     let told = |text: &str| {
