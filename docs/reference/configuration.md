@@ -293,7 +293,6 @@ commands = ["answer", "prompt", "idea"]
 | `restart.auto` | `true` | config.toml only | Whether kebbie restarts the Claude sessions and Codex tasks that run older code than is installed, after an update or a new Claude Code or Codex; no other session restarts. |
 | `restart.idle_minutes` | `10` | config.toml only | How long, an integer from 1 to 1440 minutes, a session on older code waits to be idle and out of focus before that restart. |
 | `keeper.enabled` | `true` | config.toml only | Whether the keeper, one background kebbie per machine, runs the routines. |
-| `worker.enabled` | `false` | config.toml only | Whether this machine runs [jobs](#jobs) and [`kebbie run`](commands.md#commands-on-another-machine) commands for the other machines of its hub account. |
 | `recover.enabled` | `true` | config.toml only | Whether kebbie resumes a task whose Claude an API error stopped, and puts a Codex task an API error stopped under Needs you. |
 | `builds.slots` | `1` | config.toml only | How many task builds run at once on this machine, a whole number from 1 to 64. See [Builds](#builds). |
 | `builds.commands` | `["cargo"]` | config.toml only | The commands that take a build slot: a program, and the words its arguments start with, such as `"npm run build"`. |
@@ -314,8 +313,6 @@ full_command = "cargo test --locked"
 `comments.watch` needs what `ci.watch` needs, origin on GitHub and `gh` logged in, and [`kebbie doctor`](requirements.md#what-kebbie-doctor-checks) says when a repo misses either. Your own comments are skipped, and so are a bot's. kebbie asks `gh` for a repo's new commit comments every 12 minutes while any of its pushed commits is watched, in one call however many are, and less often while `gh` fails. A comment already on the board stays there after the days run out. See [Act on comments on pushed commits](../how-to/act-on-comments-on-pushed-commits.md).
 
 `restart.auto`: each restarted session resumes its conversation, and `kebbie update` restarts the idle ones at once. A session mid-turn, the pane you are in and one with background work running are never restarted on their own. `false` restarts nothing on its own; the board still marks the sessions on older code.
-
-`worker.enabled`: the keeper tells the hub this machine is a worker, takes the jobs the other machines on your account's signed list send, and runs them one at a time, in your user account, each in a folder of its task's own under `~/.local/share/kebbie/worker`. Turning it on is your yes to every one of those machines. Jobs come through the hub; for [`kebbie run`](commands.md#commands-on-another-machine) the keeper also listens on port 47011, on loopback and this machine's Tailscale and WireGuard addresses only, and tells the account's other machines those addresses through the hub, and it keeps a WebSocket to the hub open to be rung for a relayed link. Turning it off, or stopping the keeper, tells the hub it is no worker any more and stops the listening. See [Run a job on another machine](../how-to/run-a-job-on-another-machine.md) and [Run a command on another machine](../how-to/run-a-command-on-another-machine.md).
 
 `keeper.enabled`: the keeper's routines then go on with the board closed. `false` runs them in an open board instead, and the board then posts the hub's board once a minute. See [The keeper](../explanation/updates-and-restarts.md#the-keeper). The routines are:
 
@@ -476,28 +473,6 @@ title = "Bump the client"
 ask = ["package", "version"]
 task = "Bump {package} to {version}; commit."
 ```
-
-## `[jobs]`
-
-A repo's jobs, in its repo config on the machine with the tasks: commands a machine with [`worker.enabled`](#ci-updates-and-the-keeper) runs on a worktree for [`kebbie job run <name>`](commands.md#jobs-on-another-machine).
-
-```toml
-# ~/.config/kebbie/repos/app.toml
-[jobs]
-lint = "swiftlint"
-
-[jobs.build]
-run = "xcodebuild -scheme App -destination 'generic/platform=iOS Simulator' build"
-on = "macos"
-timeout_minutes = 90
-```
-
-| Form | What it is |
-|---|---|
-| `name = "<command>"` | A job any worker of your hub account runs. |
-| `[jobs.<name>]` with `run`, `on` and `timeout_minutes` | `run` is the command. `on` picks the worker: an operating system, `macos` or `linux`, or a machine's name. `timeout_minutes`, a whole number from 1 to 1440, is how long the job may run, 60 unless set. |
-
-The command runs with `sh -c` in the worktree's files on the worker, its stderr in its output. Past its timeout the worker stops it, SIGTERM to its process group and SIGKILL 10 s later, and once the command ends, whatever it left running is stopped too. Repo config only.
 
 ## `[[routines]]`
 
