@@ -782,7 +782,7 @@ mod tests {
             app.take_images();
         }
         let (rows, buffer) = render(&mut app, 170, 50);
-        let (_, y) = find(&rows, "  after")[0];
+        let (_, y) = find(&rows, &format!("{}  after", png.display()))[0];
         let red = Color::Rgb(200, 30, 30);
         assert!((0..170).any(|x| buffer[(x, y as u16 + 1)].bg == red || buffer[(x, y as u16 + 1)].fg == red), "the image under its line: {}", rows.join("\n"));
         assert!(rows.join("\n").contains("▣ /nowhere/before.png  before"), "a missing file stays a path");

@@ -571,12 +571,13 @@ COMMITS
 | --- | --- |
 | The facts | The task's group, its repo, its commits, how many of its changed files you marked read in the review, and, for a task in subtasks, how many are accepted. `no card yet` until it wrote one, `code changed since the card` when its code moved on. |
 | The card's sections | Its [sign-off card](#the-card-window), section by section: its headline, BUILT, DECISIONS, ALSO NOTICED and the rest, as the card window shows it. The card shows what it says now, never a diff against its version before; a part the task itself labels `Changed:` shows like any other. |
+| `IMAGES` | The card's images by file name and alt text, with how many and the key that shows them: `s`, or `→ then s` while a question waits, since `s` on the row opens the question. |
 | `RECIPE`, `LAST REPORT` | For a task without a card: the recipe it runs and why, and its last report with its age. |
 | `COMMITS` | Each commit's short sha and subject. |
 
 - On a row that is not a task, such as the bugs to send, the Done block or a comment, it says so in one line.
 - On a task without subtasks, `→` or a click focuses it: `CARD` lights in mauve. `↑` `↓` `pgup` `pgdn` then scroll it; `←` or `esc` gives the keys back to the tasks.
-- `s` opens the card in its window, with its images.
+- `s` opens the card in its window, with its images. On the focused column `s` opens the card window even while the task's question waits.
 - Under 86 columns the column is not drawn; `s` opens the same card in its window.
 
 ### A subtask's card

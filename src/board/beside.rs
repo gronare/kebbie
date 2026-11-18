@@ -157,6 +157,10 @@ impl App {
             Some(Act::Move) if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) => *scroll = scroll.saturating_sub(1),
             Some(Act::Move) => *scroll = scroll.saturating_add(1),
             Some(Act::Switch | Act::Back) => self.beside.focused = false,
+            Some(Act::Card) => match self.selected_task().filter(|item| self.card_of(item).is_some()).and_then(|item| Some((item.path.clone()?, item.name.clone()))) {
+                Some((path, name)) => self.mode = super::Mode::Card { path, name, scroll: 0, image: 0 },
+                None => return false,
+            },
             _ => match key.code {
                 KeyCode::PageUp => *scroll = scroll.saturating_sub(10),
                 KeyCode::PageDown | KeyCode::Char(' ') => *scroll = scroll.saturating_add(10),
@@ -184,7 +188,16 @@ impl App {
         }
         let detail = self.detail(&item);
         let title = vec![Span::styled(item.titled(), bold(TEXT))];
-        (heading(title, focused, width), task_card(Some(&item), detail.as_deref(), width), address_of(&item))
+        let mut lines = task_card(Some(&item), detail.as_deref(), width);
+        let images = detail.as_ref().and_then(|detail| detail.card.as_ref()).map(|(card, _)| card_parts(&card.text).1).unwrap_or_default();
+        if !images.is_empty() {
+            let opens = if self.s_opens(&item) == Some("card") { "s shows them".to_string() } else { "→ then s shows them".to_string() };
+            let mut head = section("IMAGES");
+            head.spans.push(Span::styled(format!("  {} · {opens}", plural(images.len(), "image")), style(MUTED)));
+            lines.extend([Line::default(), head]);
+            lines.extend(images.iter().map(|image| fit(vec![Span::raw("  "), Span::styled("▣ ", style(TEAL)), Span::styled(image.name(), style(TEXT)), Span::styled(format!("  {}", image.alt), style(MUTED))], width)));
+        }
+        (heading(title, focused, width), lines, address_of(&item))
     }
 
     pub(super) fn draw_beside(&mut self, frame: &mut Frame, area: Rect) {
@@ -256,6 +269,25 @@ mod tests {
         let (x, y) = find(&rows, "CARD   search-filters")[0];
         assert_eq!(buffer[(x as u16, y as u16)].fg, MUTED, "the column is not focused");
         assert!(!rows.join("\n").contains("BACKLOG") && !rows[1].contains("backlog:"), "the backlog has its own page: {}", rows.join("\n"));
+    }
+
+    #[test]
+    fn the_column_lists_the_cards_images_and_s_on_it_opens_them_even_while_a_question_waits() {
+        let mut app = carded(true);
+        let (side, _) = card_side(&mut app);
+        let screen = side.join("\n");
+        let at = side.iter().position(|row| row.trim().starts_with("IMAGES")).unwrap_or_else(|| panic!("{screen}"));
+        assert_eq!((side[at].trim(), side[at + 1].trim(), side[at + 2].trim()), ("IMAGES  2 images · s shows them", "▣ filters.png  the filters", "▣ empty.png  empty"), "{screen}");
+        let address = crate::peers::address(&app.tasks[0].name, &app.tasks[0].place);
+        app.questions = crate::messages::fold(&format!(r#"{{"id":"q9","at":10,"from":"{address}","to":"lead","text":"Which queue?","state":"asked","question":{{"options":[{{"label":"One","meaning":"the first"}},{{"label":"Two","meaning":"the second"}}],"recommend":1}}}}"#));
+        let (side, _) = card_side(&mut app);
+        assert!(side.iter().any(|row| row.trim() == "IMAGES  2 images · → then s shows them"), "{}", side.join("\n"));
+        app.handle_normal(key(KeyCode::Char('s')));
+        assert!(matches!(app.mode, crate::board::Mode::Questions(_)), "s on the row answers the question first");
+        app.mode = crate::board::Mode::Normal;
+        press(&mut app, key(KeyCode::Right));
+        press(&mut app, key(KeyCode::Char('s')));
+        assert!(matches!(app.mode, crate::board::Mode::Card { .. }), "s on the focused column opens the card window with its images");
     }
 
     #[test]

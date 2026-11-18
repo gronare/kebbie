@@ -16,6 +16,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A Mac worker on the WireGuard app links directly, and a logged-out Tailscale no longer fills the keeper log.
 - s on a task with nothing to push shows its card and images beside the offer to close it.
 - A sign-off card keeps its images after the task's scratchpad is cleaned away.
+- The card beside the tasks lists the card's images, and s on it shows them even while a question waits.
 
 ## 0.41.1
 
