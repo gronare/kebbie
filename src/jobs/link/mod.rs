@@ -73,16 +73,32 @@ impl Listening {
     }
 }
 
+// The machine, account, hub and token a Host carries, so listeners and the relay wait never outlive a leave or a reconnect.
+type Who = (kebbie_hub_protocol::Id, kebbie_hub_protocol::AccountKey, String, String);
+
+fn who(identity: &identity::Identity, account: &kebbie_hub_protocol::AccountKey) -> Who {
+    (identity.machine.clone(), account.clone(), identity.url.clone(), identity.token().to_string())
+}
+
 // The keeper's link: while worker.enabled is on, it listens and tells the account's other machines where; once off, it stops and tells them it takes no links.
 fn serve(state: &Path) {
     let log = |text: &str| crate::keeper::log_line(state, text);
     let mut listeners = Listening { on: BTreeMap::new() };
     let (mut told, mut looked) = (None::<(Addresses, u64, Instant)>, None::<(bool, Instant)>);
     let mut rings: Option<std::thread::JoinHandle<()>> = None;
+    let (mut serving, mut current) = (None::<Who>, Arc::new(AtomicBool::new(false)));
     while !halted() {
         let enabled = crate::config::worker_enabled().unwrap_or(false);
         let dir = identity::dir(state);
         let loaded = identity::load_at(&dir).ok().flatten().and_then(|identity| identity.account.clone().map(|account| (identity, account.key)));
+        let who = loaded.as_ref().map(|(identity, account)| who(identity, account));
+        if who != serving {
+            listeners.drop_all_but(&[], &log);
+            current.store(false, Ordering::SeqCst);
+            current = Arc::new(AtomicBool::new(true));
+            serving = who;
+            looked = None;
+        }
         if looked.is_none_or(|(was, at)| was != enabled || at.elapsed() >= LOOK_EVERY) {
             looked = Some((enabled, Instant::now()));
             if !enabled {
@@ -94,8 +110,8 @@ fn serve(state: &Path) {
                 let host = Arc::new(serve::Host { state: state.to_path_buf(), dir: dir.clone(), identity: identity.clone(), account: account.clone(), data: super::data_dir() });
                 listeners.keep(&host, &if enabled { listening(&local) } else { Vec::new() }, &log);
                 if enabled && rings.as_ref().is_none_or(std::thread::JoinHandle::is_finished) {
-                    let host = host.clone();
-                    rings = Some(std::thread::spawn(move || relay::wait_for_rings(host, &|| crate::config::worker_enabled().unwrap_or(false), Arc::new(halted))));
+                    let (host, current) = (host.clone(), current.clone());
+                    rings = Some(std::thread::spawn(move || relay::wait_for_rings(host, &|| current.load(Ordering::SeqCst) && crate::config::worker_enabled().unwrap_or(false), Arc::new(halted))));
                 }
                 let client = Client::new(&identity.url, Some(identity.token()), CALL);
                 if let Ok(cluster) = cluster::fetch(&dir, &client, &account) {
