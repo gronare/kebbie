@@ -188,7 +188,7 @@ impl App {
             Column::Work => {
                 let item = self.tasks.get(self.work_selected);
                 let settings = item.and_then(settings_of);
-                let command = |process: Process| settings.as_ref().and_then(|settings| process.command(settings));
+                let command = |process: Process| settings.as_ref().zip(item.and_then(|item| item.repo.as_deref())).and_then(|(settings, repo)| process.command(settings, repo));
                 let mut choices = task_choices(item, command(Process::Server).as_deref(), command(Process::Worker).as_deref());
                 if let Some(staging) = item.and_then(|item| stage_choice(item, settings.as_ref().is_some_and(|settings| settings.stage_on_main.value))) {
                     let after = choices.iter().position(|choice| choice.act == Some(Act::Push)).map_or(choices.len(), |at| at + 1);

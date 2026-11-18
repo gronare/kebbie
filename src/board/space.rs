@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::config;
 use crate::herdr;
@@ -51,8 +51,9 @@ impl Process {
         }
     }
 
-    pub(super) fn command(self, settings: &config::Settings) -> Option<String> {
-        self.setting(settings).value.clone()
+    // A command naming a path runs only in a repo that has the file, so a machine-wide bin/dev offers no w in a repo without one.
+    pub(super) fn command(self, settings: &config::Settings, repo: &Path) -> Option<String> {
+        config::setup_command_in(self.setting(settings).value.clone(), repo)
     }
 
     fn setting(self, settings: &config::Settings) -> &config::Setting<Option<String>> {
@@ -138,7 +139,7 @@ impl App {
             return;
         };
         let settings = settings_of(item);
-        let Some(command) = settings.as_ref().and_then(|settings| process.command(settings)) else {
+        let Some(command) = settings.as_ref().zip(item.repo.as_deref()).and_then(|(settings, repo)| process.command(settings, repo)) else {
             self.about(process.key(), &item.name);
             self.show(Notice::new(Tone::You, format!("{} has no {} set", item.place, process.key())).you(format!("Set worktree.{} for {}; kebbie config shows where.", process.key(), item.place)).ok());
             return;
@@ -211,6 +212,24 @@ fn open_review_in(path: &std::path::Path, agent: &str, script: &std::path::Path,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_machine_wide_dev_server_or_worker_naming_a_path_is_offered_only_in_a_repo_that_has_the_file() {
+        let (rails, xcode) = (crate::sh::test_dir("dev-rails"), crate::sh::test_dir("dev-xcode"));
+        std::fs::create_dir_all(rails.join("bin")).unwrap();
+        for file in ["bin/dev", "bin/jobs"] {
+            std::fs::write(rails.join(file), "").unwrap();
+        }
+        let machine = config::parse_machine("[worktree]\ndev_server = \"bin/dev\"\ndev_worker = \"bin/jobs --verbose\"\nserver_name = \"web\"\nworker_name = \"jobs\"\n", "config.toml").unwrap();
+        let settings = config::settings(&config::Worktree::default(), &machine);
+        assert_eq!((Process::Server.command(&settings, &rails).as_deref(), Process::Worker.command(&settings, &rails).as_deref()), (Some("bin/dev"), Some("bin/jobs --verbose")));
+        assert_eq!((Process::Server.command(&settings, &xcode), Process::Worker.command(&settings, &xcode)), (None, None), "an Xcode project has no bin/dev and no bin/jobs: no web, no jobs");
+        let anywhere = config::settings(&config::Worktree::default(), &config::parse_machine("[worktree]\ndev_server = \"npm run dev\"\n", "config.toml").unwrap());
+        assert_eq!(Process::Server.command(&anywhere, &xcode).as_deref(), Some("npm run dev"), "a command naming no path applies wherever it is set");
+        for dir in [rails, xcode] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
 
     #[test]
     fn opening_review_focuses_the_split_already_open_in_the_space() {

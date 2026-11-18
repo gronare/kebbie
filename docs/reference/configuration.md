@@ -77,7 +77,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 
 - `worktree.setup_skill`: `plugin:skill` for a plugin's skill; a bare name for one in `~/.claude/skills` or the repo's `.claude/skills`; or a Markdown file by an absolute or `~` path, such as `"~/code/app/SETUP.md"`, whose text the task gets in its role.
 - `worktree.setup_command`: a command naming a path applies only in a repo that has that file. Where it does not apply, and when unset, the skill runs `bin/setup-worktree` if the repo has one.
-- `worktree.dev_server` and `worktree.dev_worker` run with `PORT` set to the worktree's port.
+- `worktree.dev_server` and `worktree.dev_worker` run with `PORT` set to the worktree's port. A command naming a path, such as `bin/dev`, applies only in a repo that has the file: set in config.toml, it gives no `w` or `b`, and no server or worker line, in a repo without it.
 - `worktree.dev_url` fills in the [URL placeholders](#url-placeholders).
 - `worktree.dev_route`: each site is at the host `dev_url` names, proxied to the worktree's port. It is opt-in per repo, so a repo that serves its worktrees itself stays out. See [Open dev servers from a remote machine](../how-to/open-dev-servers-from-a-remote-machine.md).
 - `worktree.stage_on_main`: the commits stay unpushed, to try them from the main checkout before you push main. It is for a repo you run from its main checkout; kebbie's own repo, when you run kebbie from your clone, turns it on. See [Try a task before pushing](../how-to/try-a-task-before-pushing.md).

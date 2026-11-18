@@ -261,8 +261,8 @@ fn gather_detail(path: &Path, repo: Option<&Path>) -> Detail {
         changed,
         card: report::card_for(path),
         tests: evidence::for_path(path),
-        dev_server: settings.as_ref().is_some_and(|settings| settings.dev_server.value.is_some()),
-        dev_worker: settings.as_ref().is_some_and(|settings| settings.dev_worker.value.is_some()),
+        dev_server: settings.as_ref().zip(repo).is_some_and(|(settings, repo)| Process::Server.command(settings, repo).is_some()),
+        dev_worker: settings.as_ref().zip(repo).is_some_and(|(settings, repo)| Process::Worker.command(settings, repo).is_some()),
         server_name: Process::Server.tab(settings.as_ref()),
         worker_name: Process::Worker.tab(settings.as_ref()),
     }

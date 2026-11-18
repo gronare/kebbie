@@ -20,6 +20,7 @@ The server starts in a `server` tab of the task's Space with `PORT` set, and a `
 - If you want to stop it, press `w` again.
 - If you want the worker, press `b`. It starts and stops the same way.
 - If a worktree has neither a `PORT=` nor a port in its setup note, no `PORT` is set.
+- If you set the commands in `config.toml` for every repo, a command naming a path, such as `bin/dev`, applies only in a repo that has the file; elsewhere the task shows no server or worker line.
 - If kebbie runs on a remote machine and your browser is on your laptop, see [Open dev servers from a remote machine](open-dev-servers-from-a-remote-machine.md).
 
 ## Change the link
