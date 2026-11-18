@@ -36,6 +36,10 @@ When the user wants the lead to stop proposing kebbie issues, write `propose = f
 
 When the user wants new ideas from their phone to go to one machine, write `ideas_machine = "<that machine's machine.name>"` under `[hub]` in config.toml on that machine, or the same on every machine; nothing else follows it. When they want another agent or model to write out backlog items, write `profile = "<profile>"` under `[writer]`, or `"none"` to have the lead write them in its own chat. Done when `kebbie config` shows `hub.ideas_machine` or `writer.profile` as the user chose.
 
+## Build or run on another machine
+
+When the user wants a task's builds or tests to run on another machine of their hub account, such as an iOS build on a Mac for a task on Linux, follow docs/how-to/run-a-job-on-another-machine.md and docs/how-to/run-a-command-on-another-machine.md: on the other machine `enabled = true` under `[worker]` in its config.toml, which the user does there or asks that machine's kebbie to do; on this machine `kebbie link`, which must show that machine `direct` or `relayed`, then the command once with `kebbie run --on <system or name> -- <command>`, then, if they want a named job, a `[jobs.<name>]` table with `run`, `on` and `timeout_minutes` in the repo's config. Done when `kebbie run --on` exits 0 with the command's output, and `kebbie job run <name>` does for a job you wrote.
+
 ## Change a setting
 
 1. Run `kebbie config --repo <main checkout>` and find the key. Done when you know the key, its value in effect and the file it comes from.
