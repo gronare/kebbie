@@ -43,8 +43,9 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     let (line, tabs) = header(app, top.width);
     frame.render_widget(Paragraph::new(line), top);
     let tab_hits: Vec<(Rect, Hit)> = tabs.into_iter().map(|(x, width, page)| (Rect::new(top.x + x, top.y, width, 1), Hit::Tab(page))).collect();
+    app.beside.shown = matches!(app.page, Page::Work | Page::Backlog) && app.error.is_none() && app.loaded && app.column != Column::Backlog && body.width >= 86;
     let (full_hints, short_hints) = match app.page {
-        Page::Work | Page::Backlog => hint_lines(app.ctx(), app.selected_s_opens(), app.lead_chat.is_some(), app.selected_steps()),
+        Page::Work | Page::Backlog => hint_lines(app.ctx(), app.selected_s_opens(), app.lead_chat.is_some(), app.selected_steps(), &app.pane_hints()),
         Page::Areas => area_page::Page::hint_lines(),
         Page::Routines => crate::routine_page::Page::hint_lines(),
         Page::Settings => app.settings.hint_lines(),
@@ -87,7 +88,8 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         frame.render_widget(Paragraph::new(Span::styled(line, style(color))), row);
         tab_hits.push((row, Hit::Key(keys::map().code(act))));
     }
-    tab_hits.extend(hint_hits(&status, bottom, app.ctx(), app.selected_s_opens(), app.lead_chat.is_some(), app.selected_steps()));
+    let panes = if matches!(app.page, Page::Work | Page::Backlog) { app.pane_hints() } else { Vec::new() };
+    tab_hits.extend(hint_hits(&status, bottom, app.ctx(), app.selected_s_opens(), app.lead_chat.is_some(), app.selected_steps(), &panes));
     frame.render_widget(Paragraph::new(status), bottom);
     let (message_lines, first_message) = messages_lines(app, fold, messages_area.height as usize, messages_area.width as usize);
     let shown_messages = message_lines.len();

@@ -1584,7 +1584,7 @@ mod tests {
         let mut app = test_app(Vec::new());
         app.handle_key(KeyEvent::from(KeyCode::Char('h')), None);
         assert_eq!(app.notice.as_ref().map(|(text, _)| text.as_str()), Some("h hides the lead's chat only on the board in the lead Space"));
-        assert!(!hint_lines(Ctx::Work, None, false, false).0.to_string().contains("h chat") && hint_lines(Ctx::Work, None, true, false).0.to_string().contains("h chat"));
+        assert!(!hint_lines(Ctx::Work, None, false, false, &Vec::new()).0.to_string().contains("h chat") && hint_lines(Ctx::Work, None, true, false, &Vec::new()).0.to_string().contains("h chat"));
         assert!(!shown(keys::map(), Ctx::Work, false).iter().any(|(key, _)| key == "h") && shown(keys::map(), Ctx::Work, true).iter().any(|(key, _)| key == "h"));
         assert!(!header(&app, 200).0.to_string().contains("chat hidden"));
         app.lead_chat = Some(true);

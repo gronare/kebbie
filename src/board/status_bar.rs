@@ -14,8 +14,11 @@ fn status_hints(keys: &Hints) -> Line<'static> {
 }
 
 // On a task with subtask rows the line opens with how to move and step in: ↑ ↓ task · → subtasks · s card · ⏎ options, s only when there is a card or question.
-fn work_hints(ctx: Ctx, opens: Option<&'static str>, lead: bool, steps: bool) -> (Hints, Hints) {
+fn work_hints(ctx: Ctx, opens: Option<&'static str>, lead: bool, steps: bool, panes: &Hints) -> (Hints, Hints) {
     let (mut full, mut short) = keys::map().hints(ctx, lead);
+    for hints in [&mut full, &mut short] {
+        hints.splice(0..0, panes.iter().cloned());
+    }
     let card = (keys::key(Act::Card).to_string(), opens.unwrap_or("card"), keys::map().code(Act::Card));
     if steps {
         let mut lead_in = vec![("↑ ↓".to_string(), "task", KeyCode::Down), ("→".to_string(), "subtasks", KeyCode::Right)];
@@ -31,17 +34,17 @@ fn work_hints(ctx: Ctx, opens: Option<&'static str>, lead: bool, steps: bool) ->
     (full, short)
 }
 
-pub(super) fn hint_lines(ctx: Ctx, opens: Option<&'static str>, lead: bool, steps: bool) -> (Line<'static>, Line<'static>) {
-    let (full, short) = work_hints(ctx, opens, lead, steps);
+pub(super) fn hint_lines(ctx: Ctx, opens: Option<&'static str>, lead: bool, steps: bool, panes: &Hints) -> (Line<'static>, Line<'static>) {
+    let (full, short) = work_hints(ctx, opens, lead, steps, panes);
     (status_hints(&full), status_hints(&short))
 }
 
-pub(super) fn hint_hits(line: &Line, area: Rect, ctx: Ctx, opens: Option<&'static str>, lead: bool, steps: bool) -> Vec<(Rect, Hit)> {
+pub(super) fn hint_hits(line: &Line, area: Rect, ctx: Ctx, opens: Option<&'static str>, lead: bool, steps: bool, panes: &Hints) -> Vec<(Rect, Hit)> {
     let text = line.to_string();
     let mut hits = Vec::new();
     let update = keys::map().code(Act::Update);
     let update_hints = [(update_hint(), update), (short_update_hint(), update)];
-    for (hint, code) in work_hints(ctx, opens, lead, steps).0.into_iter().map(|(key, label, code)| (format!("{key} {label}"), code)).chain(update_hints) {
+    for (hint, code) in work_hints(ctx, opens, lead, steps, panes).0.into_iter().map(|(key, label, code)| (format!("{key} {label}"), code)).chain(update_hints) {
         let Some(byte) = text.find(&hint) else { continue };
         let x = Span::raw(&text[..byte]).width() as u16;
         let width = Span::raw(hint.as_str()).width() as u16;
@@ -165,7 +168,7 @@ mod tests {
 
     #[test]
     fn s_card_is_offered_on_a_task_with_subtasks_only_when_s_has_something_to_open() {
-        let line = |opens| hint_lines(Ctx::Work, opens, false, true).0.to_string();
+        let line = |opens| hint_lines(Ctx::Work, opens, false, true, &Vec::new()).0.to_string();
         assert!(line(None).contains("↑ ↓ task · → subtasks · ⏎ options") && !line(None).contains("s card"), "{}", line(None));
         assert!(line(Some("card")).contains("↑ ↓ task · → subtasks · s card · ⏎ options"), "{}", line(Some("card")));
     }

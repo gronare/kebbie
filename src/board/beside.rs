@@ -156,7 +156,8 @@ impl App {
         match keys::map().act(Ctx::Work, key) {
             Some(Act::Move) if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) => *scroll = scroll.saturating_sub(1),
             Some(Act::Move) => *scroll = scroll.saturating_add(1),
-            Some(Act::Switch | Act::Back) => self.beside.focused = false,
+            Some(Act::Switch) if key.code == KeyCode::Right => {}
+            Some(Act::Switch | Act::Back | Act::Close) => self.beside.focused = false,
             Some(Act::Card) => match self.selected_task().filter(|item| self.card_of(item).is_some()).and_then(|item| Some((item.path.clone()?, item.name.clone()))) {
                 Some((path, name)) => self.mode = super::Mode::Card { path, name, scroll: 0, image: 0 },
                 None => return false,
@@ -168,6 +169,16 @@ impl App {
             },
         }
         true
+    }
+
+    // Where ← and esc go from the focused card, for the status bar; the subtask rows have their own keys line.
+    pub(super) fn pane_hints(&self) -> crate::keys::Hints {
+        let inside = matches!(self.mode, super::Mode::Subtasks);
+        match (self.beside.focused && self.beside.shown, inside) {
+            (true, true) => vec![("← esc".to_string(), "subtasks", KeyCode::Left)],
+            (true, false) => vec![("← esc".to_string(), "tasks", KeyCode::Left)],
+            (false, _) => Vec::new(),
+        }
     }
 
     // The card for the task the cursor is on, its title line apart so it stays put while the rest scrolls.
@@ -332,6 +343,38 @@ mod tests {
         let (side, _) = card_side(&mut app);
         let screen = side.join("\n");
         assert!(screen.contains("Not a task: move to one to see its card here.") && !screen.contains("Stripe"), "no stale card on the issues row: {screen}");
+    }
+
+    #[test]
+    fn right_steps_from_the_tasks_to_the_subtasks_to_the_card_and_left_or_esc_step_back_one_pane() {
+        let mut item = stepped(stripe());
+        item.path = Some(PathBuf::from("/work/wt1.billing"));
+        let mut app = test_app(vec![item]);
+        let status = |app: &mut App| render(app, 140, 40).0.iter().rev().find(|row| !row.trim().is_empty()).cloned().unwrap_or_default();
+        card_side(&mut app);
+        press(&mut app, key(KeyCode::Right));
+        assert!(matches!(app.mode, crate::board::Mode::Subtasks) && !app.beside.focused, "→ onto the subtask rows first");
+        assert!(status(&mut app).contains("→ card · ← esc task"), "{}", status(&mut app));
+        press(&mut app, key(KeyCode::Right));
+        assert!(matches!(app.mode, crate::board::Mode::Subtasks) && app.beside.focused, "→ again onto the card");
+        assert!(status(&mut app).contains("← esc subtasks"), "{}", status(&mut app));
+        press(&mut app, key(KeyCode::Right));
+        assert!(app.beside.focused, "→ on the card stays there");
+        press(&mut app, key(KeyCode::Left));
+        assert!(matches!(app.mode, crate::board::Mode::Subtasks) && !app.beside.focused, "← back to the subtasks");
+        press(&mut app, key(KeyCode::Right));
+        press(&mut app, key(KeyCode::Esc));
+        assert!(matches!(app.mode, crate::board::Mode::Subtasks) && !app.beside.focused, "esc back to the subtasks too");
+        press(&mut app, key(KeyCode::Esc));
+        assert!(matches!(app.mode, crate::board::Mode::Normal) && !app.beside.focused, "and once more back to the tasks");
+        let mut plain = carded_app();
+        card_side(&mut plain);
+        press(&mut plain, key(KeyCode::Right));
+        assert!(plain.beside.focused && status(&mut plain).contains("← esc tasks"), "a task without subtasks goes straight to its card");
+        press(&mut plain, key(KeyCode::Right));
+        assert!(plain.beside.focused, "→ on the card stays there");
+        press(&mut plain, key(KeyCode::Esc));
+        assert!(!plain.beside.focused, "esc back to the tasks");
     }
 
     #[test]

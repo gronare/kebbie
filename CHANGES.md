@@ -18,6 +18,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A sign-off card keeps its images after the task's scratchpad is cleaned away.
 - The card beside the tasks lists the card's images, and s on it shows them even while a question waits.
 - A task's server and worker lines show only in repos that have the dev server or worker command.
+- → on the board reaches the card of a task with subtasks too, and ← or esc step back one pane at a time.
 
 ## 0.41.1
 

@@ -152,7 +152,7 @@ With [`task.steps`](configuration.md) on and subtasks listed, the task's subtask
 | `accept “<title>” · r review` | Under the subtasks: the first ready subtask whose accepting matters, because `task.require_accept` is on or a later subtask is still being built. `r` opens the review, and [`kebbie accept`](commands.md#kebbie-accept-name-sha) accepts it. |
 | `accept “<title>” · r review`, under Needs you | With [`task.require_accept`](configuration.md) on, a ready task with a subtask to accept waits under Needs you with this line: it cannot be pushed until that subtask is accepted. |
 
-`↑` `↓` move from task to task and never stop on a subtask row; the keys line reads `↑ ↓ task · → subtasks · s card · ⏎ options`, `s card` only while the task has a card or a question. `→` steps into the task's own rows on the board: the cursor goes onto the first subtask that waits for you, marked with the selection's background, and the card beside the tasks becomes that subtask's card. The keys line then reads `↑ ↓ subtask · ⏎ options · s card · r review · a accept · ← esc back`, `a accept` only on a ready subtask whose accepting matters. On the collapsed parked line `→` steps into nothing. Inside the task:
+`↑` `↓` move from task to task and never stop on a subtask row; the keys line reads `↑ ↓ task · → subtasks · s card · ⏎ options`, `s card` only while the task has a card or a question. `→` steps into the task's own rows on the board: the cursor goes onto the first subtask that waits for you, marked with the selection's background, and the card beside the tasks becomes that subtask's card. The keys line then reads `↑ ↓ subtask · ⏎ options · s card · r review · a accept · → card · ← esc task`, `→ card` while the card column is drawn, `a accept` only on a ready subtask whose accepting matters. On the collapsed parked line `→` steps into nothing. Inside the task:
 
 | Key | Action |
 | --- | --- |
@@ -162,6 +162,7 @@ With [`task.steps`](configuration.md) on and subtasks listed, the task's subtask
 | `pgup` `pgdn` `space` | Scroll the subtask's card beside the tasks. |
 | `a` | Accept that subtask, as [`kebbie accept <name> --subtask <id>`](commands.md#kebbie-accept-name-sha) does. On the task's own row, `a` stays [let the lead push it](#on-a-task). |
 | `r` | Open the review on that subtask. A review already open in its Space moves to it. |
+| `→` | Onto the subtask's card beside the tasks, to scroll it; `←` or `esc` there come back to the subtask rows. |
 | `←` `esc` | Back to the task's row. |
 | `?` `i` `m` | As on the task's row: help, the inbox, the messages. |
 
@@ -350,7 +351,7 @@ kebbie never posts a reply.
 | --- | --- |
 | `⏎` | Options for the selected task. On the Backlog page, the item's card. |
 | `↑` `↓`, `j` `k` | Move. |
-| `→` | Step into the selected task: onto its [subtask rows](#a-task-in-subtasks), or, for a task without them, its card beside the tasks, where `↑` `↓` `pgup` `pgdn` scroll it. `←` or `esc` back to the tasks. |
+| `→` | Step one pane right: onto the selected task's [subtask rows](#a-task-in-subtasks), then onto its card beside the tasks, where `↑` `↓` `pgup` `pgdn` scroll it; a task without subtasks goes straight to its card. `←` or `esc` step back one pane at a time. |
 | `1`, `2`, `3`, `4`, `,` | The Work page, the [Backlog page](#backlog-page), the Areas page, the Routines page, the [Settings page](#settings-page). |
 | `tab` | Move focus to the lead's chat, showing it first when it is hidden. |
 | `h` | Hide the lead's chat so the board takes the whole width while the chat runs on, or show it again. Only on the board in the lead Space. See [Hiding the chat](../explanation/lead-and-away-mode.md#hiding-the-chat). |
@@ -576,7 +577,7 @@ COMMITS
 | `COMMITS` | Each commit's short sha and subject. |
 
 - On a row that is not a task, such as the bugs to send, the Done block or a comment, it says so in one line.
-- On a task without subtasks, `→` or a click focuses it: `CARD` lights in mauve. `↑` `↓` `pgup` `pgdn` then scroll it; `←` or `esc` gives the keys back to the tasks.
+- `→` steps one pane to the right: from the tasks onto the task's subtask rows when it has them, then onto the card; a click on the card focuses it too. Focused, `CARD` lights in mauve and `↑` `↓` `pgup` `pgdn` scroll it. `←` or `esc` step back one pane at a time, card to subtasks to tasks, and the status bar names where they go, as `← esc subtasks`.
 - `s` opens the card in its window, with its images. On the focused column `s` opens the card window even while the task's question waits.
 - Under 86 columns the column is not drawn; `s` opens the same card in its window.
 

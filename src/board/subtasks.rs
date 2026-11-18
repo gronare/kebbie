@@ -155,12 +155,15 @@ fn key(text: String) -> Span<'static> {
 }
 
 // The keys line under the board while a subtask row is highlighted.
-pub(super) fn inside_hint(accept: bool) -> Line<'static> {
+pub(super) fn inside_hint(accept: bool, card: bool) -> Line<'static> {
     let mut spans = vec![key("↑ ↓".to_string()), label(" subtask · "), key("⏎".to_string()), label(" options · "), key(keys::key(Act::Card).to_string()), label(" card · "), key(keys::key(Act::Review).to_string()), label(" review · ")];
     if accept {
         spans.extend([key(keys::key(Act::Permit).to_string()), label(" accept · ")]);
     }
-    spans.extend([key("← esc".to_string()), label(" back")]);
+    if card {
+        spans.extend([key("→".to_string()), label(" card · ")]);
+    }
+    spans.extend([key("← esc".to_string()), label(" task")]);
     Line::from(spans)
 }
 
@@ -326,8 +329,8 @@ impl App {
 
     // Inside a task the keys at the bottom are the subtask's.
     pub(super) fn subtask_keys(&self) -> Option<Line<'static>> {
-        let item = self.selected_task()?;
-        self.subtask_at(&item).map(|at| inside_hint(super::steps::accept_offered(&item, &walked(&item)[at])))
+        let item = self.selected_task().filter(|_| !self.beside.focused)?;
+        self.subtask_at(&item).map(|at| inside_hint(super::steps::accept_offered(&item, &walked(&item)[at]), self.beside.shown))
     }
 
     // The task under the cursor has subtask rows to step into, and the cursor is on the task itself.
@@ -388,7 +391,27 @@ impl App {
             return self.handle_normal(*key);
         };
         let steps = walked(&item).to_vec();
+        if self.beside.focused {
+            match act {
+                Some(Act::Move) if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) => self.beside.scroll = self.beside.scroll.saturating_sub(1),
+                Some(Act::Move) => self.beside.scroll = self.beside.scroll.saturating_add(1),
+                Some(Act::Switch) if key.code == KeyCode::Right => {}
+                Some(Act::Switch | Act::Back | Act::Close) => self.beside.focused = false,
+                Some(Act::Card) => self.open_subtask(&item, &steps[at]),
+                Some(Act::Help | Act::Inbox | Act::Messages) => {
+                    self.leave_subtasks();
+                    self.handle_normal(*key);
+                }
+                _ => match key.code {
+                    KeyCode::PageUp => self.beside.scroll = self.beside.scroll.saturating_sub(10),
+                    KeyCode::PageDown | KeyCode::Char(' ') => self.beside.scroll = self.beside.scroll.saturating_add(10),
+                    _ => {}
+                },
+            }
+            return;
+        }
         match act {
+            Some(Act::Switch) if key.code == KeyCode::Right => self.focus_beside(),
             Some(Act::Move) => {
                 let to = if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) { at.saturating_sub(1) } else { (at + 1).min(steps.len() - 1) };
                 self.put_cursor(&item, &steps[to]);
@@ -413,6 +436,7 @@ impl App {
 
     fn leave_subtasks(&mut self) {
         self.subtask_row = None;
+        self.beside.focused = false;
         self.mode = Mode::Normal;
     }
 
@@ -601,7 +625,7 @@ mod tests {
         let (task_x, task_y) = find(&rows, "search")[0];
         assert_ne!(buffer[(task_x as u16, task_y as u16)].fg, crate::board::widgets::FAINT, "nothing fades: {shown}");
         assert!(rows.iter().any(|row| row.contains("CARD   Switch the payment provider to Stripe ›")) && rows.iter().any(|row| row.contains("WHAT IT DOES")) && !shown.contains("SUBTASKS"), "the column is the subtask's card: {shown}");
-        assert!(shown.contains("↑ ↓ subtask · ⏎ options · s card · r review · a accept · ← esc back"), "{shown}");
+        assert!(shown.contains("↑ ↓ subtask · ⏎ options · s card · r review · a accept · → card · ← esc task"), "{shown}");
         assert!(rows.iter().any(|row| row.contains("╰ ⏎ options · s card · r review · a accept · ← back")), "the task's key line under its rows gives the subtask's keys: {shown}");
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Char('j'));
