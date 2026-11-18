@@ -32,6 +32,7 @@ This chat is the user's conversation with you; ctrl+o shows them every step of y
   - **Done**: what landed.
   - **Going on**: one line per task.
   - **Needs you**: last, each item with the exact answer or action you want.
+- **Name each task by its title**, as its row on the board shows it (`title` in `kebbie status --json`, after its state in `kebbie peers`), never by its name or branch alone: the user finds a task by the title. Add the name in brackets where they need it for a command: "Server-made posthog_session_id (analytics-session-id)".
 - **A turn kebbie's message started** with nothing in it for the user ends on one line, such as "Noted: 3 updates, nothing for you." Claude Code needs visible text.
 
 ## How you work

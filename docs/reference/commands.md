@@ -577,7 +577,7 @@ The **push order** is the branch's commits not yet on origin's default branch, o
 | `kebbie profiles [--json]` | The [profiles](configuration.md#profiles) a task can start with: the built-in `task`, `reviewer` and `ops`, then each file in `~/.config/kebbie/profiles`. |
 | `kebbie list [--json]` | The pool's worktrees: each one's task or `free`, uncommitted changes, commits ahead and behind, its port, and the first line of its setup note. |
 | `kebbie areas` | The vault's areas with their repo: main against origin, the last release, notes and actions. Needs the vault. |
-| `kebbie peers` | Who you are and the other task sessions, with what each is doing. |
+| `kebbie peers` | Who you are and the other task sessions, with what each is doing and the title its row on the board shows. |
 | `kebbie messages` | The sessions' messages, live. `--print` prints the last 30. |
 | `kebbie backlog` | The backlog the board shows. |
 | `kebbie backlog --search "<words>"` | The backlog items and Found by tasks holding every word, from the backlog as kebbie last read it. It changes nothing, and a task runs it before it files what it noticed. |

@@ -103,8 +103,16 @@ pub fn resolve<'a>(to: &str, from: &str, sessions: &'a [Session]) -> Result<Vec<
 }
 
 pub fn list(me: Option<&str>, sessions: &[Session]) -> String {
+    list_titled(me, sessions, &|_| None)
+}
+
+// The board's title after each task's state, so whoever reads the list names a task as its row shows it.
+fn list_titled(me: Option<&str>, sessions: &[Session], title: &dyn Fn(&str) -> Option<String>) -> String {
     let task = me.and_then(|me| me.split_once('@')).map(|(task, _)| task);
-    let line = |session: &Session| format!("  {:<36} {}", session.address, session.state());
+    let line = |session: &Session| match session.task.as_ref().and_then(|_| title(&session.address)) {
+        Some(title) => format!("  {:<36} {} · {title}", session.address, session.state()),
+        None => format!("  {:<36} {}", session.address, session.state()),
+    };
     let others = |same: bool| -> Vec<String> {
         sessions.iter()
             .filter(|session| session.task.is_some() && Some(session.address.as_str()) != me && (session.task.as_deref() == task) == same)
@@ -129,7 +137,9 @@ pub fn list(me: Option<&str>, sessions: &[Session]) -> String {
 
 pub fn peers(cwd: &Path) -> Result<String> {
     let me = me(cwd);
-    let listed = list(me.as_deref(), &sessions()?);
+    let state = crate::lead::state_location().ok();
+    let title = |address: &str| state.as_deref().and_then(|state| crate::status::kept_title(state, address)).filter(|title| !title.eq_ignore_ascii_case(task_part(address)));
+    let listed = list_titled(me.as_deref(), &sessions()?, &title);
     Ok(standing(listed, me.as_deref() == Some(LEAD_LABEL) && crate::permit::lead_without_role()))
 }
 
@@ -766,6 +776,9 @@ mod tests {
         assert!(listed.starts_with("You are billing@api.\nSame task, other repos:\n  billing@web"), "{listed}");
         assert!(listed.contains("Other tasks:\n  search@api"));
         assert!(listed.lines().last().unwrap().starts_with("  lead"));
+        let titled = list_titled(Some("billing@api"), &sessions(), &|address| (address == "search@api").then(|| "Search by title".to_string()));
+        assert!(titled.lines().any(|line| line.starts_with("  search@api") && line.ends_with(" · Search by title")), "a task the board titles carries its title: {titled}");
+        assert!(titled.lines().any(|line| line.starts_with("  billing@web") && !line.contains(" · ")), "a task without a title stays as it was: {titled}");
     }
 
     #[test]

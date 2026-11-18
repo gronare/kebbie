@@ -903,6 +903,13 @@ mod tests {
     }
 
     #[test]
+    fn the_lead_names_a_task_to_the_user_by_its_title() {
+        let role = role_text(include_str!("../roles/lead.md"), "/opt/kebbie/kebbie", &[Source::Local], false, true, "English");
+        assert!(role.contains("**Name each task by its title**, as its row on the board shows it (`title` in `kebbie status --json`, after its state in `kebbie peers`), never by its name or branch alone"), "{role}");
+        assert!(include_str!("../roles/task.md").contains("In `--next` and the summary, name another task by the title its row on the board shows"));
+    }
+
+    #[test]
     fn the_lead_runs_a_tasks_tests_through_its_repos_test_commands() {
         let role = role_text(include_str!("../roles/lead.md"), "/opt/kebbie/kebbie", &[Source::Local], false, true, "English");
         assert!(role.contains("running its tests, through the commands its repo names in `task.test_commands` (`kebbie config --repo <path>` shows them) and never another test setup beside them"), "{role}");
