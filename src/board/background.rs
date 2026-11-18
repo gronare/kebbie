@@ -7,7 +7,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 
 const WAIT: Duration = Duration::from_millis(150);
-const STEP: f32 = 0.06;
+const LIFT: u8 = 6;
 const MOCHA_BASE: (u8, u8, u8) = (0x1e, 0x1e, 0x2e);
 
 // OSC 11 asks for the background and DA1 follows, since every terminal answers DA1, so one without OSC 11 ends the wait at once; raw mode must be on and the event loop not yet reading.
@@ -58,20 +58,18 @@ fn parse(reply: &str) -> Option<(u8, u8, u8)> {
     }
 }
 
-// A few percent toward white on a dark background, toward black on a light one; with no answer, Mocha's base, which the board's colours already assume.
+// The same few levels on every channel keeps the background's hue; up on a dark background, down on a light one; with no answer, Mocha's base, which the board's colours already assume.
 pub(super) fn focus_tint(background: Option<(u8, u8, u8)>) -> Color {
     let (red, green, blue) = background.unwrap_or(MOCHA_BASE);
     let dark = 0.299 * f32::from(red) + 0.587 * f32::from(green) + 0.114 * f32::from(blue) < 128.0;
-    let toward = |part: u8| {
-        let part = f32::from(part);
-        (if dark { part + (255.0 - part) * STEP } else { part * (1.0 - STEP) }).round() as u8
-    };
-    Color::Rgb(toward(red), toward(green), toward(blue))
+    let shift = |part: u8| if dark { part.saturating_add(LIFT) } else { part.saturating_sub(LIFT) };
+    Color::Rgb(shift(red), shift(green), shift(blue))
 }
 
-// Every cell of the pane on the terminal's own background takes the tint; a cell with a colour of its own, such as the selection, keeps it.
+// Every cell of the pane and a cell of padding left, right and above it on the terminal's own background takes the tint; a cell with a colour of its own, such as the selection, keeps it.
 pub(super) fn paint(buffer: &mut Buffer, area: Rect, tint: Color) {
-    let area = area.intersection(buffer.area);
+    let padded = Rect::new(area.x.saturating_sub(1), area.y.saturating_sub(1), area.width + (area.x.min(1)) + 1, area.height + area.y.min(1));
+    let area = padded.intersection(buffer.area);
     for y in area.top()..area.bottom() {
         for x in area.left()..area.right() {
             let cell = &mut buffer[(x, y)];
@@ -97,8 +95,9 @@ mod tests {
 
     #[test]
     fn the_focus_tint_is_a_step_lighter_on_a_dark_background_and_darker_on_a_light_one() {
-        assert_eq!(focus_tint(Some((0, 0, 0))), Color::Rgb(15, 15, 15));
-        assert_eq!(focus_tint(Some((255, 255, 255))), Color::Rgb(240, 240, 240));
-        assert_eq!(focus_tint(None), Color::Rgb(44, 44, 59), "with no answer, a step lighter than Mocha's base");
+        assert_eq!(focus_tint(Some((0, 0, 0))), Color::Rgb(6, 6, 6));
+        assert_eq!(focus_tint(Some((255, 255, 255))), Color::Rgb(249, 249, 249));
+        assert_eq!(focus_tint(Some((0x1e, 0x1e, 0x2e))), Color::Rgb(36, 36, 52), "the hue stays: every channel moves alike");
+        assert_eq!(focus_tint(None), Color::Rgb(36, 36, 52), "with no answer, a step lighter than Mocha's base");
     }
 }

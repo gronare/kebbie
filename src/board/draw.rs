@@ -121,7 +121,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         render_column(frame, body, backlog, backlog_selected, backlog_rows, &mut app.hits);
     } else if full.width >= 150 {
         let [work_area, _, panel_area, _, backlog_area] = Layout::horizontal([
-            Constraint::Percentage(33), Constraint::Length(1), Constraint::Percentage(38), Constraint::Length(2), Constraint::Min(20),
+            Constraint::Percentage(33), Constraint::Length(2), Constraint::Percentage(38), Constraint::Length(3), Constraint::Min(20),
         ]).areas(body);
         let (work, work_selected, work_rows) = work_lines(app, work_area.width as usize, false, work_area.height as usize);
         render_column(frame, work_area, work, work_selected, work_rows, &mut app.hits);

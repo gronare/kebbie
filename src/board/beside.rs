@@ -389,7 +389,7 @@ mod tests {
     fn the_focused_pane_takes_the_tint_under_its_text_and_in_its_empty_rows_and_the_other_pane_does_not() {
         use ratatui::style::Color;
         let mut app = carded_app();
-        app.focus_tint = Color::Rgb(44, 44, 59);
+        app.focus_tint = Color::Rgb(36, 36, 52);
         let (rows, buffer) = render(&mut app, 140, 40);
         let (built_x, built_y) = find(&rows, "BUILT")[0];
         let (task_x, task_y) = find(&rows, "WORK")[0];
@@ -400,6 +400,10 @@ mod tests {
         let (_, buffer) = render(&mut app, 140, 40);
         assert_eq!((buffer[card].bg, buffer[(built_x as u16, built_y as u16)].bg), (app.focus_tint, app.focus_tint), "→ moves the tint onto the card");
         assert_eq!(buffer[tasks].bg, Color::Reset, "and off the tasks");
+        let (card_x, card_y) = find(&rows, "CARD")[0];
+        let (card_x, card_y) = (card_x as u16, card_y as u16);
+        assert_eq!((buffer[(card_x - 1, card_y)].bg, buffer[(card_x, card_y - 1)].bg), (app.focus_tint, app.focus_tint), "a cell of padding left of and above the card");
+        assert_eq!(buffer[(card_x - 3, card_y)].bg, Color::Reset, "the gap beyond the padding stays the terminal's");
     }
 
     #[test]

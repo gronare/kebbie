@@ -581,7 +581,7 @@ COMMITS
 
 - On a row that is not a task, such as the bugs to send, the Done block or a comment, it says so in one line.
 - `→` steps one pane to the right: from the tasks onto the task's subtask rows when it has them, then onto the card; a click on the card focuses it too. Focused, `CARD` lights in mauve and `↑` `↓` `pgup` `pgdn` scroll it. `←` or `esc` step back one pane at a time, card to subtasks to tasks, and the status bar names where they go, as `← esc subtasks`.
-- The pane that has the keys is a step lighter than the rest, under its text and in its empty rows: the tasks with their subtask rows and panels, the card once focused, or the open messages. kebbie asks the terminal for its background when the board starts and tints a few percent toward white on a dark background, toward black on a light one; a terminal that does not answer gets a step lighter than the board's dark base.
+- The pane that has the keys is a shade lighter than the rest, under its text and in its empty rows: the tasks with their subtask rows and panels, the card once focused, or the open messages. kebbie asks the terminal for its background when the board starts and lifts every colour channel by the same few levels on a dark background, or lowers them on a light one, so the pane keeps the background's hue; a terminal that does not answer gets a step lighter than the board's dark base.
 - `s` opens the card in its window, with its images. On the focused column `s` opens the card window even while the task's question waits.
 - Under 86 columns the column is not drawn; `s` opens the same card in its window.
 
