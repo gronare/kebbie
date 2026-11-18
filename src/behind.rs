@@ -3,6 +3,11 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+// The outcome a run gives when its thread ends without one, as when it panics.
+pub trait Lost {
+    fn lost(label: &str) -> Self;
+}
+
 // Work a page runs behind it: a line for each while it runs, and outcomes that wait until the page can show them.
 pub struct Runs<T> {
     running: Vec<(String, Receiver<T>)>,
@@ -15,7 +20,7 @@ impl<T> Default for Runs<T> {
     }
 }
 
-impl<T: Send + 'static> Runs<T> {
+impl<T: Lost + Send + 'static> Runs<T> {
     pub fn start(&mut self, label: String, work: impl FnOnce() -> T + Send + 'static) {
         let (sender, result) = mpsc::channel();
         thread::spawn(move || {
@@ -34,13 +39,16 @@ impl<T: Send + 'static> Runs<T> {
 
     // Gathers what finished; hands the oldest outcome over only once the page is ready to show it.
     pub fn next(&mut self, ready: bool) -> Option<T> {
-        self.running.retain(|(_, result)| match result.try_recv() {
+        self.running.retain(|(label, result)| match result.try_recv() {
             Ok(outcome) => {
                 self.done.push(outcome);
                 false
             }
             Err(mpsc::TryRecvError::Empty) => true,
-            Err(mpsc::TryRecvError::Disconnected) => false,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.done.push(T::lost(label));
+                false
+            }
         });
         (ready && !self.done.is_empty()).then(|| self.done.remove(0))
     }
@@ -115,7 +123,25 @@ impl<A: Clone + Send + 'static> Reader<A> {
 
 #[cfg(test)]
 mod tests {
-    use super::Runs;
+    use super::{Lost, Runs};
+
+    impl Lost for i32 {
+        fn lost(_: &str) -> Self {
+            -1
+        }
+    }
+
+    #[test]
+    fn a_run_whose_thread_panics_leaves_a_lost_outcome() {
+        let mut runs: Runs<i32> = Runs::default();
+        runs.start("Pushing main".to_string(), || panic!("a run that panics"));
+        let start = std::time::Instant::now();
+        while runs.labels().len() == 1 {
+            assert!(start.elapsed() < std::time::Duration::from_secs(10), "the run never ended");
+            assert_eq!(runs.next(false), None);
+        }
+        assert_eq!(runs.next(true), Some(-1), "it says it stopped instead of vanishing");
+    }
 
     #[test]
     fn an_outcome_waits_until_the_page_is_ready_and_a_run_says_what_it_does_meanwhile() {

@@ -37,6 +37,12 @@ enum Ran {
     Card { address: String, card: bool, report: String },
 }
 
+impl crate::behind::Lost for Ran {
+    fn lost(label: &str) -> Self {
+        Ran::Show(Err(format!("{label} stopped without an answer.")))
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Focus {
     List,

@@ -105,6 +105,12 @@ enum After {
     Left,
 }
 
+impl crate::behind::Lost for After {
+    fn lost(label: &str) -> Self {
+        After::Show(Err(format!("{label} stopped without an answer.")), None)
+    }
+}
+
 enum Mode {
     Normal,
     Options(usize),
