@@ -57,13 +57,14 @@ pub fn run(claude_dir: &Path, visible: bool, request: &Request) -> Result<Outcom
         let root = installed_root(root.clone(), kebbie_plugin().ok().as_ref().and_then(plugin_root), std::env::var_os("HOME").map(PathBuf::from).as_deref());
         let mut lines = vec![line];
         lines.extend(finish_on_new_binary(claude_dir, root.as_deref(), &path));
-        lines
+        (lines, root)
     });
     tracker = Tracker::resume(&path).unwrap_or(tracker);
-    let outcome = result.map(|lines| {
-        let after = update_check::installed(&Places::new(root.clone(), claude_dir.to_path_buf(), channel));
+    let outcome = result.map(|(lines, root)| {
         let running = release::read_override(&state);
-        let mut details = versions(&before, &after, channel);
+        let main = channel == Channel::Main || running.is_some();
+        let finished = finished_on(root.as_deref(), claude_dir, channel, main, &before, old_head.as_deref());
+        let mut details = versions(&before, &finished.after, channel);
         details.insert(0, match &running {
             Some(running) => format!("kebbie is {}", running.describe(channel)),
             None => format!("kebbie follows the {} channel", channel.key()),
@@ -71,15 +72,8 @@ pub fn run(claude_dir: &Path, visible: bool, request: &Request) -> Result<Outcom
         details.extend(crate::lead_restart::versions().map(|(from, to)| format!("lead: runs {from}; {to} is installed")));
         details.push(String::new());
         details.extend(lines);
-        let version = after.iter().find(|component| component.name == update_check::KEBBIE).and_then(|component| component.installed.clone()).unwrap_or_default();
-        let was = before.iter().find(|component| component.name == update_check::KEBBIE).and_then(|component| component.installed.clone());
-        let main = channel == Channel::Main || running.is_some();
-        let olds = old_commits(&before, old_head.as_deref());
-        let notes = root.as_deref().map(|root| changes::for_update(root, &olds, was.as_deref(), &version, main)).unwrap_or_default();
-        let head = root.as_deref().and_then(|root| update_check::git(root, &["rev-parse", "--short=7", "HEAD"]).ok()).unwrap_or_default();
-        let from = if channel == Channel::Main { olds.first().cloned().unwrap_or_default() } else { String::new() };
         let restarted = tracker.progress.summary.take().unwrap_or_default();
-        Outcome { summary: Summary { version: crate::shown_number(channel, &version), new: notes.new, fixed: notes.fixed, head, from, ..restarted }, details, started: tracker.progress.started }
+        Outcome { summary: Summary { version: crate::shown_number(channel, &finished.version), new: finished.new, fixed: finished.fixed, head: finished.head, from: finished.from, ..restarted }, details, started: tracker.progress.started }
     });
     match &outcome {
         Ok(outcome) => {
@@ -139,6 +133,27 @@ pub fn text(outcome: &Outcome, bugs: &[String]) -> String {
 // The steps after the build run on the binary just built, so a fix to them reaches the update that installs it.
 fn plugin_root(plugin: &Value) -> Option<PathBuf> {
     plugin["plugin_root"].as_str().filter(|root| !root.is_empty()).map(PathBuf::from)
+}
+
+struct Finished {
+    after: Vec<Component>,
+    version: String,
+    new: Vec<String>,
+    fixed: Vec<String>,
+    head: String,
+    from: String,
+}
+
+// The version, notes and head an update shows are read from the folder it finished on, which herdr makes a new one for a GitHub update.
+fn finished_on(root: Option<&Path>, claude_dir: &Path, channel: Channel, main: bool, before: &[Component], old_head: Option<&str>) -> Finished {
+    let after = update_check::installed(&Places::new(root.map(Path::to_path_buf), claude_dir.to_path_buf(), channel));
+    let version = after.iter().find(|component| component.name == update_check::KEBBIE).and_then(|component| component.installed.clone()).unwrap_or_default();
+    let was = before.iter().find(|component| component.name == update_check::KEBBIE).and_then(|component| component.installed.clone());
+    let olds = old_commits(before, old_head);
+    let notes = root.map(|root| changes::for_update(root, &olds, was.as_deref(), &version, main)).unwrap_or_default();
+    let head = root.and_then(|root| update_check::git(root, &["rev-parse", "--short=7", "HEAD"]).ok()).unwrap_or_default();
+    let from = if channel == Channel::Main { olds.first().cloned().unwrap_or_default() } else { String::new() };
+    Finished { after, version, new: notes.new, fixed: notes.fixed, head, from }
 }
 
 // herdr installs a GitHub update into a new folder, so the root read before the update names the old kebbie: the update finishes on the folder herdr names now, and the link every config and the PATH reach kebbie by moves there.
@@ -703,6 +718,25 @@ mod tests {
         std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
         crate::executable::write(&binary, "#!/bin/sh\n[ \"$*\" = \"update --finish\" ] && [ -n \"$KEBBIE_UPDATE_PROGRESS\" ] && printf 'Claude Code plugin: from the new binary\\nboard: up to date\\n'\n").unwrap();
         assert_eq!(finish_on_new_binary(&dir, Some(&dir), &dir.join(progress::FILE)), ["Claude Code plugin: from the new binary", "board: up to date"]);
+    }
+
+    #[test]
+    fn the_update_shows_the_version_and_notes_of_the_folder_herdr_installed_it_into() {
+        let dir = scratch("new-folder");
+        let kebbie = |folder: &str, version: &str| {
+            let root = dir.join(folder);
+            let binary = root.join("target/release/kebbie");
+            std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+            crate::executable::write(&binary, format!("#!/bin/sh\n[ \"$1 $2\" = \"version --built\" ] && echo 'kebbie {version}'\n")).unwrap();
+            std::fs::write(root.join("CHANGES.md"), format!("# Changes\n\n## Unreleased\n\n### What's new\n\n### Fixed\n\n## {version}\n\n### What's new\n- New in {version}.\n\n### Fixed\n")).unwrap();
+            root
+        };
+        let (old, new) = (kebbie("old", "0.41.1"), kebbie("new", "0.41.2"));
+        let before = update_check::installed(&Places::new(Some(old), dir.join("claude"), Channel::Release));
+        let finished = finished_on(Some(&new), &dir.join("claude"), Channel::Release, false, &before, None);
+        assert_eq!(finished.version, "0.41.2", "the title names the kebbie the update installed, not the one in the folder it started from");
+        assert_eq!(finished.new, ["New in 0.41.2."]);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     fn scratch(name: &str) -> PathBuf {

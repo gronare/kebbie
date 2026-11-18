@@ -21,6 +21,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - → on the board reaches the card of a task with subtasks too, and ← or esc step back one pane at a time.
 - The review split of a task without subtasks speaks of its commits: the arrows move between commits, tab goes back to the commits, and the header no longer counts commits to accept.
 - The update window names the vault plugin only when it is installed; otherwise its step reads Claude Code plugin.
+- After an update that herdr installed into a new folder, the update window's title names the version it installed, with that version's notes, instead of the version before.
 
 ## 0.41.1
 
