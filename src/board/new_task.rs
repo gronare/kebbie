@@ -70,10 +70,20 @@ fn file(sources: &[Source], repo: &str, text: &str) -> Result<String> {
     backlog_file::file_item(sources, &Filing { priority: "", repo, line: &title, words: Some(text.trim()), body: None, by: "The user" }, false)
 }
 
-// A task name from the description's first words, made unique with -2, -3 and on against what is taken.
+// A task name from the description's first words as kebbie start keeps it, made unique with -2, -3 and on against what is taken.
 pub(crate) fn task_name(text: &str, taken: impl Fn(&str) -> bool) -> String {
-    let base = Some(suggested_name(text)).filter(|name| !name.is_empty()).unwrap_or_else(|| "task".to_string());
-    (1..).map(|count| if count == 1 { base.clone() } else { format!("{base}-{count}") }).find(|name| !taken(name)).expect("an unused name")
+    let words = suggested_name(text);
+    let base = crate::tasks::slug(&words).or_else(|_| crate::tasks::slug(&format!("task {words}"))).unwrap_or_else(|_| "task".to_string());
+    (1..).map(|count| numbered(&base, count)).find(|name| !taken(name)).expect("an unused name")
+}
+
+fn numbered(base: &str, count: usize) -> String {
+    if count == 1 {
+        return base.to_string();
+    }
+    let suffix = format!("-{count}");
+    let kept: String = base.chars().take(40 - suffix.len()).collect();
+    format!("{}{suffix}", kept.trim_end_matches('-'))
 }
 
 fn branch_exists(repo: &Path, name: &str) -> bool {
@@ -361,5 +371,10 @@ mod tests {
         assert_eq!(task_name("Fix the disk warning", |name| name == "fix-disk-warning"), "fix-disk-warning-2");
         assert_eq!(task_name("Fix the disk warning", |name| ["fix-disk-warning", "fix-disk-warning-2"].contains(&name)), "fix-disk-warning-3");
         assert_eq!(task_name("…!", |_| false), "task");
+        assert_eq!(task_name("2fa login breaks", |_| false), "task-2fa-login-breaks", "a name kebbie start refuses for its leading digit");
+        let long = task_name("Internationalisation localisation documentation reorganisation", |_| false);
+        assert_eq!(crate::tasks::slug(&long).as_deref(), Ok(long.as_str()), "the name start keeps, never one it cuts at 40");
+        let again = task_name("Internationalisation localisation documentation reorganisation", |name| name == long);
+        assert!(again.ends_with("-2") && again.len() <= 40 && crate::tasks::slug(&again).as_deref() == Ok(again.as_str()), "{again}");
     }
 }
