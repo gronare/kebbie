@@ -18,6 +18,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - kebbie setup stops mindin's install when you press e to pick another vault server, so it never signs in to the old address afterwards, and two installs never run at once.
 - An action on the Areas or Routines page that crashes says it stopped without an answer, instead of vanishing.
 - An Areas action still running in a repo, such as a release or a push, is refused a second start there until it is done.
+- An answer you give on a backlog item's card stays on it, even when a read of the item was under way as you answered.
 
 ## 0.40.3
 

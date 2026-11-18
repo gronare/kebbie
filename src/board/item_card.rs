@@ -446,6 +446,7 @@ impl App {
                 if let Err(error) = sent {
                     return self.show(Err(error));
                 }
+                self.card_read = None;
                 if let Some(text) = told {
                     let tell = self.lead_teller.clone();
                     self.in_background("Telling the lead your answer".to_string(), move || tell(&text).map(|_| String::new()));
@@ -633,6 +634,24 @@ mod tests {
         settle_jobs(&mut app);
         assert!(told.lock().unwrap()[0].contains("Answer: \"Only the e2e job.\""), "{:?}", told.lock().unwrap());
         assert!(matches!(app.mode, Mode::Normal) && app.toast.is_none(), "a told answer says nothing more");
+    }
+
+    #[test]
+    fn an_answer_drops_the_read_begun_before_it_so_the_answer_stays_on_the_card() {
+        let mut app = test_app(vec![served("billing")]);
+        app.lead_teller = std::sync::Arc::new(|_| Ok(()));
+        let mut shown = card("Projects/answer-stale.md");
+        let stale = shown.clone();
+        shown.typing = Some("Only the e2e job.".to_string());
+        app.mode = Mode::ItemCard(Box::new(shown));
+        let (reader, read) = std::sync::mpsc::channel();
+        app.card_read = Some(read);
+        press(&mut app, key(KeyCode::Enter));
+        assert!(app.card_read.is_none() && reader.send(Some(stale)).is_err(), "the read from before the answer is dropped");
+        assert!(!app.take_item_card_read());
+        let Mode::ItemCard(open) = &app.mode else { panic!("the card stays open") };
+        assert!(open.answers.iter().any(|answer| answer.answer == "Only the e2e job."), "the answer stays on the card");
+        settle_jobs(&mut app);
     }
 
     #[test]
