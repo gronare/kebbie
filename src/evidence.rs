@@ -24,6 +24,7 @@ const UNRECORDED_KEPT: usize = 3;
 const OLDER_SHOWN: usize = 5;
 const RUNNER_WORDS: [&str; 4] = ["test", "tests", "spec", "specs"];
 const TASK_RUNNERS: [&str; 22] = ["make", "just", "rake", "npm", "pnpm", "yarn", "bun", "deno", "dotnet", "mvn", "gradle", "gradlew", "swift", "zig", "flutter", "dart", "mix", "go", "nx", "turbo", "task", "bundle"];
+const NOT_LAUNCHERS: [&str; 30] = ["echo", "printf", "git", "gh", "kebbie", "grep", "rg", "ag", "cat", "less", "head", "tail", "sed", "awk", "man", "which", "type", "ls", "find", "chmod", "cp", "mv", "rm", "touch", "mkdir", "vim", "nano", "code", "diff", "wc"];
 const TEST_TOOLS: [&str; 8] = ["jest", "vitest", "mocha", "phpunit", "ctest", "tox", "nox", "bats"];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -343,13 +344,27 @@ fn test_like(simple: &str) -> Option<String> {
 // A command in the line that looks like a test run kebbie will not record: one the list leaves out, or a listed one inside a loop, a condition or xargs.
 pub fn unrecorded(command: &str, listed: &[String]) -> Option<String> {
     shell::pieces(command).into_iter().find_map(|(text, _)| match shell::piece(text) {
-        shell::Piece::Simple(simple) => test_like(simple).filter(|_| listed_start(simple, listed).is_none()),
+        shell::Piece::Simple(simple) => test_like(simple).filter(|_| listed_start(simple, listed).is_none()).or_else(|| launched(simple, listed)),
         shell::Piece::Nested(inner) => unrecorded(&inner, listed),
         shell::Piece::Hidden(keyword, simple) => {
             let simple = shell::unwrap(simple);
             listed_start(simple, listed).map(str::to_string).or_else(|| test_like(simple)).map(|start| format!("{keyword} {start}"))
         }
         shell::Piece::Setup => None,
+    })
+}
+
+// A test command another command launches, as in `spring rspec` or `docker compose run web bin/rspec`, up to and including the test command, so listing that start records it.
+fn launched(simple: &str, listed: &[String]) -> Option<String> {
+    let words = words(simple);
+    let first = words.first()?;
+    if listed_start(simple, listed).is_some() || NOT_LAUNCHERS.contains(&first.rsplit('/').next().unwrap_or(first)) {
+        return None;
+    }
+    (1..words.len()).find_map(|at| {
+        let rest = words[at..].join(" ");
+        let start = listed_start(&rest, listed).map(str::to_string).or_else(|| test_like(&rest))?;
+        Some(format!("{} {start}", words[..at].join(" ")))
     })
 }
 
@@ -505,7 +520,7 @@ fn unrecorded_context(command: &str) -> String {
     if hidden(command) {
         format!("kebbie did not record `{command}` as a test run: it cannot tell the result of a test command inside a loop, a condition or xargs. Run the test command as a command of its own to have its result recorded.")
     } else {
-        format!("kebbie did not record `{command}` as a test run: it is not in task.test_commands. Name it in your report, so the user can add it.")
+        format!("kebbie did not record `{command}` as a test run: it is not in task.test_commands, so no run of it counts. Ask the lead to add it now with `kebbie tell lead \"add {command} to task.test_commands\"`, run it again once it is added, and name it in your report.")
     }
 }
 
@@ -1135,6 +1150,22 @@ mod tests {
     }
 
     #[test]
+    fn a_test_command_another_command_launches_is_named_up_to_the_test_command() {
+        let list = listed(&[]);
+        assert_eq!(unrecorded("cd x; bundle exec spring rspec spec/a_spec.rb", &list).as_deref(), Some("bundle exec spring rspec"));
+        assert_eq!(unrecorded("docker compose run --rm web bin/rspec spec/a_spec.rb", &list).as_deref(), Some("docker compose run --rm web bin/rspec"));
+        assert_eq!(unrecorded("npx jest src", &list).as_deref(), Some("npx jest"));
+        assert_eq!(recognise("docker compose run --rm web bin/rspec spec/a_spec.rb", &listed(&["docker compose run --rm web bin/rspec"])), Some("docker compose run --rm web bin/rspec"), "listing the named start records it");
+        for command in ["chmod +x bin/test", "git commit -m 'cargo test passes'", "echo npm test", "cat bin/test", "cargo build --tests"] {
+            assert_eq!(unrecorded(command, &list), None, "{command}");
+        }
+        let input = json!({ "hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": { "command": "spring rspec spec/a_spec.rb" }, "cwd": "/nowhere" });
+        let said: Value = serde_json::from_str(&hook("launched-note@app", &input.to_string())).unwrap();
+        let text = said["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
+        assert!(text.contains("`spring rspec`") && text.contains("kebbie tell lead \"add spring rspec to task.test_commands\"") && text.contains("run it again once it is added"), "{text}");
+    }
+
+    #[test]
     fn a_listed_test_command_kebbie_cannot_attribute_is_told_to_the_task() {
         let list = listed(&["script/test"]);
         assert_eq!(unrecorded("for f in a b; do script/test $f; done", &list).as_deref(), Some("do script/test"));
@@ -1545,7 +1576,7 @@ mod tests {
         for (command, prefix) in [
             ("script/test", "script/test"), ("./script/test --fast spec/models", "./script/test"), ("bin/test unit", "bin/test"), ("cd /src/wt1.app && CI=1 bin/spec", "bin/spec"),
             ("make test", "make test"), ("just test-all", ""), ("npm run test:unit", "npm run test:unit"), ("yarn spec", "yarn spec"), ("bundle exec rake spec", "bundle exec rake spec"),
-            ("deno test -A", "deno test"), ("npx vitest run", ""), ("vitest run", "vitest"), ("tox -e py312", "tox"), ("make test 2>&1 | tail", "make test"),
+            ("deno test -A", "deno test"), ("npx vitest run", "npx vitest"), ("vitest run", "vitest"), ("tox -e py312", "tox"), ("make test 2>&1 | tail", "make test"),
         ] {
             assert_eq!(unrecorded(command, &[]).unwrap_or_default(), prefix, "{command}");
         }
