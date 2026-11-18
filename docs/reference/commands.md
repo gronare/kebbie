@@ -952,6 +952,7 @@ A job is a command another machine of your hub account runs on a worktree as it 
 | Command | What it does |
 |---|---|
 | `kebbie job run <name>` | Run the repo's job of that name, from [`[jobs]`](configuration.md#jobs) in its repo config, on a machine of your hub account with [`worker.enabled`](configuration.md#ci-updates-and-the-keeper), on this worktree with its uncommitted and untracked files. It prints the job's output as it comes and exits as the job did: 0 when it exited 0, 1 when it failed, was refused, ran past its timeout, no worker fits, the worker sent nothing for 10 minutes or you pressed Ctrl-C. Without a name it lists the repo's jobs. |
+| `kebbie job suggest [--all]` | The commands [`kebbie run --on`](#commands-on-another-machine) ran in this repo more than once, from its last 200 runs, grouped by command and `--on`, most run first: how many runs passed, the longest, the last day and machine, and a `timeout_minutes` when twice the longest run is past 60 minutes. Commands a job of the repo already runs are named under `Already jobs`. `--all` lists commands run once too. The skill [`kebbie:write-jobs`](skills.md) makes jobs of them. |
 
 - It needs this machine connected to the hub with its account pinned, and its keeper running: the keeper takes the job's output from the hub.
 - The worker is a machine on your account's signed list whose operating system or name matches the job's `on` and that the hub heard from in the last ten minutes, the one heard from last. A report from any other machine is refused, and a job from a machine the account removed from its list is too, once the hub hands over the new list: the worker refuses a list older than one it already saw, but cannot tell when a hub keeps handing over the last list it had.
@@ -983,6 +984,7 @@ A command runs on another machine of your hub account over a direct link on a pr
 - `--send` takes a file, which lands under its own name in the run's folder after the checkout. `--fetch` takes a path relative to the run's folder, refused with `..`, absolute or naming the folder itself; it comes back after the command to the same path under this worktree or `--out`, plain files and folders only, and a path through a symbolic link is refused. A missing path is named on stderr, the rest still comes, and the exit code stays the command's. Files sent and fetched carry at most 1 GiB in all per run.
 - `--alongside` takes no turn and sends no commit: the worker runs the command in the task's folder as it is, without sync, checkout or clean, and refuses it with `--send` or before the task's first run there. `--fetch` works with it.
 - The worker's keeper log gets one line per session: who asked, from where, what ran and how it ended, or why the session was refused.
+- Each command that ran to an exit code is kept for [`kebbie job suggest`](#jobs-on-another-machine): the command line, the `--on` it was given, the machine that ran it, its exit code, how long it took and when, in `runs/<repo>.jsonl` in the [state directory](files.md#pushes-ci-and-staging).
 
 ## The hub
 

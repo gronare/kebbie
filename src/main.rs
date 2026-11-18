@@ -146,6 +146,8 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
   kebbie job run [<name>]         run the repo's job of that name ([jobs] in its repo config) on another machine of
                                   your hub account that has worker.enabled, on this worktree as it stands; prints its
                                   output and exits as the job did; no name lists the repo's jobs
+  kebbie job suggest [--all]      the commands kebbie run --on ran in this repo more than once, grouped by command
+                                  and --on with their runs, passes and longest run, to make jobs of; --all also once
   kebbie run --on <machine> [--send <file>]… [--fetch <path>]… [--out <dir>] [--alongside] -- <command …>
                                   run the command on that machine of your hub account (a system, macos or linux,
                                   or a machine name) over a direct link on Tailscale or WireGuard, on this worktree
@@ -877,7 +879,8 @@ fn run(arguments: &Arguments) -> Result<String> {
         }
         Some("docs") => docs::print(arguments.rest(1)),
         Some("job") if name == Some("run") => jobs::run(&cwd, arguments.positional(2)),
-        Some("job") => Err("kebbie job run <name> runs the repo's job of that name on another machine of your hub account; kebbie job run lists the repo's jobs".to_string()),
+        Some("job") if name == Some("suggest") => jobs::suggest(&cwd, arguments.flag("--all")),
+        Some("job") => Err("kebbie job run <name> runs the repo's job of that name on another machine of your hub account; kebbie job run lists the repo's jobs; kebbie job suggest [--all] lists the commands kebbie run --on ran more than once".to_string()),
         Some("profiles") => profiles::print(arguments.flag("--json")),
         Some("hub") => hub::cli(name, arguments.rest(2), arguments.value("--name")),
         Some("config") if name == Some("edit") => settings_page::edit(&cwd, arguments.value("--repo")),

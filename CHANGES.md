@@ -5,6 +5,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- kebbie job suggest lists the commands kebbie run --on ran more than once in a repo, with how many passed and the longest run, ready to become jobs.
 
 - link.networks picks which private network kebbie run links over first, or only: Tailscale, WireGuard or both.
 - kebbie run --send puts a local file in the run's folder, and --fetch copies files and folders back after the command, over a direct link or the hub.

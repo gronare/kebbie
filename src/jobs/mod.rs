@@ -11,11 +11,13 @@ mod bundle;
 mod cluster;
 pub mod link;
 mod master;
+mod runs;
 mod worker;
 #[cfg(test)]
 mod tests;
 
 pub use master::run;
+pub use runs::suggest;
 
 pub fn spawn(state: &Path) {
     worker::spawn(state);

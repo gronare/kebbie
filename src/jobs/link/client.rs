@@ -460,6 +460,7 @@ fn run(cwd: &Path, on: Option<&str>, options: &Options, argv: &[String]) -> Resu
         return Err("kebbie run --on <system or machine> -- <command …> runs the command there, on this worktree as it stands".to_string());
     }
     timing::mark("start");
+    let started = Instant::now();
     let top = PathBuf::from(crate::repo::git(cwd, &["rev-parse", "--show-toplevel"])?);
     let here = here()?;
     timing::mark("identity");
@@ -473,6 +474,7 @@ fn run(cwd: &Path, on: Option<&str>, options: &Options, argv: &[String]) -> Resu
     eprintln!("kebbie: {} runs it, {route}", target.name);
     catch_interrupt();
     let ran = go(&mut link, &target.name, &top, argv, options, &mut std::io::stdout(), &mut std::io::stderr(), &|| INTERRUPTS.load(Ordering::SeqCst))?;
+    super::super::runs::record(&top, on, &target.name, &shell_line(argv), ran.code, started.elapsed());
     Ok(ran.code)
 }
 
