@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
@@ -88,6 +88,22 @@ enum Purpose {
 enum Go {
     Script { repo: PathBuf, steps: Vec<Step>, next: Option<Next> },
     Task { repo: PathBuf, name: String, prompt: String },
+}
+
+impl Go {
+    fn key(&self, title: &str) -> String {
+        match self {
+            Go::Script { repo, .. } => run_key(repo, title),
+            Go::Task { repo, name, .. } => run_key(repo, name),
+        }
+    }
+}
+
+const PUSH: &str = "push";
+
+// One run of an action per repo: a second start waits until the first is done.
+fn run_key(repo: &Path, action: &str) -> String {
+    format!("{}\n{action}", repo.display())
 }
 
 struct PushWindow {
@@ -415,18 +431,20 @@ impl Page {
                 _ => {}
             },
             Mode::Confirm { title, lines, question, go, .. } => match key.code {
+                KeyCode::Char('y') if self.runs.is_running(&go.key(&title)) => self.show(Err(format!("{title} is already running; it says how it went once it is done."))),
                 KeyCode::Char('y') => match go {
-                    Go::Script { repo, steps, next } => self.runs.start(title, move || run_script(repo, steps, next)),
-                    Go::Task { repo, name, prompt } => self.runs.start(format!("Starting {name}"), move || After::Show(tasks::start(&repo, &name, &tasks::Start { prompt: Some(&prompt), focus: true, from: None, mode: None, profile: None, backlog: None, note: true, anyway: false }), None)),
+                    Go::Script { repo, steps, next } => self.runs.start_as(run_key(&repo, &title), title, move || run_script(repo, steps, next)),
+                    Go::Task { repo, name, prompt } => self.runs.start_as(run_key(&repo, &name), format!("Starting {name}"), move || After::Show(tasks::start(&repo, &name, &tasks::Start { prompt: Some(&prompt), focus: true, from: None, mode: None, profile: None, backlog: None, note: true, anyway: false }), None)),
                 },
                 KeyCode::Char('n') => {}
                 _ if leaves => {}
                 _ => self.mode = Mode::Confirm { title, lines, question, go, nudged: true },
             },
             Mode::Push(window) => match key.code {
+                KeyCode::Char('y') if self.runs.is_running(&run_key(&window.repo, PUSH)) => self.show(Err(format!("{} is already being pushed; it says how it went once it is done.", window.branch))),
                 KeyCode::Char('y') => {
                     let label = format!("Pushing {} to origin", window.tag.as_ref().map_or(window.branch.clone(), |tag| format!("{} and {tag}", window.branch)));
-                    self.runs.start(label, move || push(window));
+                    self.runs.start_as(run_key(&window.repo, PUSH), label, move || push(window));
                 }
                 KeyCode::Char('n') | KeyCode::Esc | KeyCode::Char('q') => {
                     if !window.done.is_empty() {
@@ -511,6 +529,7 @@ impl Page {
                 self.runs.start(format!("Changing the lead's permission in {name}"), move || After::Show(permit::toggle_repo(&name), None));
             }
             Some(Act::Push) => match &area.git {
+                Some(git) if self.runs.is_running(&run_key(&repo, PUSH)) => self.show(Err(format!("{} is already being pushed; it says how it went once it is done.", git.branch))),
                 Some(git) if git.ahead > 0 => {
                     let (range, branch) = (format!("{}..refs/heads/{}", crate::repo::tracking(&git.upstream), git.branch), git.branch.clone());
                     self.runs.start(format!("Reading {branch}'s commits"), move || {
@@ -1067,5 +1086,24 @@ mod tests {
         let lines: Vec<String> = text(&off).into_iter().filter(|line| line.contains("sandbox")).collect();
         assert_eq!(lines.len(), 1, "{lines:?}");
         assert!(lines[0].contains("off (task.sandbox = false)"), "{lines:?}");
+    }
+
+    #[test]
+    fn an_action_still_running_in_its_repo_is_refused_a_second_start() {
+        let mut page = Page::new(Vec::new());
+        let repo = PathBuf::from("/src/app");
+        let (go, wait) = mpsc::channel::<()>();
+        page.runs.start_as(run_key(&repo, "Release · app"), "Release · app".to_string(), move || {
+            let _ = wait.recv();
+            After::Show(Ok(String::new()), None)
+        });
+        page.mode = Mode::Confirm { title: "Release · app".to_string(), lines: Vec::new(), question: "Release?".to_string(), go: Go::Script { repo: repo.clone(), steps: Vec::new(), next: None }, nudged: false };
+        page.handle(KeyEvent::from(KeyCode::Char('y')));
+        assert_eq!(page.running().len(), 1, "no second run starts");
+        assert!(matches!(&page.mode, Mode::Message { text, .. } if text.contains("already running")), "it says why");
+        page.mode = Mode::Confirm { title: "Release · other".to_string(), lines: Vec::new(), question: "Release?".to_string(), go: Go::Script { repo: PathBuf::from("/src/other"), steps: Vec::new(), next: None }, nudged: false };
+        page.handle(KeyEvent::from(KeyCode::Char('y')));
+        assert_eq!(page.running().len(), 2, "another repo's run starts");
+        drop(go);
     }
 }

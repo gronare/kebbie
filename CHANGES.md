@@ -17,6 +17,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Squashing or rewording commits from the push window runs behind the board with the task's row saying so, and tells you how it went; esc no longer looks like it cancels a rewrite that goes on.
 - kebbie setup stops mindin's install when you press e to pick another vault server, so it never signs in to the old address afterwards, and two installs never run at once.
 - An action on the Areas or Routines page that crashes says it stopped without an answer, instead of vanishing.
+- An Areas action still running in a repo, such as a release or a push, is refused a second start there until it is done.
 
 ## 0.40.3
 

@@ -10,7 +10,7 @@ pub trait Lost {
 
 // Work a page runs behind it: a line for each while it runs, and outcomes that wait until the page can show them.
 pub struct Runs<T> {
-    running: Vec<(String, Receiver<T>)>,
+    running: Vec<(String, String, Receiver<T>)>,
     done: Vec<T>,
 }
 
@@ -22,15 +22,25 @@ impl<T> Default for Runs<T> {
 
 impl<T: Lost + Send + 'static> Runs<T> {
     pub fn start(&mut self, label: String, work: impl FnOnce() -> T + Send + 'static) {
+        let key = label.clone();
+        self.start_as(key, label, work);
+    }
+
+    // A run under a key, such as an action in one repo, that is_running finds while it runs.
+    pub fn start_as(&mut self, key: String, label: String, work: impl FnOnce() -> T + Send + 'static) {
         let (sender, result) = mpsc::channel();
         thread::spawn(move || {
             let _ = sender.send(work());
         });
-        self.running.push((label.trim_end_matches('…').to_string(), result));
+        self.running.push((key, label.trim_end_matches('…').to_string(), result));
+    }
+
+    pub fn is_running(&self, key: &str) -> bool {
+        self.running.iter().any(|(running, _, _)| running == key)
     }
 
     pub fn labels(&self) -> Vec<String> {
-        self.running.iter().map(|(label, _)| format!("{label}…")).collect()
+        self.running.iter().map(|(_, label, _)| format!("{label}…")).collect()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -39,7 +49,7 @@ impl<T: Lost + Send + 'static> Runs<T> {
 
     // Gathers what finished; hands the oldest outcome over only once the page is ready to show it.
     pub fn next(&mut self, ready: bool) -> Option<T> {
-        self.running.retain(|(label, result)| match result.try_recv() {
+        self.running.retain(|(_, label, result)| match result.try_recv() {
             Ok(outcome) => {
                 self.done.push(outcome);
                 false
