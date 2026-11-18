@@ -203,7 +203,7 @@ impl Comment {
         let text = |key: &str| value[key].as_str().map(str::to_string);
         Some(Comment {
             id: value["id"].as_u64()?, url: text("url").unwrap_or_default(), author: text("author")?, body: text("body").unwrap_or_default(),
-            path: text("path"), line: value["line"].as_u64(), commit: text("commit")?, created_at: text("created_at").unwrap_or_default(), seen_at: value["seen_at"].as_u64().unwrap_or(0),
+            path: text("path").and_then(|path| file_path(&path)), line: value["line"].as_u64(), commit: text("commit")?, created_at: text("created_at").unwrap_or_default(), seen_at: value["seen_at"].as_u64().unwrap_or(0),
             repo: PathBuf::from(text("repo")?), slug: text("slug").unwrap_or_default(), task: text("task").unwrap_or_default(), address: text("address").unwrap_or_default(),
             pushed_at: value["pushed_at"].as_u64().unwrap_or(0), hunk: text("hunk").unwrap_or_default(), status: Status::of_key(value["status"].as_str()?)?,
             reading: value.get("reading").filter(|reading| reading.is_object()).map(Reading::from_json),
@@ -307,6 +307,12 @@ pub fn clean(text: &str, limit: usize) -> String {
         return kept;
     }
     format!("{}…", kept.chars().take(limit).collect::<String>())
+}
+
+// A commented file's name is anyone's text and goes into prompts outside any fence, so one with any other character is dropped.
+pub fn file_path(text: &str) -> Option<String> {
+    let safe = |character: char| character.is_ascii_alphanumeric() || "._/@+_-".contains(character);
+    (!text.is_empty() && text.len() <= 300 && text.chars().all(safe)).then(|| text.to_string())
 }
 
 // A GitHub login, as it may go into a commit message.

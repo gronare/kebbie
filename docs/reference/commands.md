@@ -365,7 +365,7 @@ After a push, the keeper asks `gh api` for the repo's new commit comments every 
 In a repo with a kebbie worktree pool, the keeper asks every 12 minutes whether or not anything is pushed, and keeps more. Its first round there only marks where the repo's comments stand, so no comment from before it becomes a card. From then on it keeps:
 
 - a comment on your own commit on the default branch, by the author email `git config user.email` gives in that repo, however it was pushed;
-- a comment that mentions your GitHub handle, the login `gh` is logged in as, on any commit, and in the conversation or review of any pull request or issue. Those come from two more calls a round, for the comments changed since the last round. A read-only Claude reads each new comment against the commit's message and diff and the code as it is now, and calls it one of:
+- a comment that mentions your GitHub handle, the login `gh` is logged in as, on any commit, and in the conversation or review of any pull request or issue. Those come from two more calls a round, for the comments changed since the last round, and a round keeps at most 10 of them a repo; the keeper's log says how many more it left unread. A read-only Claude reads each new comment against the commit's message and diff and the code as it is now, and calls it one of:
 
 | Reading | Means |
 | --- | --- |
