@@ -12,7 +12,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph};
 use ratatui::Frame;
 
-use crate::keys::{self, Act};
+use crate::keys::{self, Act, Ctx};
 use crate::obstacle::{Kind, Obstacle, State};
 use crate::peers;
 use crate::sh::Result;
@@ -391,6 +391,14 @@ impl App {
             return self.handle_normal(*key);
         };
         let steps = walked(&item).to_vec();
+        if self.beside.focused && keys::map().act(Ctx::Beside, key) == Some(Act::StepSubtask) {
+            let to = if key.code == KeyCode::Up { at.checked_sub(1) } else { Some(at + 1).filter(|to| *to < steps.len()) };
+            if let Some(to) = to {
+                self.put_cursor(&item, &steps[to]);
+                self.beside.scroll = 0;
+            }
+            return;
+        }
         if self.beside.focused {
             match act {
                 Some(Act::Move) if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) => self.beside.scroll = self.beside.scroll.saturating_sub(1),

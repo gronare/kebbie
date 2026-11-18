@@ -11,6 +11,7 @@ pub enum Ctx {
     Routines,
     Settings,
     Card,
+    Beside,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -20,6 +21,7 @@ pub enum Act {
     Move,
     Switch,
     Subtasks,
+    StepSubtask,
     WorkPage,
     BacklogPage,
     AreasPage,
@@ -75,6 +77,7 @@ pub enum Act {
 enum Default {
     Char(char),
     Fixed(&'static [KeyCode], &'static str),
+    Shift(&'static [KeyCode], &'static str),
     CtrlC,
 }
 
@@ -93,15 +96,15 @@ pub struct Binding {
     pub hint: Hint,
 }
 
-use Ctx::{Areas, Backlog, Card, Routines, Settings, Work};
+use Ctx::{Areas, Backlog, Beside, Card, Routines, Settings, Work};
 
 const BOARD: &[Ctx] = &[Work, Backlog];
 const ALL: &[Ctx] = &[Work, Backlog, Areas, Routines];
 const PAGES: &[Ctx] = &[Work, Backlog, Areas, Routines, Settings];
 
 impl Act {
-    pub const EVERY: [Act; 54] = [
-        Act::Options, Act::ItemOptions, Act::Move, Act::Switch, Act::Subtasks, Act::WorkPage, Act::BacklogPage, Act::AreasPage, Act::RoutinesPage, Act::SettingsPage, Act::Lead, Act::HideChat, Act::Messages, Act::Hub, Act::Help, Act::Inbox, Act::Next, Act::New, Act::Go, Act::Chat,
+    pub const EVERY: [Act; 55] = [
+        Act::Options, Act::ItemOptions, Act::Move, Act::Switch, Act::Subtasks, Act::StepSubtask, Act::WorkPage, Act::BacklogPage, Act::AreasPage, Act::RoutinesPage, Act::SettingsPage, Act::Lead, Act::HideChat, Act::Messages, Act::Hub, Act::Help, Act::Inbox, Act::Next, Act::New, Act::Go, Act::Chat,
         Act::Review, Act::Card, Act::Note, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Rebase, Act::Follow, Act::Tidy, Act::Push, Act::Stage, Act::Done, Act::DismissCi, Act::RerunCi, Act::Park, Act::Reset, Act::Drop, Act::StartAt, Act::Refresh, Act::Away,
         Act::Update, Act::RestartLead, Act::Filter, Act::AreaRefresh, Act::Log, Act::Edit, Act::Pause, Act::Delete, Act::Fullscreen, Act::OpenImage, Act::Back, Act::Close, Act::Quit,
     ];
@@ -113,6 +116,7 @@ impl Act {
             Act::Move => "move",
             Act::Switch => "switch",
             Act::Subtasks => "subtasks",
+            Act::StepSubtask => "step_subtask",
             Act::WorkPage => "work_page",
             Act::BacklogPage => "backlog_page",
             Act::AreasPage => "areas_page",
@@ -171,6 +175,7 @@ impl Act {
             Act::Move => Default::Fixed(&[KeyCode::Up, KeyCode::Down, KeyCode::Char('k'), KeyCode::Char('j')], "↑ ↓ j k"),
             Act::Switch => Default::Fixed(&[KeyCode::Left, KeyCode::Right], "← →"),
             Act::Subtasks => Default::Fixed(&[KeyCode::Char(' ')], "space"),
+            Act::StepSubtask => Default::Shift(&[KeyCode::Up, KeyCode::Down], "shift ↑↓"),
             Act::Lead => Default::Fixed(&[KeyCode::Tab, KeyCode::BackTab], "tab"),
             Act::Back => Default::Fixed(&[KeyCode::Esc], "esc"),
             Act::Fullscreen => Default::Fixed(&[KeyCode::Char('f')], "f"),
@@ -237,6 +242,7 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::Options, on: &[Areas], help: "actions for the selected area (in the detail: run the selected action)", hint: Hint::Both },
     Binding { act: Act::Switch, on: &[Work], help: "→ hands the keys to the card beside the tasks, which ↑ ↓ pgup pgdn scroll: from a task row the task's own card, from a subtask row that subtask's card; ← or esc hand them back to the rows they came from; on a narrow board, with no card beside, → does nothing", hint: Hint::No },
     Binding { act: Act::Subtasks, on: &[Work], help: "space steps into the selected task's subtask rows: ↑ ↓ step them and the card beside the tasks is the highlighted subtask's; esc steps back out to the tasks; on a task without subtasks space does nothing", hint: Hint::No },
+    Binding { act: Act::StepSubtask, on: &[Beside], help: "on a subtask's card beside the tasks: the previous or next subtask of the same task, its card from the top, with the subtask row following; nothing at the first or last, nor on a task's own card", hint: Hint::No },
     Binding { act: Act::Options, on: &[Routines], help: "options for the selected routine (on a narrow board: open it, then options)", hint: Hint::No },
     Binding { act: Act::Switch, on: &[Areas], help: "list · detail", hint: Hint::No },
     Binding { act: Act::Move, on: ALL, help: "move", hint: Hint::No },
@@ -372,7 +378,7 @@ impl Keys {
     pub fn codes(&self, act: Act) -> Vec<KeyCode> {
         match act.default() {
             Default::Char(_) => vec![KeyCode::Char(self.char(act))],
-            Default::Fixed(codes, _) => codes.to_vec(),
+            Default::Fixed(codes, _) | Default::Shift(codes, _) => codes.to_vec(),
             Default::CtrlC => Vec::new(),
         }
     }
@@ -380,7 +386,7 @@ impl Keys {
     pub fn label(&self, act: Act) -> String {
         match act.default() {
             Default::Char(_) => self.char(act).to_string(),
-            Default::Fixed(_, label) => label.to_string(),
+            Default::Fixed(_, label) | Default::Shift(_, label) => label.to_string(),
             Default::CtrlC => "ctrl+c".to_string(),
         }
     }
@@ -389,12 +395,14 @@ impl Keys {
         self.codes(act).first().copied().unwrap_or(KeyCode::Null)
     }
 
-    // The action a key press means here; ctrl+c is the only key read with its modifier.
+    // The action a key press means here; ctrl+c and the shift keys are the only ones read with their modifier.
     pub fn act(&self, ctx: Ctx, key: &KeyEvent) -> Option<Act> {
         if ctrl_c(key) {
             return Some(Act::Quit);
         }
-        TABLE.iter().filter(|row| row.on.contains(&ctx) && row.act != Act::Quit).map(|row| row.act).find(|act| self.codes(*act).contains(&key.code))
+        let shifted = key.modifiers.contains(KeyModifiers::SHIFT);
+        TABLE.iter().filter(|row| row.on.contains(&ctx) && row.act != Act::Quit).map(|row| row.act)
+            .find(|act| self.codes(*act).contains(&key.code) && (shifted || !matches!(act.default(), Default::Shift(..))))
     }
 
     #[cfg(test)]
@@ -479,6 +487,16 @@ mod tests {
     }
 
     #[test]
+    fn shift_up_and_down_step_subtasks_on_the_card_beside_and_stay_moves_elsewhere() {
+        let keys = Keys::defaults();
+        let shift = |code| KeyEvent::new(code, KeyModifiers::SHIFT);
+        assert_eq!((keys.act(Beside, &shift(KeyCode::Up)), keys.act(Beside, &shift(KeyCode::Down))), (Some(Act::StepSubtask), Some(Act::StepSubtask)));
+        assert_eq!(keys.act(Beside, &KeyEvent::from(KeyCode::Up)), None, "plain ↑ is not the shift key");
+        assert_eq!((keys.act(Work, &shift(KeyCode::Up)), keys.act(Card, &shift(KeyCode::Down))), (Some(Act::Move), Some(Act::Move)));
+        assert!(!Act::StepSubtask.remappable() && keys.label(Act::StepSubtask) == "shift ↑↓");
+    }
+
+    #[test]
     fn the_try_action_reads_its_older_name_stage_too() {
         let (keys, errors) = Keys::with(&entries(&[("stage", "J")]));
         assert!(errors.is_empty(), "{errors:?}");
@@ -492,7 +510,7 @@ mod tests {
             assert!(TABLE.iter().any(|row| row.act == act), "{} has no row", act.id());
         }
         let keys = Keys::defaults();
-        for ctx in [Work, Backlog, Areas, Routines, Settings, Card] {
+        for ctx in [Work, Backlog, Areas, Routines, Settings, Card, Beside] {
             let mut seen: Vec<(KeyCode, Act)> = Vec::new();
             for row in TABLE.iter().filter(|row| row.on.contains(&ctx)) {
                 for code in keys.codes(row.act) {

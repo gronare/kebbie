@@ -155,6 +155,9 @@ impl App {
         if !self.beside.focused || !self.beside.shown || self.column != super::Column::Work {
             return false;
         }
+        if keys::map().act(Ctx::Beside, key).is_some() {
+            return true;
+        }
         let scroll = &mut self.beside.scroll;
         match keys::map().act(Ctx::Work, key) {
             Some(Act::Move) if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) => *scroll = scroll.saturating_sub(1),
@@ -181,7 +184,7 @@ impl App {
         }
         let on_row = matches!(self.mode, super::Mode::Normal) && self.column == super::Column::Work && !self.offer_panel.focused && !self.comment_panel.focused && !self.on_parked_line() && self.selected_task().is_some();
         match (self.beside.focused, matches!(self.mode, super::Mode::Subtasks)) {
-            (true, true) => vec![("← esc".to_string(), "subtasks", KeyCode::Left)],
+            (true, true) => vec![(keys::map().label(Act::StepSubtask), "subtask", KeyCode::Down), ("← esc".to_string(), "subtasks", KeyCode::Left)],
             (true, false) => vec![("← esc".to_string(), "tasks", KeyCode::Left)],
             (false, _) if on_row => vec![("→".to_string(), "card", KeyCode::Right)],
             (false, _) => Vec::new(),
@@ -411,6 +414,41 @@ mod tests {
         assert!(plain.beside.focused && status(&mut plain).contains("← esc tasks"), "a task without subtasks goes to its card the same way");
         press(&mut plain, key(KeyCode::Esc));
         assert!(!plain.beside.focused, "esc back to the tasks");
+    }
+
+    #[test]
+    fn shift_down_and_up_on_a_subtasks_focused_card_step_to_the_next_and_previous_subtask_and_keep_the_card() {
+        let mut item = stepped(stripe());
+        item.path = Some(PathBuf::from("/work/wt1.billing"));
+        let mut app = test_app(vec![item]);
+        let shift = |code| ratatui::crossterm::event::KeyEvent::new(code, ratatui::crossterm::event::KeyModifiers::SHIFT);
+        let status = |app: &mut App| render(app, 140, 40).0.iter().rev().find(|row| !row.trim().is_empty()).cloned().unwrap_or_default();
+        card_side(&mut app);
+        press(&mut app, key(KeyCode::Char(' ')));
+        press(&mut app, key(KeyCode::Right));
+        let first = app.subtask_row.clone().unwrap().1;
+        let (side, _) = card_side(&mut app);
+        assert!(side.join("\n").contains("› 2 of 4") && status(&mut app).contains("shift ↑↓ subtask · ← esc subtasks"), "{} {}", side.join("\n"), status(&mut app));
+        press(&mut app, shift(KeyCode::Up));
+        assert_eq!(app.subtask_row.clone().unwrap().1, first, "shift ↑ on the first subtask does nothing");
+        press(&mut app, key(KeyCode::Down));
+        assert!(app.beside.scroll == 1 && app.subtask_row.clone().unwrap().1 == first, "plain ↓ still scrolls the card");
+        press(&mut app, shift(KeyCode::Down));
+        let second = app.subtask_row.clone().unwrap().1;
+        assert!(second != first && app.beside.focused && app.beside.scroll == 0 && matches!(app.mode, crate::board::Mode::Subtasks), "shift ↓ shows the next subtask from its top, the card keeps the keys");
+        let (side, _) = card_side(&mut app);
+        assert!(side.join("\n").contains("› 3 of 4") && side.join("\n").contains("Add Stripe as the gateway"), "{}", side.join("\n"));
+        press(&mut app, shift(KeyCode::Up));
+        assert!(app.subtask_row.clone().unwrap().1 == first && app.beside.focused, "shift ↑ goes back");
+        press(&mut app, shift(KeyCode::Down));
+        press(&mut app, key(KeyCode::Left));
+        assert!(!app.beside.focused && app.subtask_row.clone().unwrap().1 == second, "← lands on the row the card stepped to");
+        let mut plain = test_app(vec![{ let mut item = stepped(stripe()); item.path = Some(PathBuf::from("/work/wt1.billing")); item }]);
+        card_side(&mut plain);
+        press(&mut plain, key(KeyCode::Right));
+        press(&mut plain, shift(KeyCode::Down));
+        assert!(plain.beside.focused && plain.beside.scroll == 0 && plain.subtask_row.is_none() && plain.work_selected == 0, "on a task's own card shift ↓ does nothing");
+        assert!(!status(&mut plain).contains("shift ↑↓"), "{}", status(&mut plain));
     }
 
     #[test]

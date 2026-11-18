@@ -21,6 +21,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A waiting task's Claude and the lead hear it when a task it waits for is dropped, reset or lands with red CI.
 - kebbie peers shows each task's board title after its state, and the lead names tasks to you by those titles.
 - On the board → always moves to the card beside the tasks, and space steps into a task's subtask rows.
+- On a subtask's card beside the tasks, shift+↑ and shift+↓ show the previous or next subtask of the same task without leaving the card.
 
 ### Fixed
 - The questions window sends the selected answer on Enter, the recommended one included, once it has been open half a second; a plan's approve still waits for y.

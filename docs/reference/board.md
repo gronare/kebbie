@@ -163,6 +163,7 @@ With [`task.steps`](configuration.md) on and subtasks listed, the task's subtask
 | `a` | Accept that subtask, as [`kebbie accept <name> --subtask <id>`](commands.md#kebbie-accept-name-sha) does. On the task's own row, `a` stays [let the lead push it](#on-a-task). |
 | `r` | Open the review on that subtask. A review already open in its Space moves to it. |
 | `→` | Onto the subtask's card beside the tasks, to scroll it; `←` or `esc` there come back to the subtask rows. |
+| `shift` `↑` `↓` | On the subtask's focused card: the previous or next subtask of the same task, its card from the top, with the keys staying on the card and the subtask row following, so `←` or `esc` land on it. At the first or last subtask nothing happens. |
 | `esc` | Back to the task's row. |
 | `?` `i` `m` | As on the task's row: help, the inbox, the messages. |
 
@@ -586,7 +587,7 @@ COMMITS
 | `COMMITS` | Each commit's short sha and subject. |
 
 - On a row that is not a task, such as the bugs to send, the Done block or a comment, it says so in one line.
-- `→` moves onto the card: from a task row the task's own card, from a subtask row that subtask's card; a click on the card focuses it too. Focused, `CARD` lights in mauve and `↑` `↓` `pgup` `pgdn` `space` scroll it. `←` or `esc` go back to the rows they came from, and the status bar names where, as `← esc tasks` or `← esc subtasks`.
+- `→` moves onto the card: from a task row the task's own card, from a subtask row that subtask's card; a click on the card focuses it too. Focused, `CARD` lights in mauve and `↑` `↓` `pgup` `pgdn` `space` scroll it. `←` or `esc` go back to the rows they came from, and the status bar names where, as `← esc tasks` or `← esc subtasks`. On a subtask's card `shift` `↑` `↓` step to the previous or next subtask of the same task and the status bar adds `shift ↑↓ subtask`; on a task's own card they do nothing.
 - The pane that has the keys is a shade lighter than the rest, under its text and in its empty rows: the tasks with their subtask rows and panels, the card once focused, or the open messages. kebbie asks the terminal for its background when the board starts and lifts every colour channel by the same few levels on a dark background, or lowers them on a light one, so the pane keeps the background's hue; a terminal that does not answer gets a step lighter than the board's dark base.
 - `s` opens the card in its window, with its images. On the focused column `s` opens the card window even while the task's question waits.
 - Under 86 columns the column is not drawn; `s` opens the same card in its window.

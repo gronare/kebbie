@@ -101,7 +101,7 @@ const WAITING: Group = group("WAITING ON YOU", &[bind(&[Act::Inbox], "inbox: que
 
 const WORK: Sheet = Sheet {
     title: "keys · work",
-    ctxs: &[Ctx::Work, Ctx::Backlog, Ctx::Card],
+    ctxs: &[Ctx::Work, Ctx::Backlog, Ctx::Card, Ctx::Beside],
     groups: &[
         group("MOVE AROUND", &[
             bind(&[Act::Move], "move", "move"),
@@ -171,6 +171,7 @@ const WORK: Sheet = Sheet {
         ]),
         group("IN A SUBTASK'S CARD", &[
             bind(&[Act::Move], "scroll", "scroll"),
+            bind(&[Act::StepSubtask], "step beside the tasks", "step beside"),
             bind(&[Act::Review], "its review", "review"),
             bind(&[Act::Permit], "accept", "accept"),
             bind(&[Act::Back], "the subtask", "back"),
@@ -521,7 +522,7 @@ mod tests {
         assert!(screen.contains("h         hide or show the lead's chat") && screen.contains("ctrl+c    twice: quit the board"), "{screen}");
         assert!(screen.contains("in the card window  ← → image · ↑ ↓ j k scroll · f fullscreen · o open the image · p push"), "{screen}");
         assert!(screen.contains("subtasks  space step into a task's rows · ↑ ↓ j k step · s its card · a accept it · r its review · esc the task"), "{screen}");
-        assert!(screen.contains("in a subtask's card  ↑ ↓ j k scroll · r its review · a accept · esc the subtask"), "{screen}");
+        assert!(screen.contains("in a subtask's card  ↑ ↓ j k scroll · shift ↑↓ step beside the tasks · r its review · a accept · esc the subtask"), "{screen}");
         assert!(screen.contains("areas (3) and routines (4) show their own keys here when you are on them · any key closes") && !screen.contains("↓ more"), "{screen}");
         assert!(screen.contains(&crate::shown_kebbie()), "the window names the kebbie that runs: {screen}");
         assert!(screen.contains("a problem with kebbie? ask the lead: the bugs it saves wait under Work to be sent") && !screen.contains("bug reports"), "{screen}");
@@ -552,15 +553,16 @@ mod tests {
         assert!(row_with(&rows, "END IT").contains("asks first"));
         assert!(screen.contains("any key closes · ↓ more") && !screen.contains("DEV SERVERS"), "{screen}");
         assert!(screen.contains("a problem with kebbie? ask the lead"), "the line stays below the scrolled keys: {screen}");
-        for _ in 0..20 {
+        for _ in 0..21 {
             press(&mut app, key(KeyCode::Down));
         }
         assert!(matches!(app.mode, Mode::Help(_)), "↓ scrolls instead of closing");
         let (rows, _) = render(&mut app, 80, 22);
         let screen = rows.join("\n");
         assert!(screen.contains("IN THE CARD WINDOW") && screen.contains("IN A SUBTASK'S CARD") && !screen.contains("↓ more") && !screen.contains("MOVE AROUND"), "{screen}");
-        press(&mut app, key(KeyCode::PageUp));
-        press(&mut app, key(KeyCode::PageUp));
+        for _ in 0..3 {
+            press(&mut app, key(KeyCode::PageUp));
+        }
         let (rows, _) = render(&mut app, 80, 22);
         assert!(rows.join("\n").contains("MOVE AROUND"));
         press(&mut app, key(KeyCode::Char('x')));
