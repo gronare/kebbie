@@ -352,16 +352,21 @@ fn tell_for_real(told: Told) {
     }
 }
 
+// A task waited for in another repo is open only if that repo's worktrees are read too.
+fn repos_of(waits: &[Waiting]) -> Vec<PathBuf> {
+    let mut repos: Vec<PathBuf> = waits.iter().flat_map(|wait| wait.on.iter().map(|dep| dep.repo.clone()).chain([wait.repo.clone()])).collect();
+    repos.sort();
+    repos.dedup();
+    repos
+}
+
 pub fn tick(state: &Path) -> Vec<String> {
     let waits = all(state);
     if waits.is_empty() {
         return Vec::new();
     }
-    let mut repos: Vec<PathBuf> = waits.iter().flat_map(|wait| wait.on.iter().map(|dep| dep.repo.clone()).chain([wait.repo.clone()])).collect();
-    repos.sort();
-    repos.dedup();
     let log = messages::load();
-    let facts = Facts::with_repos(state, &log, &repos);
+    let facts = Facts::with_repos(state, &log, &repos_of(&waits));
     tick_in(state, &facts, messages::now(), &mut |wait| resume_live(state, wait, &log), &mut tell_for_real)
 }
 
@@ -384,17 +389,18 @@ pub(crate) fn shown_line(wait: &Waiting, facts: &Facts) -> String {
     format!("{} waits for {}{then}", wait.address, and_list(&deps))
 }
 
+fn listing(state: &Path, log: &[Message]) -> String {
+    let waits = all(state);
+    if waits.is_empty() {
+        return "No task waits for another.".to_string();
+    }
+    let facts = Facts::with_repos(state, log, &repos_of(&waits));
+    waits.iter().map(|wait| shown_line(wait, &facts)).collect::<Vec<_>>().join("\n")
+}
+
 pub fn command(cwd: &Path, name: Option<&str>, on: &[&str], off: bool, then: &[String]) -> Result<String> {
     let state = crate::lead::state_dir()?;
-    let Some(name) = name else {
-        let waits = all(&state);
-        if waits.is_empty() {
-            return Ok("No task waits for another.".to_string());
-        }
-        let repos: Vec<PathBuf> = waits.iter().map(|wait| wait.repo.clone()).collect();
-        let facts = Facts::with_repos(&state, &messages::load(), &repos);
-        return Ok(waits.iter().map(|wait| shown_line(wait, &facts)).collect::<Vec<_>>().join("\n"));
-    };
+    let Some(name) = name else { return Ok(listing(&state, &messages::load())) };
     let (repo, address) = address_at(cwd, name)?;
     let caller = crate::permit::caller();
     if off {
@@ -405,7 +411,7 @@ pub fn command(cwd: &Path, name: Option<&str>, on: &[&str], off: bool, then: &[S
     }
     if on.is_empty() {
         return match load(&state, &address) {
-            Some(wait) => Ok(shown_line(&wait, &Facts::with_repos(&state, &messages::load(), &[repo]))),
+            Some(wait) => Ok(shown_line(&wait, &Facts::with_repos(&state, &messages::load(), &repos_of(std::slice::from_ref(&wait))))),
             None => Ok(format!("{address} waits for nothing: kebbie wait {} --on <task[@repo]> makes it wait.", task_part(&address))),
         };
     }
@@ -662,5 +668,19 @@ mod tests {
         wait_in(&state, &Caller::User, &asked("billing@web", &["billing@api"], None), &known, 100, &mut nothing.clone()).unwrap();
         assert_eq!(load(&state, "billing@web").map(|wait| wait.on), Some(vec![dep("billing@api")]), "its half in api is another task to wait for");
         fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn the_listing_reads_the_repo_of_a_task_waited_for_in_another_repo() {
+        use super::super::test_support::{cleanup, state_of, task_in_another_repo, task_with_a_commit};
+        let (web, web_origin, billing, _) = task_with_a_commit("billing");
+        let (api, api_origin, rounding, _) = task_in_another_repo("rounding");
+        let state = state_of(&web);
+        let waited = peers::address("rounding", &name_of(&api));
+        save(&state, &Waiting { address: peers::address("billing", &name_of(&web)), repo: web.clone(), on: vec![Dep { address: waited.clone(), repo: api.clone() }], then: None, by: "user".to_string(), at: 100, gone_since: None, unlisted_since: None, unlisted_told: false }).unwrap();
+        let shown = listing(&state, &[]);
+        assert!(shown.contains(&format!("waits for {waited} (open)")), "the task in the other repo is open, not gone: {shown}");
+        cleanup(web, web_origin, &billing);
+        cleanup(api, api_origin, &rounding);
     }
 }
