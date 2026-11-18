@@ -1,6 +1,6 @@
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver};
-use std::thread;
+use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
@@ -14,7 +14,8 @@ use crate::evidence;
 use crate::report;
 use crate::sh::Result;
 use crate::tasks;
-use super::{App, Mode};
+use super::push::{Opened, Opening};
+use super::{App, Mode, Page};
 use super::widgets::{MAUVE, MUTED, TEXT, YELLOW, bold, centered, style};
 
 pub(super) enum Rewrite {
@@ -73,7 +74,7 @@ impl MessageEditor {
     }
 }
 
-fn rewrite_commits(path: &std::path::Path, rewrite: Rewrite, message: &str, (selected, scroll): (usize, super::push::Scroll), (card, tests): (Option<(report::Card, bool)>, Option<evidence::Shown>), working: bool) -> super::push::Opening {
+fn rewrite_commits(path: &std::path::Path, rewrite: Rewrite, message: &str, (selected, scroll): (usize, super::push::Scroll), (card, tests): (Option<(report::Card, bool)>, Option<evidence::Shown>), working: bool) -> Opening {
     let result = match &rewrite {
         Rewrite::Reword(sha) => tasks::reword(path, sha, message),
         Rewrite::Squash => tasks::squash(path, message),
@@ -82,9 +83,9 @@ fn rewrite_commits(path: &std::path::Path, rewrite: Rewrite, message: &str, (sel
         Ok(commits) => {
             let (selected, scroll) = if matches!(rewrite, Rewrite::Squash) { (0, super::push::Scroll::default()) } else { (selected.min(commits.len().saturating_sub(1)), scroll) };
             let marks = super::push::Marks::read(path, &commits, working);
-            super::push::Opening::Window(Box::new(super::push::Opened { commits, selected, card, tests, marks, scroll }))
+            Opening::Window(Box::new(Opened { commits, selected, card, tests, marks, scroll }))
         }
-        Err(error) => super::push::Opening::Said(Err(error)),
+        Err(error) => Opening::Said(Err(error)),
     }
 }
 
@@ -110,15 +111,31 @@ impl App {
                     self.mode = Mode::EditMessage(editor);
                     return;
                 }
+                let name = self.name_at(&editor.path);
+                if let Some(doing) = self.doing(&name, Some(&editor.path)) {
+                    self.about_path("push", &editor.path);
+                    self.already(doing);
+                    self.mode = Mode::EditMessage(editor);
+                    return;
+                }
                 let MessageEditor { path, selected, rewrite, card, tests, scroll, .. } = *editor;
                 let working = self.tasks.iter().any(|item| item.path.as_deref() == Some(path.as_path()) && item.turn_under_way());
-                let label = if matches!(rewrite, Rewrite::Squash) { "Squashing its commits…" } else { "Rewording the commit…" }.to_string();
-                let (sender, read) = mpsc::channel();
-                let rewritten = path.clone();
-                thread::spawn(move || {
-                    let _ = sender.send(rewrite_commits(&rewritten, rewrite, &message, (selected, scroll), (card, tests), working));
+                let (doing, label) = if matches!(rewrite, Rewrite::Squash) { ("squashing", "Squashing its commits") } else { ("rewording", "Rewording a commit") };
+                let opened: Arc<Mutex<Option<Box<Opened>>>> = Arc::default();
+                let (into, rewritten, reopen) = (opened.clone(), path.clone(), path.clone());
+                self.about_path("push", &path);
+                let job = self.task_in_background(&name, Some(&path), doing, label.to_string(), move || match rewrite_commits(&rewritten, rewrite, &message, (selected, scroll), (card, tests), working) {
+                    Opening::Window(window) => {
+                        if let Ok(mut into) = into.lock() {
+                            *into = Some(window);
+                        }
+                        Ok(String::new())
+                    }
+                    Opening::Said(said) => said,
                 });
-                self.mode = Mode::PushOpening { path, label, read };
+                if let Some(job) = job {
+                    job.then(move |app| app.reopen_push(reopen, &opened));
+                }
             }
             KeyCode::Char('o') if control => {
                 if let Some(Ok(Some(message))) = terminal.map(|terminal| edit_in_editor(terminal, &editor.message())) {
@@ -130,6 +147,17 @@ impl App {
                 editor.text.input(key);
                 self.mode = Mode::EditMessage(editor);
             }
+        }
+    }
+}
+
+impl App {
+    // The push window comes back after a rewrite only when the board is at rest on its work page; otherwise the task's row shows the new commits.
+    fn reopen_push(&mut self, path: PathBuf, opened: &Mutex<Option<Box<Opened>>>) {
+        let Some(opened) = opened.lock().ok().and_then(|mut opened| opened.take()) else { return };
+        if matches!(self.mode, Mode::Normal) && self.page == Page::Work {
+            let Opened { commits, selected, card, tests, marks, scroll } = *opened;
+            self.mode = Mode::ConfirmPush { path, commits, selected, card, tests, marks, scroll };
         }
     }
 }
@@ -151,4 +179,28 @@ pub(super) fn draw_editor(frame: &mut Frame, editor: &MessageEditor) {
         Line::default(),
         Line::from(vec![count, Span::styled(keys, style(YELLOW)), Span::styled("ctrl-s save · esc back · ctrl-o open in your editor", style(MUTED))]),
     ]), footer);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    use crate::board::Mode;
+    use crate::board::test_support::*;
+    use super::{MessageEditor, Rewrite};
+
+    #[test]
+    fn a_squash_runs_as_its_tasks_job_and_says_how_it_went() {
+        let mut item = served("squashed");
+        item.path = Some(PathBuf::from("/nonexistent/kebbie-squash"));
+        let mut app = test_app(vec![item]);
+        app.mode = Mode::EditMessage(Box::new(MessageEditor::new(PathBuf::from("/nonexistent/kebbie-squash"), Vec::new(), (0, crate::board::push::Scroll::default()), (None, None, Default::default()), Rewrite::Squash, "One commit")));
+        press(&mut app, KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert!(matches!(app.mode, Mode::Normal), "no window waits on the rewrite");
+        assert_eq!(app.doing("squashed", Some(Path::new("/nonexistent/kebbie-squash"))).as_deref(), Some("squashing"), "the task is held while it runs");
+        settle_jobs(&mut app);
+        assert!(matches!(&app.mode, Mode::Message(_)), "its outcome is shown once it is done");
+    }
 }
