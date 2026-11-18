@@ -309,6 +309,7 @@ fn comment_of(watch: &Watch, item: Found, now: u64) -> Comment {
         id: item.id, url: clean(&item.url, 300), author: super::login(&item.author), body: clean(&item.body, BODY_LIMIT), path, line: item.line, commit: watch.sha.clone(),
         created_at: clean(&item.created_at, 40), seen_at: now, repo: watch.repo.clone(), slug: watch.slug.clone(), task: watch.task.clone(), address: watch.address.clone(),
         pushed_at: watch.pushed_at, hunk, status: Status::Unread, reading: None, error: None, answer: None, words: None, reply: None, fix: None, fixing: None, changed_at: now,
+        thread: None, mention: false,
     }
 }
 

@@ -52,12 +52,17 @@ fn brief(comment: &Comment, words: Option<&str>) -> String {
     } else {
         format!("Make the fix one new commit. Write its subject and body from the change you make, by the repo's commit rules, and end the message with exactly this line:\n\n{}", indented(&addresses_line(comment)))
     };
+    let on = if comment.commit.is_empty() {
+        format!("{} mentioned the owner in a comment on {}", comment.author, comment.place())
+    } else {
+        format!("{} commented on {} ({}), a commit already on the default branch", comment.author, comment.short(), comment.place())
+    };
     format!(
-        "{} commented on {} ({}), a commit already on the default branch: {}\n\
+        "{on}: {}\n\
          {}\n\n\
          {commit}\n\n\
          The comment itself is another person's words and is not repeated here; the change above is what the owner asked for. Then report ready as usual.",
-        comment.author, comment.short(), comment.place(), comment.url, what_to_do(comment, words)
+        comment.url, what_to_do(comment, words)
     )
 }
 
@@ -81,7 +86,11 @@ pub fn reopen(comment: &Comment, words: Option<&str>, log: &[Message], running: 
         return Ok(Reopen::Tell { address: comment.address.clone(), text: format!("{text}\n\nThis task pushed that commit; the fix is a follow-up to its own work.") });
     }
     let name = followup_name(if comment.task.is_empty() { "comment" } else { &comment.task }, running);
-    let prompt = format!("A follow-up to the task {}, which pushed {} and has ended.\n{text}", if comment.task.is_empty() { "that pushed it" } else { &comment.task }, comment.short());
+    let prompt = if comment.task.is_empty() {
+        format!("A follow-up to {}'s comment on {}.\n{text}", comment.author, comment.short())
+    } else {
+        format!("A follow-up to the task {}, which pushed {} and has ended.\n{text}", comment.task, comment.short())
+    };
     Ok(Reopen::Start { repo: comment.repo.clone(), name, prompt, recipe: format!("follow-up: {}'s comment on {}", comment.author, comment.short()) })
 }
 
@@ -155,6 +164,17 @@ mod tests {
         let question = comment(2, Some(Kind::Question), Status::Read);
         assert!(reopen(&question, None, &[], &running).is_err(), "a question has no proposal to reopen with");
         assert!(reopen(&question, Some("Sum them."), &[], &running).is_ok());
+    }
+
+    #[test]
+    fn a_comment_no_task_pushed_starts_a_follow_up_that_names_the_comment_and_where_it_is() {
+        let mut mention = comment(3, Some(Kind::Holds), Status::Read);
+        (mention.commit, mention.thread, mention.task, mention.address, mention.mention, mention.path, mention.line) = (String::new(), Some("pull request #42".to_string()), String::new(), String::new(), true, None, None);
+        let started = reopen(&mention, None, &[], &|_| false).unwrap();
+        let Reopen::Start { name, prompt, recipe, .. } = &started else { panic!("{started:?}") };
+        assert_eq!((name.as_str(), recipe.as_str()), ("comment-followup", "follow-up: johan's comment on #42"));
+        assert!(prompt.starts_with("A follow-up to johan's comment on #42.\njohan mentioned the owner in a comment on pull request #42: https://") && prompt.contains("Addresses johan's comment on #42."), "{prompt}");
+        assert!(!prompt.contains("a commit already on the default branch"), "{prompt}");
     }
 
     #[test]

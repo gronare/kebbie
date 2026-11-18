@@ -127,11 +127,26 @@ pub struct Comment {
     pub fix: Option<String>,
     pub fixing: Option<String>,
     pub changed_at: u64,
+    pub thread: Option<String>,
+    pub mention: bool,
 }
 
 impl Comment {
+    // The commit, or the #number of the pull request or issue the comment is on.
     pub fn short(&self) -> &str {
-        &self.commit[..7.min(self.commit.len())]
+        match &self.thread {
+            Some(thread) if self.commit.is_empty() => thread.rsplit(' ').next().unwrap_or(thread),
+            _ => &self.commit[..7.min(self.commit.len())],
+        }
+    }
+
+    // Whose the comment is to the owner: the task that pushed the commit, else their own commit, else a mention of them.
+    pub fn whose(&self) -> String {
+        match (self.task.is_empty(), self.mention) {
+            (false, _) => self.task.clone(),
+            (true, true) => "mentions you".to_string(),
+            (true, false) => "your commit".to_string(),
+        }
     }
 
     pub fn kind(&self) -> Option<Kind> {
@@ -142,6 +157,7 @@ impl Comment {
         match (&self.path, self.line) {
             (Some(path), Some(line)) => format!("{path}:{line}"),
             (Some(path), None) => path.clone(),
+            _ if self.commit.is_empty() => self.thread.clone().unwrap_or_else(|| "the thread".to_string()),
             _ => "the commit as a whole".to_string(),
         }
     }
@@ -179,6 +195,7 @@ impl Comment {
             "created_at": self.created_at, "seen_at": self.seen_at, "repo": self.repo, "slug": self.slug, "task": self.task, "address": self.address,
             "pushed_at": self.pushed_at, "hunk": self.hunk, "status": self.status.key(), "reading": self.reading.as_ref().map(Reading::to_json),
             "error": self.error, "answer": self.answer, "words": self.words, "reply": self.reply, "fix": self.fix, "fixing": self.fixing, "changed_at": self.changed_at,
+            "thread": self.thread, "mention": self.mention,
         })
     }
 
@@ -191,6 +208,7 @@ impl Comment {
             pushed_at: value["pushed_at"].as_u64().unwrap_or(0), hunk: text("hunk").unwrap_or_default(), status: Status::of_key(value["status"].as_str()?)?,
             reading: value.get("reading").filter(|reading| reading.is_object()).map(Reading::from_json),
             error: text("error"), answer: text("answer"), words: text("words"), reply: text("reply"), fix: text("fix"), fixing: text("fixing"), changed_at: value["changed_at"].as_u64().unwrap_or(0),
+            thread: text("thread"), mention: value["mention"].as_bool().unwrap_or(false),
         })
     }
 }
@@ -316,14 +334,14 @@ pub fn list(state: &Path, as_json: bool) -> String {
         return serde_json::to_string_pretty(&comments.iter().map(Comment::to_json).collect::<Vec<_>>()).unwrap_or_default();
     }
     if comments.is_empty() {
-        return "No comments on pushed commits wait for you.".to_string();
+        return "No comments wait for you.".to_string();
     }
-    comments.iter().map(|comment| format!("{}  {} on {} · {}  {}", comment.id, comment.author, comment.short(), comment.task, row_word(comment))).collect::<Vec<_>>().join("\n")
+    comments.iter().map(|comment| format!("{}  {} on {} · {}  {}", comment.id, comment.author, comment.short(), comment.whose(), row_word(comment))).collect::<Vec<_>>().join("\n")
 }
 
 pub fn show(state: &Path, id: &str) -> Result<String> {
     let comment = found(state, id)?;
-    let mut lines = vec![format!("{} on {} · {} · {}", comment.author, comment.short(), comment.place(), comment.task), comment.url.clone(), String::new()];
+    let mut lines = vec![format!("{} on {} · {} · {}", comment.author, comment.short(), comment.place(), comment.whose()), comment.url.clone(), String::new()];
     lines.extend(comment.body.lines().map(|line| format!("> {line}")));
     lines.push(String::new());
     lines.push(format!("status: {}", row_word(&comment)));
@@ -378,7 +396,7 @@ pub(crate) mod tests {
             id, url: format!("https://github.com/acme/app/commit/3f2a9c1#commitcomment-{id}"), author: "johan".to_string(), body: "This misses partial refunds.".to_string(),
             path: Some("app/models/refund.rb".to_string()), line: Some(42), commit: "3f2a9c1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(), created_at: "2026-10-30T10:00:00Z".to_string(), seen_at: id,
             repo: PathBuf::from("/src/app"), slug: "acme/app".to_string(), task: "refunds-in-part".to_string(), address: "refunds-in-part@app".to_string(), pushed_at: 1,
-            hunk: "@@ -40,3 +40,3 @@\n   def total\n-    refunds.count\n+    refunds.size\n".to_string(), status, reading, error: None, answer: None, words: None, reply: None, fix: None, fixing: None, changed_at: 1,
+            hunk: "@@ -40,3 +40,3 @@\n   def total\n-    refunds.count\n+    refunds.size\n".to_string(), status, reading, error: None, answer: None, words: None, reply: None, fix: None, fixing: None, changed_at: 1, thread: None, mention: false,
         }
     }
 
@@ -404,6 +422,22 @@ pub(crate) mod tests {
         save(&state, &comment(14, Some(Kind::Holds), Status::Reply)).unwrap();
         prune(&state, changed + PRUNE_AFTER * 10);
         assert_eq!(open(&state).len(), 1, "a card still open never goes on its own");
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_comment_on_a_thread_or_the_owners_commit_names_where_it_is_and_whose_it_is() {
+        let state = crate::sh::test_dir("comments-thread");
+        let mut mention = comment(15, None, Status::Unread);
+        (mention.commit, mention.thread, mention.task, mention.address, mention.mention, mention.path, mention.line) = (String::new(), Some("issue #7".to_string()), String::new(), String::new(), true, None, None);
+        save(&state, &mention).unwrap();
+        assert_eq!(load(&state, 15).as_ref(), Some(&mention), "the thread and the mention survive a restart");
+        assert_eq!((mention.short(), mention.place(), mention.whose()), ("#7", "issue #7".to_string(), "mentions you".to_string()));
+        let mut own = comment(16, None, Status::Unread);
+        (own.task, own.address) = (String::new(), String::new());
+        save(&state, &own).unwrap();
+        assert_eq!((own.short(), own.whose()), ("3f2a9c1", "your commit".to_string()));
+        assert!(list(&state, false).contains("15  johan on #7 · mentions you  reading…") && list(&state, false).contains("16  johan on 3f2a9c1 · your commit"), "{}", list(&state, false));
         fs::remove_dir_all(state).unwrap();
     }
 
@@ -442,7 +476,7 @@ pub(crate) mod tests {
         assert_eq!(dismiss_cli(&state, "21").unwrap(), "Dismissed johan's comment on 3f2a9c1; nothing was posted.");
         assert!(sent_cli(&state, "22").unwrap().starts_with("Marked the reply"));
         assert!(dismiss_cli(&state, "99").unwrap_err().contains("No comment 99"));
-        assert_eq!(list(&state, false), "No comments on pushed commits wait for you.");
+        assert_eq!(list(&state, false), "No comments wait for you.");
         assert_eq!(list(&state, true), "[]");
         fs::remove_dir_all(state).unwrap();
     }

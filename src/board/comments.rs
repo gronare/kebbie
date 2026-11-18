@@ -78,7 +78,7 @@ pub(super) fn title(comment: &Comment, facts: &str, width: usize) -> String {
     let (author, short) = (&comment.author, comment.short());
     let titles = match comment.fix_short().filter(|_| comment.status == Status::Reply) {
         Some(fix) => vec![format!("{author} on {short} · fixed in {fix}"), format!("{author} · fixed in {fix}"), format!("{author} on {short}"), author.clone()],
-        None => vec![format!("{author} on {short} · {}", comment.task), format!("{author} on {short}"), author.clone()],
+        None => vec![format!("{author} on {short} · {}", comment.whose()), format!("{author} on {short}"), author.clone()],
     };
     let fits = |title: &String| text_width(title) + text_width(facts) + 5 <= width;
     titles.iter().find(|title| fits(title)).or(titles.last()).cloned().unwrap_or_default()
@@ -302,7 +302,7 @@ impl App {
         let Some(index) = self.comments.iter().position(|comment| comment.id == id) else { return };
         let comment = self.comments[index].clone();
         let Some(state) = self.comment_state() else { return };
-        let task = comment.task.clone();
+        let task = if comment.task.is_empty() { "the follow-up".to_string() } else { comment.task.clone() };
         let author = comment.author.clone();
         match (key.code, comment.status, comment.kind()) {
             (KeyCode::Char('o'), _, _) => {
@@ -408,10 +408,10 @@ fn choice(key: &str, label: &str, recommended: bool) -> Line<'static> {
 }
 
 fn choices(comment: &Comment) -> Vec<Line<'static>> {
-    let task = &comment.task;
+    let reopen = if comment.task.is_empty() { "Start a follow-up task".to_string() } else { format!("Reopen {}", comment.task) };
     match (comment.status, comment.kind()) {
-        (Status::Read, Some(Kind::Holds)) => vec![choice("1", &format!("Reopen {task} with the proposal"), true), choice("2", "Reply without a change", false), choice("3", "Dismiss", false), choice("w", "In my own words", false)],
-        (Status::Read, Some(Kind::Opinion)) => vec![choice("1", "Reply without a change", true), choice("2", &format!("Reopen {task} and change it anyway"), false), choice("3", "Dismiss", false), choice("w", "Edit the reply", false)],
+        (Status::Read, Some(Kind::Holds)) => vec![choice("1", &format!("{reopen} with the proposal"), true), choice("2", "Reply without a change", false), choice("3", "Dismiss", false), choice("w", "In my own words", false)],
+        (Status::Read, Some(Kind::Opinion)) => vec![choice("1", "Reply without a change", true), choice("2", &format!("{reopen} and change it anyway"), false), choice("3", "Dismiss", false), choice("w", "Edit the reply", false)],
         (Status::Read, Some(Kind::Praise)) => vec![choice("d", "Done", true), choice("r", "Reply anyway", false)],
         (Status::Read, _) => vec![choice("w", "Answer the question", true), choice("3", "Dismiss", false)],
         (Status::Failed, _) => vec![choice("1", "Read it again", true), choice("3", "Dismiss", false)],
@@ -422,7 +422,7 @@ fn choices(comment: &Comment) -> Vec<Line<'static>> {
 
 // The card's body, scrolled as one; its choices and keys stay under it.
 pub(super) fn body_lines(comment: &Comment, width: usize) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::from(Span::styled(format!("{} on {} · {} · {}", comment.author, comment.short(), comment.place(), comment.task), style(MUTED)))];
+    let mut lines = vec![Line::from(Span::styled(format!("{} on {} · {} · {}", comment.author, comment.short(), comment.place(), comment.whose()), style(MUTED)))];
     lines.extend(text_rows(&comment.body, width, "┃ ", TEXT).into_iter().map(|line| {
         let mut spans = line.spans;
         if let Some(first) = spans.first_mut() {
@@ -482,7 +482,7 @@ pub(super) fn body_lines(comment: &Comment, width: usize) -> Vec<Line<'static>> 
 }
 
 pub(super) fn window_title(comment: &Comment, index: usize, count: usize) -> String {
-    format!("comment {}/{count} · {} · {}", index + 1, status_word(comment), comment.task)
+    format!("comment {}/{count} · {} · {}", index + 1, status_word(comment), comment.whose())
 }
 
 // Returns the scroll it drew at.
@@ -617,6 +617,20 @@ mod tests {
         assert!(app.comments_open() && app.comment_panel.focused, "⏎ opens it again");
         press(&mut app, key(KeyCode::Enter));
         assert!(matches!(app.mode, Mode::Comment { id: 1, .. }), "⏎ on a card opens its window");
+        std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_mention_on_a_pull_request_shows_where_it_is_and_offers_a_follow_up_task() {
+        let mut mention = comment(5, Some(Kind::Holds), Status::Read);
+        (mention.commit, mention.thread, mention.task, mention.address, mention.mention, mention.path, mention.line, mention.hunk) = (String::new(), Some("pull request #42".to_string()), String::new(), String::new(), true, None, None, String::new());
+        let (mut app, state) = with_comments(vec![ready()], vec![mention]);
+        app.mode = Mode::Comment { id: 5, scroll: 0, nudged: false };
+        let shown = rows_of(&mut app, 140, 50).join("\n");
+        for wanted in ["johan on #42 · pull request #42 · mentions you", "1 Start a follow-up task with the proposal", "comment 1/1"] {
+            assert!(shown.contains(wanted), "{wanted:?} in:\n{shown}");
+        }
+        assert!(!shown.contains("Reopen  with"), "{shown}");
         std::fs::remove_dir_all(state).unwrap();
     }
 
