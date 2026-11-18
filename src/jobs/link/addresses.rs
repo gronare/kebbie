@@ -18,18 +18,31 @@ fn tailscale(ip: &IpAddr) -> bool {
     }
 }
 
+// The ranges no public interface carries: RFC 1918, carrier-grade NAT and IPv6 unique-local.
+fn private(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_private() || (v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 64),
+        IpAddr::V6(v6) => (v6.segments()[0] & 0xfe00) == 0xfc00,
+    }
+}
+
+fn tailscale_interface(name: &str) -> bool {
+    name.starts_with("tailscale") || name.starts_with("utun")
+}
+
 fn usable(ip: &IpAddr) -> bool {
     let link_local = matches!(ip, IpAddr::V6(v6) if (v6.segments()[0] & 0xffc0) == 0xfe80);
     !ip.is_loopback() && !ip.is_unspecified() && !ip.is_multicast() && !link_local
 }
 
-// The private-network addresses among this machine's interfaces: Tailscale's by their ranges or tailscale ip, WireGuard's by interface; tailnet first.
+// The private-network addresses among this machine's interfaces: Tailscale's as tailscale ip says or by their ranges on a tailscale or utun interface, WireGuard's by interface and only in a private range; tailnet first.
 pub fn classify(interfaces: &[(String, IpAddr)], wireguard: &BTreeSet<String>, tailnet: &[IpAddr]) -> Vec<LinkAddress> {
     let mut found: Vec<(Network, IpAddr)> = Vec::new();
-    for ip in tailnet.iter().chain(interfaces.iter().map(|(_, ip)| ip)).filter(|ip| tailscale(ip) && usable(ip)) {
+    let on_tailscale = interfaces.iter().filter(|(name, ip)| tailscale_interface(name) && tailscale(ip)).map(|(_, ip)| ip);
+    for ip in tailnet.iter().filter(|ip| private(ip)).chain(on_tailscale).filter(|ip| usable(ip)) {
         found.push((Network::Tailscale, *ip));
     }
-    for (_, ip) in interfaces.iter().filter(|(name, ip)| usable(ip) && !tailscale(ip) && (wireguard.contains(name) || name.starts_with("wg"))) {
+    for (_, ip) in interfaces.iter().filter(|(name, ip)| usable(ip) && private(ip) && (wireguard.contains(name) || name.starts_with("wg"))) {
         found.push((Network::Wireguard, *ip));
     }
     let mut seen = BTreeSet::new();
