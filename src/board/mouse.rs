@@ -12,7 +12,7 @@ impl App {
         self.hits.iter().find(|(area, _)| area.contains(Position::new(column, row))).map(|(_, hit)| *hit)
     }
 
-    // A click selects a row, a click on the selected row opens its options, and the wheel moves through whatever is in front.
+    // A click selects a row or focuses the pane it falls in, a click on the selected row of the focused pane opens its options, and the wheel moves through whatever is in front.
     pub(super) fn mouse(&mut self, event: MouseEvent, terminal: &mut DefaultTerminal) {
         let hit = self.hit_at(event.column, event.row);
         if let (Some(Hit::Tab(page)), MouseEventKind::Down(MouseButton::Left)) = (hit, event.kind) {
@@ -68,10 +68,17 @@ impl App {
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 match (hit, &mut self.mode) {
-                    (Some(Hit::Beside), Mode::Normal) => self.focus_beside(),
+                    (Some(Hit::Beside), Mode::Normal | Mode::Subtasks) => self.focus_beside(),
+                    (Some(Hit::Tasks), Mode::Normal) => (self.column, self.in_messages, self.offer_panel.focused, self.comment_panel.focused, self.beside.focused) = (Column::Work, false, false, false, false),
+                    (Some(Hit::Tasks), Mode::Subtasks) => self.beside.focused = false,
+                    (Some(Hit::Task(index)), Mode::Subtasks) if index == self.work_selected => self.beside.focused = false,
+                    (Some(Hit::Task(index)), Mode::Subtasks) => {
+                        self.leave_subtasks();
+                        self.work_selected = index;
+                    }
                     (Some(Hit::Task(index)), Mode::Normal) => {
+                        let again = self.column == Column::Work && self.work_selected == index && !self.in_messages && !self.offer_panel.focused && !self.comment_panel.focused && !self.beside.focused;
                         self.beside.focused = false;
-                        let again = self.column == Column::Work && self.work_selected == index && !self.in_messages && !self.offer_panel.focused && !self.comment_panel.focused;
                         (self.column, self.work_selected, self.in_messages, self.offer_panel.focused, self.comment_panel.focused) = (Column::Work, index, false, false, false);
                         if again && self.on_parked_line() {
                             self.show_parked(true);
@@ -151,7 +158,7 @@ impl App {
                         let order = std::mem::take(order);
                         self.push_all(order, index);
                     }
-                    (Some(Hit::Key(code)), Mode::Next(_) | Mode::PushAll { .. } | Mode::Device { .. }) => return Some(KeyEvent::from(code)),
+                    (Some(Hit::Key(code)), Mode::Next(_) | Mode::PushAll { .. } | Mode::Device { .. } | Mode::Subtasks) => return Some(KeyEvent::from(code)),
                     (None, Mode::Next(_) | Mode::PushAll { .. }) => self.mode = Mode::Normal,
                     (Some(Hit::Choice(index)), Mode::ReviewMenu(_)) => {
                         if let Mode::ReviewMenu(menu) = std::mem::replace(&mut self.mode, Mode::Normal) {

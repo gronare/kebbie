@@ -24,6 +24,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - On a subtask's card beside the tasks, shift+↑ and shift+↓ show the previous or next subtask of the same task without leaving the card.
 
 ### Fixed
+- A click in the tasks or on the card beside them moves the focus there, also on subtask rows, and opens options only on the already focused task.
 - The questions window sends the selected answer on Enter, the recommended one included, once it has been open half a second; a plan's approve still waits for y.
 
 ## 0.41.2

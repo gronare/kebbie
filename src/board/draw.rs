@@ -125,6 +125,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         ]).areas(body);
         let (work, work_selected, work_rows) = work_lines(app, work_area.width as usize, false, work_area.height as usize);
         render_column(frame, work_area, work, work_selected, work_rows, &mut app.hits);
+        app.hits.push((work_area, Hit::Tasks));
         draw_panel(frame, app, panel_area);
         app.draw_beside(frame, backlog_area);
         app.tint_focused(frame, work_area, backlog_area);
@@ -132,11 +133,13 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         let [work_area, _, backlog_area] = Layout::horizontal([Constraint::Percentage(54), Constraint::Length(4), Constraint::Min(20)]).areas(body);
         let (work, work_selected, work_rows) = work_lines(app, work_area.width as usize, true, work_area.height as usize);
         render_column(frame, work_area, work, work_selected, work_rows, &mut app.hits);
+        app.hits.push((work_area, Hit::Tasks));
         app.draw_beside(frame, backlog_area);
         app.tint_focused(frame, work_area, backlog_area);
     } else {
         let (lines, work_selected, rows) = work_lines(app, body.width as usize, true, body.height as usize);
         render_column(frame, body, lines, work_selected, rows, &mut app.hits);
+        app.hits.push((body, Hit::Tasks));
     }
 
     let mut modal_hits = Vec::new();
@@ -224,7 +227,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     if matches!(app.mode, Mode::Normal) {
         draw_corner(frame, app);
     }
-    if matches!(app.mode, Mode::Normal) {
+    if matches!(app.mode, Mode::Normal | Mode::Subtasks) {
         app.hits.extend(tab_hits);
     } else {
         app.hits = modal_hits;

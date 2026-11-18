@@ -417,6 +417,43 @@ mod tests {
     }
 
     #[test]
+    fn a_click_in_a_pane_focuses_it_and_a_click_on_the_selected_task_from_the_card_only_takes_the_focus_back() {
+        let mut item = stepped(stripe());
+        item.path = Some(PathBuf::from("/work/wt1.billing"));
+        let mut other = crate::status::tests::task(Some("working"), Some("working"), 1);
+        other.name = "other".to_string();
+        let mut app = test_app(vec![item, other]);
+        let (rows, _) = render(&mut app, 140, 40);
+        let row_of = |text: &str| rows.iter().position(|row| row.chars().take(70).collect::<String>().contains(text)).unwrap_or_else(|| panic!("{text}: {}", rows.join("\n"))) as u16;
+        let (stripe_row, other_row) = (row_of("Switch the payment"), row_of("other"));
+        let empty = (30..38).rev().find(|row| rows[*row].chars().take(70).all(|cell| cell == ' ')).expect("a blank row under the tasks") as u16;
+        click(&mut app, 100, 10);
+        assert!(app.beside.focused, "a click on the card focuses it");
+        click(&mut app, 5, empty);
+        assert!(!app.beside.focused && matches!(app.mode, crate::board::Mode::Normal), "a click in the blank part of the tasks takes the focus back");
+        click(&mut app, 100, 10);
+        click(&mut app, 5, stripe_row);
+        assert!(!app.beside.focused && matches!(app.mode, crate::board::Mode::Normal), "a click on the selected task from the card only moves the focus");
+        click(&mut app, 5, stripe_row);
+        assert!(matches!(app.mode, crate::board::Mode::Options(_)), "a second click opens its options");
+        app.mode = crate::board::Mode::Normal;
+        press(&mut app, key(KeyCode::Char(' ')));
+        press(&mut app, key(KeyCode::Right));
+        assert!(matches!(app.mode, crate::board::Mode::Subtasks) && app.beside.focused);
+        render(&mut app, 140, 40);
+        click(&mut app, 5, empty);
+        assert!(matches!(app.mode, crate::board::Mode::Subtasks) && !app.beside.focused, "a blank click back on the subtask rows");
+        click(&mut app, 100, 10);
+        assert!(matches!(app.mode, crate::board::Mode::Subtasks) && app.beside.focused, "a click on the subtask's card focuses it");
+        click(&mut app, 5, stripe_row);
+        assert!(matches!(app.mode, crate::board::Mode::Subtasks) && !app.beside.focused, "a click on the task back on its subtask rows");
+        let (rows, _) = render(&mut app, 140, 40);
+        let other_row = rows.iter().position(|row| row.chars().take(70).collect::<String>().contains("other")).map_or(other_row, |row| row as u16);
+        click(&mut app, 5, other_row);
+        assert!(matches!(app.mode, crate::board::Mode::Normal) && app.work_selected == 1 && app.subtask_row.is_none(), "a click on another task leaves the subtasks for it");
+    }
+
+    #[test]
     fn shift_down_and_up_on_a_subtasks_focused_card_step_to_the_next_and_previous_subtask_and_keep_the_card() {
         let mut item = stepped(stripe());
         item.path = Some(PathBuf::from("/work/wt1.billing"));

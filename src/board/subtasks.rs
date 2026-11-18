@@ -441,7 +441,7 @@ impl App {
         }
     }
 
-    fn leave_subtasks(&mut self) {
+    pub(super) fn leave_subtasks(&mut self) {
         self.subtask_row = None;
         self.beside.focused = false;
         self.mode = Mode::Normal;

@@ -173,6 +173,7 @@ enum Hit {
     Fixed,
     Comment(usize),
     Beside,
+    Tasks,
     Key(KeyCode),
 }
 
