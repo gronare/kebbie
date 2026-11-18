@@ -484,7 +484,7 @@ fn card_image(line: &Line) -> Option<String> {
     (first.content == "▣ ").then(|| line.spans.get(1).map(|span| span.content.to_string())).flatten()
 }
 
-fn note_of(app: &App, item: &Item) -> Option<String> {
+pub(super) fn note_of(app: &App, item: &Item) -> Option<String> {
     let address = peers::address(&item.name, &item.place);
     app.ongoing.iter().find(|note| note.task.as_deref() == Some(address.as_str()) || note.also.contains(&address)).map(|note| note.key.clone())
 }

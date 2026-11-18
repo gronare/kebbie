@@ -380,6 +380,9 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
                 if !super::steps::walked(item).is_empty() {
                     hint.spans.extend([Span::styled(" · ", style(MUTED)), Span::styled("→", style(MAUVE)), Span::styled(" subtasks", style(MUTED))]);
                 }
+                if super::detail::note_of(app, item).is_some() {
+                    hint.spans.extend([Span::styled(" · ", style(MUTED)), Span::styled(keys::key(Act::Note).to_string(), style(MAUVE)), Span::styled(" its note", style(MUTED))]);
+                }
                 lines.push(hint);
             }
         }

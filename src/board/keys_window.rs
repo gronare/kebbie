@@ -130,7 +130,7 @@ const WORK: Sheet = Sheet {
             bind(&[Act::Options], "options, each one explained", "options"),
             bind(&[Act::Go], "go to its Space", "its Space"),
             bind(&[Act::Chat], "message its Claude", "message it"),
-            bind(&[Act::Card], "its question, or its card", "question or card"),
+            bind(&[Act::Card, Act::Note], "its question or card, or its vault note", "card · note"),
             bind(&[Act::StartAt], "start it later", "start later"),
             bind(&[Act::ItemOptions], "a backlog item's options", "item options"),
         ]),

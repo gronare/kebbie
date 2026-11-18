@@ -410,6 +410,7 @@ A question that asks first, as reset, drop and done do, takes `y` to go ahead an
 | `s` | Show the sign-off card as it stands: Built, Decisions and Also noticed, in the task's words. | It has a card and no open question. |
 | `w` | Start or stop the dev server. | `worktree.dev_server` is set. |
 | `b` | Start or stop the worker. | `worktree.dev_worker` is set. |
+| `V` | Read the task's vault note in a window over the board: its markdown rendered, with headings, lists, code blocks and tables, and each wikilink as the words Obsidian shows for it. `↑ ↓` and `pgup pgdn` scroll, `esc` closes it. | It has a note in the vault. The selected row says `V its note`. |
 | `1`–`9` | Open one of its links in the browser, listed under LINKS. | It has that link. |
 | `v` | The review menu: send it to review, or withdraw it while it is in review. See below. | It has commits and Claude is not mid-turn. |
 | `e` | Rebase onto the default branch now, in the background, without pushing. | It is behind the default branch, Claude is not mid-turn, and it is not pushed. |

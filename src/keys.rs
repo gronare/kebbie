@@ -36,6 +36,7 @@ pub enum Act {
     Chat,
     Review,
     Card,
+    Note,
     Server,
     Worker,
     SendReview,
@@ -98,9 +99,9 @@ const ALL: &[Ctx] = &[Work, Backlog, Areas, Routines];
 const PAGES: &[Ctx] = &[Work, Backlog, Areas, Routines, Settings];
 
 impl Act {
-    pub const EVERY: [Act; 52] = [
+    pub const EVERY: [Act; 53] = [
         Act::Options, Act::ItemOptions, Act::Move, Act::Switch, Act::WorkPage, Act::BacklogPage, Act::AreasPage, Act::RoutinesPage, Act::SettingsPage, Act::Lead, Act::HideChat, Act::Messages, Act::Hub, Act::Help, Act::Inbox, Act::Next, Act::New, Act::Go, Act::Chat,
-        Act::Review, Act::Card, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Rebase, Act::Follow, Act::Tidy, Act::Push, Act::Stage, Act::Done, Act::DismissCi, Act::RerunCi, Act::Park, Act::Reset, Act::Drop, Act::StartAt, Act::Refresh, Act::Away,
+        Act::Review, Act::Card, Act::Note, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Rebase, Act::Follow, Act::Tidy, Act::Push, Act::Stage, Act::Done, Act::DismissCi, Act::RerunCi, Act::Park, Act::Reset, Act::Drop, Act::StartAt, Act::Refresh, Act::Away,
         Act::Update, Act::RestartLead, Act::Filter, Act::AreaRefresh, Act::Log, Act::Edit, Act::Pause, Act::Delete, Act::Fullscreen, Act::OpenImage, Act::Back, Act::Close, Act::Quit,
     ];
 
@@ -127,6 +128,7 @@ impl Act {
             Act::Chat => "chat",
             Act::Review => "review",
             Act::Card => "card",
+            Act::Note => "note",
             Act::Server => "server",
             Act::Worker => "worker",
             Act::SendReview => "send_review",
@@ -187,6 +189,7 @@ impl Act {
             Act::Chat => Default::Char('c'),
             Act::Review => Default::Char('r'),
             Act::Card => Default::Char('s'),
+            Act::Note => Default::Char('V'),
             Act::Server => Default::Char('w'),
             Act::Worker => Default::Char('b'),
             Act::SendReview => Default::Char('v'),
@@ -252,6 +255,7 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::Chat, on: &[Work], help: "chat: message the task's Claude", hint: Hint::No },
     Binding { act: Act::Review, on: &[Work], help: "open the task's review next to its Claude, or go to the one already open", hint: Hint::No },
     Binding { act: Act::Card, on: &[Work], help: "the task's waiting question in the questions window, else its sign-off card with its images in a window: ← → image, ↑ ↓ scroll, p goes on to push; a task with nothing to push shows its card with kebbie's offer to close it, and d closes it", hint: Hint::No },
+    Binding { act: Act::Note, on: &[Work], help: "the task's vault note in a window, its markdown rendered: headings, lists, code blocks, tables, and wikilinks as their words; ↑ ↓ pgup pgdn scroll, esc back", hint: Hint::No },
     Binding { act: Act::Server, on: &[Work], help: "start or stop the task's dev server (worktree.dev_server); its address shows in the task's details (worktree.dev_url)", hint: Hint::No },
     Binding { act: Act::Worker, on: &[Work], help: "start or stop the task's worker (worktree.dev_worker)", hint: Hint::No },
     Binding { act: Act::SendReview, on: &[Work], help: "the review menu: v sends the task to its reviewer (review.profile), or withdraws it while it is in review; s and o ask for the second opinion review.second names; i reads its points", hint: Hint::No },

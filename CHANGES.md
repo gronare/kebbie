@@ -5,6 +5,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- V on a task opens its vault note in a window over the board, with its markdown rendered.
 
 ### Fixed
 

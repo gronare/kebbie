@@ -23,6 +23,7 @@ mod message_log;
 mod mouse;
 mod next_window;
 mod note_card;
+mod note_window;
 mod notices;
 mod options;
 mod park;
@@ -142,6 +143,7 @@ enum Mode {
     Report { id: String, shown: Box<BugReport>, scroll: u16, read: bool, nudged: bool },
     ReportAll { shown: Vec<bug_report::Offer>, scroll: u16, read: bool, nudged: bool },
     NoteCard { key: String, scroll: u16, nudged: bool },
+    TaskNote { key: String, name: String, scroll: u16 },
     ItemCard(Box<item_card::ItemCard>),
     Comment { id: u64, scroll: u16, nudged: bool },
     Help(keys_window::Scroll),
@@ -792,6 +794,7 @@ impl App {
             Mode::Report { id, shown, scroll, read, .. } => self.confirm_report(id, shown, scroll, read, key, cancels),
             Mode::ReportAll { shown, scroll, read, .. } => self.confirm_report_all(shown, scroll, read, key, cancels),
             Mode::NoteCard { key: note, scroll, .. } => self.handle_note_card(note, scroll, key, cancels),
+            Mode::TaskNote { key: note, name, scroll } => self.handle_task_note(note, name, scroll, key, cancels),
             Mode::ItemCard(card) => self.handle_item_card(card, key, terminal),
             Mode::Comment { id, scroll, .. } => self.handle_comment_window(id, scroll, key, cancels),
             Mode::ConfirmReset { path, name, .. } => self.confirm_reset(path, name, key, cancels),
@@ -1066,6 +1069,7 @@ impl App {
                         }
                     }
                     Act::Review => self.open_review(&item),
+                    Act::Note => self.open_task_note(&item),
                     Act::Card => match (item.path.clone(), self.card_of(&item), self.s_question(&item)) {
                         (_, _, Some(at)) => self.open_questions(Some(at)),
                         (Some(path), Some(_), None) => self.mode = Mode::Card { path, name: item.name.clone(), scroll: 0, image: 0 },

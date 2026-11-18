@@ -134,9 +134,14 @@ fn plan_changed_in(question: &Question, changed_at: impl Fn(&str) -> Option<f64>
 pub fn plan_text(question: &Question) -> Option<String> {
     let plan = question.plan.as_deref()?;
     match plan.strip_prefix(VAULT_PLAN) {
-        Some(key) => crate::vault::Index::open().ok().and_then(|index| index.body(key)).or_else(|| read_plan(crate::vault_cli::cli().as_ref(), key, Instant::now())),
+        Some(key) => vault_text(key),
         None => fs::read_to_string(plan).ok(),
     }
+}
+
+// A vault note's markdown: the local index first, else the vault server.
+pub fn vault_text(key: &str) -> Option<String> {
+    crate::vault::Index::open().ok().and_then(|index| index.body(key)).or_else(|| read_plan(crate::vault_cli::cli().as_ref(), key, Instant::now()))
 }
 
 const READ_RETRY: Duration = Duration::from_secs(60);

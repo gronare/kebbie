@@ -178,6 +178,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
             let drawn = super::note_card::draw_note_card(frame, app, &key, *scroll, nudged);
             app.mode = Mode::NoteCard { key, scroll: drawn, nudged };
         }
+        Mode::TaskNote { .. } => super::note_window::draw(frame, app),
         Mode::Comment { id, scroll, nudged } => {
             let (id, nudged) = (*id, *nudged);
             let drawn = super::comments::draw_comment(frame, app, id, *scroll, nudged);
