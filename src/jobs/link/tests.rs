@@ -18,6 +18,7 @@ use super::serve::{self, Host};
 use super::wire::Link;
 use super::wire::{Ask, Frame, Said};
 use super::unanswered::Unanswered;
+use super::files::{self, Files};
 use super::{addresses, relay, tls};
 use crate::config::LinkNetwork;
 use crate::hub::tests::{member, open_hub};
@@ -206,11 +207,15 @@ struct Run {
 }
 
 fn run_on(asker: &Machine, at: &Target, top: &Path, argv: &[&str], interrupt_after: Option<&str>) -> Run {
+    run_with(asker, at, top, argv, interrupt_after, &client::Options::default())
+}
+
+fn run_with(asker: &Machine, at: &Target, top: &Path, argv: &[&str], interrupt_after: Option<&str>, options: &client::Options) -> Run {
     let (out, err) = (Rc::new(RefCell::new(Vec::new())), Rc::new(RefCell::new(Vec::new())));
     let watched = out.clone();
     let interrupts = || u32::from(interrupt_after.is_some_and(|marker| String::from_utf8_lossy(&watched.borrow()).contains(marker)));
     let argv: Vec<String> = argv.iter().map(|word| word.to_string()).collect();
-    let ran = client::connect(&asker.identity, at, Duration::from_secs(2), &unanswered(asker)).and_then(|(mut link, _)| client::go(&mut link, &at.name, top, &argv, &mut Captured(out.clone()), &mut Captured(err.clone()), &interrupts));
+    let ran = client::connect(&asker.identity, at, Duration::from_secs(2), &unanswered(asker)).and_then(|(mut link, _)| client::go(&mut link, &at.name, top, &argv, options, &mut Captured(out.clone()), &mut Captured(err.clone()), &interrupts));
     let text = |bytes: &Rc<RefCell<Vec<u8>>>| String::from_utf8_lossy(&bytes.borrow()).to_string();
     Run { ran, out: text(&out), err: text(&err) }
 }
@@ -327,6 +332,12 @@ fn a_run_goes_through_the_hubs_relay_when_no_address_answers() {
     assert_eq!((ran.ran.map(|ran| ran.code), ran.out.as_str(), ran.err.as_str()), (Ok(5), "out\n", "err\n"), "the same session runs through the hub");
     let stopped = run_on(&devbox, &at, &top, &["trap 'echo caught; exit 42' INT; echo ready; while true; do sleep 0.1; done"], Some("ready"));
     assert_eq!(stopped.ran.map(|ran| ran.code), Ok(42), "Ctrl-C reaches it through the hub too: {}", stopped.err);
+    let cert = root.join("ca.pem");
+    std::fs::write(&cert, "-----BEGIN CERTIFICATE-----\n").unwrap();
+    let files = client::Options { files: Files { send: vec![cert], fetch: vec!["shots".into()], out: Some(root.join("back")) }, alongside: false };
+    let relayed = run_with(&devbox, &at, &top, &["mkdir -p shots && cp ca.pem shots/seen.pem && exit 4"], None, &files);
+    assert_eq!(relayed.ran.map(|ran| ran.code), Ok(4), "the files go both ways through the hub: {}", relayed.err);
+    assert_eq!(std::fs::read_to_string(root.join("back/shots/seen.pem")).unwrap(), "-----BEGIN CERTIFICATE-----\n");
     wait_for_log(&studio, " through the hub): run ");
     stop.store(true, Ordering::SeqCst);
     waiting.join().unwrap();
@@ -355,7 +366,7 @@ fn a_run_gives_up_in_plain_words_when_the_other_machine_goes_silent() {
     link.silent = Duration::from_secs(1);
     let started = Instant::now();
     let argv = vec!["make".to_string()];
-    let ended = client::go(&mut link, "studio", &top, &argv, &mut std::io::sink(), &mut std::io::sink(), &|| 0);
+    let ended = client::go(&mut link, "studio", &top, &argv, &client::Options::default(), &mut std::io::sink(), &mut std::io::sink(), &|| 0);
     assert_eq!(ended, Err("kebbie: studio sent nothing for 1 s, so kebbie stopped waiting. The machine or the network between went away; the command may still be running there".to_string()));
     assert!(started.elapsed() < Duration::from_secs(3), "it gives up once the silence passed, not later");
     silent.join().unwrap();
@@ -396,7 +407,7 @@ fn a_command_that_exits_while_its_output_is_still_on_the_way_hands_over_all_of_i
     let out = Rc::new(RefCell::new(Vec::new()));
     let (mut link, _) = client::connect(&devbox.identity, &at, Duration::from_secs(2), &unanswered(&devbox)).unwrap();
     let argv = vec!["head -c 12000000 /dev/zero | tr '\\0' x; exit 3".to_string()];
-    let ran = client::go(&mut link, "studio", &top, &argv, &mut Slow(out.clone()), &mut std::io::sink(), &|| 0);
+    let ran = client::go(&mut link, "studio", &top, &argv, &client::Options::default(), &mut Slow(out.clone()), &mut std::io::sink(), &|| 0);
     assert_eq!(ran.map(|ran| ran.code), Ok(3));
     assert_eq!(out.borrow().len(), 12_000_000, "a slow reader still gets every byte, and the command waited on its pipe meanwhile");
     let _ = std::fs::remove_dir_all(root);
@@ -526,7 +537,7 @@ fn ctrl_c_before_the_command_starts_stops_the_run_and_leaves_no_snapshot_behind(
     let at = target(&studio, "studio", listening.address);
     let (mut link, _) = client::connect(&devbox.identity, &at, Duration::from_secs(2), &unanswered(&devbox)).unwrap();
     let argv = vec!["true".to_string()];
-    let ended = client::go(&mut link, "studio", &top, &argv, &mut std::io::sink(), &mut std::io::sink(), &|| 1);
+    let ended = client::go(&mut link, "studio", &top, &argv, &client::Options::default(), &mut std::io::sink(), &mut std::io::sink(), &|| 1);
     assert_eq!(ended, Err("kebbie: stopped before the command started on studio".to_string()));
     assert_eq!(git(&top, &["for-each-ref", super::super::REF]), "", "the snapshot's ref is gone");
     let _ = std::fs::remove_dir_all(root);
@@ -577,5 +588,94 @@ fn an_unanswered_address_is_remembered_for_ten_minutes_and_only_as_announced() {
     memory.remember(&machine, &old);
     memory.forget(&machine);
     assert!(!memory.lately(&machine, &old));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_run_sends_files_into_its_folder_and_fetches_files_and_folders_back_with_the_commands_exit_code() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let (workstation, studio) = (Machine::connected(&hub, &mut browser, "workstation"), Machine::connected(&hub, &mut browser, "studio"));
+    let root = crate::sh::test_dir("link-files");
+    let top = repo(&root);
+    let listening = listen(host(&studio, &root.join("data")));
+    let at = target(&studio, "studio", listening.address);
+    let (cert, tool) = (root.join("ca.pem"), root.join("tool.sh"));
+    std::fs::write(&cert, "cert\n").unwrap();
+    std::fs::write(&tool, "#!/bin/sh\necho tool\n").unwrap();
+    std::fs::set_permissions(&tool, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let options = client::Options { files: Files { send: vec![cert.clone(), tool], fetch: vec!["shots".into(), "logs/run.log".into(), "missing.png".into()], out: None }, alongside: false };
+    let ran = run_with(&workstation, &at, &top, &["cat ca.pem; ./tool.sh; mkdir -p shots/deep logs; echo a > shots/one.png; head -c 700000 /dev/zero > shots/deep/two.png; echo log > logs/run.log; exit 9"], None, &options);
+    assert_eq!((ran.ran.as_ref().map(|ran| ran.code), ran.out.as_str()), (Ok(9), "cert\ntool\n"), "the files sent are in the run's folder before it starts, and the exit code is the command's: {}", ran.err);
+    assert_eq!(std::fs::read_to_string(top.join("shots/one.png")).unwrap(), "a\n", "fetched into the worktree at the same path");
+    assert_eq!(std::fs::metadata(top.join("shots/deep/two.png")).unwrap().len(), 700_000, "a folder comes whole, past one frame");
+    assert_eq!(std::fs::read_to_string(top.join("logs/run.log")).unwrap(), "log\n");
+    assert!(ran.err.contains("[kebbie: no missing.png in the run's folder to fetch]") && ran.err.contains("[kebbie: fetched 3 files, 0.7 MiB, into "), "{}", ran.err);
+    let out = root.join("out");
+    let elsewhere = client::Options { files: Files { send: Vec::new(), fetch: vec!["./shots/one.png".into()], out: Some(out.clone()) }, alongside: false };
+    let again = run_with(&workstation, &at, &top, &["mkdir -p shots; echo b > shots/one.png; ln -s /etc shots/etc"], None, &elsewhere);
+    assert_eq!(again.ran.map(|ran| ran.code), Ok(0), "{}", again.err);
+    assert_eq!(std::fs::read_to_string(out.join("shots/one.png")).unwrap(), "b\n", "--out takes them instead of the worktree");
+    let linked = client::Options { files: Files { send: Vec::new(), fetch: vec!["shots".into(), "shots/etc/hostname".into()], out: Some(root.join("linked")) }, alongside: false };
+    let refused = run_with(&workstation, &at, &top, &["mkdir -p shots; ln -sf /etc shots/etc"], None, &linked);
+    assert!(refused.err.contains("left out shots/etc: kebbie fetches plain files and folders") && refused.err.contains("shots/etc is a symbolic link, and kebbie fetches none"), "{}", refused.err);
+    assert!(!root.join("linked/shots/etc").exists(), "nothing comes through a link out of the run's folder");
+    let twice = client::Options { files: Files { send: vec![cert.clone(), cert], fetch: Vec::new(), out: None }, alongside: false };
+    assert!(run_with(&workstation, &at, &top, &["true"], None, &twice).ran.unwrap_err().contains("another file sent is also called ca.pem"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_path_out_of_the_run_folder_is_refused_on_both_sides_and_the_files_stay_within_their_limit() {
+    for escaping in ["../secret", "/etc/passwd", ".", "shots/../../x", ""] {
+        assert!(files::inside(escaping).is_err(), "{escaping:?}");
+    }
+    assert_eq!(files::inside("./shots//one.png").unwrap(), Path::new("shots/one.png"));
+    assert!(files::check(&[super::wire::SendAsk { name: "../ca.pem".into(), size: 1, mode: 0o644 }], &[]).unwrap_err().contains("by its name alone"));
+    assert!(files::check(&[], &["../logs".into()]).is_err(), "the worker refuses what an asker should never have sent");
+    let root = crate::sh::test_dir("link-files-limit");
+    let big = root.join("big.bin");
+    std::fs::File::create(&big).unwrap().set_len(super::wire::MAX_FILES + 1).unwrap();
+    let plan = files::plan(&Files { send: vec![big], fetch: Vec::new(), out: None });
+    assert!(plan.unwrap_err().contains("past the 1 GiB a run sends and fetches in all"));
+    assert!(files::plan(&Files { send: vec![root.clone()], fetch: Vec::new(), out: None }).unwrap_err().contains("is no file"));
+    let plain = super::wire::RunAsk { repo: "app".into(), task: "t".into(), commit: "c".into(), remote: None, command: "true".into(), send: Vec::new(), fetch: Vec::new(), alongside: false };
+    assert_eq!(serde_json::to_string(&plain).unwrap(), r#"{"repo":"app","task":"t","commit":"c","remote":null,"command":"true"}"#, "a run without files reads as before on an older worker");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_run_alongside_runs_in_the_folder_of_the_run_in_progress_without_waiting_for_it_or_touching_its_tree() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let (workstation, studio) = (Machine::connected(&hub, &mut browser, "workstation"), Machine::connected(&hub, &mut browser, "studio"));
+    let root = crate::sh::test_dir("link-alongside");
+    let top = repo(&root);
+    let listening = listen(host(&studio, &root.join("data")));
+    let at = target(&studio, "studio", listening.address);
+    let peek = |options: &client::Options, argv: &[&str]| run_with(&workstation, &at, &top, argv, None, options);
+    let alongside = client::Options { alongside: true, ..client::Options::default() };
+    assert!(peek(&alongside, &["true"]).ran.unwrap_err().contains("no run of the task billing-refunds on this machine yet to run alongside"));
+    let folder = root.join("data/app/.links/billing-refunds");
+    std::fs::write(top.join("tracked.txt"), "first run's tree\n").unwrap();
+    let (first, side) = std::thread::scope(|scope| {
+        let first = scope.spawn(|| run_on(&workstation, &at, &top, &["echo step 3 > progress.log; while [ ! -f stop ]; do sleep 0.05; done; cat stop tracked.txt"], None));
+        let until = Instant::now() + Duration::from_secs(30);
+        while !folder.join("progress.log").exists() {
+            assert!(Instant::now() < until, "the first run never wrote its progress");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::fs::write(top.join("tracked.txt"), "changed since\n").unwrap();
+        let fetching = client::Options { files: Files { send: Vec::new(), fetch: vec!["progress.log".into()], out: Some(root.join("peeked")) }, alongside: true };
+        let side = peek(&fetching, &["cat progress.log; echo seen > stop"]);
+        (first.join().unwrap(), side)
+    });
+    assert_eq!((side.ran.as_ref().map(|ran| (ran.code, ran.sent)), side.out.as_str()), (Ok((0, None)), "step 3\n"), "it ran beside the first, sending no commit: {}", side.err);
+    assert!(!side.err.contains("waiting for the run before this one"), "{}", side.err);
+    assert_eq!(std::fs::read_to_string(root.join("peeked/progress.log")).unwrap(), "step 3\n");
+    assert_eq!((first.ran.map(|ran| ran.code), first.out.as_str()), (Ok(0), "seen\nfirst run's tree\n"), "the first run's tree is as it checked it out: {}", first.err);
+    let sending = client::Options { files: Files { send: vec![top.join("tracked.txt")], fetch: Vec::new(), out: None }, alongside: true };
+    assert!(peek(&sending, &["true"]).ran.unwrap_err().contains("--alongside sends no files"));
+    assert!(keeper_log(&studio).contains(": alongside, exited 0"), "{}", keeper_log(&studio));
     let _ = std::fs::remove_dir_all(root);
 }

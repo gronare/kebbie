@@ -13,7 +13,8 @@ use rustls::{ClientConnection, StreamOwned};
 
 use super::super::cluster::{self, Cluster};
 use super::super::{REF, bundle, token};
-use super::wire::{Ask, CHUNK, Frame, Link, RemoteAsk, RunAsk, Said, beating};
+use super::files::{self, Fetched, Files};
+use super::wire::{Ask, CHUNK, Frame, Link, MAX_FILES, RemoteAsk, RunAsk, Said, beating};
 use super::wire::keep_alive;
 use super::unanswered::Unanswered;
 use super::{PORT, addresses, relay, timing, tls};
@@ -266,27 +267,56 @@ impl Drop for Snapshot<'_> {
     }
 }
 
-// The worktree as it stands goes to the target's per-task worktree, then the command runs there with its output streamed here and Ctrl-C forwarded as SIGINT, then SIGTERM, then SIGKILL.
-pub fn go(link: &mut Link, name: &str, top: &Path, argv: &[String], out: &mut dyn Write, err: &mut dyn Write, interrupts: &dyn Fn() -> u32) -> Result<Ran> {
-    let id = cluster::new_id()?;
+// What a run asks beyond its command: files to send and fetch, and whether it runs alongside the task's run in progress.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Options {
+    pub files: Files,
+    pub alongside: bool,
+}
+
+// The commit a run asks for and the ref that keeps it until the worker has it; a run alongside asks for none, as it checks nothing out.
+fn snapshot<'a>(top: &'a Path, id: &Id, alongside: bool) -> Result<(String, Option<Snapshot<'a>>, Option<RemoteAsk>)> {
+    if alongside {
+        return Ok((String::new(), None, None));
+    }
     let commit = super::super::snapshot(top, id.as_str())?;
     timing::mark("snapshot");
     let snapshot = Snapshot { top, refname: format!("{REF}/{id}") };
     crate::repo::git(top, &["update-ref", &snapshot.refname, &commit])?;
+    let remote = bundle::remote_base(top, &commit).map(|remote| RemoteAsk { url: remote.url, base: remote.base });
+    Ok((commit, Some(snapshot), remote))
+}
+
+// The worktree as it stands goes to the target's per-task worktree with the files sent, then the command runs there with its output streamed here and Ctrl-C forwarded as SIGINT, then SIGTERM, then SIGKILL, and the fetched paths come back.
+#[allow(clippy::too_many_arguments)]
+pub fn go(link: &mut Link, name: &str, top: &Path, argv: &[String], options: &Options, out: &mut dyn Write, err: &mut dyn Write, interrupts: &dyn Fn() -> u32) -> Result<Ran> {
+    if options.alongside && !options.files.send.is_empty() {
+        return Err("kebbie: --alongside sends no files, so it leaves the run's folder as the other run has it; drop --send".to_string());
+    }
+    let planned = files::plan(&options.files).map_err(|why| format!("kebbie: {why}"))?;
+    let into = options.files.out.clone().unwrap_or_else(|| top.to_path_buf());
+    let id = cluster::new_id()?;
+    let (commit, snapshot, remote) = snapshot(top, &id, options.alongside)?;
     let branch = crate::repo::git(top, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
     let task = token(if branch.is_empty() || branch == "HEAD" { "detached" } else { &branch });
-    let remote = bundle::remote_base(top, &commit).map(|remote| RemoteAsk { url: remote.url, base: remote.base });
     timing::mark("ref, branch, remote base");
-    let ask = RunAsk { repo: token(&super::super::repo_name(top)), task, commit: commit.clone(), remote, command: shell_line(argv) };
+    let fetch = options.files.fetch.clone();
+    let ask = RunAsk { repo: token(&super::super::repo_name(top)), task, commit: commit.clone(), remote, command: shell_line(argv), send: planned.iter().map(|(_, ask)| ask.clone()).collect(), fetch: fetch.clone(), alongside: options.alongside };
+    let budget = MAX_FILES - ask.send.iter().map(|send| send.size).sum::<u64>();
+    let newer = !ask.send.is_empty() || !ask.fetch.is_empty() || ask.alongside;
     let silent = link.silent.as_secs();
     let lost = |error: std::io::Error| if error.kind() == std::io::ErrorKind::TimedOut { quiet(name, silent) } else { format!("kebbie: the link to {name} was lost: {error}") };
+    let early = |error: std::io::Error| {
+        let older = newer && error.kind() == std::io::ErrorKind::UnexpectedEof;
+        format!("{}{}", lost(error), if older { format!("; a kebbie on {name} older than --send, --fetch and --alongside closes the link at such a run: update it there") } else { String::new() })
+    };
     link.send(&Frame::Ask(Ask::Run(ask))).map_err(lost)?;
     let mut sent = None;
     loop {
         if interrupts() > 0 {
             return Err(format!("kebbie: stopped before the command started on {name}"));
         }
-        let Some(frame) = link.recv(Some(Duration::from_millis(50))).map_err(lost)? else {
+        let Some(frame) = link.recv(Some(Duration::from_millis(50))).map_err(early)? else {
             if link.gone_quiet() {
                 return Err(quiet(name, silent));
             }
@@ -295,6 +325,7 @@ pub fn go(link: &mut Link, name: &str, top: &Path, argv: &[String], out: &mut dy
         };
         match frame {
             Frame::Said(Said::Want { haves }) => {
+                let Some(snapshot) = &snapshot else { return Err(format!("{name} asked for a commit for a run alongside")) };
                 let scratch = std::env::temp_dir().join(format!("kebbie-link-{id}"));
                 timing::mark("worker wants commit");
                 let bytes = beating(link, || bundle_for(top, &snapshot.refname, &commit, &haves, &scratch))?;
@@ -306,6 +337,7 @@ pub fn go(link: &mut Link, name: &str, top: &Path, argv: &[String], out: &mut dy
                 sent = Some(bytes.len());
                 timing::mark("bundle sent");
             }
+            Frame::Said(Said::Take) => files::stream(link, &planned).map_err(lost)?,
             Frame::Err(bytes) => {
                 let _ = err.write_all(&bytes).and_then(|()| err.flush());
             }
@@ -319,6 +351,7 @@ pub fn go(link: &mut Link, name: &str, top: &Path, argv: &[String], out: &mut dy
     }
     drop(snapshot);
     let mut forwarded = 0u32;
+    let mut fetched = Fetched::default();
     loop {
         let asked = interrupts();
         while forwarded < asked && (forwarded as usize) < ESCALATION.len() {
@@ -335,8 +368,13 @@ pub fn go(link: &mut Link, name: &str, top: &Path, argv: &[String], out: &mut dy
             Some(Frame::Err(bytes)) => {
                 let _ = err.write_all(&bytes).and_then(|()| err.flush());
             }
+            Some(Frame::Said(Said::Entry { path, dir, size, mode })) => files::take_entry(link, &into, &fetch, budget, (path, dir, size, mode), &mut fetched).map_err(|why| format!("kebbie: {why}"))?,
             Some(Frame::Said(Said::Exited { code })) => {
                 timing::mark("exited");
+                if !fetch.is_empty() {
+                    let notes: String = fetched.notes.iter().map(|note| format!("[kebbie: not fetched: {note}]\n")).collect();
+                    let _ = err.write_all(format!("{notes}{}", fetched.summary(&into)).as_bytes()).and_then(|()| err.flush());
+                }
                 return Ok(Ran { code, sent });
             }
             Some(Frame::Said(Said::Failed { reason })) => return Err(reason),
@@ -417,7 +455,7 @@ fn hub_job_hint(top: &Path, why: &str, name: &str) -> String {
     format!("kebbie: no link to {name}: {why}\nTo run it through the hub instead, which is slower but needs no link, add it to [jobs] in {} and run kebbie job run <name>", crate::config::repo_file(top).display())
 }
 
-fn run(cwd: &Path, on: Option<&str>, argv: &[String]) -> Result<i32> {
+fn run(cwd: &Path, on: Option<&str>, options: &Options, argv: &[String]) -> Result<i32> {
     if argv.is_empty() {
         return Err("kebbie run --on <system or machine> -- <command …> runs the command there, on this worktree as it stands".to_string());
     }
@@ -434,12 +472,12 @@ fn run(cwd: &Path, on: Option<&str>, argv: &[String]) -> Result<i32> {
     timing::mark("link made");
     eprintln!("kebbie: {} runs it, {route}", target.name);
     catch_interrupt();
-    let ran = go(&mut link, &target.name, &top, argv, &mut std::io::stdout(), &mut std::io::stderr(), &|| INTERRUPTS.load(Ordering::SeqCst))?;
+    let ran = go(&mut link, &target.name, &top, argv, options, &mut std::io::stdout(), &mut std::io::stderr(), &|| INTERRUPTS.load(Ordering::SeqCst))?;
     Ok(ran.code)
 }
 
-pub fn run_cli(cwd: &Path, on: Option<&str>, argv: &[String]) -> ExitCode {
-    match run(cwd, on, argv) {
+pub fn run_cli(cwd: &Path, on: Option<&str>, options: &Options, argv: &[String]) -> ExitCode {
+    match run(cwd, on, options, argv) {
         Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
         Err(error) => {
             eprintln!("{error}");

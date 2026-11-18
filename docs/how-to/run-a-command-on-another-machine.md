@@ -53,11 +53,41 @@ Everything after `--` is the command. kebbie refuses a word that starts with `-`
 
 `--on` picks the machine as [`on`](run-a-job-on-another-machine.md#2-name-the-repos-jobs-on-the-master) picks a job's worker: by its system, `macos` or `linux`, or by its name. This machine's own name runs the command here, over loopback. Several words after `--` are quoted one by one. A single word is one shell line, so `kebbie run --on studio -- 'make lint && make test'` runs both.
 
-The command runs on the worktree as it stands, uncommitted and untracked files included. The first time, the worker fetches the history from `origin` itself when `origin` is an https or ssh URL it can reach, and the rest comes over the link. Later runs send only the objects the worker lacks, and nothing when the worktree has not changed. On the worker, each task has its own folder under `~/.local/share/kebbie/worker/<repo>/.links/`, apart from the jobs' folders, checked out with `--force` and cleaned without `-x`, so ignored files such as build caches survive from one run to the next. Two runs in one task take turns: the second says it waits for the first and starts once the first has ended.
+The command runs on the worktree as it stands, uncommitted and untracked files included. The first time, the worker fetches the history from `origin` itself when `origin` is an https or ssh URL it can reach, and the rest comes over the link. Later runs send only the objects the worker lacks, and nothing when the worktree has not changed. On the worker, each task has its own folder under `~/.local/share/kebbie/worker/<repo>/.links/`, apart from the jobs' folders, checked out with `--force` and cleaned without `-x`, so ignored files such as build caches survive from one run to the next. Two runs in one task take turns: the second says it waits for the first and starts once the first has ended, unless it runs [alongside](#look-in-on-a-long-run).
 
 stdout and stderr come back apart and as they are written. `kebbie run` exits with the command's own exit code: 128 plus the signal's number when a signal ended it, and 255 when no link could be made or the link was lost. Ctrl-C sends SIGINT to the command's process group on the worker, a second sends SIGTERM and a third SIGKILL; a fourth quits `kebbie run` at once. Ctrl-C before the command has started stops the run there and then, and the command never starts. SIGTERM or SIGHUP to `kebbie run`, as when its terminal closes, counts as two Ctrl-C. The command runs with `sh -c`, with `KEBBIE_RUN_TASK` and `KEBBIE_RUN_FROM` set to the task and the asking machine's name, and stdin closed. Whatever the command left in the background is stopped when it ends.
 
 Both sides send a beat every 10 s when they have nothing else to send. When the other machine sends nothing for 45 s, `kebbie run` stops waiting, says so and exits 255; the worker stops the command the same way when the asker goes silent. A send the other side does not take within 45 s fails the link too. A direct link also has TCP keepalive. A keeper that stops gives its running commands SIGTERM and waits up to 15 s for them.
+
+## Send files along and fetch files back
+
+`--send <file>` puts a file from this machine in the run's folder before the command starts, under its own name, as a CA certificate that is not in the worktree:
+
+```sh
+kebbie run --on studio --send ~/certs/ca.pem -- curl --cacert ca.pem https://staging.internal
+```
+
+`--fetch <path>` copies a file or folder of the run's folder back once the command has ended, to the same path in this worktree, or under `--out <dir>` instead:
+
+```sh
+kebbie run --on macos --fetch build/screenshots --fetch logs/ui-test.log -- make ui-test
+kebbie run --on macos --fetch build/screenshots --out ~/Desktop/run -- make ui-test
+```
+
+Both take one path each and can be given more than once. A fetched path is relative to the run's folder; a path with `..`, an absolute path and the folder itself are refused before anything is sent. kebbie fetches plain files and folders, with their permissions, and leaves out a symbolic link or special file with a word on stderr; a path through a symbolic link is refused, so nothing comes from outside the run's folder. A file sent replaces one of the same name in the folder, and the next run's clean removes it unless `.gitignore` ignores it.
+
+`kebbie run` still exits with the command's own exit code. A fetched path that is missing, as when the command failed before it wrote its screenshots, is named on stderr and the rest still comes, and a last line says how many files came back and where. Files sent and fetched carry at most 1 GiB in all per run, so a run stays within what the hub relays. Both work the same over a direct link and through the hub.
+
+## Look in on a long run
+
+A second `kebbie run` from the same task waits for the first. `--alongside` runs it beside the first instead, in the same folder on the worker, as it is: it sends no commit, checks nothing out and cleans nothing, so the first run's tree stays as that run has it. Take a screenshot or read a log in the middle of a UI test:
+
+```sh
+kebbie run --on macos --alongside --fetch shot.png -- screencapture -x shot.png
+kebbie run --on macos --alongside -- tail -n 50 logs/ui-test.log
+```
+
+`--alongside` takes `--fetch` but not `--send`, and needs a run of the task on that machine before, in progress or done. It takes no turn, so a run that starts after it checks out as usual. kebbie cannot stop a command run alongside from writing to the folder; keep it to reading.
 
 ## Pick the network
 
@@ -78,6 +108,7 @@ On the worker, the list limits the addresses its keeper listens on and announces
 - `studio was rung through the hub but did not answer within 10 s`: the worker's keeper waits on the hub but did not take the link; its keeper log says why.
 - `the TLS handshake failed`: something other than that machine answered on its address, or one of the two machines is no longer on your account's list.
 - `kebbie: studio sent nothing for 45 s, so kebbie stopped waiting`: the machine went to sleep or off, or the network between went away. The command may still be running there.
+- `a kebbie on studio older than --send, --fetch and --alongside closes the link at such a run`: update kebbie on that machine.
 - `relaying through hub.kebbie.dev needs Hub Pro`: the account has no Hub Pro, so only a direct link over Tailscale or WireGuard works.
 - `the hub keeps no machine addresses yet` or `the hub relays no links yet`: the hub runs an older version than the machines.
 

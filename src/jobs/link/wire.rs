@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_FRAME: usize = 1024 * 1024;
 pub const CHUNK: usize = 256 * 1024;
+// What a run's --send and --fetch files carry in all, so a 2 GiB bundle, the files and the output stay within the 4 GiB the hub relays per link.
+pub const MAX_FILES: u64 = 1024 * 1024 * 1024;
 
 // How often a side that has nothing to say sends a beat, and how long the other waits without a word before it gives the link up.
 pub const BEAT: Duration = Duration::from_secs(10);
@@ -75,6 +77,20 @@ pub struct RunAsk {
     pub commit: String,
     pub remote: Option<RemoteAsk>,
     pub command: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub send: Vec<SendAsk>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fetch: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub alongside: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SendAsk {
+    pub name: String,
+    pub size: u64,
+    pub mode: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -90,7 +106,9 @@ pub struct RemoteAsk {
 pub enum Said {
     Pong,
     Want { haves: Vec<String> },
+    Take,
     Started,
+    Entry { path: String, dir: bool, size: u64, mode: u32 },
     Exited { code: i32 },
     Failed { reason: String },
 }

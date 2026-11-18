@@ -146,10 +146,13 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
   kebbie job run [<name>]         run the repo's job of that name ([jobs] in its repo config) on another machine of
                                   your hub account that has worker.enabled, on this worktree as it stands; prints its
                                   output and exits as the job did; no name lists the repo's jobs
-  kebbie run --on <machine> -- <command …>
+  kebbie run --on <machine> [--send <file>]… [--fetch <path>]… [--out <dir>] [--alongside] -- <command …>
                                   run the command on that machine of your hub account (a system, macos or linux,
                                   or a machine name) over a direct link on Tailscale or WireGuard, on this worktree
-                                  as it stands; streams its output and exits with its exit code; Ctrl-C reaches it
+                                  as it stands; streams its output and exits with its exit code; Ctrl-C reaches it;
+                                  --send puts a local file in the run's folder first, --fetch copies a file or
+                                  folder of it back after, into this worktree or --out; --alongside runs beside the
+                                  task's run in progress there, on its folder as it is, instead of waiting for it
   kebbie status [--json]          every task and Claude session, grouped by what it needs from you
   kebbie next                     what needs you, in the order to do it: what is stopped on you, what to push in
                                   which order, what to read; the same list N shows on the board
@@ -541,7 +544,7 @@ impl Arguments {
                 arguments.positionals.extend(input.by_ref());
                 break;
             }
-            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--after-push", "--profile", "--why", "--name", "--until", "--recipe", "--step", "--on", "--id", "--subtask", "--because", "--prepares", "--before", "--verify", "--stage", "--red-cause", "--search"].contains(&argument.as_str()) {
+            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--after-push", "--profile", "--why", "--name", "--until", "--recipe", "--step", "--on", "--id", "--subtask", "--because", "--prepares", "--before", "--verify", "--stage", "--red-cause", "--search", "--send", "--fetch", "--out"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
                 arguments.flags.push(argument);
@@ -1030,12 +1033,13 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     if arguments.positional(0) == Some("run") {
-        if let Err(error) = arguments.only("run", &["--on"]) {
+        if let Err(error) = arguments.only("run", &["--on", "--send", "--fetch", "--out", "--alongside"]) {
             eprintln!("{error}");
             return ExitCode::from(255);
         }
         let cwd = arguments.value("-C").map_or_else(|| std::env::current_dir().unwrap_or_default(), std::path::PathBuf::from);
-        return jobs::link::run_cli(&cwd, arguments.value("--on"), arguments.rest(1));
+        let files = jobs::link::Files { send: arguments.values_of("--send").into_iter().map(std::path::PathBuf::from).collect(), fetch: arguments.values_of("--fetch").into_iter().map(str::to_string).collect(), out: arguments.value("--out").map(std::path::PathBuf::from) };
+        return jobs::link::run_cli(&cwd, arguments.value("--on"), &jobs::link::Options { files, alongside: arguments.flag("--alongside") }, arguments.rest(1));
     }
     signals::install_panic_hook();
     if matches!(arguments.positional(0), Some("board" | "start" | "after" | "land" | "push" | "done" | "move" | "update" | "ci" | "routine" | "routines")) {

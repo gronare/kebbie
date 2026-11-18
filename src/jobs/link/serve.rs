@@ -12,8 +12,8 @@ use kebbie_hub_protocol::{AccountKey, Id, is_commit};
 use rustls::{ServerConnection, StreamOwned};
 
 use super::super::{bundle, cluster, fetchable, safe, worker};
-use super::tls;
-use super::wire::{Ask, Frame, Link, RunAsk, Said, Timed, beating, keep_alive};
+use super::{files, tls};
+use super::wire::{Ask, Frame, Link, MAX_FILES, RunAsk, Said, Timed, beating, keep_alive};
 use crate::hub::http::{CALL, Client};
 use crate::hub::identity::Identity;
 use crate::sh::Result;
@@ -246,11 +246,15 @@ fn ms(from: Instant, to: Instant) -> u128 {
 
 fn run(host: &Host, link: &mut Link, ask: &RunAsk, from: &str, halted: &(dyn Fn() -> bool + Sync), began: Instant) -> std::result::Result<String, String> {
     let asked = Instant::now();
-    if !is_commit(&ask.commit) || ask.command.trim().is_empty() {
+    if (!ask.alongside && !is_commit(&ask.commit)) || ask.command.trim().is_empty() {
         return Err("the run named no full commit or no command".to_string());
     }
+    files::check(&ask.send, &ask.fetch)?;
     let repo = host.data.join(safe(&ask.repo));
     let work = repo.join(LINKS).join(safe(&ask.task));
+    if ask.alongside {
+        return alongside(link, &work, ask, from, halted);
+    }
     let _held = match Held::try_take(&work) {
         Some(held) => held,
         None => {
@@ -263,9 +267,37 @@ fn run(host: &Host, link: &mut Link, ask: &RunAsk, from: &str, halted: &(dyn Fn(
     let synced = Instant::now();
     beating(link, || worker::check_out(&repo.join(".store"), &work, &ask.commit, halted))?;
     let checked_out = Instant::now();
+    if !ask.send.is_empty() {
+        link.send(&Frame::Said(Said::Take)).map_err(|error| error.to_string())?;
+        files::take(link, &work, &ask.send, &|| halted())?;
+    }
     link.send(&Frame::Said(Said::Started)).map_err(|error| error.to_string())?;
     let code = exec(link, &work, ask, from, halted)?;
+    finish(link, &work, ask, code)?;
     Ok(format!("exited {code} (ms: open {}, turn {}, sync {}, checkout {}, command {})", ms(began, asked), ms(asked, held), ms(held, synced), ms(synced, checked_out), ms(checked_out, Instant::now())))
+}
+
+// A run beside the one that holds the task's folder: no turn, no sync and no checkout, so it leaves the tree as the other run has it.
+fn alongside(link: &mut Link, work: &Path, ask: &RunAsk, from: &str, halted: &(dyn Fn() -> bool + Sync)) -> std::result::Result<String, String> {
+    if !ask.send.is_empty() {
+        return Err("--alongside sends no files, so it leaves the run's folder as the other run has it".to_string());
+    }
+    if !work.join(".git").exists() {
+        return Err(format!("no run of the task {} on this machine yet to run alongside; run it without --alongside first", ask.task));
+    }
+    link.send(&Frame::Said(Said::Started)).map_err(|error| error.to_string())?;
+    let code = exec(link, work, ask, from, halted)?;
+    finish(link, work, ask, code)?;
+    Ok(format!("alongside, exited {code}"))
+}
+
+// The fetched paths go back after the command, then its exit code.
+fn finish(link: &mut Link, work: &Path, ask: &RunAsk, code: i32) -> std::result::Result<(), String> {
+    if !ask.fetch.is_empty() {
+        let budget = MAX_FILES - ask.send.iter().map(|send| send.size).sum::<u64>();
+        files::send_back(link, work, &ask.fetch, budget, &say).map_err(|error| error.to_string())?;
+    }
+    link.send(&Frame::Said(Said::Exited { code })).map_err(|error| error.to_string())
 }
 
 static HELD: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
@@ -368,7 +400,6 @@ fn exec(link: &mut Link, work: &Path, ask: &RunAsk, from: &str, halted: &(dyn Fn
             if gone {
                 return Err(format!("the asker went away; the command ended with {code}"));
             }
-            link.send(&Frame::Said(Said::Exited { code })).map_err(|error| error.to_string())?;
             return Ok(code);
         }
     }

@@ -968,6 +968,8 @@ A command runs on another machine of your hub account over a direct link on a pr
 | Command | What it does |
 |---|---|
 | `kebbie run --on <system or machine> -- <command …>` | Run the command on that machine, on this worktree with its uncommitted and untracked files, with its stdout and stderr streamed as they come. It exits with the command's exit code, 128 plus the signal's number when a signal ended it, and 255 when no link could be made or the link was lost. |
+| `kebbie run --on <machine> --send <file> --fetch <path> [--out <dir>] -- <command …>` | The same, with each `--send` file put in the run's folder before the command starts and each `--fetch` file or folder copied back after it, into this worktree or under `--out`. Each flag can be given more than once. |
+| `kebbie run --on <machine> --alongside -- <command …>` | Run the command beside the task's run in progress on that machine, in its folder as it is, instead of waiting for it. |
 | `kebbie link` | Each machine of your hub account and how a link reaches it: direct on which address or relayed through the hub, with the round trip of a ping, or down and why. |
 
 - `--on` picks a worker as a job's `on` does: by its system or its name, the one the hub heard from last. This machine's own name runs the command here over loopback, when its `worker.enabled` is on. Without `--on`, any worker.
@@ -978,6 +980,8 @@ A command runs on another machine of your hub account over a direct link on a pr
 - Each side beats every 10 s when it has nothing to send, also while it fetches, checks out or bundles, and gives the link up after 45 s without a word or after a send not taken for 45 s: `kebbie run` says so and exits 255, the worker stops the command. A direct link also has TCP keepalive.
 - `link.networks` in config.toml picks the networks and their order: on the worker, the addresses it listens on and announces; on the asker, the order it dials them in, the next network 150 ms after the one before unless that one failed, and never a network the list leaves out. By default both, Tailscale first. See [`link.networks`](configuration.md#ci-updates-and-the-keeper).
 - The worker listens on loopback and on its Tailscale and WireGuard addresses only: Tailscale's from `tailscale ip` or in Tailscale's ranges on a `tailscale…` or `utun…` interface, WireGuard's on a `wg…` or WireGuard interface and in a private range, never a public one. It takes at most 8 connections at once that have not finished their handshake, gives each 10 s in all, and asks the hub for the account's list only once a peer shows a key, reading it again when it is over 3 s old.
+- `--send` takes a file, which lands under its own name in the run's folder after the checkout. `--fetch` takes a path relative to the run's folder, refused with `..`, absolute or naming the folder itself; it comes back after the command to the same path under this worktree or `--out`, plain files and folders only, and a path through a symbolic link is refused. A missing path is named on stderr, the rest still comes, and the exit code stays the command's. Files sent and fetched carry at most 1 GiB in all per run.
+- `--alongside` takes no turn and sends no commit: the worker runs the command in the task's folder as it is, without sync, checkout or clean, and refuses it with `--send` or before the task's first run there. `--fetch` works with it.
 - The worker's keeper log gets one line per session: who asked, from where, what ran and how it ended, or why the session was refused.
 
 ## The hub

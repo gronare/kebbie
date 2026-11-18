@@ -12,6 +12,7 @@ use crate::hub::http::{CALL, Client};
 use crate::hub::identity;
 
 pub mod addresses;
+pub mod files;
 mod client;
 pub mod relay;
 pub mod serve;
@@ -22,7 +23,8 @@ pub mod wire;
 #[cfg(test)]
 mod tests;
 
-pub use client::{list_cli, run_cli};
+pub use client::{Options, list_cli, run_cli};
+pub use files::Files;
 
 pub const PORT: u16 = 47_011;
 const TICK: Duration = Duration::from_secs(2);
