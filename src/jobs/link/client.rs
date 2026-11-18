@@ -11,7 +11,7 @@ use rustls::{ClientConnection, StreamOwned};
 
 use super::super::cluster::{self, Cluster};
 use super::super::{REF, bundle, token};
-use super::wire::{Ask, CHUNK, Frame, Link, RemoteAsk, RunAsk, Said};
+use super::wire::{Ask, CHUNK, Frame, Link, RemoteAsk, RunAsk, Said, beating};
 use super::wire::keep_alive;
 use super::{PORT, addresses, relay, tls};
 use crate::hub::http::{CALL, Client};
@@ -192,9 +192,20 @@ pub fn go(link: &mut Link, name: &str, top: &Path, argv: &[String], out: &mut dy
     link.send(&Frame::Ask(Ask::Run(ask))).map_err(lost)?;
     let mut sent = None;
     loop {
-        match link.expect().map_err(lost)? {
+        if interrupts() > 0 {
+            return Err(format!("kebbie: stopped before the command started on {name}"));
+        }
+        let Some(frame) = link.recv(Some(Duration::from_millis(50))).map_err(lost)? else {
+            if link.gone_quiet() {
+                return Err(quiet(name, silent));
+            }
+            link.beat_if_due().map_err(lost)?;
+            continue;
+        };
+        match frame {
             Frame::Said(Said::Want { haves }) => {
-                let bytes = bundle_for(top, &snapshot.refname, &commit, &haves, &std::env::temp_dir().join(format!("kebbie-link-{id}")))?;
+                let scratch = std::env::temp_dir().join(format!("kebbie-link-{id}"));
+                let bytes = beating(link, || bundle_for(top, &snapshot.refname, &commit, &haves, &scratch))?;
                 for chunk in bytes.chunks(CHUNK) {
                     link.send(&Frame::Data(chunk.to_vec())).map_err(lost)?;
                 }
@@ -277,9 +288,22 @@ extern "C" fn on_interrupt(_: libc::c_int) {
     }
 }
 
+// SIGTERM or SIGHUP asks as two Ctrl-C would: SIGINT then SIGTERM to the command, or a clean stop before it started; a second one kills it.
+extern "C" fn on_terminate(signal: libc::c_int) {
+    if INTERRUPTS.fetch_max(2, Ordering::SeqCst) >= 2 {
+        INTERRUPTS.fetch_add(1, Ordering::SeqCst);
+        // SAFETY: signal() is async-signal-safe.
+        unsafe { libc::signal(signal, libc::SIG_DFL) };
+    }
+}
+
 fn catch_interrupt() {
-    // SAFETY: the handler only touches an atomic and calls signal(), both async-signal-safe.
-    unsafe { libc::signal(libc::SIGINT, on_interrupt as extern "C" fn(libc::c_int) as libc::sighandler_t) };
+    // SAFETY: the handlers only touch an atomic and call signal(), both async-signal-safe.
+    unsafe {
+        libc::signal(libc::SIGINT, on_interrupt as extern "C" fn(libc::c_int) as libc::sighandler_t);
+        libc::signal(libc::SIGTERM, on_terminate as extern "C" fn(libc::c_int) as libc::sighandler_t);
+        libc::signal(libc::SIGHUP, on_terminate as extern "C" fn(libc::c_int) as libc::sighandler_t);
+    }
 }
 
 fn hub_job_hint(top: &Path, why: &str, name: &str) -> String {

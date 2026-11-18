@@ -39,8 +39,9 @@ pub trait Pipe: Read + Write + Timed + Send {}
 
 impl<T: Read + Write + Timed + Send> Pipe for T {}
 
-// TCP keepalive after 15 s of quiet, every 5 s, given up after 3 unanswered, so a direct link to a machine that went away ends in about half a minute.
+// TCP keepalive after 15 s of quiet, every 5 s, given up after 3 unanswered, and a write unsent or unacknowledged for SILENT fails, so a link to a machine that went away ends in under a minute even mid-send.
 pub fn keep_alive(tcp: &TcpStream) {
+    let _ = tcp.set_write_timeout(Some(SILENT));
     use std::os::fd::AsRawFd;
     let fd = tcp.as_raw_fd();
     let set = |level: libc::c_int, name: libc::c_int, value: libc::c_int| {
@@ -54,6 +55,8 @@ pub fn keep_alive(tcp: &TcpStream) {
     set(libc::IPPROTO_TCP, libc::TCP_KEEPALIVE, 15);
     set(libc::IPPROTO_TCP, libc::TCP_KEEPINTVL, 5);
     set(libc::IPPROTO_TCP, libc::TCP_KEEPCNT, 3);
+    #[cfg(target_os = "linux")]
+    set(libc::IPPROTO_TCP, libc::TCP_USER_TIMEOUT, SILENT.as_millis() as libc::c_int);
 }
 
 // What the machine asking says it wants.
@@ -215,7 +218,15 @@ impl Link {
 
     // The next frame, beating meanwhile; an error once the other side has gone quiet.
     pub fn expect(&mut self) -> std::io::Result<Frame> {
+        self.expect_unless(&|| false)
+    }
+
+    // As expect, and an error as soon as halted says this side stops.
+    pub fn expect_unless(&mut self, halted: &dyn Fn() -> bool) -> std::io::Result<Frame> {
         loop {
+            if halted() {
+                return Err(std::io::Error::new(ErrorKind::Interrupted, "this machine is stopping"));
+            }
             if let Some(frame) = self.recv(Some(Duration::from_millis(500)))? {
                 return Ok(frame);
             }
@@ -225,4 +236,16 @@ impl Link {
             self.beat_if_due()?;
         }
     }
+}
+
+// Work that may take long, as a fetch, a checkout or a bundle, runs beside beats to the other side, so it knows this machine is still there.
+pub fn beating<T: Send>(link: &mut Link, work: impl FnOnce() -> T + Send) -> T {
+    std::thread::scope(|scope| {
+        let running = scope.spawn(work);
+        while !running.is_finished() {
+            std::thread::sleep(Duration::from_millis(50));
+            let _ = link.beat_if_due();
+        }
+        running.join().expect("the work does not panic")
+    })
 }

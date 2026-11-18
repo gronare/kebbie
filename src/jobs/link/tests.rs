@@ -111,10 +111,6 @@ fn a_machine_announces_its_addresses_to_the_others_on_the_account_and_they_trust
 }
 
 #[test]
-fn a_link_opens_only_between_keys_on_the_accounts_list_as_it_is_now() {
-    let hub = open_hub(|_| {});
-    let mut browser = member(&hub);
-#[test]
 fn an_address_on_a_network_a_newer_kebbie_announced_is_skipped_not_dialed() {
     let mixed = Addresses { port: 47_011, addresses: vec![LinkAddress { network: Network::Other, ip: "100.64.9.9".into() }, LinkAddress { network: Network::Wireguard, ip: "10.8.0.2".into() }] };
     assert_eq!(client::dialable("studio", Some(&mixed)).unwrap(), ["10.8.0.2:47011".parse::<SocketAddr>().unwrap()]);
@@ -122,6 +118,10 @@ fn an_address_on_a_network_a_newer_kebbie_announced_is_skipped_not_dialed() {
     assert!(client::dialable("studio", Some(&only_other)).unwrap_err().contains("studio is on no private network kebbie knows"), "and with nothing else it has no address, so the hub relays");
 }
 
+#[test]
+fn a_link_opens_only_between_keys_on_the_accounts_list_as_it_is_now() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
     let (devbox, studio, laptop) = (Machine::connected(&hub, &mut browser, "devbox"), Machine::connected(&hub, &mut browser, "studio"), Machine::connected(&hub, &mut browser, "laptop"));
     let root = crate::sh::test_dir("link-pinning");
     let listening = listen(host(&studio, &root.join("data")));
@@ -133,7 +133,8 @@ fn an_address_on_a_network_a_newer_kebbie_announced_is_skipped_not_dialed() {
     let impostor = Target { keys: laptop.identity.public(), ..studio_at.clone() };
     assert!(client::connect(&devbox.identity, &impostor, Duration::from_secs(2)).err().unwrap().contains("TLS handshake failed"), "the asker refuses a machine that does not show the key it expects");
     hub.runtime.block_on(browser.remove_machine(&laptop.identity.machine)).unwrap();
-    assert!(handshake_as(&laptop.identity.secret(), &studio_at).is_err(), "a machine the account removed is refused at once, as the list is read fresh");
+    std::thread::sleep(serve::LISTED);
+    assert!(handshake_as(&laptop.identity.secret(), &studio_at).is_err(), "a machine the account removed is refused within seconds, as the list is read again once it is a few seconds old");
     let log = keeper_log(&studio);
     assert!(log.contains("link: session from devbox (127.0.0.1:") && log.contains(": ping"), "one line per session: {log}");
     assert!(log.contains("link: refused a session from 127.0.0.1:"), "{log}");
@@ -300,7 +301,7 @@ fn a_run_gives_up_in_plain_words_when_the_other_machine_goes_silent() {
     let allowed = std::collections::BTreeMap::from([(devbox.identity.public().signing, devbox.identity.machine.clone())]);
     let silent = std::thread::spawn(move || {
         let (tcp, _) = listener.accept().unwrap();
-        let (mut link, _) = serve::handshake(&frozen, tcp, allowed).unwrap();
+        let (mut link, _) = serve::handshake(&frozen, tcp, tls::fixed(allowed)).unwrap();
         assert!(matches!(link.expect().unwrap(), Frame::Ask(Ask::Run(_))));
         link.send(&Frame::Said(Said::Started)).unwrap();
         std::thread::sleep(Duration::from_secs(4));
@@ -322,4 +323,166 @@ fn a_relay_the_hubs_plan_lacks_is_refused_in_plain_words_naming_the_free_way() {
     assert_eq!(relay::refusal("studio", "https://hub.kebbie.dev/", &refused), "relaying through hub.kebbie.dev needs Hub Pro; a direct link over Tailscale or WireGuard is free");
     let other = Ok(relay::Refused { status: 402, code: "plan-inactive".to_string() });
     assert_eq!(relay::refusal("studio", "https://hub.kebbie.dev", &other), "the hub refused the relayed link: 402 plan-inactive");
+}
+
+struct Slow(Rc<RefCell<Vec<u8>>>);
+
+impl Write for Slow {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        std::thread::sleep(Duration::from_millis(15));
+        self.0.borrow_mut().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_command_that_exits_while_its_output_is_still_on_the_way_hands_over_all_of_it() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let (devbox, studio) = (Machine::connected(&hub, &mut browser, "devbox"), Machine::connected(&hub, &mut browser, "studio"));
+    let root = crate::sh::test_dir("link-drain");
+    let top = repo(&root);
+    let listening = listen(host(&studio, &root.join("data")));
+    let at = target(&studio, "studio", listening.address);
+    let out = Rc::new(RefCell::new(Vec::new()));
+    let (mut link, _) = client::connect(&devbox.identity, &at, Duration::from_secs(2)).unwrap();
+    let argv = vec!["head -c 12000000 /dev/zero | tr '\\0' x; exit 3".to_string()];
+    let ran = client::go(&mut link, "studio", &top, &argv, &mut Slow(out.clone()), &mut std::io::sink(), &|| 0);
+    assert_eq!(ran.map(|ran| ran.code), Ok(3));
+    assert_eq!(out.borrow().len(), 12_000_000, "a slow reader still gets every byte, and the command waited on its pipe meanwhile");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn two_runs_in_one_task_take_turns_in_its_worktree_which_no_job_shares() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let (devbox, studio) = (Machine::connected(&hub, &mut browser, "devbox"), Machine::connected(&hub, &mut browser, "studio"));
+    let root = crate::sh::test_dir("link-turns");
+    let top = repo(&root);
+    let listening = listen(host(&studio, &root.join("data")));
+    let at = target(&studio, "studio", listening.address);
+    assert_eq!(run_on(&devbox, &at, &top, &["true"], None).ran.map(|ran| ran.code), Ok(0));
+    assert!(root.join("data/app/.links/billing-refunds/tracked.txt").exists(), "a link's worktree sits under .links, where no job's task name can reach");
+    let (first, second) = std::thread::scope(|scope| {
+        let first = scope.spawn(|| run_on(&devbox, &at, &top, &["echo a > mine; sleep 1; cat mine"], None));
+        std::thread::sleep(Duration::from_millis(400));
+        let second = run_on(&devbox, &at, &top, &["echo b > mine"], None);
+        (first.join().unwrap(), second)
+    });
+    assert_eq!((first.ran.map(|ran| ran.code), first.out.as_str()), (Ok(0), "a\n"), "the second run neither cleaned nor wrote the first's tree while it ran: {}", second.err);
+    assert_eq!(second.ran.map(|ran| ran.code), Ok(0));
+    assert!(format!("{}{}", first.err, second.err).contains("waiting for the run before this one in the same task"), "{} {}", first.err, second.err);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_handshake_has_one_deadline_however_slowly_the_bytes_trickle_in() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let trickle = std::thread::spawn(move || {
+        let mut tcp = TcpStream::connect(address).unwrap();
+        for _ in 0..30 {
+            if tcp.write_all(b"x").is_err() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    });
+    let (mut tcp, _) = listener.accept().unwrap();
+    let started = Instant::now();
+    let mut deadline = serve::Deadline { inner: &mut tcp, until: started + Duration::from_millis(500) };
+    let mut byte = [0u8; 1];
+    let ended = loop {
+        if let Err(error) = std::io::Read::read(&mut deadline, &mut byte) {
+            break error;
+        }
+    };
+    assert_eq!(ended.kind(), std::io::ErrorKind::TimedOut);
+    assert!(started.elapsed() < Duration::from_millis(900), "{:?}", started.elapsed());
+    drop(tcp);
+    trickle.join().unwrap();
+}
+
+#[test]
+fn strangers_cost_no_hub_call_and_at_most_eight_waiting_connections() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let (devbox, studio) = (Machine::connected(&hub, &mut browser, "devbox"), Machine::connected(&hub, &mut browser, "studio"));
+    let root = crate::sh::test_dir("link-strangers");
+    let listening = listen(host(&studio, &root.join("data")));
+    let at = target(&studio, "studio", listening.address);
+    let mut garbage = TcpStream::connect(listening.address).unwrap();
+    garbage.write_all(b"GET / HTTP/1.1\r\n\r\n").unwrap();
+    wait_for_log(&studio, "link: refused a session from 127.0.0.1:");
+    assert!(!serve::list_read(&studio.dir), "bytes that are no TLS client key never reach the hub");
+    let idle: Vec<TcpStream> = (0..8).map(|_| TcpStream::connect(listening.address).unwrap()).collect();
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(client::direct(&devbox.identity, &at, Duration::from_secs(2)).is_err(), "a ninth is turned away while eight wait in their handshake");
+    wait_for_log(&studio, "link: turned away 127.0.0.1:");
+    drop(idle);
+    let until = Instant::now() + Duration::from_secs(5);
+    let mut linked = client::direct(&devbox.identity, &at, Duration::from_secs(2));
+    while linked.is_err() && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(100));
+        linked = client::direct(&devbox.identity, &at, Duration::from_secs(2));
+    }
+    assert!(client::ping(&mut linked.unwrap().0).is_ok(), "once they are gone a machine of the account gets in");
+    assert!(serve::list_read(&studio.dir));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_direct_link_gives_up_a_send_the_other_side_never_takes() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let tcp = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    super::wire::keep_alive(&tcp);
+    assert_eq!(tcp.write_timeout().unwrap(), Some(super::wire::SILENT));
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        let (mut value, mut len) = (0 as libc::c_int, std::mem::size_of::<libc::c_int>() as libc::socklen_t);
+        // SAFETY: value and len live for the call and fit a c_int.
+        unsafe { libc::getsockopt(tcp.as_raw_fd(), libc::IPPROTO_TCP, libc::TCP_USER_TIMEOUT, (&raw mut value).cast(), &raw mut len) };
+        assert_eq!(value, 45_000, "unacknowledged data fails the link after SILENT too");
+    }
+}
+
+#[test]
+fn long_work_on_one_side_keeps_beating_so_the_other_does_not_give_up() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let near = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (far, _) = listener.accept().unwrap();
+    let (mut working, mut waiting) = (Link::new(Box::new(near)), Link::new(Box::new(far)));
+    working.beat = Duration::from_millis(100);
+    waiting.silent = Duration::from_millis(400);
+    let work = std::thread::spawn(move || super::wire::beating(&mut working, || std::thread::sleep(Duration::from_millis(1_200))));
+    let until = Instant::now() + Duration::from_millis(1_100);
+    while Instant::now() < until {
+        assert!(waiting.recv(Some(Duration::from_millis(50))).unwrap().is_none());
+        assert!(!waiting.gone_quiet(), "a beat came within the silence the waiting side allows");
+    }
+    work.join().unwrap();
+}
+
+#[test]
+fn ctrl_c_before_the_command_starts_stops_the_run_and_leaves_no_snapshot_behind() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let (devbox, studio) = (Machine::connected(&hub, &mut browser, "devbox"), Machine::connected(&hub, &mut browser, "studio"));
+    let root = crate::sh::test_dir("link-early-stop");
+    let top = repo(&root);
+    std::fs::write(top.join("tracked.txt"), "edited\n").unwrap();
+    let listening = listen(host(&studio, &root.join("data")));
+    let at = target(&studio, "studio", listening.address);
+    let (mut link, _) = client::connect(&devbox.identity, &at, Duration::from_secs(2)).unwrap();
+    let argv = vec!["true".to_string()];
+    let ended = client::go(&mut link, "studio", &top, &argv, &mut std::io::sink(), &mut std::io::sink(), &|| 1);
+    assert_eq!(ended, Err("kebbie: stopped before the command started on studio".to_string()));
+    assert_eq!(git(&top, &["for-each-ref", super::super::REF]), "", "the snapshot's ref is gone");
+    let _ = std::fs::remove_dir_all(root);
 }

@@ -35,20 +35,32 @@ fn certified(secret: &SecretKeys) -> Result<Arc<CertifiedKey>> {
     Ok(Arc::new(CertifiedKey::new(vec![CertificateDer::from(spki(&secret.public().signing))], key)))
 }
 
-// Accepts a peer only by its Ed25519 key, and only a key in allowed: the signing keys of a list the account signed and that is no older than one this machine saw.
-#[derive(Debug)]
+// Which machine an Ed25519 key belongs to, asked only once a peer presents one.
+pub type Lookup = Arc<dyn Fn(&[u8; 32]) -> Option<Id> + Send + Sync>;
+
+pub fn fixed(allowed: BTreeMap<[u8; 32], Id>) -> Lookup {
+    Arc::new(move |key| allowed.get(key).cloned())
+}
+
+// Accepts a peer only by its Ed25519 key, and only a key the lookup knows: the signing keys of a list the account signed and that is no older than one this machine saw.
 pub struct Pinned {
-    allowed: BTreeMap<[u8; 32], Id>,
+    lookup: Lookup,
     algorithms: WebPkiSupportedAlgorithms,
 }
 
+impl std::fmt::Debug for Pinned {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Pinned")
+    }
+}
+
 impl Pinned {
-    pub fn new(allowed: BTreeMap<[u8; 32], Id>) -> Pinned {
-        Pinned { allowed, algorithms: provider().signature_verification_algorithms }
+    pub fn new(lookup: Lookup) -> Pinned {
+        Pinned { lookup, algorithms: provider().signature_verification_algorithms }
     }
 
-    pub fn check(&self, presented: &[u8]) -> std::result::Result<&Id, Error> {
-        key_of(presented).and_then(|key| self.allowed.get(&key)).ok_or(Error::InvalidCertificate(CertificateError::ApplicationVerificationFailure))
+    pub fn check(&self, presented: &[u8]) -> std::result::Result<Id, Error> {
+        key_of(presented).and_then(|key| (self.lookup)(&key)).ok_or(Error::InvalidCertificate(CertificateError::ApplicationVerificationFailure))
     }
 
     fn signed(&self, message: &[u8], key: &CertificateDer<'_>, dss: &DigitallySignedStruct) -> std::result::Result<HandshakeSignatureValid, Error> {
@@ -109,12 +121,12 @@ pub fn client(me: &SecretKeys, peer: Id, peer_key: [u8; 32]) -> Result<Arc<Clien
         .with_protocol_versions(&[&rustls::version::TLS13])
         .map_err(|error| error.to_string())?
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(Pinned::new(BTreeMap::from([(peer_key, peer)]))))
+        .with_custom_certificate_verifier(Arc::new(Pinned::new(fixed(BTreeMap::from([(peer_key, peer)])))))
         .with_client_cert_resolver(Arc::new(rustls::client::AlwaysResolvesClientRawPublicKeys::new(certified(me)?)));
     Ok(Arc::new(config))
 }
 
-pub fn server(me: &SecretKeys, allowed: BTreeMap<[u8; 32], Id>) -> Result<Arc<ServerConfig>> {
+pub fn server(me: &SecretKeys, allowed: Lookup) -> Result<Arc<ServerConfig>> {
     let config = ServerConfig::builder_with_provider(provider())
         .with_protocol_versions(&[&rustls::version::TLS13])
         .map_err(|error| error.to_string())?

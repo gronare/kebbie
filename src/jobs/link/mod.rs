@@ -160,4 +160,8 @@ pub fn stop() {
     if handle.is_finished() {
         let _ = handle.join();
     }
+    let until = Instant::now() + serve::SETTLE;
+    while serve::live() > 0 && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
