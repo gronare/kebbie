@@ -331,9 +331,14 @@ Yours alone, also `C` on the board: no Claude, the lead included, can run it.
 
 ### `kebbie comments [--json]`
 
-The comments colleagues left on commits kebbie pushed that still wait for you, one per line: its id, who wrote it, the commit, the task that pushed it and where it stands, such as `holds · reopen with a fix` or `reply ready · y copy`. `--json` gives the comment records. The board shows the same under [COMMENTS](board.md#comments).
+The comments that still wait for you, one per line: its id, who wrote it, the commit or `#42` for a pull request or an issue, whose it is and where it stands, such as `holds · reopen with a fix` or `reply ready · y copy`. Whose is the task that pushed the commit, `your commit` for a commit of yours kebbie did not push, or `mentions you`. `--json` gives the comment records. The board shows the same under [COMMENTS](board.md#comments).
 
-After a push, the keeper asks `gh api` for the repo's new commit comments every 12 minutes, for [`comments.watch_days`](configuration.md#ci-updates-and-the-keeper), and keeps those on the commits it pushed. GitHub lists them oldest first, so kebbie reads on from the last page it read and pages through no history: one call a round for a repo, however many of its commits are watched. It skips your own comments and a bot's. A read-only Claude reads each new comment against the commit's message and diff and the code as it is now, and calls it one of:
+After a push, the keeper asks `gh api` for the repo's new commit comments every 12 minutes, for [`comments.watch_days`](configuration.md#ci-updates-and-the-keeper), and keeps those on the commits it pushed. GitHub lists them oldest first, so kebbie reads on from the last page it read and pages through no history: one call a round for a repo, however many of its commits are watched. It skips your own comments and a bot's.
+
+In a repo with a kebbie worktree pool, the keeper asks every 12 minutes whether or not anything is pushed, and keeps more:
+
+- a comment on your own commit on the default branch, by the author email `git config user.email` gives in that repo, however it was pushed;
+- a comment that mentions your GitHub handle, the login `gh` is logged in as, on any commit, and in the conversation or review of any pull request or issue. Those come from two more calls a round, for the comments changed since the last round, and a repo's first round reads none from before it. A read-only Claude reads each new comment against the commit's message and diff and the code as it is now, and calls it one of:
 
 | Reading | Means |
 | --- | --- |

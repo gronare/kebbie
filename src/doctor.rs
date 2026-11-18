@@ -622,7 +622,7 @@ pub fn comments(watch: &Setting<bool>, days: u64, target: impl FnOnce() -> std::
         return ok("comments", format!("comments.watch is off ({}): comments on pushed commits are not read", watch.layer.label())).brief("comments not read");
     }
     match target() {
-        Ok(slug) => ok("comments", format!("on: kebbie reads colleagues' comments on the commits it pushes to {slug}, for {days} days after each push")).brief("comments read"),
+        Ok(slug) => ok("comments", format!("on: kebbie reads colleagues' comments on the commits it pushes to {slug}, for {days} days after each push, and those on your own commits there or that mention you")).brief("comments read"),
         Err(reason) => warn("comments", format!("on, but comments here are not read: {reason}"), one("gh auth login, with origin on GitHub")),
     }
 }
@@ -1670,7 +1670,7 @@ mod tests {
     fn doctor_says_whether_comments_on_pushed_commits_are_read_and_why_not() {
         let on = Setting { value: true, layer: config::Layer::Default };
         let watched = comments(&on, 7, || Ok("acme/app".to_string()));
-        assert_eq!((watched.level, watched.fact.as_str()), (Level::Ok, "on: kebbie reads colleagues' comments on the commits it pushes to acme/app, for 7 days after each push"));
+        assert_eq!((watched.level, watched.fact.as_str()), (Level::Ok, "on: kebbie reads colleagues' comments on the commits it pushes to acme/app, for 7 days after each push, and those on your own commits there or that mention you"));
         let unread = comments(&on, 7, || Err("gh is not logged in to github.com (gh auth login)".to_string()));
         assert!(unread.level == Level::Warn && unread.fact == "on, but comments here are not read: gh is not logged in to github.com (gh auth login)", "the same reason CI watching gives: {unread:?}");
         let off = comments(&Setting { value: false, layer: config::Layer::Repo }, 7, || panic!("gh is not asked when it is off"));

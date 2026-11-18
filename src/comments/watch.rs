@@ -16,6 +16,7 @@ const PER_PAGE: usize = 100;
 #[cfg(test)]
 const PER_PAGE: usize = 2;
 const MAX_PAGES: u64 = 10;
+const THREAD_SLACK: u64 = 5 * 60;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Watch {
@@ -50,15 +51,19 @@ pub struct Cursor {
     pub checked_at: Option<u64>,
     pub failures: u32,
     pub error: Option<String>,
+    pub threads_since: Option<u64>,
 }
 
 impl Cursor {
     fn to_json(&self) -> Value {
-        json!({ "slug": self.slug, "page": self.page, "checked_at": self.checked_at, "failures": self.failures, "error": self.error })
+        json!({ "slug": self.slug, "page": self.page, "checked_at": self.checked_at, "failures": self.failures, "error": self.error, "threads_since": self.threads_since })
     }
 
     fn from_json(value: &Value) -> Option<Cursor> {
-        Some(Cursor { slug: value["slug"].as_str()?.to_string(), page: value["page"].as_u64(), checked_at: value["checked_at"].as_u64(), failures: value["failures"].as_u64().unwrap_or(0) as u32, error: value["error"].as_str().map(str::to_string) })
+        Some(Cursor {
+            slug: value["slug"].as_str()?.to_string(), page: value["page"].as_u64(), checked_at: value["checked_at"].as_u64(), failures: value["failures"].as_u64().unwrap_or(0) as u32,
+            error: value["error"].as_str().map(str::to_string), threads_since: value["threads_since"].as_u64(),
+        })
     }
 
     // Each failure doubles the wait, so a gh that keeps failing is asked a few times a day at most.
@@ -74,7 +79,7 @@ fn cursor_file(state: &Path, slug: &str) -> PathBuf {
 
 fn load_cursor(state: &Path, slug: &str) -> Cursor {
     fs::read_to_string(cursor_file(state, slug)).ok().and_then(|text| serde_json::from_str(&text).ok()).and_then(|value| Cursor::from_json(&value))
-        .unwrap_or(Cursor { slug: slug.to_string(), page: None, checked_at: None, failures: 0, error: None })
+        .unwrap_or(Cursor { slug: slug.to_string(), page: None, checked_at: None, failures: 0, error: None, threads_since: None })
 }
 
 fn save_cursor(state: &Path, cursor: &Cursor) {
@@ -137,12 +142,20 @@ impl Lock {
 }
 
 pub fn tick(state: &Path) -> Vec<String> {
-    tick_with(state, &crate::ci::gh(), crate::messages::now(), &crate::trusted_spawn::reviewer_env(std::env::vars()))
+    tick_with(state, &crate::ci::gh(), crate::messages::now(), &crate::trusted_spawn::reviewer_env(std::env::vars()), &watched_repos(&crate::repo::pooled_checkouts()))
 }
 
-pub(super) fn tick_with(state: &Path, gh: &str, now: u64, env: &[(String, String)]) -> Vec<String> {
+// The repos kebbie keeps a worktree pool for, on GitHub with comments.watch on: read every round, pushed by kebbie or not.
+fn watched_repos(pooled: &[PathBuf]) -> Vec<(PathBuf, String)> {
+    pooled.iter().filter(|repo| crate::config::resolve(Some(repo)).is_ok_and(|loaded| loaded.settings.comments_watch.value)).filter_map(|repo| {
+        let url = crate::repo::git(repo, &["config", "--get", "remote.origin.url"]).ok()?;
+        Some((repo.clone(), crate::ci::github_repo(&url, &crate::ci::hosts())?))
+    }).collect()
+}
+
+pub(super) fn tick_with(state: &Path, gh: &str, now: u64, env: &[(String, String)], repos: &[(PathBuf, String)]) -> Vec<String> {
     let Some(_lock) = Lock::take(state) else { return Vec::new() };
-    let mut notes = poll(state, gh, now);
+    let mut notes = poll(state, gh, now, repos);
     notes.extend(settle_fixes(state));
     notes.extend(super::read::tick(state, env));
     super::prune(state, now);
@@ -214,6 +227,7 @@ pub(super) struct Found {
     pub path: Option<String>,
     pub line: Option<u64>,
     pub created_at: String,
+    pub hunk: Option<String>,
 }
 
 // gh --paginate prints one JSON array per page back to back.
@@ -227,15 +241,59 @@ pub(super) fn parse_comments(text: &str) -> Result<Vec<Found>> {
             Some(Found {
                 id: item["id"].as_u64()?, commit: text("commit_id").unwrap_or_default(), url: text("html_url").unwrap_or_default(), author: item["user"]["login"].as_str()?.to_string(),
                 bot: item["user"]["type"].as_str() == Some("Bot"), body: text("body").unwrap_or_default(), path: text("path").filter(|path| !path.is_empty()),
-                line: item["line"].as_u64(), created_at: text("created_at").unwrap_or_default(),
+                line: item["line"].as_u64(), created_at: text("created_at").unwrap_or_default(), hunk: text("diff_hunk").filter(|hunk| !hunk.is_empty()),
             })
         }));
     }
     Ok(found)
 }
 
-// One round asks each repo with a watched commit for the comments since its cursor, once every 12 minutes, whatever number of its commits are watched.
-fn poll(state: &Path, gh: &str, now: u64) -> Vec<String> {
+// @login as GitHub links it: not inside an address like ada@login.dev, and not the start of a longer login.
+pub(super) fn mentions(body: &str, login: &str) -> bool {
+    let (body, wanted) = (body.to_lowercase(), format!("@{}", login.to_lowercase()));
+    let login_char = |character: char| character.is_ascii_alphanumeric() || character == '-';
+    body.match_indices(&wanted).any(|(at, _)| {
+        let before = body[..at].chars().next_back();
+        let after = body[at + wanted.len()..].chars().next();
+        before.is_none_or(|character| !character.is_alphanumeric()) && after.is_none_or(|character| !login_char(character))
+    })
+}
+
+// The owner's own commit on the default branch, by the author email git commits with in this repo, however it was pushed.
+pub(super) fn mine(repo: &Path, sha: &str) -> bool {
+    if sha.is_empty() {
+        return false;
+    }
+    let (Ok(email), Ok(upstream)) = (crate::repo::git(repo, &["config", "user.email"]), crate::repo::default_branch(repo)) else { return false };
+    if !crate::sh::succeeds("git", &["cat-file", "-e", &format!("{sha}^{{commit}}")], Some(repo)) {
+        let _ = crate::repo::git(repo, &["fetch", "--quiet", "origin", upstream.trim_start_matches("origin/")]);
+    }
+    crate::sh::succeeds("git", &["merge-base", "--is-ancestor", sha, &crate::repo::tracking(&upstream)], Some(repo))
+        && crate::repo::git(repo, &["log", "-1", "--format=%ae", sha]).is_ok_and(|author| !email.trim().is_empty() && author.trim().eq_ignore_ascii_case(email.trim()))
+}
+
+// Where a kept comment comes from: a commit kebbie pushed under a task, else the owner's own commit or a mention of them.
+pub(super) struct Origin {
+    pub repo: PathBuf,
+    pub slug: String,
+    pub task: String,
+    pub address: String,
+    pub pushed_at: u64,
+    pub mention: bool,
+}
+
+impl Origin {
+    fn of_watch(watch: &Watch) -> Origin {
+        Origin { repo: watch.repo.clone(), slug: watch.slug.clone(), task: watch.task.clone(), address: watch.address.clone(), pushed_at: watch.pushed_at, mention: false }
+    }
+
+    fn owner(repo: &Path, slug: &str, mention: bool) -> Origin {
+        Origin { repo: repo.to_path_buf(), slug: slug.to_string(), task: String::new(), address: String::new(), pushed_at: 0, mention }
+    }
+}
+
+// One round asks each repo with a watched commit, and each repo kebbie pools, for the comments since its cursors, once every 12 minutes, whatever number of its commits are watched.
+fn poll(state: &Path, gh: &str, now: u64, repos: &[(PathBuf, String)]) -> Vec<String> {
     let mut live: Vec<Watch> = Vec::new();
     for watch in watches(state) {
         if now > watch.until {
@@ -244,26 +302,44 @@ fn poll(state: &Path, gh: &str, now: u64) -> Vec<String> {
             live.push(watch);
         }
     }
-    let mut slugs: Vec<String> = live.iter().map(|watch| watch.slug.clone()).collect();
-    slugs.sort();
-    slugs.dedup();
+    let mut slugs: Vec<(String, PathBuf)> = live.iter().map(|watch| (watch.slug.clone(), watch.repo.clone())).chain(repos.iter().map(|(repo, slug)| (slug.clone(), repo.clone()))).collect();
+    slugs.sort_by(|one, other| one.0.cmp(&other.0));
+    slugs.dedup_by(|one, other| one.0 == other.0);
     let mut notes = Vec::new();
-    for slug in slugs {
+    for (slug, repo) in slugs {
         let mut cursor = load_cursor(state, &slug);
         if !cursor.due(now) {
             continue;
         }
         let watched: Vec<&Watch> = live.iter().filter(|watch| watch.slug == slug).collect();
-        let repo = watched[0].repo.clone();
+        let whole = repos.iter().any(|(_, pooled)| *pooled == slug);
         cursor.checked_at = Some(now);
-        match owner(state, gh, &slug, &repo, now).and_then(|owner| read_pages(gh, &slug, &repo, cursor.page).map(|(page, found)| (owner, page, found))) {
+        let round = owner(state, gh, &slug, &repo, now).and_then(|owner| read_pages(gh, &slug, &repo, cursor.page).map(|(page, found)| (owner, page, found)));
+        match round {
             Ok((owner, page, found)) => {
                 (cursor.page, cursor.failures, cursor.error) = (Some(page), 0, None);
-                for item in found.into_iter().filter(|item| !item.bot && !item.author.eq_ignore_ascii_case(&owner) && !exists(state, item.id)) {
-                    let Some(watch) = watched.iter().find(|watch| !item.commit.is_empty() && watch.sha.starts_with(&item.commit)) else { continue };
-                    let comment = comment_of(watch, item, now);
-                    if save(state, &comment).is_ok() {
-                        notes.push(format!("comments: {} commented on {} ({}); reading it", comment.author, comment.short(), comment.task));
+                let new = |item: &Found| !item.bot && !item.author.eq_ignore_ascii_case(&owner) && !exists(state, item.id);
+                for item in found.into_iter().filter(|item| new(item)) {
+                    let origin = match watched.iter().find(|watch| !item.commit.is_empty() && watch.sha.starts_with(&item.commit)) {
+                        Some(watch) => Origin::of_watch(watch),
+                        None if whole && mentions(&item.body, &owner) => Origin::owner(&repo, &slug, true),
+                        None if whole && mine(&repo, &item.commit) => Origin::owner(&repo, &slug, false),
+                        None => continue,
+                    };
+                    notes.extend(keep(state, comment_of(&origin, item, now)));
+                }
+                if whole {
+                    match cursor.threads_since {
+                        None => cursor.threads_since = Some(now),
+                        Some(since) => match read_threads(gh, &slug, &repo, since) {
+                            Ok(found) => {
+                                cursor.threads_since = Some(now);
+                                for item in found.into_iter().filter(|item| new(item) && mentions(&item.body, &owner)) {
+                                    notes.extend(keep(state, comment_of(&Origin::owner(&repo, &slug, true), item, now)));
+                                }
+                            }
+                            Err(error) => (cursor.failures, cursor.error) = (1, Some(error)),
+                        },
                     }
                 }
             }
@@ -275,6 +351,10 @@ fn poll(state: &Path, gh: &str, now: u64) -> Vec<String> {
         save_cursor(state, &cursor);
     }
     notes
+}
+
+fn keep(state: &Path, comment: Comment) -> Option<String> {
+    save(state, &comment).ok().map(|_| format!("comments: {} commented on {} ({}); reading it", comment.author, comment.short(), comment.whose()))
 }
 
 // From the cursor's page on until a page that is not full; a first round finds the last page from the Link header, so no history is paged through.
@@ -302,14 +382,47 @@ fn read_pages(gh: &str, slug: &str, repo: &Path, from: Option<u64>) -> Result<(u
     Ok((page, found))
 }
 
-fn comment_of(watch: &Watch, item: Found, now: u64) -> Comment {
+// The conversation comments on pull requests and issues, and the line comments of pull request reviews, changed since the last round, which a comment already kept repeats harmlessly.
+fn read_threads(gh: &str, slug: &str, repo: &Path, since: u64) -> Result<Vec<Found>> {
+    let from = crate::keeper::stamp(since.saturating_sub(THREAD_SLACK)).replace(' ', "T");
+    let mut found = Vec::new();
+    for kind in ["issues", "pulls"] {
+        let base = format!("repos/{}/{kind}/comments?since={from}&sort=updated&direction=asc&per_page={PER_PAGE}", api_path(slug));
+        for page in 1..=MAX_PAGES {
+            let items = parse_comments(&gh_api(gh, slug, &format!("{base}&page={page}"), false, repo)?)?;
+            let full = items.len() >= PER_PAGE;
+            found.extend(items);
+            if !full {
+                break;
+            }
+        }
+    }
+    Ok(found)
+}
+
+// The pull request or issue a comment's link names, as the card says it.
+pub(super) fn thread_of(url: &str) -> Option<String> {
+    [("/pull/", "pull request"), ("/issues/", "issue")].into_iter().find_map(|(part, word)| {
+        let (_, rest) = url.split_once(part)?;
+        let number: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        (!number.is_empty()).then(|| format!("{word} #{number}"))
+    })
+}
+
+fn comment_of(origin: &Origin, item: Found, now: u64) -> Comment {
     let path = item.path.map(|path| clean(&path, 300));
-    let hunk = path.as_deref().map(|path| hunk(&watch.repo, &watch.sha, path, item.line)).unwrap_or_default();
+    let thread = (item.commit.is_empty() || item.hunk.is_some()).then(|| thread_of(&item.url)).flatten();
+    let hunk = match (&thread, &item.hunk, path.as_deref()) {
+        (Some(_), Some(diff), _) => clean(&diff.lines().rev().take(HUNK_LINES).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n"), 4_000),
+        (Some(_), None, _) | (None, _, None) => String::new(),
+        (None, _, Some(path)) => hunk(&origin.repo, &item.commit, path, item.line),
+    };
+    let commit = if thread.is_some() { String::new() } else { item.commit };
     Comment {
-        id: item.id, url: clean(&item.url, 300), author: super::login(&item.author), body: clean(&item.body, BODY_LIMIT), path, line: item.line, commit: watch.sha.clone(),
-        created_at: clean(&item.created_at, 40), seen_at: now, repo: watch.repo.clone(), slug: watch.slug.clone(), task: watch.task.clone(), address: watch.address.clone(),
-        pushed_at: watch.pushed_at, hunk, status: Status::Unread, reading: None, error: None, answer: None, words: None, reply: None, fix: None, fixing: None, changed_at: now,
-        thread: None, mention: false,
+        id: item.id, url: clean(&item.url, 300), author: super::login(&item.author), body: clean(&item.body, BODY_LIMIT), path, line: item.line, commit,
+        created_at: clean(&item.created_at, 40), seen_at: now, repo: origin.repo.clone(), slug: origin.slug.clone(), task: origin.task.clone(), address: origin.address.clone(),
+        pushed_at: origin.pushed_at, hunk, status: Status::Unread, reading: None, error: None, answer: None, words: None, reply: None, fix: None, fixing: None, changed_at: now,
+        thread, mention: origin.mention,
     }
 }
 
@@ -413,7 +526,7 @@ mod tests {
         let gh = fake_gh(&state);
         watched(&state, "abcdef0123", 10_000);
         watched(&state, "bbbbbbb111", 10_000);
-        let notes = tick_with(&state, &gh, 100, &[]);
+        let notes = tick_with(&state, &gh, 100, &[], &[]);
         assert_eq!(notes.iter().filter(|note| note.contains("commented on")).count(), 2, "{notes:?}");
         assert!(notes[0].starts_with("comments: johan commented on abcdef0 (refunds-in-part)"), "{notes:?}");
         let saved: Vec<u64> = open(&state).iter().map(|comment| comment.id).collect();
@@ -425,13 +538,62 @@ mod tests {
         assert!(johan.status == Status::Failed && johan.error.as_deref().is_some_and(|error| error.contains("no claude")), "without a claude to read with, the card says so: {johan:?}");
         assert!(!load(&state, 104).unwrap().body.contains('\u{1b}'), "the body is stored without escapes");
         crate::comments::set_status(&state, 101, Status::Dismissed).unwrap();
-        tick_with(&state, &gh, 101, &[]);
+        tick_with(&state, &gh, 101, &[], &[]);
         assert_eq!(calls(&state).len(), 4, "a repo checked a moment ago waits");
-        let again = tick_with(&state, &gh, 100 + POLL, &[]);
+        let again = tick_with(&state, &gh, 100 + POLL, &[], &[]);
         assert!(!again.iter().any(|note| note.contains("commented on")), "a comment seen once, even dismissed, is never new again: {again:?}");
         assert_eq!(&calls(&state)[4..], ["api repos/acme/app/comments?per_page=2&page=5"], "the next round reads only from the cursor's page");
         assert_eq!(fs::read_to_string(state.join("gh.log")).unwrap().matches(" user ").count(), 1, "who the owner is is asked once a day");
         fs::remove_dir_all(state).unwrap();
+    }
+
+    fn own_gh(state: &Path, mine: &str, bos: &str) -> String {
+        let gh = state.join("gh");
+        let log = state.join("gh.log");
+        let commits = format!(r#"[{{"id":301,"commit_id":"{mine}","html_url":"https://github.com/acme/app/commit/{mine}#commitcomment-301","user":{{"login":"johan","type":"User"}},"body":"Could this be split?"}},{{"id":302,"commit_id":"{bos}","user":{{"login":"olle","type":"User"}},"body":"Bo's commit, nothing for Ada"}}]"#);
+        let more = format!(r#"[{{"id":303,"commit_id":"{bos}","user":{{"login":"olle","type":"User"}},"body":"@Ada, does this match the spec?"}}]"#);
+        let issues = r#"[{"id":401,"html_url":"https://github.com/acme/app/pull/42#issuecomment-401","user":{"login":"johan","type":"User"},"body":"@ada can you take the retry part?"},{"id":402,"html_url":"https://github.com/acme/app/issues/7#issuecomment-402","user":{"login":"johan","type":"User"},"body":"mail ada@ada.dev or @adam"}]"#;
+        let pulls = r#"[{"id":501,"commit_id":"feedbeef","html_url":"https://github.com/acme/app/pull/42#discussion_r501","path":"lib/retry.rb","line":3,"diff_hunk":"@@ -1,2 +1,3 @@\n def retry\n+  sleep 1","user":{"login":"anna","type":"User"},"body":"@ada why a fixed sleep?"}]"#;
+        let answer = |text: &str| format!("cat <<'JSON'\n{text}\nJSON\n");
+        crate::executable::write(&gh, format!("#!/bin/sh\necho \"$*\" >> '{}'\ncase \"$*\" in\n*\" user \"*) echo ada ;;\n*--include*) printf 'HTTP/2.0 200 OK\\n\\n[]\\n' ;;\n*\"issues/comments\"*\"page=1\") {};;\n*\"pulls/comments\"*\"page=1\") {};;\n*\"app/comments?per_page=2&page=1\") {};;\n*\"app/comments?per_page=2&page=2\") {};;\n*) echo '[]' ;;\nesac\n", log.display(), answer(issues), answer(pulls), answer(&commits), answer(&more))).unwrap();
+        gh.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn a_pooled_repo_keeps_comments_on_the_owners_own_commits_and_every_mention_of_them_with_no_push_of_kebbies() {
+        let (dir, origin, slot, _) = crate::tasks::test_support::task_with_a_commit("own-commits");
+        crate::tasks::test_support::upstream_commit(&dir, "e", "e", "Bo's change");
+        let bos = crate::repo::git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        let mine = crate::repo::git(&dir, &["rev-parse", "HEAD~1"]).unwrap();
+        let state = crate::sh::test_dir("comments-own");
+        let gh = own_gh(&state, &mine, &bos);
+        let repos = [(dir.clone(), "acme/app".to_string())];
+        let notes = tick_with(&state, &gh, 1_000_000, &[], &repos);
+        assert_eq!(open(&state).iter().map(|comment| (comment.id, comment.whose())).collect::<Vec<_>>(), [(301, "your commit".to_string()), (303, "mentions you".to_string())], "a comment on Ada's commit on main and one naming @Ada are kept, one on Bo's commit is not: {notes:?}");
+        assert!(notes.iter().any(|note| note.starts_with("comments: johan commented on ") && note.ends_with("(your commit); reading it")), "{notes:?}");
+        assert!(!calls(&state).iter().any(|call| call.contains("issues/") || call.contains("pulls/")), "a first round reads no history of the threads");
+        let later = 1_000_000 + POLL;
+        tick_with(&state, &gh, later, &[], &repos);
+        let since = crate::keeper::stamp(1_000_000 - THREAD_SLACK).replace(' ', "T");
+        let threads: Vec<String> = calls(&state).into_iter().filter(|call| call.contains("issues/") || call.contains("pulls/")).collect();
+        assert_eq!(threads, [format!("api repos/acme/app/issues/comments?since={since}&sort=updated&direction=asc&per_page=2&page=1"), format!("api repos/acme/app/issues/comments?since={since}&sort=updated&direction=asc&per_page=2&page=2"), format!("api repos/acme/app/pulls/comments?since={since}&sort=updated&direction=asc&per_page=2&page=1")], "one round asks for the thread comments since the last");
+        let pr = load(&state, 401).unwrap();
+        assert_eq!((pr.short(), pr.place(), pr.whose(), pr.commit.as_str(), pr.mention), ("#42", "pull request #42".to_string(), "mentions you".to_string(), "", true));
+        assert!(load(&state, 402).is_none(), "an address and a longer login are no mention");
+        let review = load(&state, 501).unwrap();
+        assert_eq!((review.short(), review.place(), review.hunk.as_str()), ("#42", "lib/retry.rb:3".to_string(), "@@ -1,2 +1,3 @@\n def retry\n+  sleep 1"), "a review line comment keeps its pull request, its line and its hunk");
+        assert_eq!(load_cursor(&state, "acme/app").threads_since, Some(later));
+        crate::tasks::test_support::cleanup(dir, origin, &slot);
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_mention_is_the_login_as_github_links_it() {
+        assert!(mentions("@Ada can you look?", "ada") && mentions("thanks (@ada)", "ada") && mentions("cc @ada.", "ada"));
+        assert!(!mentions("mail ada@ada.dev", "ada") && !mentions("@adam knows", "ada") && !mentions("@ada-bot", "ada") && !mentions("no one", "ada"));
+        assert_eq!(thread_of("https://github.com/acme/app/pull/42#discussion_r1").as_deref(), Some("pull request #42"));
+        assert_eq!(thread_of("https://github.com/acme/app/issues/7#issuecomment-2").as_deref(), Some("issue #7"));
+        assert_eq!(thread_of("https://github.com/acme/app/commit/abc"), None);
     }
 
     #[test]
@@ -444,13 +606,13 @@ mod tests {
     fn a_failing_gh_backs_off_and_a_watch_ends_after_its_days() {
         let state = crate::sh::test_dir("comments-backoff");
         watched(&state, "abcdef0123", 10_000);
-        tick_with(&state, "false", 100, &[]);
+        tick_with(&state, "false", 100, &[], &[]);
         let failed = load_cursor(&state, "acme/app");
         assert_eq!((failed.failures, failed.error.is_some()), (1, true));
         assert!(!failed.due(100 + POLL) && failed.due(100 + 2 * POLL), "one failure doubles the wait");
         let worst = Cursor { failures: 30, ..failed.clone() };
         assert!(worst.due(100 + MAX_BACKOFF), "never longer than the ceiling");
-        tick_with(&state, "false", 10_001, &[]);
+        tick_with(&state, "false", 10_001, &[], &[]);
         assert!(watches(&state).is_empty(), "past comments.watch_days the watch goes");
         fs::remove_dir_all(state).unwrap();
     }

@@ -304,7 +304,7 @@ Task keys on the parked line act on the line only, `Z` among them: `⏎` shows t
 
 ## Comments
 
-The comments colleagues leave on commits kebbie pushed, each read by an independent, read-only Claude, sit in their own section under READY TO PUSH. They are no task: Needs you, the status line's counts, the lead's summaries and your notifications leave them out, and one line in the messages says when a comment has been read. See [Act on comments on pushed commits](../how-to/act-on-comments-on-pushed-commits.md).
+The comments colleagues leave on commits kebbie pushed, on your own commits and wherever they mention you, each read by an independent, read-only Claude, sit in their own section under READY TO PUSH. They are no task: Needs you, the status line's counts, the lead's summaries and your notifications leave them out, and one line in the messages says when a comment has been read. See [Act on comments on pushed commits](../how-to/act-on-comments-on-pushed-commits.md).
 
 The section shows open while a card waits for your choice that you have not folded over, and folded otherwise, as `◇ 3 comments · ⏎ shows them`, peach while one waits. Open, its header reads `COMMENTS  3  esc hides them`, and each comment takes two lines: its row and the first words of the comment, dim.
 
@@ -318,6 +318,8 @@ The section shows open while a card waits for your choice that you have not fold
 | `! johan on 3f2a9c1 · refunds-in-part   not read · ⏎ reads it again` | The reading gave no answer. |
 | `↻ johan on 3f2a9c1 · refunds-in-part   fixing in refunds-in-part-followup` | A task fixes it. |
 | `↩ johan on 3f2a9c1 · fixed in 7c9e2f1   reply ready · y copy` | The fix is on the default branch, or you chose to reply without one: the reply waits to be posted. |
+| `◆ johan on 5d1e0b2 · your commit   holds · reopen with a fix` | A comment on a commit of yours on the default branch that kebbie did not push. |
+| `◇ anna on #42 · mentions you   opinion · reply, no change` | A comment that names your GitHub handle, here on pull request 42; on a commit it names the commit. |
 
 A narrow column drops the task, then the commit, from the row before it cuts what the row says. A card stays until you mark its reply sent, finish it or dismiss it; it never leaves on its own.
 
@@ -333,7 +335,7 @@ A narrow column drops the task, then the commit, from the row before it cuts wha
 | unclear | `Question` | `w Answer the question (recommended)`, `3 Dismiss` |
 | reply ready | `Fixed in 7c9e2f1, on the default branch` and `Reply to send`, as plain lines you can select in the terminal | `y Copy the reply (recommended)`, `d Mark it sent`, `w Edit the reply` |
 
-- Reopen tells the task that pushed the commit, while it runs, what to change and the commit message to use; once it has ended, a new task starts in the same repo, named `<task>-followup`, with that as its brief.
+- Reopen tells the task that pushed the commit, while it runs, what to change and the commit message to use; once it has ended, a new task starts in the same repo, named `<task>-followup`, with that as its brief. A comment no task pushed, on your own commit or a mention, offers `Start a follow-up task` instead, named `comment-followup`.
 - `w In my own words` reopens with what you type in place of the proposal, under the same commit message. When the reading has no commit subject, as for a question, the fixing task writes the subject and body from its change and ends them with the `Addresses` line.
 - The answer to a question goes to a fresh reading.
 - Once a commit carrying the `Addresses` line is on the default branch, the card turns to its reply, naming the fix's sha.

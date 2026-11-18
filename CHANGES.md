@@ -7,6 +7,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### What's new
 - V on a task opens its vault note in a window over the board, with its markdown rendered.
 - A task whose report sends you to its vault note opens the note from ⏎ on its row and from Next.
+- COMMENTS also catches comments on your own commits on the default branch, however you pushed them, and comments that mention your GitHub handle on commits, pull requests and issues in the repos kebbie keeps worktrees for.
 
 ### Fixed
 

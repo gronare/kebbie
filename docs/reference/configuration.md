@@ -286,7 +286,7 @@ commands = ["answer", "prompt", "idea"]
 | `tests.per_commit` | `true` in a repo with a worktree setup, else `false` | either | Whether the keeper tests each of a ready task's unpushed commits on its own and marks the push order with the results. |
 | `tests.before_push` | `"related"` | either | Which tests a ready report and a push wait on: `"related"`, the tests the task runs for its change, or `"full"`, a green run of `tests.full_command` on the task's HEAD. |
 | `tests.full_command` | none | repo only | The command that runs the repo's whole test suite, such as `"cargo test --locked"` or `"uv run pytest -q"`. |
-| `comments.watch` | `true` | either | Whether kebbie reads the comments colleagues leave on the commits it pushed and shows each under COMMENTS on the board. |
+| `comments.watch` | `true` | either | Whether kebbie reads the comments colleagues leave on the commits it pushed, on your own commits and wherever they mention you, and shows each under COMMENTS on the board. |
 | `comments.watch_days` | `7` | either | How many days after a push kebbie checks its commits for new comments, a whole number from 1 to 90. |
 | `update.channel` | `"release"` | config.toml only | What `kebbie update` installs: `"release"`, the highest `vX.Y.Z` tag on origin, or `"main"`, origin's default branch. |
 | `update.agents` | `"ask"` | config.toml only | What happens when Codex, which does not update itself, has a newer version: `"ask"` offers it in a window after `U` on the board, `"auto"` has `U` install it with Codex's own installer, `"notify"` only puts a notice on the board and a line in `kebbie doctor`. kebbie checks once a day. |
@@ -312,7 +312,7 @@ before_push = "full"
 full_command = "cargo test --locked"
 ```
 
-`comments.watch` needs what `ci.watch` needs, origin on GitHub and `gh` logged in, and [`kebbie doctor`](requirements.md#what-kebbie-doctor-checks) says when a repo misses either. Your own comments are skipped, and so are a bot's. kebbie asks `gh` for a repo's new commit comments every 12 minutes while any of its pushed commits is watched, in one call however many are, and less often while `gh` fails. A comment already on the board stays there after the days run out. See [Act on comments on pushed commits](../how-to/act-on-comments-on-pushed-commits.md).
+`comments.watch` needs what `ci.watch` needs, origin on GitHub and `gh` logged in, and [`kebbie doctor`](requirements.md#what-kebbie-doctor-checks) says when a repo misses either. Your own comments are skipped, and so are a bot's. kebbie asks `gh` for a repo's new commit comments every 12 minutes while any of its pushed commits is watched, in one call however many are, and less often while `gh` fails. In a repo with a kebbie worktree pool it asks every 12 minutes regardless, with two more calls for the pull request and issue comments that mention you. A comment already on the board stays there after the days run out. See [Act on comments on pushed commits](../how-to/act-on-comments-on-pushed-commits.md).
 
 `restart.auto`: each restarted session resumes its conversation, and `kebbie update` restarts the idle ones at once. A session mid-turn, the pane you are in and one with background work running are never restarted on their own. `false` restarts nothing on its own; the board still marks the sessions on older code.
 

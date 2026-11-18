@@ -371,7 +371,7 @@ pub fn gh() -> String {
     std::env::var(GH_VAR).ok().filter(|path| !path.is_empty()).unwrap_or_else(|| "gh".to_string())
 }
 
-fn hosts() -> Vec<String> {
+pub(crate) fn hosts() -> Vec<String> {
     let mut hosts = vec!["github.com".to_string()];
     hosts.extend(std::env::var("GH_HOST").ok().filter(|host| !host.is_empty()));
     hosts
