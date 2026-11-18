@@ -609,6 +609,14 @@ pub fn tests(policy: &Setting<config::BeforePush>, full: Option<&str>, short: im
         .with(one(format!("to require it before every push, add [tests] before_push = \"full\" and full_command = \"{command}\" to {}", repo_config.display()))))
 }
 
+const TEST_SCRIPTS: [&str; 5] = ["script/test", "bin/test", "scripts/test", "script/spec", "bin/spec"];
+
+// A repo's own test script that kebbie would not record, so a task's runs of it never reach the reviewer.
+pub fn test_script(repo: &Path, listed: &[String], repo_config: &Path) -> Option<Check> {
+    let script = TEST_SCRIPTS.iter().find(|script| repo.join(script).is_file() && crate::evidence::recognise(script, listed).is_none())?;
+    Some(warn("test commands", format!("this repo has {script}, but task.test_commands does not name it, so kebbie records no task's run of it"), one(format!("add [task] test_commands = [\"{script}\"] to {}", repo_config.display()))))
+}
+
 // Every task's recorded runs in this repo, wherever its tasks stand now.
 fn repo_runs(state: &Path, repo: &Path) -> Vec<crate::evidence::Run> {
     let tail = format!("@{}.jsonl", crate::repo::name_of(repo));
@@ -1025,6 +1033,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
         checks.extend(docs(&settings.docs_required, || visibility(gh_on(&env.path).as_deref(), repo, GH_TIMEOUT), file));
         let short = || short_full_run(&repo_runs(&env.kebbie_state, repo), &crate::evidence::listed_for(&settings));
         checks.extend(tests(&settings.tests_before_push, settings.tests_full_command.value.as_deref(), short, file));
+        checks.extend(test_script(repo, &crate::evidence::listed_for(&settings), file));
     }
     if let Some(repo) = env.repo.as_deref() {
         checks.push(comments(&settings.comments_watch, settings.comments_days.value, || crate::ci::target(repo, &crate::ci::gh())));
@@ -1400,6 +1409,20 @@ mod tests {
         crate::repo::git(&dir, &["config", "core.worktree", &dir.to_string_lossy()]).unwrap();
         let off = push_block(&dir);
         assert!(off.level == Level::Warn && off.fact.contains("push block is off") && off.fix[0].contains("config.worktree"), "{off:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_repo_test_script_kebbie_would_not_record_is_pointed_out() {
+        let dir = scratch("test-script");
+        let file = dir.join("repos/app.toml");
+        let listed = crate::evidence::commands(&[]);
+        assert_eq!(test_script(&dir, &listed, &file), None, "no script, nothing said");
+        std::fs::create_dir_all(dir.join("script")).unwrap();
+        std::fs::write(dir.join("script/test"), "#!/bin/sh\n").unwrap();
+        let named = test_script(&dir, &listed, &file).unwrap();
+        assert!(named.level == Level::Warn && named.fact.contains("this repo has script/test") && named.fix[0] == format!("add [task] test_commands = [\"script/test\"] to {}", file.display()), "{named:?}");
+        assert_eq!(test_script(&dir, &crate::evidence::commands(&["./script/test".to_string()]), &file), None, "once listed it is recorded");
         let _ = std::fs::remove_dir_all(dir);
     }
 

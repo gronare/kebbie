@@ -108,6 +108,7 @@ With `--plain`, without a terminal or with `NO_COLOR` set, each line is `ok`, `s
 | `task hooks` | Open tasks and the lead whose hooks run a kebbie binary that is gone, so their test runs and edits go unrecorded (`kebbie restart` gives each its settings again, a busy one once it is idle). |
 | `docs` | Inside a repo: whether `docs.required` is on. |
 | `tests` | Inside a repo: which tests a push waits on, `tests.before_push` and its `tests.full_command`. |
+| `test commands` | Inside a repo: a test script of the repo's own (`script/test`, `bin/test`, `scripts/test`, `script/spec`, `bin/spec`) that `task.test_commands` leaves out, so no task's run of it is recorded. |
 | `comments` | Inside a repo: whether kebbie reads comments on the commits it pushes there, and for how many days, and those on your own commits and that mention you, or why not. |
 | `setup skill` | The setup skill's plugin is installed and enabled. |
 | `hub` | Whether the machine joined a kebbie hub, and how its board posts go. |

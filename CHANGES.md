@@ -12,6 +12,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - worktree.release_command runs the repo's own command when a worktree goes back to the pool, such as one that removes the worktree's database copy, and the freed line says how it went.
 - kebbie records each test command in a chained line, such as bin/rspec; npm test, as a run of its own with its own result.
 - A task hears at once when a test command another command launches, such as spring rspec, goes unrecorded, with the line that asks the lead to list it.
+- kebbie doctor warns when a repo's own test script, such as script/test, is missing from task.test_commands.
 
 ### Fixed
 
