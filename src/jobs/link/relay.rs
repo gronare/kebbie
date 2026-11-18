@@ -10,6 +10,7 @@ use tungstenite::client::IntoClientRequest;
 use tungstenite::{Message, WebSocket};
 
 use super::serve::{self, Host};
+use super::timing;
 use super::wire::{Timed, keep_alive};
 use crate::hub::identity::Identity;
 use crate::sh::Result;
@@ -149,7 +150,9 @@ pub fn open(identity: &Identity, query: &str) -> std::result::Result<WebSocket<H
     let host = authority.rsplit_once(':').filter(|(_, port)| port.parse::<u16>().is_ok()).map_or(authority, |(host, _)| host).trim_matches(['[', ']']);
     let port = authority.rsplit_once(':').and_then(|(_, port)| port.parse::<u16>().ok()).unwrap_or(if secure { 443 } else { 80 });
     let addresses: Vec<_> = (host, port).to_socket_addrs().map_err(|error| Err(format!("{host}: {error}")))?.collect();
+    timing::mark("hub dns");
     let tcp = addresses.iter().find_map(|address| TcpStream::connect_timeout(address, DIAL).ok()).ok_or_else(|| Err(format!("the hub at {base} did not answer")))?;
+    timing::mark("hub tcp");
     keep_alive(&tcp);
     let _ = tcp.set_nodelay(true);
     let _ = tcp.set_read_timeout(Some(ANSWER));
@@ -165,7 +168,10 @@ pub fn open(identity: &Identity, query: &str) -> std::result::Result<WebSocket<H
     headers.insert("authorization", format!("Bearer {}", identity.token()).parse().map_err(|_| Err("the machine's token is not a header".to_string()))?);
     headers.insert("user-agent", format!("kebbie/{}", env!("CARGO_PKG_VERSION")).parse().expect("a plain header"));
     match tungstenite::client(request, stream) {
-        Ok((ws, _)) => Ok(ws),
+        Ok((ws, _)) => {
+            timing::mark("hub tls, ws, ring, accept");
+            Ok(ws)
+        }
         Err(tungstenite::HandshakeError::Failure(tungstenite::Error::Http(response))) => {
             let code = response.body().as_deref().and_then(|body| serde_json::from_slice::<HubError>(body).ok()).map_or_else(|| response.status().to_string(), |said| said.error);
             Err(Ok(Refused { status: response.status().as_u16(), code }))

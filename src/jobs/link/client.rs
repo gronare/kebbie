@@ -13,13 +13,15 @@ use super::super::cluster::{self, Cluster};
 use super::super::{REF, bundle, token};
 use super::wire::{Ask, CHUNK, Frame, Link, RemoteAsk, RunAsk, Said, beating};
 use super::wire::keep_alive;
-use super::{PORT, addresses, relay, tls};
+use super::unanswered::Unanswered;
+use super::{PORT, addresses, relay, timing, tls};
 use crate::hub::http::{CALL, Client};
 use crate::hub::identity::{self, Identity};
 use crate::sh::Result;
 
 const DIAL: Duration = Duration::from_secs(2);
 const HANDSHAKE: Duration = Duration::from_secs(5);
+const HEAD_START: Duration = Duration::from_millis(300);
 const ESCALATION: [i32; 3] = [libc::SIGINT, libc::SIGTERM, libc::SIGKILL];
 
 // The machine a link goes to: its key on the account's list and the addresses it announced, or loopback when it is this machine.
@@ -97,6 +99,7 @@ fn secure<T: std::io::Read + std::io::Write + super::wire::Timed + Send + 'stati
     while connection.is_handshaking() {
         connection.complete_io(&mut transport).map_err(|error| format!("{path} answered, but the TLS handshake failed: {error}; only {} with the key the account's list has for it, and a machine on that list, completes it", target.name))?;
     }
+    timing::mark("tls handshake");
     Ok(Link::new(Box::new(StreamOwned::new(connection, transport))))
 }
 
@@ -111,17 +114,69 @@ pub fn direct(identity: &Identity, target: &Target, wait: Duration) -> Result<(L
     Ok((secure(identity, target, tcp, &path)?, path))
 }
 
-// Direct when an announced address answers within the wait, else through the hub's relay; this machine itself only directly.
-pub fn connect(identity: &Identity, target: &Target, wait: Duration) -> Result<(Link, Route)> {
-    let why = match direct(identity, target, wait) {
-        Ok(linked) => return Ok(linked),
-        Err(why) => why,
-    };
+enum Racer {
+    Direct,
+    Relay,
+}
+
+fn race(sender: &mpsc::Sender<(Racer, Result<(Link, Route)>)>, racer: Racer, identity: &Identity, target: &Target, wait: Duration) {
+    let (sender, identity, target) = (sender.clone(), identity.clone(), target.clone());
+    std::thread::spawn(move || {
+        let linked = match racer {
+            Racer::Direct => direct(&identity, &target, wait),
+            Racer::Relay => relay::ask(&identity, &target.machine, &target.name).and_then(|transport| secure(&identity, &target, transport, &Route::Relay)).map(|link| (link, Route::Relay)),
+        };
+        let _ = sender.send((racer, linked));
+    });
+}
+
+// Direct and through the hub's relay at once, the relay after the direct addresses had HEAD_START unless they lost to it lately, and the first link made wins; this machine itself only directly.
+pub fn connect(identity: &Identity, target: &Target, wait: Duration, unanswered: &Unanswered) -> Result<(Link, Route)> {
     if target.machine == identity.machine {
-        return Err(why);
+        return direct(identity, target, wait);
     }
-    let relayed = relay::ask(identity, &target.machine, &target.name).and_then(|transport| secure(identity, target, transport, &Route::Relay));
-    relayed.map(|link| (link, Route::Relay)).map_err(|relay| format!("{why}; and {relay}"))
+    let (sender, linked) = mpsc::channel();
+    let dialing = !target.addresses.is_empty();
+    let lost_lately = dialing && unanswered.lately(&target.machine, &target.addresses);
+    let mut why_direct = target.no_address.clone().unwrap_or_else(|| format!("{} announced no address", target.name));
+    let mut why_relay = None::<String>;
+    if dialing {
+        race(&sender, Racer::Direct, identity, target, wait);
+    }
+    let mut relaying = !dialing || lost_lately;
+    if relaying {
+        race(&sender, Racer::Relay, identity, target, wait);
+    }
+    let (mut direct_open, mut relay_open) = (dialing, relaying);
+    while direct_open || relay_open {
+        let next = if relaying { linked.recv().ok() } else { linked.recv_timeout(HEAD_START).ok() };
+        let Some((racer, result)) = next else {
+            race(&sender, Racer::Relay, identity, target, wait);
+            (relaying, relay_open) = (true, true);
+            continue;
+        };
+        match (racer, result) {
+            (Racer::Direct, Ok(linked)) => {
+                unanswered.forget(&target.machine);
+                return Ok(linked);
+            }
+            (Racer::Relay, Ok(linked)) => {
+                if dialing {
+                    unanswered.remember(&target.machine, &target.addresses);
+                }
+                return Ok(linked);
+            }
+            (Racer::Direct, Err(why)) => {
+                (why_direct, direct_open) = (why, false);
+                if !relaying {
+                    race(&sender, Racer::Relay, identity, target, wait);
+                    (relaying, relay_open) = (true, true);
+                }
+            }
+            (Racer::Relay, Err(why)) => (why_relay, relay_open) = (Some(why), false),
+        }
+    }
+    Err(format!("{why_direct}; and {}", why_relay.unwrap_or_default()))
 }
 
 // Times a ping over a link already made, which is the round trip a command's output takes.
@@ -181,11 +236,13 @@ impl Drop for Snapshot<'_> {
 pub fn go(link: &mut Link, name: &str, top: &Path, argv: &[String], out: &mut dyn Write, err: &mut dyn Write, interrupts: &dyn Fn() -> u32) -> Result<Ran> {
     let id = cluster::new_id()?;
     let commit = super::super::snapshot(top, id.as_str())?;
+    timing::mark("snapshot");
     let snapshot = Snapshot { top, refname: format!("{REF}/{id}") };
     crate::repo::git(top, &["update-ref", &snapshot.refname, &commit])?;
     let branch = crate::repo::git(top, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
     let task = token(if branch.is_empty() || branch == "HEAD" { "detached" } else { &branch });
     let remote = bundle::remote_base(top, &commit).map(|remote| RemoteAsk { url: remote.url, base: remote.base });
+    timing::mark("ref, branch, remote base");
     let ask = RunAsk { repo: token(&super::super::repo_name(top)), task, commit: commit.clone(), remote, command: shell_line(argv) };
     let silent = link.silent.as_secs();
     let lost = |error: std::io::Error| if error.kind() == std::io::ErrorKind::TimedOut { quiet(name, silent) } else { format!("kebbie: the link to {name} was lost: {error}") };
@@ -205,17 +262,23 @@ pub fn go(link: &mut Link, name: &str, top: &Path, argv: &[String], out: &mut dy
         match frame {
             Frame::Said(Said::Want { haves }) => {
                 let scratch = std::env::temp_dir().join(format!("kebbie-link-{id}"));
+                timing::mark("worker wants commit");
                 let bytes = beating(link, || bundle_for(top, &snapshot.refname, &commit, &haves, &scratch))?;
+                timing::mark("bundle made");
                 for chunk in bytes.chunks(CHUNK) {
                     link.send(&Frame::Data(chunk.to_vec())).map_err(lost)?;
                 }
                 link.send(&Frame::End).map_err(lost)?;
                 sent = Some(bytes.len());
+                timing::mark("bundle sent");
             }
             Frame::Err(bytes) => {
                 let _ = err.write_all(&bytes).and_then(|()| err.flush());
             }
-            Frame::Said(Said::Started) => break,
+            Frame::Said(Said::Started) => {
+                timing::mark("worker started command");
+                break;
+            }
             Frame::Said(Said::Failed { reason }) => return Err(reason),
             other => return Err(format!("the other machine sent {other:?} before the command started")),
         }
@@ -232,12 +295,16 @@ pub fn go(link: &mut Link, name: &str, top: &Path, argv: &[String], out: &mut dy
             None if link.gone_quiet() => return Err(quiet(name, silent)),
             None => link.beat_if_due().map_err(lost)?,
             Some(Frame::Out(bytes)) => {
+                timing::mark("output");
                 let _ = out.write_all(&bytes).and_then(|()| out.flush());
             }
             Some(Frame::Err(bytes)) => {
                 let _ = err.write_all(&bytes).and_then(|()| err.flush());
             }
-            Some(Frame::Said(Said::Exited { code })) => return Ok(Ran { code, sent }),
+            Some(Frame::Said(Said::Exited { code })) => {
+                timing::mark("exited");
+                return Ok(Ran { code, sent });
+            }
             Some(Frame::Said(Said::Failed { reason })) => return Err(reason),
             Some(other) => return Err(format!("the other machine sent {other:?} while the command ran")),
         }
@@ -248,6 +315,12 @@ struct Here {
     dir: PathBuf,
     identity: Identity,
     account: AccountKey,
+}
+
+impl Here {
+    fn unanswered(&self) -> Unanswered {
+        Unanswered::at(&self.dir.join("unanswered"))
+    }
 }
 
 fn here() -> Result<Here> {
@@ -314,12 +387,17 @@ fn run(cwd: &Path, on: Option<&str>, argv: &[String]) -> Result<i32> {
     if argv.is_empty() {
         return Err("kebbie run --on <system or machine> -- <command …> runs the command there, on this worktree as it stands".to_string());
     }
+    timing::mark("start");
     let top = PathBuf::from(crate::repo::git(cwd, &["rev-parse", "--show-toplevel"])?);
     let here = here()?;
+    timing::mark("identity");
     let client = Client::new(&here.identity.url, Some(here.identity.token()), CALL);
     let cluster = cluster::fetch(&here.dir, &client, &here.account).map_err(|error| format!("kebbie: the hub's list of your machines was not read: {error}"))?;
+    timing::mark("machine list");
     let target = target(&here, &client, &cluster, on).map_err(|why| hub_job_hint(&top, &why, on.unwrap_or("a worker")))?;
-    let (mut link, route) = connect(&here.identity, &target, DIAL).map_err(|why| hub_job_hint(&top, &why, &target.name))?;
+    timing::mark("announced addresses");
+    let (mut link, route) = connect(&here.identity, &target, DIAL, &here.unanswered()).map_err(|why| hub_job_hint(&top, &why, &target.name))?;
+    timing::mark("link made");
     eprintln!("kebbie: {} runs it, {route}", target.name);
     catch_interrupt();
     let ran = go(&mut link, &target.name, &top, argv, &mut std::io::stdout(), &mut std::io::stderr(), &|| INTERRUPTS.load(Ordering::SeqCst))?;
@@ -352,7 +430,7 @@ pub fn list_cli() -> Result<String> {
             Ok(Target::of(row.machine.clone(), row.name.clone(), keys, announced.as_ref().map_err(Clone::clone).and_then(|announced| dialable(&row.name, announced.get(&row.machine)))))
         };
         let path = target.and_then(|target| {
-            let (mut link, route) = connect(&here.identity, &target, DIAL)?;
+            let (mut link, route) = connect(&here.identity, &target, DIAL, &here.unanswered())?;
             let rtt = ping(&mut link)?;
             Ok(format!("{route}, {:.1} ms", rtt.as_secs_f64() * 1000.0))
         });

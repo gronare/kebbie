@@ -17,6 +17,7 @@ use super::client::{self, Ran, Target};
 use super::serve::{self, Host};
 use super::wire::Link;
 use super::wire::{Ask, Frame, Said};
+use super::unanswered::Unanswered;
 use super::{addresses, relay, tls};
 use crate::hub::tests::{member, open_hub};
 
@@ -46,6 +47,10 @@ fn listen(host: Arc<Host>) -> Listening {
 
 fn target(of: &Machine, name: &str, address: SocketAddr) -> Target {
     Target { machine: of.identity.machine.clone(), name: name.to_string(), keys: of.identity.public(), addresses: vec![address], no_address: None }
+}
+
+fn unanswered(machine: &Machine) -> Unanswered {
+    Unanswered::at(&machine.dir.join("unanswered"))
 }
 
 fn handshake_as(secret: &SecretKeys, peer: &Target) -> Result<(), String> {
@@ -126,12 +131,12 @@ fn a_link_opens_only_between_keys_on_the_accounts_list_as_it_is_now() {
     let root = crate::sh::test_dir("link-pinning");
     let listening = listen(host(&studio, &root.join("data")));
     let studio_at = target(&studio, "studio", listening.address);
-    let (mut link, _) = client::connect(&devbox.identity, &studio_at, Duration::from_secs(2)).unwrap();
+    let (mut link, _) = client::connect(&devbox.identity, &studio_at, Duration::from_secs(2), &unanswered(&devbox)).unwrap();
     assert!(client::ping(&mut link).is_ok(), "a listed machine reaches another");
     assert!(handshake_as(&laptop.identity.secret(), &studio_at).is_ok());
     assert!(handshake_as(&SecretKeys::generate(), &studio_at).is_err(), "a key on no list is refused");
     let impostor = Target { keys: laptop.identity.public(), ..studio_at.clone() };
-    assert!(client::connect(&devbox.identity, &impostor, Duration::from_secs(2)).err().unwrap().contains("TLS handshake failed"), "the asker refuses a machine that does not show the key it expects");
+    assert!(client::connect(&devbox.identity, &impostor, Duration::from_secs(2), &unanswered(&devbox)).err().unwrap().contains("TLS handshake failed"), "the asker refuses a machine that does not show the key it expects");
     hub.runtime.block_on(browser.remove_machine(&laptop.identity.machine)).unwrap();
     std::thread::sleep(serve::LISTED);
     assert!(handshake_as(&laptop.identity.secret(), &studio_at).is_err(), "a machine the account removed is refused within seconds, as the list is read again once it is a few seconds old");
@@ -165,7 +170,7 @@ fn run_on(asker: &Machine, at: &Target, top: &Path, argv: &[&str], interrupt_aft
     let watched = out.clone();
     let interrupts = || u32::from(interrupt_after.is_some_and(|marker| String::from_utf8_lossy(&watched.borrow()).contains(marker)));
     let argv: Vec<String> = argv.iter().map(|word| word.to_string()).collect();
-    let ran = client::connect(&asker.identity, at, Duration::from_secs(2)).and_then(|(mut link, _)| client::go(&mut link, &at.name, top, &argv, &mut Captured(out.clone()), &mut Captured(err.clone()), &interrupts));
+    let ran = client::connect(&asker.identity, at, Duration::from_secs(2), &unanswered(asker)).and_then(|(mut link, _)| client::go(&mut link, &at.name, top, &argv, &mut Captured(out.clone()), &mut Captured(err.clone()), &interrupts));
     let text = |bytes: &Rc<RefCell<Vec<u8>>>| String::from_utf8_lossy(&bytes.borrow()).to_string();
     Run { ran, out: text(&out), err: text(&err) }
 }
@@ -269,13 +274,13 @@ fn a_run_goes_through_the_hubs_relay_when_no_address_answers() {
     let top = repo(&root);
     let closed = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
     let at = target(&studio, "studio", closed);
-    assert!(client::connect(&devbox.identity, &at, Duration::from_secs(2)).err().unwrap().contains("studio is not waiting for links through the hub either"), "a machine that waits for no relayed link has none");
+    assert!(client::connect(&devbox.identity, &at, Duration::from_secs(2), &unanswered(&devbox)).err().unwrap().contains("studio is not waiting for links through the hub either"), "a machine that waits for no relayed link has none");
     studio.work();
     let stop = Arc::new(AtomicBool::new(false));
     let (waiting_host, seen) = (host(&studio, &root.join("data")), stop.clone());
     let waiting = std::thread::spawn(move || relay::wait_for_rings(waiting_host, &|| true, Arc::new(move || seen.load(Ordering::SeqCst))));
     wait_for_log(&studio, "link: waiting for links relayed through the hub");
-    let (mut link, route) = client::connect(&devbox.identity, &at, Duration::from_secs(2)).unwrap();
+    let (mut link, route) = client::connect(&devbox.identity, &at, Duration::from_secs(2), &unanswered(&devbox)).unwrap();
     assert_eq!(route, client::Route::Relay, "the closed address fails and the hub relays");
     assert!(client::ping(&mut link).is_ok());
     let ran = run_on(&devbox, &at, &top, &["echo out; echo err >&2; exit 5"], None);
@@ -349,7 +354,7 @@ fn a_command_that_exits_while_its_output_is_still_on_the_way_hands_over_all_of_i
     let listening = listen(host(&studio, &root.join("data")));
     let at = target(&studio, "studio", listening.address);
     let out = Rc::new(RefCell::new(Vec::new()));
-    let (mut link, _) = client::connect(&devbox.identity, &at, Duration::from_secs(2)).unwrap();
+    let (mut link, _) = client::connect(&devbox.identity, &at, Duration::from_secs(2), &unanswered(&devbox)).unwrap();
     let argv = vec!["head -c 12000000 /dev/zero | tr '\\0' x; exit 3".to_string()];
     let ran = client::go(&mut link, "studio", &top, &argv, &mut Slow(out.clone()), &mut std::io::sink(), &|| 0);
     assert_eq!(ran.map(|ran| ran.code), Ok(3));
@@ -479,10 +484,58 @@ fn ctrl_c_before_the_command_starts_stops_the_run_and_leaves_no_snapshot_behind(
     std::fs::write(top.join("tracked.txt"), "edited\n").unwrap();
     let listening = listen(host(&studio, &root.join("data")));
     let at = target(&studio, "studio", listening.address);
-    let (mut link, _) = client::connect(&devbox.identity, &at, Duration::from_secs(2)).unwrap();
+    let (mut link, _) = client::connect(&devbox.identity, &at, Duration::from_secs(2), &unanswered(&devbox)).unwrap();
     let argv = vec!["true".to_string()];
     let ended = client::go(&mut link, "studio", &top, &argv, &mut std::io::sink(), &mut std::io::sink(), &|| 1);
     assert_eq!(ended, Err("kebbie: stopped before the command started on studio".to_string()));
     assert_eq!(git(&top, &["for-each-ref", super::super::REF]), "", "the snapshot's ref is gone");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_link_takes_the_relay_without_waiting_out_an_address_that_never_answers_and_remembers_it() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let (devbox, studio) = (Machine::connected(&hub, &mut browser, "devbox"), Machine::connected(&hub, &mut browser, "studio"));
+    let root = crate::sh::test_dir("link-race");
+    studio.work();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (waiting_host, seen) = (host(&studio, &root.join("data")), stop.clone());
+    let waiting = std::thread::spawn(move || relay::wait_for_rings(waiting_host, &|| true, Arc::new(move || seen.load(Ordering::SeqCst))));
+    wait_for_log(&studio, "link: waiting for links relayed through the hub");
+    let silent = TcpListener::bind("127.0.0.1:0").unwrap();
+    let at = target(&studio, "studio", silent.local_addr().unwrap());
+    let started = Instant::now();
+    let (_, route) = client::connect(&devbox.identity, &at, Duration::from_secs(2), &unanswered(&devbox)).unwrap();
+    assert_eq!(route, client::Route::Relay);
+    assert!(started.elapsed() < Duration::from_secs(2), "the relay does not wait out the dial: {:?}", started.elapsed());
+    assert!(unanswered(&devbox).lately(&at.machine, &at.addresses), "the address that lost to the relay is remembered");
+    let listening = listen(host(&studio, &root.join("data")));
+    let reachable = target(&studio, "studio", listening.address);
+    assert!(!unanswered(&devbox).lately(&reachable.machine, &reachable.addresses), "an address announced since gets its head start again");
+    let (_, route) = client::connect(&devbox.identity, &reachable, Duration::from_secs(2), &unanswered(&devbox)).unwrap();
+    assert_eq!(route, client::Route::Direct(listening.address));
+    assert!(!unanswered(&devbox).lately(&at.machine, &at.addresses), "a direct link clears what was remembered");
+    stop.store(true, Ordering::SeqCst);
+    waiting.join().unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn an_unanswered_address_is_remembered_for_ten_minutes_and_only_as_announced() {
+    let root = crate::sh::test_dir("link-unanswered");
+    let memory = Unanswered::at(&root);
+    let machine = cluster::new_id().unwrap();
+    let (old, new) = (vec![SocketAddr::from(([100, 64, 0, 1], super::PORT))], vec![SocketAddr::from(([100, 64, 0, 2], super::PORT))]);
+    assert!(!memory.lately(&machine, &old));
+    memory.remember(&machine, &old);
+    assert!(memory.lately(&machine, &old));
+    assert!(!memory.lately(&machine, &new), "another address is not the one that lost");
+    let file = std::fs::read_dir(&root).unwrap().filter_map(Result::ok).find(|entry| !entry.file_name().to_string_lossy().starts_with('.')).unwrap().path();
+    std::fs::File::options().write(true).open(&file).unwrap().set_modified(std::time::SystemTime::now() - super::unanswered::REMEMBER - Duration::from_secs(1)).unwrap();
+    assert!(!memory.lately(&machine, &old), "after ten minutes the address gets its head start again");
+    memory.remember(&machine, &old);
+    memory.forget(&machine);
+    assert!(!memory.lately(&machine, &old));
     let _ = std::fs::remove_dir_all(root);
 }

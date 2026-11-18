@@ -15,7 +15,9 @@ pub mod addresses;
 mod client;
 pub mod relay;
 pub mod serve;
+pub mod timing;
 pub mod tls;
+pub mod unanswered;
 pub mod wire;
 #[cfg(test)]
 mod tests;
