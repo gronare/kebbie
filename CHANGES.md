@@ -7,6 +7,12 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### What's new
 
 ### Fixed
+
+## 0.41.1
+
+### What's new
+
+### Fixed
 - kebbie run through the hub's relay starts in about a quarter second instead of two: it no longer waits out addresses that do not answer before asking the relay.
 
 ## 0.41.0
