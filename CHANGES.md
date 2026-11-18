@@ -5,6 +5,12 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+
+### Fixed
+
+## 0.41.0
+
+### What's new
 - The backlog style kebbie keeps in the vault asks for items in the vault's language.
 - The hub app's New starts a task now on the machine you pick, named from your first words as n on the board names one.
 - kebbie run --on <machine> -- <command> runs a command on another machine of your account, live, over Tailscale, WireGuard or the hub's relay (Hub Pro on hub.kebbie.dev).
