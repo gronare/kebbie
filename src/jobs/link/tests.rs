@@ -303,3 +303,11 @@ fn a_run_gives_up_in_plain_words_when_the_other_machine_goes_silent() {
     silent.join().unwrap();
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn a_relay_the_hubs_plan_lacks_is_refused_in_plain_words_naming_the_free_way() {
+    let refused = Ok(relay::Refused { status: 402, code: "pro-required".to_string() });
+    assert_eq!(relay::refusal("studio", "https://hub.kebbie.dev/", &refused), "relaying through hub.kebbie.dev needs Hub Pro; a direct link over Tailscale or WireGuard is free");
+    let other = Ok(relay::Refused { status: 402, code: "plan-inactive".to_string() });
+    assert_eq!(relay::refusal("studio", "https://hub.kebbie.dev", &other), "the hub refused the relayed link: 402 plan-inactive");
+}

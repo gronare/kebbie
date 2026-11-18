@@ -174,9 +174,16 @@ pub fn open(identity: &Identity, query: &str) -> std::result::Result<WebSocket<H
     }
 }
 
+// The hub's host as a person knows it, hub.kebbie.dev from https://hub.kebbie.dev/.
+fn hub_host(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    rest.split('/').next().unwrap_or(rest)
+}
+
 // What an asker hears when the relay gives it no link, in words.
-pub fn refusal(name: &str, refused: &std::result::Result<Refused, String>) -> String {
+pub fn refusal(name: &str, hub: &str, refused: &std::result::Result<Refused, String>) -> String {
     match refused {
+        Ok(Refused { status: 402, code }) if code == crate::hub::http::PRO_REQUIRED => format!("relaying through {} needs Hub Pro; a direct link over Tailscale or WireGuard is free", hub_host(hub)),
         Ok(Refused { code, .. }) if code == "not-listening" => format!("{name} is not waiting for links through the hub either: is its keeper running, with [worker] enabled = true?"),
         Ok(Refused { code, .. }) if code == "no-answer" => format!("{name} was rung through the hub but did not answer within 10 s"),
         Ok(Refused { status: 404 | 405, code }) if code != "unknown-machine" => "the hub relays no links yet; it needs an update".to_string(),
@@ -187,7 +194,7 @@ pub fn refusal(name: &str, refused: &std::result::Result<Refused, String>) -> St
 }
 
 pub fn ask(identity: &Identity, to: &kebbie_hub_protocol::Id, name: &str) -> Result<WsBytes> {
-    let ws = open(identity, &format!("to={to}")).map_err(|refused| refusal(name, &refused))?;
+    let ws = open(identity, &format!("to={to}")).map_err(|refused| refusal(name, &identity.url, &refused))?;
     Ok(WsBytes::new(ws))
 }
 
@@ -254,8 +261,12 @@ pub fn wait_for_rings(host: Arc<Host>, wanted: &dyn Fn() -> bool, halted: Arc<dy
                 say("link: the hub relays no links yet; it needs an update".to_string());
                 retry = RETRY_OLD_HUB;
             }
+            Err(refused @ Ok(Refused { status: 402, .. })) => {
+                say(format!("link: not waiting for relayed links: {}", refusal("this machine", &host.identity.url, &refused)));
+                retry = RETRY_OLD_HUB;
+            }
             Err(refused) => {
-                say(format!("link: could not wait for relayed links: {}", refusal("this machine", &refused)));
+                say(format!("link: could not wait for relayed links: {}", refusal("this machine", &host.identity.url, &refused)));
                 retry = (retry * 2).min(RETRY_MOST);
             }
         }
@@ -267,6 +278,6 @@ fn answer(host: &Host, ring: &Ring, halted: &(dyn Fn() -> bool + Sync)) {
     let from = format!("{} through the hub", ring.from);
     match open(&host.identity, &format!("accept={}", ring.session)) {
         Ok(ws) => serve::session(host, from, WsBytes::new(ws), halted),
-        Err(refused) => crate::keeper::log_line(&host.state, &format!("link: could not answer a ring from {from}: {}", refusal("this machine", &refused))),
+        Err(refused) => crate::keeper::log_line(&host.state, &format!("link: could not answer a ring from {from}: {}", refusal("this machine", &host.identity.url, &refused))),
     }
 }
