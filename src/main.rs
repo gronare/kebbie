@@ -1030,6 +1030,10 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     if arguments.positional(0) == Some("run") {
+        if let Err(error) = arguments.only("run", &["--on"]) {
+            eprintln!("{error}");
+            return ExitCode::from(255);
+        }
         let cwd = arguments.value("-C").map_or_else(|| std::env::current_dir().unwrap_or_default(), std::path::PathBuf::from);
         return jobs::link::run_cli(&cwd, arguments.value("--on"), arguments.rest(1));
     }
@@ -1058,6 +1062,13 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_run_refuses_a_dash_word_before_the_double_dash_instead_of_dropping_it() {
+        let parsed = |flags: &[&str]| super::Arguments { positionals: vec!["run".to_string(), "ls".to_string()], flags: flags.iter().map(|flag| flag.to_string()).collect(), values: vec![("--on".to_string(), "studio".to_string())] };
+        assert!(parsed(&["-la"]).only("run", &["--on"]).unwrap_err().contains("goes after --"));
+        assert!(parsed(&[]).only("run", &["--on"]).is_ok(), "--on and -C are the run's own");
+    }
+
     #[test]
     fn only_the_users_own_start_takes_focus() {
         use crate::permit::Caller;
