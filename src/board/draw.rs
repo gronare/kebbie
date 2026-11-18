@@ -94,6 +94,9 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     let (message_lines, first_message) = messages_lines(app, fold, messages_area.height as usize, messages_area.width as usize);
     let shown_messages = message_lines.len();
     frame.render_widget(Paragraph::new(message_lines), messages_area);
+    if app.in_messages && fold == Fold::Open {
+        super::background::paint(frame.buffer_mut(), messages_area, app.focus_tint);
+    }
     match fold {
         Fold::Hidden => {}
         Fold::Line => tab_hits.push((messages_area, Hit::Messages(None))),
@@ -124,11 +127,13 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         render_column(frame, work_area, work, work_selected, work_rows, &mut app.hits);
         draw_panel(frame, app, panel_area);
         app.draw_beside(frame, backlog_area);
+        app.tint_focused(frame, work_area, backlog_area);
     } else if body.width >= 86 {
         let [work_area, _, backlog_area] = Layout::horizontal([Constraint::Percentage(54), Constraint::Length(4), Constraint::Min(20)]).areas(body);
         let (work, work_selected, work_rows) = work_lines(app, work_area.width as usize, true, work_area.height as usize);
         render_column(frame, work_area, work, work_selected, work_rows, &mut app.hits);
         app.draw_beside(frame, backlog_area);
+        app.tint_focused(frame, work_area, backlog_area);
     } else {
         let (lines, work_selected, rows) = work_lines(app, body.width as usize, true, body.height as usize);
         render_column(frame, body, lines, work_selected, rows, &mut app.hits);

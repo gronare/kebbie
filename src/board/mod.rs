@@ -1,3 +1,4 @@
+mod background;
 mod beside;
 mod bug_report;
 mod card;
@@ -227,6 +228,7 @@ struct App {
     images: HashMap<(PathBuf, u16, u16), Option<Protocol>>,
     cell_guessed: bool,
     viewer: Option<&'static str>,
+    focus_tint: ratatui::style::Color,
     decoded: HashMap<PathBuf, Option<image::DynamicImage>>,
     image_requests: Option<Sender<PathBuf>>,
     image_results: Option<Receiver<Decoded>>,
@@ -1290,7 +1292,7 @@ impl App {
             page: Page::Work, areas: area_page::Page::new(sources.clone()), routines: routine_page::Page::new(config::path(), config::repos_dir()), settings: settings_page::Page::new(settings_page::Paths::current(), None), sources, fetch_failures: Vec::new(), away: false,
             messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, after_message: None, questions: Vec::new(), answering: None, sending: None, offers: Vec::new(), offer_panel: Default::default(), reporter: Default::default(), fixed: None, fixed_seen: 0, usage: None, ongoing: Vec::new(), groups: Group::ALL.to_vec(), ongoing_at: OngoingAt::default(), parked_open: false,
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
-            graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(), plan_reads: Default::default(), card_read: None, card_reader: false,
+            graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, focus_tint: background::focus_tint(None), decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(), plan_reads: Default::default(), card_read: None, card_reader: false,
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel).map(|outcome| outcome.details.join("\n"))), update: None, progress_file: None, recheck: None, stale: Vec::new(), stale_at: 0, restart_after_update: false,
             agent_offer: None, agent_mode: std::sync::Arc::new(|| config::agent_updates_in(&config::path())), installer: agent_updates::default_install(),
             filter: None, ctrl_c: None, go_again: None, notice: None, lead_chat: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), lead_fresh_starter: std::sync::Arc::new(crate::lead_restart::fresh_now), lead_checker: std::sync::Arc::new(crate::lead::restart_refusal), lead_restarted: std::sync::Arc::default(), lead_context: None, restart_why: String::new(), devices: Vec::new(), subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
@@ -1357,6 +1359,7 @@ pub fn run(overlay: bool) -> Result<String> {
     let renewed = std::env::var_os(RESTART_STATE).is_some() && std::env::var_os(SCREEN_KEPT).is_some();
     let mut terminal = if renewed { terminal::continue_terminal() } else { init_terminal() };
     let mut hold = renewed.then(|| Instant::now() + RENEW_HOLD);
+    app.focus_tint = background::focus_tint(background::ask());
     let graphics = GraphicsEnv::current();
     (app.graphics, app.cell_guessed) = graphics.startup();
     app.viewer = image_viewer(std::env::consts::OS, &|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()));

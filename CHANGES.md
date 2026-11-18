@@ -11,6 +11,8 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - kebbie run --send puts a local file in the run's folder, and --fetch copies files and folders back after the command, over a direct link or the hub.
 - kebbie run --alongside runs a second command beside a long run of the same task, as a screenshot in the middle of a UI test, instead of waiting for it.
 
+- The board pane that has the keys shows a step lighter than the others, in dark and light terminals.
+
 ### Fixed
 
 - A Mac worker on the WireGuard app links directly, and a logged-out Tailscale no longer fills the keeper log.

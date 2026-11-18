@@ -211,6 +211,14 @@ impl App {
         (heading(title, focused, width), lines, address_of(&item))
     }
 
+    // The pane with the keys takes the tint: the card once focused, else the tasks with their subtask rows and panels, unless the messages have them.
+    pub(super) fn tint_focused(&self, frame: &mut Frame, tasks: Rect, card: Rect) {
+        if self.in_messages || !matches!(self.mode, super::Mode::Normal | super::Mode::Subtasks) {
+            return;
+        }
+        super::background::paint(frame.buffer_mut(), if self.beside.focused { card } else { tasks }, self.focus_tint);
+    }
+
     pub(super) fn draw_beside(&mut self, frame: &mut Frame, area: Rect) {
         let (head, lines, subject) = self.beside_lines(area.width as usize);
         let room = area.height.saturating_sub(head.len() as u16);
@@ -375,6 +383,23 @@ mod tests {
         assert!(plain.beside.focused, "→ on the card stays there");
         press(&mut plain, key(KeyCode::Esc));
         assert!(!plain.beside.focused, "esc back to the tasks");
+    }
+
+    #[test]
+    fn the_focused_pane_takes_the_tint_under_its_text_and_in_its_empty_rows_and_the_other_pane_does_not() {
+        use ratatui::style::Color;
+        let mut app = carded_app();
+        app.focus_tint = Color::Rgb(44, 44, 59);
+        let (rows, buffer) = render(&mut app, 140, 40);
+        let (built_x, built_y) = find(&rows, "BUILT")[0];
+        let (task_x, task_y) = find(&rows, "WORK")[0];
+        let (tasks, card) = ((task_x as u16, 34), (built_x as u16 + 2, 34));
+        assert_eq!((buffer[tasks].bg, buffer[(task_x as u16, task_y as u16)].bg), (app.focus_tint, app.focus_tint), "the tasks have the keys: tinted under the text and below it");
+        assert_eq!((buffer[card].bg, buffer[(built_x as u16, built_y as u16)].bg), (Color::Reset, Color::Reset), "the card does not: {}", rows.join("\n"));
+        press(&mut app, key(KeyCode::Right));
+        let (_, buffer) = render(&mut app, 140, 40);
+        assert_eq!((buffer[card].bg, buffer[(built_x as u16, built_y as u16)].bg), (app.focus_tint, app.focus_tint), "→ moves the tint onto the card");
+        assert_eq!(buffer[tasks].bg, Color::Reset, "and off the tasks");
     }
 
     #[test]
