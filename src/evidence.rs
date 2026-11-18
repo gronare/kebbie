@@ -361,11 +361,29 @@ fn launched(simple: &str, listed: &[String]) -> Option<String> {
     if listed_start(simple, listed).is_some() || NOT_LAUNCHERS.contains(&first.rsplit('/').next().unwrap_or(first)) {
         return None;
     }
-    (1..words.len()).find_map(|at| {
+    (1..words.len()).filter(|at| !open_quote(&words[..*at].join(" "))).find_map(|at| {
         let rest = words[at..].join(" ");
         let start = listed_start(&rest, listed).map(str::to_string).or_else(|| test_like(&rest))?;
         Some(format!("{} {start}", words[..at].join(" ")))
     })
+}
+
+// Whether a quote opened in the text is still open at its end, so a word after it is part of a quoted argument.
+fn open_quote(text: &str) -> bool {
+    let (mut quote, mut escaped) = (None, false);
+    for char in text.chars() {
+        match (quote, char) {
+            _ if escaped => escaped = false,
+            (Some('\''), '\'') => quote = None,
+            (Some('\''), _) => {}
+            (_, '\\') => escaped = true,
+            (Some(open), _) if char == open => quote = None,
+            (Some(_), _) => {}
+            (None, '\'' | '"') => quote = Some(char),
+            _ => {}
+        }
+    }
+    quote.is_some()
 }
 
 fn hidden(entry: &str) -> bool {
@@ -1167,7 +1185,7 @@ mod tests {
         assert_eq!(unrecorded("docker compose run --rm web bin/rspec spec/a_spec.rb", &list).as_deref(), Some("docker compose run --rm web bin/rspec"));
         assert_eq!(unrecorded("npx jest src", &list).as_deref(), Some("npx jest"));
         assert_eq!(recognise("docker compose run --rm web bin/rspec spec/a_spec.rb", &listed(&["docker compose run --rm web bin/rspec"])), Some("docker compose run --rm web bin/rspec"), "listing the named start records it");
-        for command in ["chmod +x bin/test", "git commit -m 'cargo test passes'", "echo npm test", "cat bin/test", "cargo build --tests"] {
+        for command in ["chmod +x bin/test", "git commit -m 'cargo test passes'", "echo npm test", "cat bin/test", "cargo build --tests", "uvx mindin log append \"ran npm test and it passed\"", "uvx mindin note 'then bin/rspec ran'"] {
             assert_eq!(unrecorded(command, &list), None, "{command}");
         }
         let input = json!({ "hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": { "command": "spring rspec spec/a_spec.rb" }, "cwd": "/nowhere" });
