@@ -39,6 +39,7 @@ pub struct Worktree {
     pub comments_watch: Option<bool>,
     pub comments_days: Option<u64>,
     pub clean_on_release: Option<Vec<String>>,
+    pub release_command: Option<String>,
     pub docs_required: Option<bool>,
 }
 
@@ -77,6 +78,7 @@ fn worktree(table: &Table) -> Result<Worktree> {
         comments_watch: None,
         comments_days: None,
         clean_on_release: worktree.get("clean_on_release").map(clean_on_release).transpose()?,
+        release_command: unsettable(worktree, "release_command", "worktree.release_command")?,
         docs_required: None,
     })
 }
@@ -197,11 +199,11 @@ fn with_docs(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     Ok(worktree)
 }
 
-const UNSETTABLE: [&str; 5] = ["worktree.setup_command", "worktree.dev_server", "worktree.dev_worker", "review.model", "ci.deploy"];
+const UNSETTABLE: [&str; 6] = ["worktree.setup_command", "worktree.dev_server", "worktree.dev_worker", "worktree.release_command", "review.model", "ci.deploy"];
 
 // The keys a repo config may set to "" to unset, by name, as layers read them.
 pub(super) fn unset_keys(worktree: &Worktree) -> Vec<&'static str> {
-    let values = [&worktree.setup_command, &worktree.dev_server, &worktree.dev_worker, &worktree.review_model, &worktree.ci_deploy];
+    let values = [&worktree.setup_command, &worktree.dev_server, &worktree.dev_worker, &worktree.release_command, &worktree.review_model, &worktree.ci_deploy];
     UNSETTABLE.into_iter().zip(values).filter(|(_, value)| value.as_deref() == Some("")).map(|(key, _)| key).collect()
 }
 

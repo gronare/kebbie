@@ -98,16 +98,40 @@ pub fn list(cwd: &Path) -> Result<Vec<Value>> {
 
 // -D because callers have already checked the commits are on upstream; git's -d checks the main checkout's local branch, which is still behind right after a push.
 pub(super) fn release(repo: &Path, slot: &Slot, upstream: &str) -> Result<Option<String>> {
+    let settings = config::resolve(Some(repo)).map(|loaded| loaded.settings);
+    let folders = settings.as_ref().map(|settings| settings.clean_on_release.value.clone()).unwrap_or_else(|_| vec!["target".to_string()]);
+    let command = settings.ok().and_then(|settings| config::setup_command_in(settings.release_command.value, &slot.path));
+    release_with(repo, slot, upstream, &folders, command.as_deref())
+}
+
+// The release command runs first, in the worktree as the task left it, so what it gives back is what that worktree's setup made.
+pub(super) fn release_with(repo: &Path, slot: &Slot, upstream: &str, folders: &[String], command: Option<&str>) -> Result<Option<String>> {
+    let ran = command.map(|command| run_release(command, &slot.path, RELEASE_CEILING));
     git_writing(&slot.path, &["switch", "--quiet", "--detach", &crate::repo::tracking(upstream)])?;
     clear_tmp(&slot.path);
     git(repo, &["branch", "-D", task_of(slot)])?;
-    let folders = config::resolve(Some(repo)).map(|loaded| loaded.settings.clean_on_release.value).unwrap_or_else(|_| vec!["target".to_string()]);
-    let removed = clean_build_output(&slot.path, &folders);
-    if removed.is_empty() {
-        return Ok(None);
+    let removed = clean_build_output(&slot.path, folders);
+    let freed = (!removed.is_empty()).then(|| format!("removed {}", removed.iter().map(|(folder, bytes)| format!("{folder}/ ({})", size(*bytes))).collect::<Vec<_>>().join(", ")));
+    let said: Vec<String> = ran.into_iter().chain(freed).collect();
+    Ok((!said.is_empty()).then(|| said.join("; ")))
+}
+
+const RELEASE_CEILING: std::time::Duration = std::time::Duration::from_secs(120);
+
+// What the release command did, for the freed line; a failure is said there and never stops the release.
+pub(super) fn run_release(command: &str, worktree: &Path, ceiling: std::time::Duration) -> String {
+    let mut shell = std::process::Command::new("sh");
+    shell.args(["-c", command]).current_dir(worktree);
+    match crate::sh::output_with_timeout(shell, ceiling) {
+        Ok(Some(done)) if done.code == Some(0) => format!("ran {command}"),
+        Ok(Some(done)) => {
+            let why = done.stderr.lines().chain(done.stdout.lines()).rfind(|line| !line.trim().is_empty()).map_or(String::new(), |line| format!(": {}", line.trim()));
+            let exit = done.code.map_or("a signal".to_string(), |code| format!("exit {code}"));
+            format!("{command} failed ({exit}){why}")
+        }
+        Ok(None) => format!("{command} stopped after {} s", ceiling.as_secs()),
+        Err(error) => format!("{command} did not start: {error}"),
     }
-    let freed = removed.iter().map(|(folder, bytes)| format!("{folder}/ ({})", size(*bytes))).collect::<Vec<_>>().join(", ");
-    Ok(Some(format!("removed {freed}")))
 }
 
 // Only output git ignores and tracks nothing in is removed, and target only in a Rust worktree; a symlink is never followed.
@@ -302,6 +326,22 @@ mod tests {
         assert_eq!(freed.as_deref(), Some("removed target/ (2.5 MB)"));
         assert!(!slot.path.join("target").exists() && slot.path.join("Cargo.toml").exists());
         assert_eq!(release(&dir, &find_free(&dir, &slot), &upstream).ok().flatten(), None, "nothing left to free");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn the_release_command_runs_in_the_worktree_as_the_task_left_it_and_a_failure_is_said_but_frees_it_all_the_same() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let marker = dir.with_extension("released");
+        let command = format!("printf '%s' \"$(git rev-parse --abbrev-ref HEAD)\" > {}", crate::sh::quote(&marker.to_string_lossy()));
+        let freed = release_with(&dir, &slot, &upstream, &[], Some(&command)).unwrap();
+        assert_eq!(freed, Some(format!("ran {command}")));
+        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "billing", "it ran on the task's branch, before the worktree went back");
+        let again = find_free(&dir, &slot);
+        assert_eq!(release_with(&dir, &again, &upstream, &[], Some("echo no such database >&2; exit 3")).unwrap().as_deref(), Some("echo no such database >&2; exit 3 failed (exit 3): no such database"));
+        assert!(find_task(&dir, Some("again"), &dir).is_err(), "the worktree was freed after the failure");
+        assert_eq!(run_release("sleep 5", &slot.path, std::time::Duration::from_secs(1)), "sleep 5 stopped after 1 s");
+        let _ = std::fs::remove_file(marker);
         cleanup(dir, origin, &slot);
     }
 

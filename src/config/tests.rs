@@ -315,7 +315,7 @@ fn unknown_keys_are_named_with_the_file_and_ignored_while_bad_values_still_fail(
     assert!(repo_error("colour = 1\n[ci]\nwatch = \"yes\"\n").contains("ci.watch: must be true or false"), "a known key with the wrong type still fails in a repo config");
     let repo_warned = |text: &str| unknown_in_file(text, "/home/u/.config/kebbie/repos/app.toml", &REPO_KEYS);
     assert_eq!(repo_warned("colour = 1\n"), ["/home/u/.config/kebbie/repos/app.toml: colour: unknown key; known keys here: actions, worktree, task, review, investigate, ci, tests, comments, docs, routines, jobs"]);
-    assert_eq!(repo_warned("[worktree]\nport = 3000\n"), ["/home/u/.config/kebbie/repos/app.toml: worktree.port: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, server_name, worker_name, clean_on_release"]);
+    assert_eq!(repo_warned("[worktree]\nport = 3000\n"), ["/home/u/.config/kebbie/repos/app.toml: worktree.port: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, server_name, worker_name, clean_on_release, release_command"]);
     assert_eq!(repo("colour = 1\n[lint]\nstrict = true\n[worktree]\nport = 3000\ndev_server = \"bin/dev\"\n").dev_server, Some("bin/dev".to_string()), "a repo config reads its known keys past unknown ones");
 }
 
@@ -705,7 +705,7 @@ fn sample(entry: &Entry) -> String {
 fn each_keys_scope_is_the_files_that_take_it_and_what_its_text_says() {
     let loaded = Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
     let all = entries(&loaded);
-    assert_eq!(all.len(), 60);
+    assert_eq!(all.len(), 61);
     for entry in all {
         let (section, field) = entry.key.rsplit_once('.').unwrap();
         let text = format!("[{section}]\n{field} = {}\n", sample(&entry));
@@ -764,6 +764,17 @@ fn a_repo_configs_empty_text_unsets_config_tomls_value_for_that_repo_and_config_
     assert!(parse_repo("[worktree]\ndev_worker = \" \"\n", "app.toml").unwrap_err().contains("worktree.dev_worker: must not be empty"), "only \"\" unsets, so a stray space is still a mistake");
     let refused = parse_machine("[worktree]\ndev_worker = \"\"\n", "config.toml").unwrap_err();
     assert!(refused.contains("worktree.dev_worker: must not be empty; leave it out of config.toml, and set it to \"\" in a repo config to unset it for that repo"), "{refused}");
+}
+
+#[test]
+fn the_release_command_layers_like_the_setup_command_and_a_repo_can_unset_it() {
+    let team = machine("[worktree]\nrelease_command = \"dev worktree-db remove\"\n");
+    assert_eq!(settings(&Worktree::default(), &team).release_command, Setting { value: Some("dev worktree-db remove".to_string()), layer: Layer::Machine });
+    assert_eq!(settings(&repo("[worktree]\nrelease_command = \"bin/drop-db\"\n"), &team).release_command, Setting { value: Some("bin/drop-db".to_string()), layer: Layer::Repo });
+    let unset = settings(&repo("[worktree]\nrelease_command = \"\"\n"), &team);
+    assert_eq!(unset.release_command, Setting { value: None, layer: Layer::Repo });
+    assert!(describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: unset }).contains("worktree.release_command = unset  (repo config)\n  The repo's own command that gives back what a worktree's setup made outside it"));
+    assert!(parse_machine("[worktree]\nrelease_command = 3\n", "config.toml").unwrap_err().contains("worktree.release_command: must be a string"));
 }
 
 #[test]

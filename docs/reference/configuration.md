@@ -20,7 +20,7 @@ kebbie reads each key from the first layer that sets it:
 Rules:
 
 - A key marked **config.toml only** in a repo config is an error that says so.
-- In a repo config, `""` unsets `worktree.setup_command`, `worktree.dev_server`, `worktree.dev_worker`, `review.model` and `ci.deploy` for that repo, so config.toml's value does not apply there, and `kebbie config` shows the key as `unset (repo config)`. In config.toml, `""` for these is an error: leave the key out. Other keys are turned off by a value of their own, such as `false`, `[]`, `"none"` for a profile, or `""` for `worktree.dev_url`.
+- In a repo config, `""` unsets `worktree.setup_command`, `worktree.dev_server`, `worktree.dev_worker`, `worktree.release_command`, `review.model` and `ci.deploy` for that repo, so config.toml's value does not apply there, and `kebbie config` shows the key as `unset (repo config)`. In config.toml, `""` for these is an error: leave the key out. Other keys are turned off by a value of their own, such as `false`, `[]`, `"none"` for a profile, or `""` for `worktree.dev_url`.
 - An unknown key or table in either file is ignored, with one line on stderr that names the file and the key, so a key from a newer kebbie never stops this one. `kebbie doctor` lists them as warnings.
 - A known key with a value of the wrong type is an error that names the file and the key.
 - Unknown keys inside an `[[actions]]` or `[[routines]]` entry are errors, since that entry says what kebbie runs.
@@ -73,6 +73,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 | `worktree.dev_route` | `false` | repo config only | Whether [`kebbie routes`](commands.md#setup-and-maintenance) writes a Caddy site for each of this repo's worktrees. |
 | `worktree.stage_on_main` | `false` | repo config only | Whether [`kebbie try`](commands.md#kebbie-try-name) (`M` on the board) may put a ready task's commits on this repo's local default branch. |
 | `worktree.clean_on_release` | `["target"]` | either | Build output kebbie removes from a worktree when it goes back to the pool. `[]` keeps everything. |
+| `worktree.release_command` | none | either | The repo's own command that gives back what a worktree's setup made outside it, such as its own database copy, when the worktree goes back to the pool. |
 | `worktree.server_name` | `"server"` | config.toml only | The name of the tab `w` starts, and of the Space's tag in herdr's sidebar while it runs. |
 | `worktree.worker_name` | `"worker"` | config.toml only | The same for `b`'s tab. |
 
@@ -83,6 +84,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 - `worktree.dev_route`: each site is at the host `dev_url` names, proxied to the worktree's port. It is opt-in per repo, so a repo that serves its worktrees itself stays out. See [Open dev servers from a remote machine](../how-to/open-dev-servers-from-a-remote-machine.md).
 - `worktree.stage_on_main`: the commits stay unpushed, to try them from the main checkout before you push main. It is for a repo you run from its main checkout; kebbie's own repo, when you run kebbie from your clone, turns it on. See [Try a task before pushing](../how-to/try-a-task-before-pushing.md).
 - `worktree.clean_on_release` runs on `done`, `drop`, `reset` and a landed task the keeper closes, so the pool's disk use stays bounded. The result says what it freed, as `freed: removed target/ (3.7 GB)`. Its entries are folders inside the worktree, such as `"node_modules/.cache"`, `".next"` or `"dist"`. Each is removed only when git ignores it and tracks nothing in it, a symlink is never followed, and `"target"` only where the worktree has a `Cargo.toml`.
+- `worktree.release_command` runs with `sh -c` from inside the worktree as the task left it, on the same four occasions, before `clean_on_release`. Its result opens the same line, as `freed: ran dev worktree-db remove; removed target/ (3.7 GB)`. A command that fails, or runs past 2 minutes and is stopped, is named there with its exit and the last line it printed, and the worktree goes back to the pool all the same. A command naming a path applies only in a worktree that has the file, as for `setup_command`.
 
 ### Tasks
 

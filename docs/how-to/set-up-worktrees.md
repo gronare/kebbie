@@ -48,4 +48,16 @@ bin/rails db:prepare
 setup_command = "script/prepare_worktree"
 ```
 
+## Give back what the setup made
+
+When the setup makes something outside the worktree, such as a database copy for each worktree, set the command that removes it. kebbie runs it in the worktree when the task is done, dropped or reset, and when the keeper closes a landed task:
+
+```toml
+# ~/.config/kebbie/repos/app.toml
+[worktree]
+release_command = "dev worktree-db remove"
+```
+
+The result shows in the `freed:` line. A failure is named there and the worktree is freed all the same.
+
 See also: [The worktree pool](../explanation/worktree-pool.md).

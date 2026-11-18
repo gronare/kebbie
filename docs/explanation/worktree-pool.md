@@ -28,7 +28,7 @@ kebbie keeps no list of worktrees. It reads git:
 
 `kebbie start` takes a free one, or adds a new one with `git worktree add --detach` when none is free. `done`, `drop` and `reset` give it back.
 
-Giving one back removes its build output, by default a Rust worktree's `target/`, so nine worktrees do not each keep tens of gigabytes. [`worktree.clean_on_release`](../reference/configuration.md) names the folders, and only what git ignores and tracks nothing in goes.
+Giving one back removes its build output, by default a Rust worktree's `target/`, so nine worktrees do not each keep tens of gigabytes. [`worktree.clean_on_release`](../reference/configuration.md) names the folders, and only what git ignores and tracks nothing in goes. What the setup made outside the worktree, such as its own database copy, goes by the repo's own [`worktree.release_command`](../reference/configuration.md#worktrees), run before that.
 
 You can inspect or repair the pool with plain git, and nothing in kebbie's state can disagree with it.
 

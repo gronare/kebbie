@@ -40,7 +40,7 @@ const SECTION_KEYS: [(&str, &[&str]); 25] = [
     ("lead", &["profile"]),
     ("machine", &["name"]),
     ("hub", &["url", "commands", "trust", "auto_approve", "approve_from", "ideas_machine"]),
-    ("worktree", &["setup_skill", "setup_command", "dev_server", "dev_worker", "dev_url", "dev_route", "stage_on_main", "server_name", "worker_name", "clean_on_release"]),
+    ("worktree", &["setup_skill", "setup_command", "dev_server", "dev_worker", "dev_url", "dev_route", "stage_on_main", "server_name", "worker_name", "clean_on_release", "release_command"]),
     ("task", &["rules_skill", "test_commands", "also_noticed", "permission_mode", "profile", "sandbox", "steps", "require_accept"]),
     ("review", &["model", "auto", "profile", "second"]),
     ("investigate", &["profile"]),
