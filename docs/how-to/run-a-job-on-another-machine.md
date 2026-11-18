@@ -42,6 +42,15 @@ timeout_minutes = 90
 
 `timeout_minutes` is how long the job may run, 60 minutes unless set.
 
+Commands a task already ran with [`kebbie run --on`](run-a-command-on-another-machine.md) are a good start: `kebbie job suggest` lists those it ran more than once in this repo, grouped by command and `--on`, with how many passed and the longest run.
+
+```
+2 runs on macos, 2 passed, longest 6 min, last 2026-11-18 on studio
+  xcodebuild -scheme App -derivedDataPath build/dd build
+```
+
+Ask Claude to make jobs of them: the skill `kebbie:write-jobs` names each one, shows you the `[jobs]` tables, writes them on your yes and runs each once.
+
 ## 3. Run a job from a worktree
 
 On the master, in the task's worktree:
