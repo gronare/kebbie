@@ -613,9 +613,9 @@ impl App {
         crate::lead_restart::line(&self.stale, self.restart_auto, width)
     }
 
-    // A rebuilt binary takes over only once nothing is open, and never while an update this board runs is going or its summary is unread.
+    // A rebuilt binary takes over only once nothing is open, and never while an update this board runs is going or its summary is unread, nor while a job's outcome waits to be shown.
     fn may_restart(&self) -> bool {
-        matches!(self.mode, Mode::Normal | Mode::Help(_) | Mode::Message(_)) && self.jobs.is_empty() && self.update.is_none() && self.agent_offer.is_none() && self.areas.is_idle() && self.routines.is_idle() && self.settings.is_normal()
+        matches!(self.mode, Mode::Normal | Mode::Help(_) | Mode::Message(_)) && self.jobs.is_empty() && self.outcomes.is_empty() && self.update.is_none() && self.agent_offer.is_none() && self.areas.is_idle() && self.routines.is_idle() && self.settings.is_normal()
     }
 
     fn show(&mut self, result: Result<String>) {

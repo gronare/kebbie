@@ -347,6 +347,7 @@ mod tests {
         until(&mut app, |app| app.jobs.is_empty());
         app.poll_jobs();
         assert!(matches!(app.mode, Mode::Help(_)), "the failure does not cover the open window");
+        assert!(!app.may_restart(), "a rebuilt kebbie waits until the failure is shown");
         press(&mut app, key(KeyCode::Esc));
         app.poll_jobs();
         let Mode::Message(text) = &app.mode else { panic!("the failure opens once the board is at rest: {:?}", std::mem::discriminant(&app.mode)) };
