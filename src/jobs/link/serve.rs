@@ -159,6 +159,7 @@ pub fn session<T: Read + Write + Timed + Send + 'static>(host: &Host, from: Stri
 
 fn serve<T: Read + Write + Timed + Send + 'static>(host: &Host, from: String, transport: T, halted: &(dyn Fn() -> bool + Sync), pending: Option<Pending>) {
     let _live = Live::enter();
+    let began = Instant::now();
     let opened = handshake(host, transport, on_the_list(host));
     drop(pending);
     let (mut link, name) = match opened.and_then(|(link, peer)| listed(host).map(|list| (link, list.name_of(&peer)))) {
@@ -169,7 +170,7 @@ fn serve<T: Read + Write + Timed + Send + 'static>(host: &Host, from: String, tr
         Ok(Frame::Ask(Ask::Ping)) => link.send(&Frame::Said(Said::Pong)).map(|()| "ping".to_string()).map_err(|error| error.to_string()),
         Ok(Frame::Ask(Ask::Run(ask))) => {
             let what = format!("run {:?} in {} ({}) at {}", ask.command, ask.repo, ask.task, &ask.commit[..12.min(ask.commit.len())]);
-            let ended = run(host, &mut link, &ask, &name, halted);
+            let ended = run(host, &mut link, &ask, &name, halted, began);
             if let Err(reason) = &ended {
                 let _ = link.send(&Frame::Said(Said::Failed { reason: reason.clone() }));
             }
@@ -234,7 +235,12 @@ fn sync(link: &mut Link, ask: &RunAsk, store: &Path, halted: &(dyn Fn() -> bool 
     }
 }
 
-fn run(host: &Host, link: &mut Link, ask: &RunAsk, from: &str, halted: &(dyn Fn() -> bool + Sync)) -> std::result::Result<String, String> {
+fn ms(from: Instant, to: Instant) -> u128 {
+    to.saturating_duration_since(from).as_millis()
+}
+
+fn run(host: &Host, link: &mut Link, ask: &RunAsk, from: &str, halted: &(dyn Fn() -> bool + Sync), began: Instant) -> std::result::Result<String, String> {
+    let asked = Instant::now();
     if !is_commit(&ask.commit) || ask.command.trim().is_empty() {
         return Err("the run named no full commit or no command".to_string());
     }
@@ -247,11 +253,14 @@ fn run(host: &Host, link: &mut Link, ask: &RunAsk, from: &str, halted: &(dyn Fn(
             beating(link, || Held::take(&work, halted)).ok_or("the keeper stopped before the run before this one ended")?
         }
     };
+    let held = Instant::now();
     sync(link, ask, &repo.join(".store"), halted)?;
+    let synced = Instant::now();
     beating(link, || worker::check_out(&repo.join(".store"), &work, &ask.commit, halted))?;
+    let checked_out = Instant::now();
     link.send(&Frame::Said(Said::Started)).map_err(|error| error.to_string())?;
     let code = exec(link, &work, ask, from, halted)?;
-    Ok(format!("exited {code}"))
+    Ok(format!("exited {code} (ms: open {}, turn {}, sync {}, checkout {}, command {})", ms(began, asked), ms(asked, held), ms(held, synced), ms(synced, checked_out), ms(checked_out, Instant::now())))
 }
 
 static HELD: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
