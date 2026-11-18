@@ -42,6 +42,14 @@ fn names_from_the_other_machine_never_leave_their_folder_and_names_for_the_hub_a
 }
 
 #[test]
+fn two_stores_into_one_repo_at_once_never_share_a_bundle_file() {
+    let store = Path::new("/data/app/.store");
+    let names: std::collections::BTreeSet<PathBuf> = (0..50).map(|_| bundle::scratch_bundle(store)).collect();
+    assert_eq!(names.len(), 50, "each call its own file in the same process");
+    assert!(names.iter().all(|name| name.parent() == Some(store)));
+}
+
+#[test]
 fn a_worker_is_picked_by_its_system_or_its_name_and_the_one_heard_from_last_wins() {
     let me = machine(1);
     let cluster = Cluster { counter: 1, keys: Default::default(), rows: vec![row(1, "devbox", Some("linux"), Some(500)), row(2, "MacBook", Some("macos"), Some(100)), row(3, "studio", Some("macos"), Some(300)), row(4, "laptop", None, Some(900)), row(5, "old-box", Some("linux"), Some(50))] };

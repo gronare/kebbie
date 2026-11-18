@@ -1,4 +1,5 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use kebbie_hub_protocol::{BLOB_OVERHEAD, BlobRef, JOB_BUNDLE_MEDIA_TYPE, MAX_BLOB_BYTES, MAX_JOB_BUNDLE_PARTS, open_blob, seal_blob};
@@ -218,6 +219,13 @@ pub fn open_store(store: &Path) -> Result<()> {
     Ok(())
 }
 
+static BUNDLES: AtomicU64 = AtomicU64::new(0);
+
+// A file name no other store call in any kebbie process takes, as a link's runs and a job can store into one repo at once.
+pub(super) fn scratch_bundle(store: &Path) -> PathBuf {
+    store.join(format!("kebbie-job-{}-{}.bundle", std::process::id(), BUNDLES.fetch_add(1, Ordering::Relaxed)))
+}
+
 // The bundle's commits in the repo's bare store, kept under keep so the next incremental bundle finds its base; a base the store lacks is fetched from the job's remote when it names one, and else asks the master for the whole history.
 #[allow(clippy::too_many_arguments)]
 pub fn store(store: &Path, bundle: &[u8], commit: &str, base: Option<&str>, keep: &str, remote: Option<&str>, say: &mut dyn FnMut(String), stop: &dyn Fn() -> bool) -> Result<Stored> {
@@ -238,7 +246,7 @@ pub fn store(store: &Path, bundle: &[u8], commit: &str, base: Option<&str>, keep
         }
     }
     if !bundle.is_empty() {
-        let file = store.join(format!("kebbie-job-{}.bundle", std::process::id()));
+        let file = scratch_bundle(store);
         std::fs::write(&file, bundle).map_err(|error| format!("{}: {error}", file.display()))?;
         let fetched = git_until(store, &["fetch", "--quiet", "--no-write-fetch-head", &file.to_string_lossy(), &format!("+{}/*:{INCOMING}/*", super::REF)], stop, |_| {});
         let _ = std::fs::remove_file(&file);
