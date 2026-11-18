@@ -19,6 +19,7 @@ pub enum Act {
     ItemOptions,
     Move,
     Switch,
+    Subtasks,
     WorkPage,
     BacklogPage,
     AreasPage,
@@ -99,8 +100,8 @@ const ALL: &[Ctx] = &[Work, Backlog, Areas, Routines];
 const PAGES: &[Ctx] = &[Work, Backlog, Areas, Routines, Settings];
 
 impl Act {
-    pub const EVERY: [Act; 53] = [
-        Act::Options, Act::ItemOptions, Act::Move, Act::Switch, Act::WorkPage, Act::BacklogPage, Act::AreasPage, Act::RoutinesPage, Act::SettingsPage, Act::Lead, Act::HideChat, Act::Messages, Act::Hub, Act::Help, Act::Inbox, Act::Next, Act::New, Act::Go, Act::Chat,
+    pub const EVERY: [Act; 54] = [
+        Act::Options, Act::ItemOptions, Act::Move, Act::Switch, Act::Subtasks, Act::WorkPage, Act::BacklogPage, Act::AreasPage, Act::RoutinesPage, Act::SettingsPage, Act::Lead, Act::HideChat, Act::Messages, Act::Hub, Act::Help, Act::Inbox, Act::Next, Act::New, Act::Go, Act::Chat,
         Act::Review, Act::Card, Act::Note, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Rebase, Act::Follow, Act::Tidy, Act::Push, Act::Stage, Act::Done, Act::DismissCi, Act::RerunCi, Act::Park, Act::Reset, Act::Drop, Act::StartAt, Act::Refresh, Act::Away,
         Act::Update, Act::RestartLead, Act::Filter, Act::AreaRefresh, Act::Log, Act::Edit, Act::Pause, Act::Delete, Act::Fullscreen, Act::OpenImage, Act::Back, Act::Close, Act::Quit,
     ];
@@ -111,6 +112,7 @@ impl Act {
             Act::ItemOptions => "item_options",
             Act::Move => "move",
             Act::Switch => "switch",
+            Act::Subtasks => "subtasks",
             Act::WorkPage => "work_page",
             Act::BacklogPage => "backlog_page",
             Act::AreasPage => "areas_page",
@@ -168,6 +170,7 @@ impl Act {
             Act::Options => Default::Fixed(&[KeyCode::Enter], "⏎"),
             Act::Move => Default::Fixed(&[KeyCode::Up, KeyCode::Down, KeyCode::Char('k'), KeyCode::Char('j')], "↑ ↓ j k"),
             Act::Switch => Default::Fixed(&[KeyCode::Left, KeyCode::Right], "← →"),
+            Act::Subtasks => Default::Fixed(&[KeyCode::Char(' ')], "space"),
             Act::Lead => Default::Fixed(&[KeyCode::Tab, KeyCode::BackTab], "tab"),
             Act::Back => Default::Fixed(&[KeyCode::Esc], "esc"),
             Act::Fullscreen => Default::Fixed(&[KeyCode::Char('f')], "f"),
@@ -232,7 +235,8 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::Options, on: &[Backlog], help: "the selected item's card: its sections and open questions, which you answer there; an ongoing note's card; on a row kebbie keeps or a Linear issue, its options", hint: Hint::Both },
     Binding { act: Act::ItemOptions, on: &[Backlog], help: "options for the selected backlog item, each one explained", hint: Hint::No },
     Binding { act: Act::Options, on: &[Areas], help: "actions for the selected area (in the detail: run the selected action)", hint: Hint::Both },
-    Binding { act: Act::Switch, on: &[Work], help: "→ steps into the task: ↑ ↓ step its subtasks and pgup pgdn scroll the subtask's card beside the tasks; → again, or → on a task without subtasks, hands the keys to its card beside the tasks, which ↑ ↓ pgup pgdn scroll, and on a narrow board, with no card beside, → goes no further; ← or esc step back one pane at a time", hint: Hint::No },
+    Binding { act: Act::Switch, on: &[Work], help: "→ hands the keys to the card beside the tasks, which ↑ ↓ pgup pgdn scroll: from a task row the task's own card, from a subtask row that subtask's card; ← or esc hand them back to the rows they came from; on a narrow board, with no card beside, → does nothing", hint: Hint::No },
+    Binding { act: Act::Subtasks, on: &[Work], help: "space steps into the selected task's subtask rows: ↑ ↓ step them and the card beside the tasks is the highlighted subtask's; esc steps back out to the tasks; on a task without subtasks space does nothing", hint: Hint::No },
     Binding { act: Act::Options, on: &[Routines], help: "options for the selected routine (on a narrow board: open it, then options)", hint: Hint::No },
     Binding { act: Act::Switch, on: &[Areas], help: "list · detail", hint: Hint::No },
     Binding { act: Act::Move, on: ALL, help: "move", hint: Hint::No },

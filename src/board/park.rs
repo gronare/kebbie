@@ -316,7 +316,7 @@ mod tests {
     }
 
     #[test]
-    fn right_on_the_parked_line_never_steps_into_a_hidden_tasks_subtasks() {
+    fn space_or_right_on_the_parked_line_never_steps_into_a_hidden_tasks_subtasks() {
         let mut app = board_with_two_parked();
         let mut tasks = app.tasks.clone();
         for item in tasks.iter_mut().filter(|item| item.parked.is_some()) {
@@ -326,7 +326,9 @@ mod tests {
         press(&mut app, key(KeyCode::Down));
         assert!(app.on_parked_line());
         let (rows, _) = render(&mut app, 110, 30);
-        assert!(!rows.join("\n").contains("→ subtasks"), "{}", rows.join("\n"));
+        assert!(!rows.join("\n").contains("space subtasks"), "{}", rows.join("\n"));
+        press(&mut app, key(KeyCode::Char(' ')));
+        assert!(app.subtask_row.is_none() && !matches!(app.mode, Mode::Subtasks), "space steps into nothing on the parked line");
         press(&mut app, key(KeyCode::Right));
         let (rows, _) = render(&mut app, 110, 30);
         assert!(app.subtask_row.is_none() && !matches!(app.mode, Mode::Subtasks) && rows.join("\n").contains("That is the parked line"), "{}", rows.join("\n"));

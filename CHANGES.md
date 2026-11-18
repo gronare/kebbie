@@ -20,6 +20,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - kebbie push refuses a task that waits for another unless asked with --anyway, and the board's push window says what it waits for.
 - A waiting task's Claude and the lead hear it when a task it waits for is dropped, reset or lands with red CI.
 - kebbie peers shows each task's board title after its state, and the lead names tasks to you by those titles.
+- On the board → always moves to the card beside the tasks, and space steps into a task's subtask rows.
 
 ### Fixed
 - The questions window sends the selected answer on Enter, the recommended one included, once it has been open half a second; a plan's approve still waits for y.

@@ -162,7 +162,7 @@ const WORK: Sheet = Sheet {
             bind(&[Act::Push], "push", "push"),
         ]),
         group("SUBTASKS", &[
-            bind(&[Act::Switch], "step into a task's rows", "step in"),
+            bind(&[Act::Subtasks], "step into a task's rows", "step in"),
             bind(&[Act::Move], "step", "step"),
             bind(&[Act::Card], "its card", "card"),
             bind(&[Act::Permit], "accept it", "accept"),
@@ -520,7 +520,7 @@ mod tests {
         assert!(row_with(&rows, "U         update kebbie").contains("↑ 0.26.0"), "{screen}");
         assert!(screen.contains("h         hide or show the lead's chat") && screen.contains("ctrl+c    twice: quit the board"), "{screen}");
         assert!(screen.contains("in the card window  ← → image · ↑ ↓ j k scroll · f fullscreen · o open the image · p push"), "{screen}");
-        assert!(screen.contains("subtasks  ← → step into a task's rows · ↑ ↓ j k step · s its card · a accept it · r its review · esc the task"), "{screen}");
+        assert!(screen.contains("subtasks  space step into a task's rows · ↑ ↓ j k step · s its card · a accept it · r its review · esc the task"), "{screen}");
         assert!(screen.contains("in a subtask's card  ↑ ↓ j k scroll · r its review · a accept · esc the subtask"), "{screen}");
         assert!(screen.contains("areas (3) and routines (4) show their own keys here when you are on them · any key closes") && !screen.contains("↓ more"), "{screen}");
         assert!(screen.contains(&crate::shown_kebbie()), "the window names the kebbie that runs: {screen}");

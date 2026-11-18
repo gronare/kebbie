@@ -13,23 +13,24 @@ fn status_hints(keys: &Hints) -> Line<'static> {
     Line::from(Span::styled(keys.iter().map(|(key, label, _)| format!("{key} {label}")).collect::<Vec<_>>().join(" · "), style(MUTED)))
 }
 
-// On a task with subtask rows the line opens with how to move and step in: ↑ ↓ task · → subtasks · s card · ⏎ options, s only when there is a card or question.
+// On a task with subtask rows the line opens with how to move and step in: ↑ ↓ task · space subtasks · s card · ⏎ options, s only when there is a card or question.
 fn work_hints(ctx: Ctx, opens: Option<&'static str>, lead: bool, steps: bool, panes: &Hints) -> (Hints, Hints) {
     let (mut full, mut short) = keys::map().hints(ctx, lead);
-    for hints in [&mut full, &mut short] {
-        hints.splice(0..0, panes.iter().cloned());
-    }
+    full.splice(0..0, panes.iter().cloned());
+    short.splice(0..0, panes.iter().filter(|(_, _, code)| *code != KeyCode::Right).cloned());
     let card = (keys::key(Act::Card).to_string(), opens.unwrap_or("card"), keys::map().code(Act::Card));
     if steps {
-        let mut lead_in = vec![("↑ ↓".to_string(), "task", KeyCode::Down), ("→".to_string(), "subtasks", KeyCode::Right)];
+        let mut lead_in = vec![("↑ ↓".to_string(), "task", KeyCode::Down), (keys::map().label(Act::Subtasks), "subtasks", keys::map().code(Act::Subtasks))];
         lead_in.extend(opens.map(|_| card));
         for hints in [&mut full, &mut short] {
             let at = hints.iter().position(|(_, _, code)| *code == keys::map().code(Act::Options)).unwrap_or(0);
             hints.splice(at..at, lead_in.clone());
         }
     } else if opens.is_some() {
-        full.insert(1, card.clone());
-        short.insert(1, card);
+        for hints in [&mut full, &mut short] {
+            let at = hints.iter().position(|(_, _, code)| *code == keys::map().code(Act::Options)).map_or(1, |at| at + 1);
+            hints.insert(at, card.clone());
+        }
     }
     (full, short)
 }
@@ -169,8 +170,8 @@ mod tests {
     #[test]
     fn s_card_is_offered_on_a_task_with_subtasks_only_when_s_has_something_to_open() {
         let line = |opens| hint_lines(Ctx::Work, opens, false, true, &Vec::new()).0.to_string();
-        assert!(line(None).contains("↑ ↓ task · → subtasks · ⏎ options") && !line(None).contains("s card"), "{}", line(None));
-        assert!(line(Some("card")).contains("↑ ↓ task · → subtasks · s card · ⏎ options"), "{}", line(Some("card")));
+        assert!(line(None).contains("↑ ↓ task · space subtasks · ⏎ options") && !line(None).contains("s card"), "{}", line(None));
+        assert!(line(Some("card")).contains("↑ ↓ task · space subtasks · s card · ⏎ options"), "{}", line(Some("card")));
     }
 
     #[test]
@@ -182,7 +183,7 @@ mod tests {
         });
         let (rows, buffer) = render(&mut app, 170, 30);
         let bar = &rows[28];
-        assert!(bar.trim_start().starts_with("⏎ options · tab lead · i inbox · m messages · ? keys"), "{bar}");
+        assert!(bar.trim_start().starts_with("→ card · ⏎ options · tab lead · i inbox · m messages · ? keys"), "{bar}");
         assert!(bar.contains("session ━━━━━━━━ 23% resets 12:10   week ━━━━━━━━ 71% resets sun"), "{bar}");
         let (x, _) = find(&rows[28..29], "session ━")[0];
         let fills: Vec<Color> = (0..8).map(|cell| buffer[(x as u16 + 8 + cell, 28)].fg).collect();

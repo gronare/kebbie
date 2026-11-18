@@ -385,7 +385,7 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
             } else {
                 let mut hint = app.s_gives(item).map_or_else(options_hint, |gives| card_hint(&gives));
                 if !super::steps::walked(item).is_empty() {
-                    hint.spans.extend([Span::styled(" · ", style(MUTED)), Span::styled("→", style(MAUVE)), Span::styled(" subtasks", style(MUTED))]);
+                    hint.spans.extend([Span::styled(" · ", style(MUTED)), Span::styled(keys::map().label(Act::Subtasks), style(MAUVE)), Span::styled(" subtasks", style(MUTED))]);
                 }
                 if super::detail::note_of(app, item).is_some() {
                     let label = if super::note_window::reads_note(item) { " read its note" } else { " its note" };

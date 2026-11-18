@@ -923,6 +923,7 @@ impl App {
                 }
             }
             Act::Switch if key.code == KeyCode::Right => self.enter_task(),
+            Act::Subtasks => self.enter_subtasks(),
             Act::Switch => {}
             Act::Back | Act::Close => self.at_top(Some(act)),
             Act::Help => self.mode = Mode::Help(Default::default()),
