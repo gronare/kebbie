@@ -945,6 +945,40 @@ With open [kebbie issues](#kebbie-issues), it looks them up on GitHub through `g
 - On the main channel kebbie shows as `main installed`, and what is newer as the commits on origin's default branch the build lacks, such as `3 new on main`.
 - On the release channel, the latest is the highest tag whose release is published with a binary for this machine. A newer tag that is not yet says `kebbie <version> is not published yet; try again in a while`.
 
+## Jobs on another machine
+
+A job is a command another machine of your hub account runs on a worktree as it stands, such as a build for another operating system. See [Run a job on another machine](../how-to/run-a-job-on-another-machine.md).
+
+| Command | What it does |
+|---|---|
+| `kebbie job run <name>` | Run the repo's job of that name, from [`[jobs]`](configuration.md#jobs) in its repo config, on a machine of your hub account with [`worker.enabled`](configuration.md#ci-updates-and-the-keeper), on this worktree with its uncommitted and untracked files. It prints the job's output as it comes and exits as the job did: 0 when it exited 0, 1 when it failed, was refused, ran past its timeout, no worker fits, the worker sent nothing for 10 minutes or you pressed Ctrl-C. Without a name it lists the repo's jobs. |
+
+- It needs this machine connected to the hub with its account pinned, and its keeper running: the keeper takes the job's output from the hub.
+- The worker is a machine on your account's signed list whose operating system or name matches the job's `on` and that the hub heard from in the last ten minutes, the one heard from last. A report from any other machine is refused, and a job from a machine the account removed from its list is too, once the hub hands over the new list: the worker refuses a list older than one it already saw, but cannot tell when a hub keeps handing over the last list it had.
+- The worktree goes along as a git bundle in the hub's blobs, sealed: what came after the last commit that worker took, and nothing when it has the commit; the first time, what came after the newest commit `origin` has, which the worker fetches from `origin` with its own credentials, or the whole history when `origin` is no https or ssh URL or the worker cannot fetch. A bundle carries at most 31.9 MiB. The URL goes to the worker without any password or token in it. The blobs, the snapshot's ref and the job's files go however the command ends, Ctrl-C included; those of one killed outright go with the next `kebbie job run`.
+- Ctrl-C stops following the job, not the job: a worker that took it runs it to its end, as kebbie cannot tell a worker to stop a job.
+- The worker reports at least once a minute from the moment it takes the job, and stops it at its `timeout_minutes`, 60 by default: SIGTERM to its process group, SIGKILL 10 s later. Taking the commit, the fetch from `origin` included, counts toward that time; the fetch never asks for a password or passphrase. A line in the output marks reports that were lost on the way.
+- On the worker, the job runs with `sh -c` in a folder of the task's own under `~/.local/share/kebbie/worker/<repo>/`, with `KEBBIE_JOB`, `KEBBIE_JOB_TASK`, `KEBBIE_JOB_SHA` and `KEBBIE_JOB_MASTER` set, one job at a time. A job that waited more than a day in the worker's queue is refused instead.
+- On hub.kebbie.dev, jobs are part of Hub Pro.
+
+## Commands on another machine
+
+A command runs on another machine of your hub account over a direct link on a private network both are on, Tailscale or WireGuard, or through the hub's relay when no address answers within 2 s. The relay is part of Hub Pro on hub.kebbie.dev and free on a hub you run yourself, and passes at most 4 GiB per link and 8 links at once per account. See [Run a command on another machine](../how-to/run-a-command-on-another-machine.md).
+
+| Command | What it does |
+|---|---|
+| `kebbie run --on <system or machine> -- <command …>` | Run the command on that machine, on this worktree with its uncommitted and untracked files, with its stdout and stderr streamed as they come. It exits with the command's exit code, 128 plus the signal's number when a signal ended it, and 255 when no link could be made or the link was lost. |
+| `kebbie link` | Each machine of your hub account and how a link reaches it: direct on which address or relayed through the hub, with the round trip of a ping, or down and why. |
+
+- `--on` picks a worker as a job's `on` does: by its system or its name, the one the hub heard from last. This machine's own name runs the command here over loopback, when its `worker.enabled` is on. Without `--on`, any worker.
+- The link is TLS 1.3, to port 47011 or inside a WebSocket the hub passes between the two machines of one account, each side shown by its machine's Ed25519 key as a raw public key. The asker accepts only the key the account's list has for that machine. The worker accepts only a key on the list the hub hands over for that session, one the account signed and no older than one it saw.
+- The worktree goes as a git bundle of what the worker lacks, after the worker has fetched `origin` as for a job, and nothing when it has the commit. On the worker it lands under `refs/kebbie/tasks/<task>` in the repo's store and is checked out in `~/.local/share/kebbie/worker/<repo>/.links/<task>` with `checkout --force` and `clean -fd`, so ignored files survive. A second run in the same task waits until the first has ended.
+- A word that starts with `-` before `--` is refused, with a pointer to `--`. Several words after `--` are quoted one by one; a single word is one `sh -c` line. The command runs with `KEBBIE_RUN_TASK` and `KEBBIE_RUN_FROM` set and stdin closed.
+- Ctrl-C sends SIGINT to the command's process group on the worker, a second SIGTERM, a third SIGKILL; a fourth quits at once. Ctrl-C before the command started stops the run and leaves nothing behind; SIGTERM or SIGHUP count as two Ctrl-C. The asker going away, or the worker's keeper stopping, ends the command with SIGTERM, then SIGKILL 10 s later.
+- Each side beats every 10 s when it has nothing to send, also while it fetches, checks out or bundles, and gives the link up after 45 s without a word or after a send not taken for 45 s: `kebbie run` says so and exits 255, the worker stops the command. A direct link also has TCP keepalive.
+- The worker listens on loopback and on its Tailscale and WireGuard addresses only: Tailscale's from `tailscale ip` or in Tailscale's ranges on a `tailscale…` or `utun…` interface, WireGuard's on a `wg…` or WireGuard interface and in a private range, never a public one. It takes at most 8 connections at once that have not finished their handshake, gives each 10 s in all, and asks the hub for the account's list only once a peer shows a key, reading it again when it is over 3 s old.
+- The worker's keeper log gets one line per session: who asked, from where, what ran and how it ended, or why the session was refused.
+
 ## The hub
 
 Show the board on your phone through a kebbie hub. See [See your board on your phone](../how-to/see-your-board-on-your-phone.md). `connect`, `join`, `move`, `leave` and approving or denying a device are yours only.
