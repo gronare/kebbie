@@ -188,6 +188,7 @@ struct App {
     screens: crate::behind::Reader<String>,
     refresh: Sender<()>,
     quit: bool,
+    leaving: bool,
     wanted_task: Option<String>,
     hits: Vec<(Rect, Hit)>,
     links: Vec<Link>,
@@ -750,7 +751,7 @@ impl App {
         if self.page == Page::Areas {
             let top = self.areas.is_normal();
             match self.areas.handle(key) {
-                Effect::Left => self.quit = self.overlay,
+                Effect::Left => self.close_overlay(false),
                 Effect::Unhandled if top => self.at_top(map.act(Ctx::Areas, &key)),
                 _ => {}
             }
@@ -843,13 +844,47 @@ impl App {
         match act {
             Some(Act::Back) if self.filter.is_some() && self.page == Page::Work => self.filter = None,
             Some(Act::Back) if self.page == Page::Work && self.column == Column::Work && self.parked_open && self.selected_task().is_some_and(|item| item.parked.is_some()) => self.show_parked(false),
-            Some(Act::Back | Act::Close) if self.overlay => self.quit = true,
+            Some(Act::Back | Act::Close) if self.overlay => self.close_overlay(true),
             Some(Act::Close) => {
                 let quit = keys::map().label(Act::Quit);
                 self.say(format!("{quit} twice to quit"));
             }
             _ => {}
         }
+    }
+
+    // An overlay closes at once when nothing runs behind it; otherwise once what runs is done, or at a second esc that stops it where it is.
+    fn close_overlay(&mut self, confirmed: bool) {
+        if !self.overlay {
+            return;
+        }
+        if self.under_way().is_empty() || (confirmed && self.leaving) {
+            self.quit = true;
+        } else {
+            self.leaving = true;
+        }
+    }
+
+    fn leave_once_done(&mut self) {
+        if self.leaving && self.under_way().is_empty() {
+            self.quit = true;
+        }
+    }
+
+    fn under_way(&self) -> Vec<String> {
+        self.jobs.iter().map(|job| self.job_line(job)).chain(self.areas.running()).chain(self.routines.running()).collect()
+    }
+
+    fn leaving_line(&self) -> Option<String> {
+        if !self.leaving {
+            return None;
+        }
+        let esc = keys::map().label(Act::Back);
+        Some(match self.under_way().as_slice() {
+            [] => "Closing…".to_string(),
+            [one] => format!("Closes once {} is done · {esc} again closes now and stops it where it is", one.split('…').next().unwrap_or(one)),
+            many => format!("Closes once the {} jobs under way are done · {esc} again closes now and stops them where they are", many.len()),
+        })
     }
 
     fn handle_normal(&mut self, key: KeyEvent) {
@@ -1019,7 +1054,7 @@ impl App {
                             self.in_background(format!("Going to {}", item.name), move || {
                                 let _ = herdr::focus_workspace(&workspace);
                                 Ok(String::new())
-                            }).then(|app| app.quit |= app.overlay);
+                            }).then(|app| app.close_overlay(false));
                         }
                     }
                     Act::Chat => {
@@ -1251,7 +1286,7 @@ impl App {
     fn new(sources: Vec<Source>, backlog: Backlog, overlay: bool, refresh: Sender<()>) -> Self {
         App {
             column: Column::Work, tasks: Vec::new(), checkouts: Vec::new(), backlog, found: Vec::new(), work_selected: 0, backlog_selected: 0,
-            mode: Mode::Normal, overlay, loaded: false, error: None, screens: Default::default(), refresh, quit: false, wanted_task: None, hits: Vec::new(), links: Vec::new(),
+            mode: Mode::Normal, overlay, loaded: false, error: None, screens: Default::default(), refresh, quit: false, leaving: false, wanted_task: None, hits: Vec::new(), links: Vec::new(),
             page: Page::Work, areas: area_page::Page::new(sources.clone()), routines: routine_page::Page::new(config::path(), config::repos_dir()), settings: settings_page::Page::new(settings_page::Paths::current(), None), sources, fetch_failures: Vec::new(), away: false,
             messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, after_message: None, questions: Vec::new(), answering: None, sending: None, offers: Vec::new(), offer_panel: Default::default(), reporter: Default::default(), fixed: None, fixed_seen: 0, usage: None, ongoing: Vec::new(), groups: Group::ALL.to_vec(), ongoing_at: OngoingAt::default(), parked_open: false,
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
@@ -1425,8 +1460,9 @@ pub fn run(overlay: bool) -> Result<String> {
             changed |= app.settings.take_reads();
             changed |= app.take_item_card_read();
             if let Some(Effect::Left) = app.areas.tick(app.page == Page::Areas) {
-                app.quit = app.overlay;
+                app.close_overlay(false);
             }
+            app.leave_once_done();
             if let Some(effect) = app.routines.tick(app.page == Page::Routines) {
                 app.after_routines(effect, None);
             }
@@ -1596,6 +1632,44 @@ mod tests {
         assert!(app.filter.is_none() && !app.quit, "esc clears the filter first");
         app.handle_normal(key(KeyCode::Esc));
         assert!(app.quit, "then closes the overlay");
+    }
+
+    #[test]
+    fn an_overlay_closed_while_a_job_runs_closes_once_it_is_done_or_at_a_second_esc() {
+        let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
+        app.overlay = true;
+        let (go, wait) = std::sync::mpsc::channel::<()>();
+        app.in_background("Rebasing billing".to_string(), move || {
+            let _ = wait.recv();
+            Ok(String::new())
+        });
+        press(&mut app, key(KeyCode::Esc));
+        assert!(!app.quit && app.leaving, "esc waits for the job");
+        let (rows, _) = render(&mut app, 140, 30);
+        assert!(rows.join("\n").contains("Closes once Rebasing billing is done · esc again closes now"), "a line says what still runs");
+        app.in_background("Going to billing".to_string(), || Ok(String::new())).then(|app| app.close_overlay(false));
+        app.poll_jobs();
+        let start = Instant::now();
+        while app.jobs.len() > 1 && start.elapsed() < Duration::from_secs(10) {
+            app.poll_jobs();
+        }
+        app.leave_once_done();
+        assert!(!app.quit, "a job's own close waits for the one still running");
+        go.send(()).unwrap();
+        settle_jobs(&mut app);
+        app.leave_once_done();
+        assert!(app.quit, "it closes once the job is done");
+        let mut app = test_app(Vec::new());
+        app.overlay = true;
+        let (_go, wait) = std::sync::mpsc::channel::<()>();
+        app.in_background("Pushing billing".to_string(), move || {
+            let _ = wait.recv();
+            Ok(String::new())
+        });
+        press(&mut app, key(KeyCode::Char('q')));
+        assert!(!app.quit);
+        press(&mut app, key(KeyCode::Esc));
+        assert!(app.quit, "esc again closes at once");
     }
 
     #[test]

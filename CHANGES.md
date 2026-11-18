@@ -13,6 +13,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A board left open across an update starts the newly installed keeper when the keeper stops, instead of the board's own older kebbie.
 - A restarted task gets its prompt even when Claude goes busy as it resumes: kebbie sends the prompt before telling the task about its new role, and holds the prompt for the end of the turn when the input box does not show it.
 - A rebuilt kebbie takes over the board only once every job's outcome has been shown, so a failure that waited for you to close a window is no longer lost.
+- Closing the board in a popup while something runs behind it waits until that is done, with a line naming what still runs; esc again closes it at once.
 
 ## 0.40.3
 

@@ -241,9 +241,7 @@ impl App {
                 match workspace {
                     Some(workspace) => {
                         let _ = herdr::focus_workspace(&workspace);
-                        if self.overlay {
-                            self.quit = true;
-                        }
+                        self.close_overlay(false);
                         return;
                     }
                     None => window.notice = Some((false, "Its task has no Space open.".to_string())),

@@ -72,7 +72,7 @@ impl App {
         let tasks = self.tasks.clone();
         self.subject = Some(super::notices::Subject::plain("paste"));
         self.in_background("Passing the paste on".to_string(), move || herdr::workspaces().and_then(|workspaces| pass_on(target(&workspaces, &tasks), &text)).map(|_| String::new()))
-            .then(|app| app.quit |= app.overlay);
+            .then(|app| app.close_overlay(false));
     }
 }
 

@@ -50,8 +50,8 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Page::Settings => app.settings.hint_lines(),
     };
     let updates: &[(String, String)] = if app.page == Page::Work { &app.updates } else { &[] };
-    let status = match app.notice.as_ref().filter(|(_, at)| at.elapsed() < Duration::from_secs(3)) {
-        Some((text, _)) => Line::from(Span::styled(text.clone(), style(PEACH))),
+    let status = match app.leaving_line().or_else(|| app.notice.as_ref().filter(|(_, at)| at.elapsed() < Duration::from_secs(3)).map(|(text, _)| text.clone())) {
+        Some(text) => Line::from(Span::styled(text, style(PEACH))),
         None => app.subtask_keys().filter(|_| app.page == Page::Work).unwrap_or_else(|| status_line(full_hints, short_hints, updates, app.usage.as_ref(), bottom.width as usize, super::clock::now())),
     };
     if app.page == Page::Areas {

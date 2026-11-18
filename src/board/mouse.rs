@@ -29,7 +29,7 @@ impl App {
         }
         if self.page == Page::Areas {
             if let Effect::Left = self.areas.mouse(event) {
-                self.quit = self.overlay;
+                self.close_overlay(false);
             }
             return;
         }

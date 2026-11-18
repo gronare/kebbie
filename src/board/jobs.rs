@@ -208,7 +208,7 @@ impl App {
         })
     }
 
-    fn job_line(&self, job: &Job) -> String {
+    pub(super) fn job_line(&self, job: &Job) -> String {
         let title = |name: &str| self.tasks.iter().find(|item| item.name == name).map_or_else(|| name.to_string(), Item::titled);
         match (job.step(), job.tasks.len()) {
             (Some((_, what)), 1) => format!("{}… {what}", job.label),
@@ -228,7 +228,7 @@ impl App {
 
 // One line per job under way, the board's and its pages', bottom right where toasts show, above a toast that shows at the same time.
 pub(super) fn draw_jobs(frame: &mut Frame, app: &App, below: Option<u16>) {
-    let texts: Vec<String> = app.jobs.iter().map(|job| app.job_line(job)).chain(app.areas.running()).chain(app.routines.running()).collect();
+    let texts = app.under_way();
     if texts.is_empty() {
         return;
     }

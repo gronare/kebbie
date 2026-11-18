@@ -176,7 +176,7 @@ impl App {
         };
         let workspace = item.workspace.clone();
         if let Some(job) = self.task_in_background(&item.name, Some(path.clone().as_path()), "opening its review", format!("Opening {}'s review", item.name), move || open_review_in(&path, &agent.pane, &script, workspace.as_deref(), subtask)) {
-            job.then(|app| app.quit |= app.overlay);
+            job.then(|app| app.close_overlay(false));
         }
     }
 }
