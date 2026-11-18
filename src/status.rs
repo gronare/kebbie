@@ -28,12 +28,13 @@ pub enum Group {
     ReadyToPush,
     CiRunning,
     Idle,
+    WaitingOn,
     Queued,
     Parked,
 }
 
 impl Group {
-    pub const ALL: [Group; 7] = [Group::NeedsYou, Group::Working, Group::InReview, Group::ReadyToPush, Group::CiRunning, Group::Idle, Group::Queued];
+    pub const ALL: [Group; 8] = [Group::NeedsYou, Group::Working, Group::InReview, Group::ReadyToPush, Group::CiRunning, Group::Idle, Group::WaitingOn, Group::Queued];
 
     pub fn key(self) -> &'static str {
         match self {
@@ -43,6 +44,7 @@ impl Group {
             Group::ReadyToPush => "ready-to-push",
             Group::CiRunning => "ci-running",
             Group::Idle => "waiting-for-work",
+            Group::WaitingOn => "waiting-on",
             Group::Queued => "queued",
             Group::Parked => "parked",
         }
@@ -56,6 +58,7 @@ impl Group {
             Group::ReadyToPush => "READY TO PUSH",
             Group::CiRunning => "CI RUNNING",
             Group::Idle => "WAITING FOR WORK",
+            Group::WaitingOn => "WAITING ON",
             Group::Queued => "QUEUED",
             Group::Parked => "PARKED",
         }
@@ -198,6 +201,8 @@ pub struct Item {
     pub obstacle: Option<crate::obstacle::Shown>,
     pub built: Built,
     pub build_wait: Option<usize>,
+    pub waits_on: Option<tasks::WaitsOn>,
+    pub blocks: Vec<String>,
 }
 
 // The files a task's commits change and when its first commit was made, which orders two pushes of the same files.
@@ -241,7 +246,7 @@ impl Item {
             name: wait.task.clone(), title, place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
             report: None, question: None, ci: None, recover: None, routine: None, push_waits: None,
             queued: Some(Queued { after, blocked: wait.blocked.clone(), waiting, names, base, at, backlog: wait.backlog.is_some() }),
-            held_by_draft: None, unsent_start: false, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), unrecorded: None, push_left: None, staged: false, subtasks: tasks::Subtasks::default(), to_accept: None, parked: None, assessment: None, recipe: None, obstacle: None, built: Built::default(), build_wait: None,
+            held_by_draft: None, unsent_start: false, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), unrecorded: None, push_left: None, staged: false, subtasks: tasks::Subtasks::default(), to_accept: None, parked: None, assessment: None, recipe: None, obstacle: None, built: Built::default(), build_wait: None, waits_on: None, blocks: Vec::new(),
         }
     }
 
@@ -468,6 +473,9 @@ impl Item {
         if self.wants_you_now() {
             return Group::NeedsYou;
         }
+        if self.waits_on.is_some() && matches!(phase, Phase::Idle | Phase::Ready { .. } | Phase::Staged { .. } | Phase::NeedsYou(Why::Report | Why::Unreported | Why::NothingToPush)) {
+            return Group::WaitingOn;
+        }
         match phase {
             Phase::Starting | Phase::Working | Phase::Closing => Group::Working,
             Phase::Idle if self.obstacle.as_ref().is_some_and(|obstacle| obstacle.state != crate::obstacle::State::Asked) => Group::Working,
@@ -675,6 +683,9 @@ impl Item {
         if let Some(note) = self.queued_note() {
             return note;
         }
+        if let Some(waits) = self.waits_on.as_ref().filter(|_| self.group() == Group::WaitingOn) {
+            return waits.line.clone();
+        }
         let Some(git) = &self.git else {
             return format!("{} session outside a task worktree", self.agent.as_ref().map_or("Agent", |agent| agent.kind.name()));
         };
@@ -735,6 +746,8 @@ impl Item {
         shown["pushable"] = tasks::pushable_json(&self.subtasks);
         shown["obstacle"] = self.obstacle.as_ref().map_or(Value::Null, |obstacle| json!({ "id": obstacle.id, "state": obstacle.state.word(), "text": obstacle.text }));
         shown["parked_until"] = self.parked.map_or(Value::Null, |parked| parked.until.map_or(json!(tasks::UNPARKED), |at| json!(at)));
+        shown["waits_on"] = self.waits_on.as_ref().map_or(Value::Null, |waits| waits.after.iter().map(|(address, state)| json!({ "address": address, "state": state })).collect());
+        shown["blocks"] = json!(self.blocks);
         shown
     }
 
@@ -1176,6 +1189,8 @@ fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>,
                 obstacle: state.as_deref().and_then(|state| crate::obstacle::shown_in(state, &address)),
                 built: match shas.as_ref().filter(|_| ahead > 0) { Some(shas) => built(&slot.path, shas), None => Built::default() },
                 build_wait: state.as_deref().and_then(|_| crate::builds::place(&address)),
+                waits_on: None,
+                blocks: Vec::new(),
                 phase: None,
                 title: state.as_deref().and_then(|state| title_of(state, &address, agent_title.as_deref(), &name_of(repo), &task, &name_of(&slot.path))),
                 name: task,
@@ -1201,6 +1216,7 @@ fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>,
             })
             .map(|item| Item { recipe: crate::recipe::load(state, &peers::address(&item.name, &item.place)), ..item }).collect();
         items.extend(queued);
+        tasks::mark_waits(state, &log, &mut items);
     }
     for agent in &agents {
         let workspace = agent["workspace_id"].as_str().unwrap_or_default().to_string();
@@ -1253,6 +1269,8 @@ fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>,
             obstacle: None,
             built: Built::default(),
             build_wait: None,
+            waits_on: None,
+            blocks: Vec::new(),
         });
     }
     // A task's halves in different repos sit together within a group, after what needs you most.
@@ -1329,6 +1347,8 @@ pub(crate) mod tests {
             obstacle: None,
             built: Built::default(),
             build_wait: None,
+            waits_on: None,
+            blocks: Vec::new(),
         };
         rederive(&mut item);
         item

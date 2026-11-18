@@ -33,6 +33,7 @@ pub(crate) struct Marks {
     run: bool,
     working: bool,
     bound: Option<usize>,
+    waits: Option<Box<str>>,
 }
 
 impl Marks {
@@ -48,8 +49,14 @@ impl Marks {
             run: subtasks.listed(),
             accepted,
             working: false,
+            waits: None,
             bound: commits.iter().position(|commit| subtasks.order.iter().find(|row| row.sha == commit.sha).and_then(|row| row.stage.as_deref()).is_some_and(|stage| tasks::rollout::held_by(&subtasks.stages, stage).is_some()) || subtasks.out_of_stage.as_deref() == Some(commit.sha.as_str())),
         }
+    }
+
+    // A task that waits for another is pushed from this window ahead of it, so the window says what it waits for before y or p.
+    pub(super) fn waiting(self, waits: Option<String>) -> Self {
+        Self { waits: waits.map(String::into_boxed_str), ..self }
     }
 
     // While its agent works, the window pushes only the accepted run and rewrites nothing.
@@ -224,6 +231,12 @@ pub(super) fn push_lines(card: Option<&(report::Card, bool)>, tests: Option<&evi
         lines.push(indented(Line::from(tests_spans(tests, width.saturating_sub(4))), 2));
         lines.push(Line::default());
     }
+    if let Some(waits) = &marks.waits {
+        lines.push(section_header("WAITS", Vec::new(), width));
+        let said = format!("{waits} Pushing it now puts it out before them.");
+        lines.extend(wrap(&said, width.saturating_sub(2), 6).into_iter().map(|part| Line::from(vec![Span::raw("  "), Span::styled(part, style(YELLOW))])));
+        lines.push(Line::default());
+    }
     lines.push(section_header("COMMITS", vec![Span::styled(commits.len().to_string(), style(MUTED))], width));
     let first_commit = lines.len();
     for (index, commit) in commits.iter().enumerate() {
@@ -299,13 +312,13 @@ pub(super) struct Opened {
     pub scroll: Scroll,
 }
 
-fn opening(path: &Path, busy: bool, turn: bool, held: bool) -> Opening {
+fn opening(path: &Path, busy: bool, turn: bool, held: bool, waits: Option<String>) -> Opening {
     let commits = match tasks::commits(path) {
         Ok(commits) if commits.is_empty() => return Opening::Said(Notice::new(Tone::NotNow, "Nothing to push: it has no commits yet").ok()),
         Ok(commits) => commits,
         Err(error) => return Opening::Said(Err(error)),
     };
-    let marks = Marks::read(path, &commits, turn).while_working(busy);
+    let marks = Marks::read(path, &commits, turn).while_working(busy).waiting(waits);
     if busy && marks.through().is_none() {
         return Opening::Said(Notice::new(Tone::NotNow, "Not yet: its Claude is still working").next("This opens once it reports, or once you accept its first subtask.").ok());
     }
@@ -317,10 +330,11 @@ impl App {
     // p reads the task's commits on a thread while a small window says so; esc closes it and what the thread finds is dropped.
     pub(super) fn open_push(&mut self, item: &crate::status::Item, path: PathBuf) {
         let (busy, turn, held) = (super::options::busy(item), item.turn_under_way(), item.held_by_uncommitted().is_some());
+        let waits = item.waits_on.as_ref().map(|waits| waits.line.clone());
         let (sender, read) = mpsc::channel();
         let reading = path.clone();
         thread::spawn(move || {
-            let _ = sender.send(opening(&reading, busy, turn, held));
+            let _ = sender.send(opening(&reading, busy, turn, held, waits));
         });
         self.mode = Mode::PushOpening { path, label: format!("Reading {}'s commits…", item.name), read };
     }
@@ -517,6 +531,12 @@ mod tests {
         assert_eq!(lines.len(), 7, "the body ends with the message; the keys are drawn apart");
         assert_eq!(push_keys(1, 0, None, false, false, false).to_string(), "Push?  y push and close · p push and keep it open · e edit message · esc cancel");
         assert!(push_keys(3, 1, Some(1), false, false, true).to_string().contains("p push the accepted run, 2 commits and keep it open"), "with subtasks p pushes the run");
+        let waiting = Marks::default().waiting(Some("Waits for Rounding field (ready to push).".to_string()));
+        let (lines, first) = push_lines(None, None, &commits[..1], &waiting, 0, 100);
+        let screen = text(&lines);
+        let wide = |head: &str| format!("{head} {}", "─".repeat(100 - head.chars().count() - 1));
+        assert!(screen.starts_with(&format!("{}\n  Waits for Rounding field (ready to push). Pushing it now puts it out before them.\n\n{}", wide("WAITS"), wide("COMMITS 1"))), "a task that waits says so before its commits: {screen}");
+        assert_eq!(first, 4, "the commits move down under it");
     }
 
     #[test]

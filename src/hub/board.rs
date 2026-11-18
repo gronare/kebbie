@@ -36,7 +36,7 @@ fn group(group: status::Group) -> Option<Group> {
         status::Group::InReview => Group::ToReview,
         status::Group::ReadyToPush => Group::ReadyToPush,
         status::Group::CiRunning => Group::CiRunning,
-        status::Group::Idle => Group::Idle,
+        status::Group::Idle | status::Group::WaitingOn => Group::Idle,
         status::Group::Queued | status::Group::Parked => return None,
     })
 }

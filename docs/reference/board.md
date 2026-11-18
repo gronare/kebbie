@@ -206,6 +206,7 @@ A listed test command inside a loop, a condition or `xargs` is not recorded eith
 | Ready to push | Reported ready with its commits, and pushes under way. |
 | CI running | Pushed, with its worktree kept until every workflow run for the pushed commit is green and the task's check after the push holds; then it closes as done. A run cancelled for a newer run on the default branch follows that run. |
 | Waiting for work | Started without work, blocked on something outside you, or kept open with nothing left on top. |
+| Waiting on | Running, and waiting for other tasks to land. See [Waiting on](#waiting-on). |
 | Queued | Waiting to start after other tasks or at a time, with no worktree, Space or Claude. |
 | Parked | Tasks you set aside until later, folded into one line under the other groups. See [Parked](#parked). |
 
@@ -278,6 +279,10 @@ A task that named a check for after its push (`kebbie report --after-push`) adds
 - Reported blocked on something outside you.
 - Pushed in part with `keep open` and nothing left on top.
 - Kept open and its red CI dismissed.
+
+### Waiting on
+
+A task you made wait for others with [`kebbie wait`](commands.md#kebbie-wait-name---on-task), while it is idle, ready or reported without anything for you. Its second line says what it waits for and what ends the wait: `Waits for Rounding field in api (ready to push): use the rounding field in the totals. kebbie rebases it and tells its Claude once it is pushed and CI is green.` Its row shows `waits for <title>`, and the row of each task it waits for shows `blocks <title>`, as does a task a queued one waits for.
 
 ### Queued
 

@@ -21,6 +21,7 @@ pub(super) fn group_color(group: Group) -> Color {
         Group::ReadyToPush => GREEN,
         Group::CiRunning => YELLOW,
         Group::Idle => MUTED,
+        Group::WaitingOn => MAUVE,
         Group::Queued => MAUVE,
         Group::Parked => MUTED,
     }
@@ -95,6 +96,12 @@ pub(super) fn row_facts(item: &Item, pushing: Option<String>) -> String {
     }
     parts.extend(item.review_note());
     parts.extend(item.unrecorded.clone());
+    if let Some(waits) = &item.waits_on {
+        parts.push(format!("waits for {}", tasks::and_list(&waits.names)));
+    }
+    if !item.blocks.is_empty() {
+        parts.push(format!("blocks {}", tasks::and_list(&item.blocks)));
+    }
     if item.permit == Some(Permit::Task) {
         parts.push("lead may push".to_string());
     }

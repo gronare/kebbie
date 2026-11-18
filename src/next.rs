@@ -276,7 +276,7 @@ pub fn of(items: &[Item]) -> Next {
             (Some(part), _) => parts.push((row(items, item, part), item)),
             (None, Group::Queued) => next.queued += 1,
             (None, Group::Parked) => next.parked += 1,
-            (None, Group::Idle) => {}
+            (None, Group::Idle | Group::WaitingOn) => {}
             (None, _) => next.working += 1,
         }
     }

@@ -196,9 +196,10 @@ kebbie -C ~/code/web wait billing --on rounding@api "use the rounding field in t
 Without `--on`, it says what the task waits for. Without a name, it lists every wait.
 
 - Its Claude is told what it waits for, and to go on meanwhile with the work that does not need it.
+- On the board it shows under [Waiting on](board.md#waiting-on), with `waits for <title>`, and each task it waits for shows `blocks <title>`. A question or a prompt of its Claude's still moves it to Needs you.
 - Once every task it waits for has ended as done, pushed and with green CI, the keeper rebases it onto the default branch, as [`kebbie follow`](#kebbie-follow-name-onoff) does, and tells its Claude what each landed and the text you gave. While its Claude is mid-turn it waits for the turn to end. With uncommitted files, or a question open, its Claude is told to rebase itself. The lead is told.
 - When a task it waits for is dropped, reset, lands with red CI or is gone, the task's Claude and the lead are told, and the wait goes on for the rest.
-- `kebbie push` refuses it while it waits, and names `--anyway`. The board's push window pushes it anyway.
+- `kebbie push` refuses it while it waits, and names `--anyway`. The board's push window says what it waits for, and its `y` or `p` pushes it anyway.
 - Refused, with nothing written, for a task to wait for that is not open, queued or done, for one done already, and for a wait in a circle with other waits or queued tasks.
 
 Yours to run, or the lead's on your word; a task's own Claude cannot. A wait set again replaces the one before; `done`, `drop` and `reset` of the waiting task end it.
@@ -640,6 +641,8 @@ With nothing waiting, it prints `Nothing needs you.` and what is on its way in.
 | `push_ahead` | How many pushes of its repo go before it while it waits its turn. |
 | `profile` | The profile it started with: `task` for the built-in one, `null` for a session that is no task. |
 | `parked_until` | While it is parked: the Unix time it comes back, or `"unparked"` until you bring it back; `null` otherwise. |
+| `waits_on` | While it [waits for other tasks](#kebbie-wait-name---on-task): each one's `address` and `state`; `null` otherwise. |
+| `blocks` | The titles of the tasks, running or queued, that wait for it. |
 | `recipe` | How it is done: `name`, `shown`, `why` and `by` (`the lead`, `you`, `the task`), or `null` without one. |
 | `assessment` | The assessor's word on its last ready report, such as `review suggested: changes how VAT is rounded`, `no review: wording in two templates`, `review being assessed` or `review not assessed`, or `null`. |
 | `subtasks` | With subtasks listed, each one as `kebbie subtasks --json` gives it; else `null`. |

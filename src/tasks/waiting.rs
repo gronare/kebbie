@@ -382,6 +382,60 @@ pub fn command(cwd: &Path, name: Option<&str>, on: &[&str], off: bool, then: &[S
     wait_in(&state, &caller, &Asked { address: &address, repo: &repo, on, then: Some(then.as_str()).filter(|then| !then.trim().is_empty()) }, &known, messages::now(), &mut |to, text| tell_task(to, text))
 }
 
+// What a waiting task's row shows: each task it waits for with that task's state, and what ends the wait.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WaitsOn {
+    pub after: Vec<(String, String)>,
+    pub names: Vec<String>,
+    pub line: String,
+}
+
+fn waits_line(names: &[(String, String)], then: Option<&str>) -> String {
+    let listed = and_list(&names.iter().map(|(name, label)| format!("{name} ({label})")).collect::<Vec<_>>());
+    let then = then.map_or(String::new(), |then| format!(": {}", then.trim_end_matches('.')));
+    let it = if names.len() == 1 { "it is" } else { "they are" };
+    format!("Waits for {listed}{then}. kebbie rebases it and tells its Claude once {it} pushed and CI is green.")
+}
+
+// Each waiting task gets what it waits for, and each task waited for, by a running or a queued task, the titles of those it blocks.
+pub(crate) fn mark(state: &Path, log: &[Message], items: &mut [crate::status::Item]) {
+    let address = |item: &crate::status::Item| peers::address(&item.name, &item.place);
+    let waits = all(state);
+    if !waits.is_empty() {
+        let open: std::collections::HashSet<String> = items.iter().filter(|item| item.git.is_some()).map(address).collect();
+        let queued = items.iter().filter(|item| item.queued.is_some()).map(address).collect();
+        let ci = crate::ci::all(state).into_iter().map(|watch| (watch.address.clone(), watch.running())).collect();
+        let facts = Facts { ends: after::latest_ends(log), open, queued, ci };
+        let shown: Vec<(String, WaitsOn)> = waits.iter().map(|wait| {
+            let deps: Vec<(String, String, String)> = wait.on.iter().map(|dep| {
+                let item = items.iter().find(|item| item.git.is_some() && address(item) == dep.address);
+                let label = after::label(&facts.state(&dep.address, wait.at), item);
+                let title = item.and_then(|item| item.title.clone()).or_else(|| crate::status::kept_title(state, &dep.address)).unwrap_or_else(|| task_part(&dep.address).to_string());
+                let name = if dep.repo == wait.repo { title } else { format!("{title} in {}", name_of(&dep.repo)) };
+                (dep.address.clone(), label, name)
+            }).collect();
+            let names: Vec<(String, String)> = deps.iter().map(|(_, label, name)| (name.clone(), label.clone())).collect();
+            let line = waits_line(&names, wait.then.as_deref());
+            (wait.address.clone(), WaitsOn { after: deps.iter().map(|(address, label, _)| (address.clone(), label.clone())).collect(), names: deps.into_iter().map(|(_, _, name)| name).collect(), line })
+        }).collect();
+        for item in items.iter_mut().filter(|item| item.git.is_some()) {
+            item.waits_on = shown.iter().find(|(waiter, _)| *waiter == address(item)).map(|(_, waits)| waits.clone());
+        }
+    }
+    let waiting: Vec<(String, String, Vec<String>)> = items.iter().filter_map(|item| {
+        let on: Vec<String> = match (&item.waits_on, &item.queued) {
+            (Some(waits), _) => waits.after.iter().map(|(address, _)| address.clone()).collect(),
+            (None, Some(queued)) => queued.after.iter().filter(|(_, state)| state != "done").map(|(address, _)| address.clone()).collect(),
+            (None, None) => return None,
+        };
+        Some((address(item), item.titled(), on))
+    }).collect();
+    for item in items.iter_mut() {
+        let me = address(item);
+        item.blocks = waiting.iter().filter(|(waiter, _, on)| *waiter != me && on.contains(&me)).map(|(_, title, _)| title.clone()).collect();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -439,6 +493,35 @@ mod tests {
         assert!(said[1].1.starts_with("The user took this task off its wait for rounding@api"), "{}", said[1].1);
         assert_eq!(load(&state, "billing@web"), None);
         assert!(off_in(&state, &Caller::User, "billing@web", &mut |_, _| {}).unwrap_err().contains("It waits for nothing"));
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_waiting_task_shows_under_waiting_on_and_what_it_waits_for_shows_it_blocks() {
+        use crate::next::tests::{asking, named, queued_after, ready};
+        use crate::status::Group;
+        let state = crate::sh::test_dir("waiting-shown");
+        save(&state, &Waiting { address: "billing@web".to_string(), repo: PathBuf::from("/repos/web"), on: vec![Dep { address: "rounding@web".to_string(), repo: PathBuf::from("/repos/web") }], then: Some("use the rounding field".to_string()), by: "lead".to_string(), at: 100, gone_since: None }).unwrap();
+        crate::status::keep_title(&state, "rounding@web", "Rounding field");
+        let mut rounding = ready("rounding", "web", 10);
+        rounding.title = Some("Rounding field".to_string());
+        let mut billing = ready("billing", "web", 5);
+        billing.title = Some("Bill in cents".to_string());
+        let mut items = vec![rounding, billing, queued_after("search", "web", &["rounding@web"])];
+        assert_eq!(items[1].group(), Group::ReadyToPush, "without its wait it is ready to push");
+        mark(&state, &[], &mut items);
+        let waits = items[1].waits_on.clone().expect("the waiter shows its wait");
+        assert_eq!(waits.after, [("rounding@web".to_string(), "ready to push".to_string())]);
+        assert_eq!(waits.names, ["Rounding field"]);
+        assert_eq!(items[1].group(), Group::WaitingOn);
+        assert_eq!(items[1].summary(), "Waits for Rounding field (ready to push): use the rounding field. kebbie rebases it and tells its Claude once it is pushed and CI is green.");
+        assert_eq!(items[0].blocks, ["Bill in cents".to_string(), "search".to_string()], "a running and a queued task both wait on it");
+        assert!(items[1].blocks.is_empty() && items[0].waits_on.is_none());
+        let json = items[1].to_json();
+        assert_eq!((json["group"].as_str(), json["waits_on"][0]["address"].as_str()), (Some("WAITING ON"), Some("rounding@web")));
+        let mut asks = vec![named(asking("billing", "web", 1), "billing", "web")];
+        mark(&state, &[], &mut asks);
+        assert_eq!(asks[0].group(), Group::NeedsYou, "a question on its screen still wants the user");
         fs::remove_dir_all(state).unwrap();
     }
 

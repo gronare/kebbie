@@ -656,6 +656,16 @@ mod tests {
     }
 
     #[test]
+    fn a_waiting_row_names_what_it_waits_for_and_a_row_waited_for_what_it_blocks() {
+        let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 2);
+        item.waits_on = Some(crate::tasks::WaitsOn { after: vec![("rounding@api".to_string(), "ready to push".to_string())], names: vec!["Rounding field in api".to_string()], line: "Waits.".to_string() });
+        assert_eq!(row_facts(&item, None), "2 commits · waits for Rounding field in api");
+        item.waits_on = None;
+        item.blocks = vec!["Bill in cents".to_string(), "Search".to_string()];
+        assert_eq!(row_facts(&item, None), "2 commits · blocks Bill in cents and Search");
+    }
+
+    #[test]
     fn a_task_started_with_a_profile_other_than_task_shows_it_beside_its_name_on_its_row_and_in_its_panel() {
         let mut app = test_app(vec![served("search-filters")]);
         with_detail(&mut app);
