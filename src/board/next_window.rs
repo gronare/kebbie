@@ -353,7 +353,7 @@ impl App {
         let Some(index) = self.tasks.iter().position(|item| peers::address(&item.name, &item.place) == row.address) else { return };
         (self.page, self.column, self.work_selected, self.filter, self.in_messages, self.offer_panel.focused, self.comment_panel.focused) = (Page::Work, Column::Work, index, None, false, false, false);
         let item = self.tasks[index].clone();
-        if super::note_window::reads_note(&item) && super::detail::note_of(self, &item).is_some() {
+        if super::note_window::reads_note(self, &item) {
             return self.open_task_note(&item);
         }
         match row.part {

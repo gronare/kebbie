@@ -62,10 +62,17 @@ fn shown(inner: &str) -> String {
 }
 
 // A task stopped on you whose report sends you to its note, as an investigation's "read the findings in the task note" does.
-pub(super) fn reads_note(item: &Item) -> bool {
+pub(super) fn reads_note(app: &App, item: &Item) -> bool {
     let stopped = item.group() == Group::NeedsYou && matches!(item.phase.as_ref().map(|record| &record.phase), Some(Phase::NeedsYou(Why::Report | Why::NothingToPush)));
-    let names_note = item.report.as_ref().is_some_and(|report| report.text.split(|character: char| !character.is_alphanumeric()).any(|word| matches!(word.to_lowercase().as_str(), "note" | "notes" | "noten")));
-    stopped && item.question.is_none() && names_note
+    let Some(key) = super::detail::note_of(app, item) else { return false };
+    stopped && item.question.is_none() && item.report.as_ref().is_some_and(|report| points_at(&report.text, &key))
+}
+
+// A bare "note" ("Note that…") is no pointer: only the note's path or stem, or a phrase that can mean only the note, is.
+fn points_at(text: &str, key: &str) -> bool {
+    let (text, key) = (text.to_lowercase(), key.to_lowercase());
+    let stem = key.rsplit('/').next().unwrap_or(&key).trim_end_matches(".md");
+    text.contains(&key) || (!stem.is_empty() && text.contains(stem)) || ["vault note", "task note", "valvnot"].iter().any(|phrase| text.contains(phrase))
 }
 
 impl App {
@@ -197,6 +204,17 @@ mod tests {
         app.open_next();
         app.handle_key(key(KeyCode::Enter), None);
         assert!(matches!(&app.mode, Mode::TaskNote { key, .. } if key == KEY), "⏎ in Next opens the note");
+        for pointer in ["See Projects/auth-audit.md for the fixes.", "The findings are in auth-audit.", "Läs fynden i valvnoten.", "Read the vault note."] {
+            let mut app = with_note(stopped(pointer));
+            app.open_next();
+            app.handle_key(key(KeyCode::Enter), None);
+            assert!(matches!(&app.mode, Mode::TaskNote { .. }), "{pointer}");
+        }
+        let mut passing = with_note(stopped("Note that the staging credentials expired; the notes in the README are stale."));
+        assert!(passing.choices()[0].label != "Read its note", "a passing note is no pointer");
+        passing.open_next();
+        passing.handle_key(key(KeyCode::Enter), None);
+        assert!(!matches!(passing.mode, Mode::TaskNote { .. }), "⏎ in Next on a passing note opens what it opens for the report, not the note");
         let mut other = with_note(stopped("Blocked on the staging credentials."));
         assert!(other.choices()[0].label != "Read its note" && other.choices().iter().any(|choice| choice.label == "Read its note"), "a report about something else keeps the note among the options");
         assert!(screen(&mut other, 110, 50).contains("V its note"));
