@@ -208,7 +208,7 @@ profile = "quick-codex"
 
 `hub.ideas_machine`: one machine takes the ideas you add on your phone.
 
-- The machine it names says so on its board, and the phone's **New idea** picks it while it is awake, and an awake machine while it sleeps. The line under the machine says why: `ideas machine`, or `ideas machine is asleep, sent to devbox`.
+- The machine it names says so on its board, and the phone's **New idea** picks it while it is awake, and an awake machine while it sleeps. The line under the machine says why: `ideas machine`, or `ideas machine is asleep, sent to workstation`.
 - Your own pick in the phone wins.
 - It changes nothing else: tasks, starts and items added on a machine stay there.
 - Set it on the machine it names, or the same value on every machine.
