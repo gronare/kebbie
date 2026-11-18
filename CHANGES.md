@@ -16,6 +16,9 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The work-rules skill teaches a task to cut its work into commits that each go out alone, and to check its branch commit by commit before it reports ready.
 - board.next_question = false closes the questions window after each answer instead of opening the next question.
 - Every agent that runs or asks for tests, a task, the reviewer, the assessor, the investigator and the lead, is told the repo's task.test_commands, so none starts a test setup of its own.
+- kebbie wait makes a running task wait for other tasks, and once they land the keeper rebases it and tells its Claude what landed and what to do.
+- kebbie push refuses a task that waits for another unless asked with --anyway.
+- A waiting task's Claude and the lead hear it when a task it waits for is dropped, reset or lands with red CI.
 - kebbie peers shows each task's board title after its state, and the lead names tasks to you by those titles.
 
 ### Fixed

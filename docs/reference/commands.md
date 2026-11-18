@@ -25,6 +25,7 @@ Without a name, `land`, `follow`, `review`, `evidence`, `push`, `try`, `done`, `
 | [`kebbie land`](#kebbie-land-name) | Rebase a task onto the default branch without pushing. |
 | [`kebbie follow`](#kebbie-follow-name-onoff) | Keep a task rebased on the default branch. |
 | [`kebbie park`](#kebbie-park-name---until-when), [`unpark`](#kebbie-unpark-name) | Set a task aside until later, or bring it back now. |
+| [`kebbie wait`](#kebbie-wait-name---on-task) | Make a running task wait for other tasks, and go on once they land. |
 | [`kebbie recipe`](#kebbie-recipe-task-recipe-why) | The recipes, or how a task is done and why. |
 | [`kebbie push`](#kebbie-push-name) | Put a task in its repo's push line. |
 | [`kebbie try`](#kebbie-try-name), [`try --off`](#kebbie-try-name---off) | Put a ready task's commits on local main to try them, or take them off. |
@@ -178,6 +179,30 @@ It comes back to its group by itself at that time. Yours to run, or the lead's o
 
 Bring a parked task back to its group now, as `Z` on its row does.
 
+### `kebbie wait [name] --on <task>`
+
+Record that a running task waits for other tasks, such as one whose code it builds on, and have it go on once they land. `kebbie start --after` does the same for a task that has not started yet.
+
+```bash
+kebbie -C ~/code/web wait billing --on rounding@api "use the rounding field in the totals"
+```
+
+| Option | What it does |
+| --- | --- |
+| `--on <task[@repo]>` | A task to wait for, open or queued, in any repo. Repeat it to wait for several. |
+| `"<text>"` | What the task does once they land, told to its Claude then. |
+| `--off` | End the wait. Its Claude is told. |
+
+Without `--on`, it says what the task waits for. Without a name, it lists every wait.
+
+- Its Claude is told what it waits for, and to go on meanwhile with the work that does not need it.
+- Once every task it waits for has ended as done, pushed and with green CI, the keeper rebases it onto the default branch, as [`kebbie follow`](#kebbie-follow-name-onoff) does, and tells its Claude what each landed and the text you gave. While its Claude is mid-turn it waits for the turn to end. With uncommitted files, or a question open, its Claude is told to rebase itself. The lead is told.
+- When a task it waits for is dropped, reset, lands with red CI or is gone, the task's Claude and the lead are told, and the wait goes on for the rest.
+- `kebbie push` refuses it while it waits, and names `--anyway`. The board's push window pushes it anyway.
+- Refused, with nothing written, for a task to wait for that is not open, queued or done, for one done already, and for a wait in a circle with other waits or queued tasks.
+
+Yours to run, or the lead's on your word; a task's own Claude cannot. A wait set again replaces the one before; `done`, `drop` and `reset` of the waiting task end it.
+
 ### `kebbie recipe [task] ["<recipe>: <why>"]`
 
 How a task is done, by one of the recipes in the lead's playbook, and why. See [Recipes](../explanation/recipes.md).
@@ -209,6 +234,7 @@ Put the task in its repo's push line. When its turn comes, kebbie fetches, rebas
 | --- | --- |
 | `--through <sha>` | Push the commits up to and including `<sha>` and keep the task open, also when `<sha>` is its last commit. |
 | `--cancel` | Take the task out of the push line before it goes out. Nothing of it is pushed, and it waits under Ready to push. |
+| `--anyway` | Push a task that [waits for another](#kebbie-wait-name---on-task), ahead of it. |
 
 With `--through`, kebbie leaves the task's worktree alone: uncommitted changes do not stop it, and its HEAD stays where its Claude left it. When the default branch moved, kebbie rebases the commits up to `<sha>` onto it in a worktree of its own and pushes them from there, then tells the task's Claude to rebase onto the default branch once its work in progress is committed. When those commits changed the same files as the default branch, or conflict with it, its Claude rebases, runs their tests (or resolves the conflict) and reports ready first. A commit the task makes after `<sha>` meanwhile does not stop the push; a change to the commits up to `<sha>` does. A task kept open stays open until you close it (`done`, or Done in its options).
 

@@ -287,9 +287,12 @@ pub fn tidy(cwd: &Path, name: Option<&str>, note: &str) -> Result<String> {
 }
 
 // Pushes the task's commits through `through` (all of them without it) to the default branch, then closes the task, or with keep_open leaves the rest of its branch on top of what was pushed.
-pub fn push(cwd: &Path, name: Option<&str>, through: Option<&str>, keep_open: bool) -> Result<String> {
+pub fn push(cwd: &Path, name: Option<&str>, through: Option<&str>, keep_open: bool, anyway: bool) -> Result<String> {
     let repo = main_checkout(cwd)?;
     let slot = find_task(&repo, name, cwd)?;
+    if !anyway {
+        super::waiting::refuse_push(&state_dir()?, &peers::address(task_of(&slot), &name_of(&repo)), task_of(&slot))?;
+    }
     let upstream = default_branch(&repo)?;
     let through = chosen(&slot, &upstream, through, keep_open)?;
     push_task(&crate::permit::caller(), &repo, &slot, through)

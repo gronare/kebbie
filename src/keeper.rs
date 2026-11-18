@@ -48,6 +48,7 @@ pub fn routines() -> Vec<Routine> {
         Routine { name: "stage", every: 15, run: |ctx| { ctx.notes.extend(crate::tasks::stage_tick(&crate::lead::state_dir()?)); Ok(()) } },
         Routine { name: "ci", every: 30, run: |_| { crate::ci::tick(&crate::lead::state_dir()?); Ok(()) } },
         Routine { name: "after", every: crate::tasks::AFTER_EVERY, run: |ctx| { ctx.notes.extend(crate::tasks::after_tick(&crate::lead::state_dir()?)); Ok(()) } },
+        Routine { name: "waiting", every: crate::tasks::AFTER_EVERY, run: |ctx| { ctx.notes.extend(crate::tasks::waiting_tick(&crate::lead::state_dir()?)); Ok(()) } },
         Routine { name: "landed", every: crate::tasks::LANDED_EVERY, run: |ctx| { ctx.notes.extend(crate::tasks::landed_tick(&crate::lead::state_dir()?)); Ok(()) } },
         Routine { name: "follow", every: 60, run: |ctx| { ctx.notes.extend(crate::tasks::follow_tick(&crate::lead::state_dir()?)); Ok(()) } },
         Routine { name: "prompts", every: crate::menu::EVERY, run: |ctx| { ctx.notes.extend(crate::menu::tick(&crate::lead::state_dir()?)?); Ok(()) } },

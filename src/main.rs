@@ -306,6 +306,12 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   09:00), by default tomorrow at 09:00; --until unparked keeps it until you unpark it; yours, or
                                   the lead's on your word
   kebbie unpark [name]            bring a parked task back to its group now
+  kebbie wait <name> --on <task[@repo]> [\"<what to do once it lands>\"]
+                                  record that a running task waits for others (--on again for each): it shows under
+                                  Waiting on and each one waited for shows blocks <name>; once all are pushed and CI is
+                                  green, the keeper rebases it and tells its Claude what landed and what to do, and a
+                                  dropped one is told to it; --off ends the wait; without --on, what it waits for, and
+                                  without a name, every wait; yours, or the lead's on your word
   kebbie recipe [task] [\"<recipe>: <why>\"]
                                   the playbook's recipes; a task's recipe and why; or a new one for it, shown under its
                                   row on the board and written to its note
@@ -337,7 +343,8 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   pushes once it reports ready with the same commits; a conflict goes to its Claude;
                                   either way it keeps the head while its Claude works, and leaves the line for Needs
                                   you after 30 minutes without a ready report, or new commits nobody checked
-                                  (--cancel takes it out of the line, unpushed)
+                                  (--cancel takes it out of the line, unpushed; a task that waits for another is pushed
+                                  only with --anyway, ahead of what it waits for)
                                   (--through <sha> pushes its commits up to that one, rebased onto the default branch in
                                   a worktree of kebbie's own, and keeps the task open; its worktree, HEAD and uncommitted
                                   work stay as they are, and its Claude rebases onto the new default branch itself, told
@@ -825,8 +832,9 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("park") => tasks::park(&cwd, name, arguments.value("--until")),
         Some("recipe") => arguments.only("recipe", &[]).and_then(|_| recipe::command(&cwd, arguments.rest(1))),
         Some("unpark") => tasks::unpark(&cwd, name),
+        Some("wait") => tasks::wait(&cwd, name, &arguments.values_of("--on"), arguments.flag("--off"), arguments.rest(2)),
         Some("push") if arguments.flag("--cancel") => tasks::cancel_push(&cwd, name),
-        Some("push") => tasks::push(&cwd, name, arguments.value("--through"), arguments.value("--through").is_some()),
+        Some("push") => tasks::push(&cwd, name, arguments.value("--through"), arguments.value("--through").is_some(), arguments.flag("--anyway")),
         Some("try") if arguments.flag("--off") => tasks::unstage(&cwd, name),
         Some("try") => tasks::stage(&cwd, name, true),
         Some(old @ ("stage" | "unstage")) => {

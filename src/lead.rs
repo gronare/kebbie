@@ -903,6 +903,12 @@ mod tests {
     }
 
     #[test]
+    fn the_lead_makes_a_running_task_wait_with_kebbie_wait() {
+        let role = role_text(include_str!("../roles/lead.md"), "/opt/kebbie/kebbie", &[Source::Local], false, true, "English");
+        assert!(role.contains("A task already running that needs another's work first waits with `kebbie -C <repo> wait <task> --on <task[@repo]>"), "{role}");
+    }
+
+    #[test]
     fn the_lead_names_a_task_to_the_user_by_its_title() {
         let role = role_text(include_str!("../roles/lead.md"), "/opt/kebbie/kebbie", &[Source::Local], false, true, "English");
         assert!(role.contains("**Name each task by its title**, as its row on the board shows it (`title` in `kebbie status --json`, after its state in `kebbie peers`), never by its name or branch alone"), "{role}");

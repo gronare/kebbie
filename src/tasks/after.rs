@@ -157,7 +157,7 @@ pub(crate) fn held_items(state: &Path) -> HashSet<String> {
 }
 
 fn waited_on(state: &Path, address: &str) -> bool {
-    all(state).iter().any(|wait| wait.after.iter().any(|dep| dep.address == address))
+    all(state).iter().any(|wait| wait.after.iter().any(|dep| dep.address == address)) || super::waiting::waited_on(state, address)
 }
 
 // A done task's CI watch is kept when a wait names it, so the wait starts only on green.
@@ -247,6 +247,13 @@ impl Facts {
         queued.extend(waits.iter().flat_map(|wait| wait.after.iter()).filter(|dep| starting(state, &dep.address)).map(|dep| dep.address.clone()));
         let ci = crate::ci::all(state).into_iter().map(|watch| (watch.address.clone(), watch.running())).collect();
         Facts { ends: latest_ends(log), open, queued, ci }
+    }
+
+    // A running task's wait reads the same facts, with the open tasks of the repos it and the tasks it waits for are in.
+    pub(super) fn with_repos(state: &Path, log: &[Message], repos: &[PathBuf]) -> Facts {
+        let mut facts = Facts::read(state, log, &all(state));
+        facts.open.extend(repos.iter().flat_map(|repo| open_in(repo)));
+        facts
     }
 
     pub(crate) fn state(&self, address: &str, since: u64) -> DepState {

@@ -21,7 +21,7 @@ use super::{App, Mode, Page};
 pub(super) type Pusher = Arc<dyn Fn(&Path, Option<&str>, bool) -> Result<String> + Send + Sync>;
 
 pub(super) fn live_pusher() -> Pusher {
-    Arc::new(|path, through, keep_open| tasks::push(path, None, through, keep_open))
+    Arc::new(|path, through, keep_open| tasks::push(path, None, through, keep_open, true))
 }
 
 pub(super) type Dropper = Arc<dyn Fn(&Path, bool) -> Result<String> + Send + Sync>;
