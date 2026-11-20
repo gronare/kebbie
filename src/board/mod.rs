@@ -28,6 +28,7 @@ mod notices;
 mod options;
 mod park;
 mod paste;
+mod pulse;
 mod push;
 pub(crate) mod review;
 pub(crate) mod review_data;
@@ -1372,6 +1373,7 @@ pub fn run(overlay: bool) -> Result<String> {
     (app.graphics, app.cell_guessed) = graphics.startup();
     app.viewer = image_viewer(std::env::consts::OS, &|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()));
     let (mut changed, mut drawn_at) = (true, None);
+    let mut pulse = pulse::Pulse::started(Instant::now());
     let result = (|| -> Result<()> {
         while !app.quit {
             if let Mode::EditMessage(editor) = &mut app.mode {
@@ -1395,6 +1397,7 @@ pub fn run(overlay: bool) -> Result<String> {
             }
             while let Ok(update) = snapshots.try_recv() {
                 changed = true;
+                log_pulse(pulse.snapshot(Instant::now()).into_iter().collect());
                 match update {
                     Ok(snapshot) => {
                         let previous = app.selected_task().map(|item| (item.name, item.place));
@@ -1505,7 +1508,11 @@ pub fn run(overlay: bool) -> Result<String> {
                     }
                 }).map_err(|error| error.to_string())?;
                 (changed, drawn_at) = (false, Some(now));
+                log_pulse(pulse.drawn(now, app.tasks.iter().map(|item| format!("{}@{} {:?}", item.name, item.place, item.group())).collect()));
+            } else if changed || repaint {
+                pulse.waits(now);
             }
+            log_pulse(pulse.check(now, || format!("hold {hold:?}, size {size:?}, drawn at {:?}, pending {:?}", resize.drawn, resize.pending)));
             if app.may_restart() && ((std::mem::take(&mut app.restart_after_update) && rebuild.changed()) || rebuild.ready()) {
                 let error = rebuild.restart(&app);
                 app.show_as(Err(error), true);
@@ -1532,6 +1539,17 @@ pub fn run(overlay: bool) -> Result<String> {
     })();
     restore_terminal();
     result.map(|_| String::new())
+}
+
+fn log_pulse(lines: Vec<String>) {
+    if lines.is_empty() {
+        return;
+    }
+    if let Ok(state) = crate::lead::state_dir() {
+        for line in lines {
+            crate::keeper::log_line(&state, &line);
+        }
+    }
 }
 
 fn lead_pane() -> Option<String> {

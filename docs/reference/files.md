@@ -132,7 +132,7 @@ A `comments/` file holds the comment as GitHub gave it (author, text, file and l
 | --- | --- |
 | `keeper.lock` | Held by the running keeper, with its pid, binary and start time. |
 | `keeper.json` | The keeper's routines, each with its last run and error, and the stale sessions it last saw. |
-| `keeper.log` | What the keeper did: starts, exits, routine errors and restarts. Past 256 KB it moves to `keeper.log.1`. |
+| `keeper.log` | What the keeper did: starts, exits, routine errors and restarts. The board adds a `board:` line for each change to the task rows it draws, for kebbie's state unread 30 s, and for a change that waits 5 s for a draw. Past 256 KB it moves to `keeper.log.1`. |
 | `routines/` | One file per routine, `<id>.json`. `lock` keeps two schedulers from starting the same run. |
 | `backlog.json` | The backlog the lead saved on its last refresh. |
 | `backlog-told` | The local items to write out that the lead has been told of, one file name per line. |
