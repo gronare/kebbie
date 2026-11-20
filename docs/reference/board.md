@@ -220,7 +220,7 @@ kebbie keeps one phase per task, and only what changes it writes it: its start, 
 ### Needs you
 
 - A question on screen, such as a permission or trust prompt, whatever else the task is doing.
-- An open question from `kebbie ask`.
+- An open question from `kebbie ask`, marked `answer a question · N options`, with `· held: N messages` when messages wait behind it.
 - A review whose findings only ask for your confirmation, marked `confirm what its review asks · <the finding>`: Confirm passes the review, Change it sends your comment to the task.
 - Messages held behind a draft in its input box.
 - A start prompt Claude has not taken, marked `its start prompt is typed but not sent · ⏎ sends it`: kebbie pasted it into the task's input box and pressed Enter four times over 20 seconds. `⏎` on the row presses Enter there again; your own Enter in its Space, or clearing the box, settles it too.

@@ -91,8 +91,10 @@ fn deliver(session: &Session, text: &str, type_into: TypeInto) -> std::result::R
 }
 
 // A task with a question open waits for its answer: a message typed into it would start a turn and drop the question, so only the answer itself (about that question) reaches it.
+pub const QUESTION_HOLD: &str = "waits for the user's answer to its question";
+
 pub fn question_hold(about: Option<&str>, open_question: Option<&str>) -> Option<&'static str> {
-    open_question.filter(|id| about != Some(*id)).map(|_| "waits for the user's answer to its question")
+    open_question.filter(|id| about != Some(*id)).map(|_| QUESTION_HOLD)
 }
 
 // A held message to the lead about a question is dropped once the question is settled.
@@ -371,6 +373,7 @@ pub(super) fn send_locked_in(dir: &Path, from: &str, recipients: &[&Session], te
         }
         report.push(match outcome {
             Ok(_) => format!("Told {}.", session.address),
+            Err(QUESTION_HOLD) => format!("{0} {QUESTION_HOLD}; held until the user answers it, or the user or the lead runs kebbie release {0}.", session.address),
             Err(reason) => format!("{} {reason}; held, and delivered when it is free.", session.address),
         });
     }

@@ -185,6 +185,7 @@ pub struct Item {
     pub push_waits: Option<tasks::PendingPush>,
     pub queued: Option<Queued>,
     pub held_by_draft: Option<String>,
+    pub held_messages: usize,
     pub unsent_start: bool,
     pub phase: Option<crate::phase::Record>,
     pub landed: Option<tasks::LandedUnsure>,
@@ -246,7 +247,7 @@ impl Item {
             name: wait.task.clone(), title, place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
             report: None, question: None, ci: None, recover: None, routine: None, push_waits: None,
             queued: Some(Queued { after, blocked: wait.blocked.clone(), waiting, names, base, at, backlog: wait.backlog.is_some() }),
-            held_by_draft: None, unsent_start: false, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), unrecorded: None, push_left: None, staged: false, subtasks: tasks::Subtasks::default(), to_accept: None, parked: None, assessment: None, recipe: None, obstacle: None, built: Built::default(), build_wait: None, waits_on: None, blocks: Vec::new(),
+            held_by_draft: None, held_messages: 0, unsent_start: false, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), unrecorded: None, push_left: None, staged: false, subtasks: tasks::Subtasks::default(), to_accept: None, parked: None, assessment: None, recipe: None, obstacle: None, built: Built::default(), build_wait: None, waits_on: None, blocks: Vec::new(),
         }
     }
 
@@ -600,7 +601,8 @@ impl Item {
             return Some(format!("confirm what its review asks · {}", message.text.split_once(": ").map_or(message.text.as_str(), |(_, asks)| asks)));
         }
         if let Some(question) = self.question.as_ref().and_then(|message| message.question.as_ref()) {
-            return Some(if question.plan.is_some() { "approve the plan".to_string() } else { format!("answer a question · {}", plural(question.options.len(), "option")) });
+            let asked = if question.plan.is_some() { "approve the plan".to_string() } else { format!("answer a question · {}", plural(question.options.len(), "option")) };
+            return Some(if self.held_messages == 0 { asked } else { format!("{asked} · held: {}", plural(self.held_messages, "message")) });
         }
         if self.review_stopped() {
             return Some(crate::review::LOOPED.to_string());
@@ -1033,6 +1035,10 @@ pub fn running_url(repo: &Path, worktree: &Path) -> Option<String> {
     crate::config::dev_url(settings.dev_url.value.as_deref(), repo, worktree)
 }
 
+fn held_messages(log: &[Message], address: &str) -> usize {
+    log.iter().filter(|message| message.held && message.to == address && message.kind.as_deref() != Some(messages::NOTICE_KIND)).count()
+}
+
 // Messages that wait because the task's input box holds the user's own text: the row says what clears the way.
 pub(crate) fn held_by_draft(log: &[Message], task: &str, address: &str) -> Option<String> {
     let held: Vec<&Message> = log.iter().filter(|message| message.held && message.to == address && message.kind.as_deref() != Some(messages::NOTICE_KIND)).collect();
@@ -1174,6 +1180,7 @@ fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>,
                 push_waits: state.as_deref().and_then(|state| tasks::pending_push(state, &address)),
                 queued: None,
                 held_by_draft: held_by_draft(&log, &task, &address),
+                held_messages: held_messages(&log, &address),
                 unsent_start: state.as_deref().is_some_and(|state| crate::typing::unsent_in(state, &address).is_some()),
                 landed: state.as_deref().and_then(|state| tasks::landed_mark(state, &address, &slot.path)),
                 ci_outside: state.as_deref().and_then(|state| tasks::ci_outside_reason(state, &address)),
@@ -1253,6 +1260,7 @@ fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>,
             push_waits: None,
             queued: None,
             held_by_draft: None,
+            held_messages: 0,
             unsent_start: false,
             phase: None,
             landed: None,
@@ -1331,6 +1339,7 @@ pub(crate) mod tests {
             push_waits: None,
             queued: None,
             held_by_draft: None,
+            held_messages: 0,
             unsent_start: false,
             phase: None,
             landed: None,
@@ -2235,6 +2244,13 @@ pub(crate) mod tests {
         asked.report.as_mut().unwrap().report.as_mut().unwrap().next = "answer: which queue for refund mails, Sidekiq or Solid Queue or inline?".to_string();
         asked.question = Some(messages::fold(r#"{"id":"q1","at":10,"from":"billing@web","to":"lead","text":"Which queue?","state":"asked","question":{"options":[{"label":"A","meaning":"one"},{"label":"B","meaning":"two"}],"recommend":1}}"#).remove(0));
         assert_eq!(asked.wanted(go).as_deref(), Some("answer a question · 2 options"));
+        asked.held_messages = held_messages(&messages::fold(&[
+            r#"{"id":"m1","at":11,"from":"shop@web","to":"billing@web","text":"a","state":"held","why":"waits for the user's answer to its question"}"#,
+            r#"{"id":"m2","at":12,"from":"kebbie","to":"billing@web","text":"b","state":"held","kind":"notice"}"#,
+            r#"{"id":"m3","at":13,"from":"lead","to":"shop@web","text":"c","state":"held"}"#,
+        ].join("\n")), "billing@web");
+        assert_eq!(asked.wanted(go).as_deref(), Some("answer a question · 2 options · held: 1 message"), "a message held behind the question shows on its row");
+        asked.held_messages = 0;
         asked.question.as_mut().unwrap().question.as_mut().unwrap().plan = Some("vault:Projects/billing.md".to_string());
         assert_eq!(asked.wanted(go).as_deref(), Some("approve the plan"));
         asked.agent.as_mut().unwrap().status = "blocked".to_string();

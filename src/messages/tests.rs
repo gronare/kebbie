@@ -656,7 +656,8 @@ fn the_leads_request_to_rewrite_a_question_reaches_the_task_once_the_question_is
     let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(Via::Typed) };
     let task = session(Some("w1:p1"), Some("idle"));
     let held = send_locked_in(&dir, LEAD_LABEL, &[&task], "ask it again", std::slice::from_ref(&task), None, None, &mut type_into).unwrap();
-    assert!(held[0].contains("waits for the user's answer to its question") && typed.borrow().is_empty(), "{held:?}");
+    assert_eq!(held, ["billing@web waits for the user's answer to its question; held until the user answers it, or the user or the lead runs kebbie release billing@web."], "the sender learns why and how it goes through");
+    assert!(typed.borrow().is_empty());
     write_log(&dir, &[question("q1", 2, "billing@web"), mark("q1", 3, "answered")]);
     let told = send_locked_in(&dir, LEAD_LABEL, &[&task], "ask it again", std::slice::from_ref(&task), None, None, &mut type_into).unwrap();
     assert_eq!((told, typed.borrow().as_slice()), (vec!["Told billing@web.".to_string()], ["[from lead] ask it again".to_string()].as_slice()));

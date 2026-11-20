@@ -15,6 +15,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The questions window's comment field wraps long text onto new rows and grows with it.
 - The n box shows each space as you type it, is larger, and takes shift+⏎ for a new line.
 - Typing on in the n box after ⏎ keeps typing, and ⏎ twice files it rather than starting a task.
+- A message held behind a task's question tells its sender how it goes through, and the row counts it.
 
 ## 0.41.3
 
