@@ -319,7 +319,7 @@ Every 30 seconds the keeper (or an open board, with `keeper.enabled = false`) as
 
 | State | What happens |
 | --- | --- |
-| No runs yet | kebbie waits up to 3 minutes for runs to appear. Then a repo with no active workflow (`gh workflow list`) counts as green; a repo with one keeps the task under CI running as `no run of <sha> seen for <n> min`. After 30 minutes without a run it moves to Needs you with `no CI run of <sha> seen in 30 min, though <repo> has workflows; check they run on a push to <branch>, or kebbie done`, and a run that shows up later still settles it. |
+| No runs yet | kebbie waits up to 3 minutes for runs to appear. Then a repo with no active workflow file of its own under `.github/workflows` (`gh workflow list`) counts as green, as GitHub's Copilot workflows are no CI of the repo; a repo with one keeps the task under CI running as `no run of <sha> seen for <n> min`. After 30 minutes without a run it moves to Needs you with `no CI run of <sha> seen in 30 min, though <repo> has workflows; check they run on a push to <branch>, or kebbie done`, and a run that shows up later still settles it. |
 | Running | The task waits under CI running. |
 | Every run passed, skipped or neutral | After at least a minute since the push, the task closes as `done`: its note is closed when the vault is on, and the lead hears what landed. |
 | Every run done and one cancelled, a newer run going | A newer push on the branch holds the pushed commit and runs that workflow, as a concurrency cancel leaves it. The task stays under CI running with `<workflow> cancelled for a newer run on <branch>, follows it on <sha>`, and kebbie asks every 5 minutes. When the newer run passes, the task closes as `done`. |

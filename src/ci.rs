@@ -287,10 +287,10 @@ pub fn parse_runs(text: &str) -> Result<Vec<Run>> {
     }).collect())
 }
 
-// Whether gh lists an active workflow in the repo, so a commit no run showed up for is waited on rather than taken as green.
+// Whether the repo has an active workflow file of its own, so a commit no run showed up for is waited on rather than taken as green; GitHub also lists its own dynamic/ workflows, such as Copilot code review, in every repo.
 pub fn has_workflows(text: &str) -> Result<bool> {
     let value: Value = serde_json::from_str(text).map_err(|error| format!("gh workflow list gave no JSON: {error}"))?;
-    Ok(value.as_array().ok_or("gh workflow list gave no list")?.iter().any(|workflow| workflow["state"] == "active"))
+    Ok(value.as_array().ok_or("gh workflow list gave no list")?.iter().any(|workflow| workflow["state"] == "active" && workflow["path"].as_str().is_some_and(|path| path.starts_with(".github/"))))
 }
 
 pub fn failed_job(text: &str) -> Option<(String, Option<u64>)> {
@@ -603,7 +603,7 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
             }
             Verdict::Green if watch.waits_for_deploy() => events.push(undeployed(state, &watch)),
             Verdict::Green => events.push(green(state, &watch, format!("CI is green for {}", watch.short()), now)),
-            Verdict::NoneRan => match crate::sh::run(gh, &["workflow", "list", "-R", &watch.slug, "--json", "state", "--limit", "100"], Some(&watch.repo)).and_then(|text| has_workflows(&text)) {
+            Verdict::NoneRan => match crate::sh::run(gh, &["workflow", "list", "-R", &watch.slug, "--json", "path,state", "--limit", "100"], Some(&watch.repo)).and_then(|text| has_workflows(&text)) {
                 Ok(false) if !watch.pushed.stages.is_empty() => events.push(staged(state, &watch, format!("No CI ran for {}", watch.short()), Some("no CI ran for it"), now)),
                 Ok(false) => events.push(green(state, &watch, format!("No CI ran for {}", watch.short()), now)),
                 Ok(true) => {
@@ -915,7 +915,7 @@ mod tests {
         save(&dir, &watch).unwrap();
         crate::phase::record(&dir, "billing@app", "push", &crate::phase::Event::PushOut { sha: "abcdef0" });
         let phase = || crate::phase::load(&dir, "billing@app").map(|record| record.phase);
-        let with_workflows = gh("with", r#"[{"state":"active"},{"state":"disabled_manually"}]"#);
+        let with_workflows = gh("with", r#"[{"path":".github/workflows/ci.yml","state":"active"},{"path":".github/workflows/old.yml","state":"disabled_manually"}]"#);
         assert!(tick_with(&dir, &with_workflows, APPEAR_SECONDS + 300).is_empty(), "a repo with workflows waits for their run, it never reads the silence as green");
         let waiting = load(&dir, "billing@app").unwrap();
         assert!(waiting.running());
@@ -937,8 +937,12 @@ mod tests {
         save(&dir, &Watch { checked_at: None, ..watch.clone() }).unwrap();
         assert!(tick_with(&dir, &gh("broken", "not json"), APPEAR_SECONDS + 330).is_empty(), "a workflow list gh cannot read is no green either");
         assert!(load(&dir, "billing@app").unwrap().error.is_some());
-        let events = tick_with(&dir, &gh("none", r#"[{"state":"disabled_manually"}]"#), APPEAR_SECONDS + 360);
+        let events = tick_with(&dir, &gh("none", r#"[{"path":".github/workflows/old.yml","state":"disabled_manually"}]"#), APPEAR_SECONDS + 360);
         assert!(events.len() == 1 && events[0].text.starts_with("No CI ran for abcdef0"), "{events:?}");
+        assert!(load(&dir, "billing@app").is_none());
+        save(&dir, &Watch { checked_at: None, ..watch.clone() }).unwrap();
+        let events = tick_with(&dir, &gh("copilot", r#"[{"path":"dynamic/copilot-pull-request-reviewer/copilot-pull-request-reviewer","state":"active"}]"#), APPEAR_SECONDS + 390);
+        assert!(events.len() == 1 && events[0].text.starts_with("No CI ran for abcdef0"), "the Copilot workflows GitHub lists in every repo are no CI of its own: {events:?}");
         assert!(load(&dir, "billing@app").is_none());
         fs::remove_dir_all(dir).unwrap();
     }

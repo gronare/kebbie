@@ -162,7 +162,7 @@ fn a_deploy_kebbie_cannot_see_is_asked_of_the_user_and_a_pushed_stage_keeps_its_
 fn fake_gh(dir: &Path) -> String {
     let gh = dir.with_extension("gh").join("gh");
     std::fs::create_dir_all(dir.with_extension("gh")).unwrap();
-    crate::executable::write(&gh, "#!/bin/sh\nd=$(dirname \"$0\")\ncase \"$1 $2\" in\n  'run list') while [ $# -gt 0 ]; do [ \"$1\" = --commit ] && sha=$2; shift; done; cat \"$d/runs-$sha.json\" 2>/dev/null || echo '[]';;\n  'workflow list') echo '[{\"state\":\"active\"}]';;\n  *) echo '[]';;\nesac\n").unwrap();
+    crate::executable::write(&gh, "#!/bin/sh\nd=$(dirname \"$0\")\ncase \"$1 $2\" in\n  'run list') while [ $# -gt 0 ]; do [ \"$1\" = --commit ] && sha=$2; shift; done; cat \"$d/runs-$sha.json\" 2>/dev/null || echo '[]';;\n  'workflow list') echo '[{\"path\":\".github/workflows/ci.yml\",\"state\":\"active\"}]';;\n  *) echo '[]';;\nesac\n").unwrap();
     gh.to_string_lossy().to_string()
 }
 

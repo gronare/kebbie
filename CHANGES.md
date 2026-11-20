@@ -8,6 +8,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - n asks only what you want done: Claude picks the repo, writes the card and asks its questions, then starts it or files it.
 
 ### Fixed
+- A pushed task in a repo without workflow files closes after three minutes instead of waiting under CI running.
 - The review steps subtask by subtask with ← → and commit by commit with shift+← →, and its label names what the diff shows.
 - A task's options name its vault note's link Open in Obsidian, under LINKS.
 - The questions window's comment field wraps long text onto new rows and grows with it.
