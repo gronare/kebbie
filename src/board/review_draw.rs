@@ -218,7 +218,11 @@ fn keys(view: &View) -> Line<'static> {
     } else if view.focus == Panel::Diff {
         &[("tab", if view.entries.steps { "back to the subtasks" } else { "back to the commits" }), ("shift-tab", "the files"), ("q", "closes")]
     } else {
-        &[("← →", if view.entries.steps { "subtask" } else { "commit" }), ("↑ ↓", "file"), ("a", "accept"), ("r", "read"), ("/", "filter"), ("tab", "to the diff")]
+        if view.entries.steps {
+            &[("← →", "subtask"), ("⇧← →", "commit"), ("↑ ↓", "file"), ("a", "accept"), ("r", "read"), ("/", "filter"), ("tab", "to the diff")]
+        } else {
+            &[("← →", "commit"), ("↑ ↓", "file"), ("a", "accept"), ("r", "read"), ("/", "filter"), ("tab", "to the diff")]
+        }
     };
     let mut spans = Vec::new();
     for (index, (key, label)) in pairs.iter().enumerate() {
@@ -240,7 +244,8 @@ fn help(steps: bool) -> Vec<Line<'static>> {
     let key = |key: &str, about: &str| Line::from(vec![Span::styled(format!("  {key:<11}"), bold(TEXT)), Span::styled(about.to_string(), style(SUBTEXT))]);
     vec![
         heading(if steps { "Subtasks and files" } else { "Commits and files" }),
-        key("← →  h l", if steps { "the previous or next subtask, or a commit of the subtask picked; all is the whole branch" } else { "the previous or next commit; all is the whole branch" }),
+        key("← →  h l", if steps { "the previous or next subtask, all its commits as one diff; all is the whole branch" } else { "the previous or next commit; all is the whole branch" }),
+        key("⇧← →  H L", if steps { "the previous or next commit alone, on into the next subtask" } else { "the previous or next commit" }),
         key("↑ ↓  j k", "the previous or next file; the diff shows it at once"),
         key("a", if steps { "accept the subtask, or the commit picked in it; on one accepted, withdraw it" } else { "accept the commit; on one accepted, withdraw it" }),
         key("r", "mark the file read, or unread"),

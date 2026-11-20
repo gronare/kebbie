@@ -119,6 +119,10 @@ impl Opened {
         self.view.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
     }
 
+    fn shift(&mut self, code: KeyCode) {
+        self.view.handle_key(KeyEvent::new(code, KeyModifiers::SHIFT));
+    }
+
     fn shown(&self) -> Value {
         serde_json::from_str(&fs::read_to_string(self.view.dir.join("shown.json")).unwrap()).unwrap()
     }
@@ -187,20 +191,27 @@ fn a_narrow_review_with_steps_opens_on_the_first_ready_step_with_its_commits_and
     for (sha, subject) in [(&shas[1], "Add b"), (&shas[2], "Add c")] {
         assert!(row(&screen, &format!("{} {subject}", &sha[..7])).contains(&format!("▎   {} {subject}", &sha[..7])), "each commit of the step, one line each: {}", screen.join("\n"));
     }
-    assert!(row(&screen, "FILES").contains("FILES 2 · subtask 3"), "the whole subtask: {}", screen.join("\n"));
+    assert!(row(&screen, "FILES").contains("FILES 2 · subtask 3 · 2 commits"), "the whole subtask: {}", screen.join("\n"));
     assert!(row(&screen, "+1").contains("▌ +1    -0    b"), "{}", screen.join("\n"));
     let diff: Vec<String> = serde_json::from_value(opened.shown()["diff"].clone()).unwrap();
     assert_eq!(diff[diff.len() - 4..], [format!("{}^", shas[1]), shas[2].clone(), "--".to_string(), "b".to_string()], "from under its first commit to its last");
-    assert_eq!(opened.shown()["sha"], json!(shas[2]), "a comment names the step's last commit");
-    assert!(screen[19].starts_with("← → subtask · ↑ ↓ file · a accept · r read · / filter · tab to the diff"), "{}", screen[19]);
+    assert_eq!((&opened.shown()["sha"], &opened.shown()["title"], &opened.shown()["short"]), (&json!(shas[2]), &json!("subtask 3 · 2 commits"), &json!(format!("{}..{}", &shas[1][..7], &shas[2][..7]))), "the diff's label names the subtask's whole range, and a comment its last commit");
+    assert!(screen[19].starts_with("← → subtask · ⇧← → commit · ↑ ↓ file · a accept · r read · / filter"), "{}", screen[19]);
     assert!(screen.iter().all(|line| line.chars().count() == 80));
-    opened.press(KeyCode::Right);
-    assert_eq!(opened.view.selected, Some(Sel::Commit(3, shas[1].clone())), "right goes into the step's commits");
+    opened.shift(KeyCode::Right);
+    assert_eq!(opened.view.selected, Some(Sel::Commit(3, shas[1].clone())), "shift-right goes into the subtask's first commit");
     let screen = opened.screen(80, 20);
-    assert!(row(&screen, "FILES").contains(&format!("FILES 1 · subtask 3 · {}", &shas[1][..7])) && row(&screen, "Why b exists.").contains("▎ Why b exists."), "a commit shows its own files and message: {}", screen.join("\n"));
+    assert!(row(&screen, "FILES").contains("FILES 1 · subtask 3 · commit 1/2") && row(&screen, "Why b exists.").contains("▎ Why b exists."), "a commit shows its own files and message: {}", screen.join("\n"));
+    assert_eq!(opened.shown()["short"], json!(&shas[1][..7]), "and its diff is labelled with its own sha");
     opened.press(KeyCode::Char('r'));
     assert!(data::is_read(&opened.repo.slot, "b", Some(&data::Range::commit(&shas[1]))));
+    opened.shift(KeyCode::Right);
+    assert_eq!(opened.view.selected, Some(Sel::Commit(3, shas[2].clone())));
+    opened.shift(KeyCode::Right);
+    assert_eq!(opened.view.selected, Some(Sel::Commit(3, shas[2].clone())), "the last commit is the end");
     opened.press(KeyCode::Left);
+    assert_eq!(opened.view.selected, Some(Sel::Step(2)), "left from a commit goes to the subtask before, whole");
+    opened.press(KeyCode::Right);
     assert!(opened.view.files.iter().find(|file| file.path == "b").is_some_and(|file| file.read), "b read in its commit is read in the step, the same contents at its end");
     opened.press(KeyCode::Char('a'));
     assert_eq!(opened.sent("accept billing"), [vec![kebbie_bin(), "accept".to_string(), "billing".to_string(), "--subtask".to_string(), "add-b".to_string()]], "a on a subtask accepts it whole");
@@ -335,13 +346,15 @@ fn with_steps_kebbies_own_mark_decides_and_steps_without_a_commit_are_skipped() 
     for _ in 0..5 {
         opened.press(KeyCode::Right);
     }
-    assert_eq!(opened.view.selected, Some(Sel::Commit(3, shas[2].clone())), "steps in progress or planned have no commit to show");
+    assert_eq!(opened.view.selected, Some(Sel::Step(3)), "steps in progress or planned have no commit to show");
+    opened.shift(KeyCode::Left);
+    opened.shift(KeyCode::Right);
+    opened.shift(KeyCode::Right);
+    assert_eq!(opened.view.selected, Some(Sel::Commit(3, shas[2].clone())), "shift steps commit by commit across subtasks");
     opened.press(KeyCode::Char('a'));
     assert_eq!(opened.sent("accept billing"), [vec![kebbie_bin(), "accept".to_string(), "billing".to_string(), shas[2].clone()]], "a on a commit accepts that commit");
     opened.clear();
-    for _ in 0..3 {
-        opened.press(KeyCode::Left);
-    }
+    opened.press(KeyCode::Left);
     assert_eq!(opened.view.selected, Some(Sel::Step(2)), "out of the step, its commits fold away");
     opened.press(KeyCode::Char('a'));
     assert_eq!(opened.sent("accept billing")[0][3..], ["--subtask", "change-a", "--withdraw"].map(String::from), "subtask 2 is accepted by kebbie's subtasks");

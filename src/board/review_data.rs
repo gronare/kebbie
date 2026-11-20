@@ -396,7 +396,11 @@ pub fn diff_argv(root: &Path, base: &str, path: &str, range: Option<&Range>) -> 
 // A comment typed from a step's diff names the step's last commit, where the lines it shows stand.
 pub fn shown(path: &str, title: &str, range: Option<&Range>, index: usize, count: usize, diff: Vec<String>) -> Value {
     let sha = range.map(|range| range.to.as_str());
-    json!({ "path": path, "title": title, "sha": sha.unwrap_or_default(), "short": sha.map(short).unwrap_or_default(), "index": index, "count": count, "diff": diff })
+    let named = range.map(|range| match range.from.strip_suffix('^') {
+        Some(first) if first != range.to => format!("{}..{}", short(first), short(&range.to)),
+        _ => short(&range.to).to_string(),
+    });
+    json!({ "path": path, "title": title, "sha": sha.unwrap_or_default(), "short": named.unwrap_or_default(), "index": index, "count": count, "diff": diff })
 }
 
 #[cfg(test)]

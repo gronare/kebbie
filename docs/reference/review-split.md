@@ -26,7 +26,7 @@ The view, top to bottom:
 | Part | Shows |
 | --- | --- |
 | Header | `review <task> · since <default branch>`, then, with `task.steps` on, `N accepted` in green and `N to accept` in yellow for the task's subtasks. |
-| Tabs | `all`, `↑ N pushed`, then each subtask with `task.steps` on, or each unpushed commit without, numbered, with its mark. The selected subtask's commits follow it as tabs of their own, by short sha. |
+| Tabs | `all`, `↑ N pushed`, then each subtask with `task.steps` on, or each unpushed commit without, numbered, with its mark. The selected subtask's commits follow it as tabs of their own, by short sha. A subtask of several commits is named `subtask 3 · 2 commits`, one of its commits `subtask 3 · commit 1/2`, in the files panel and above the diff, where the short shas follow: `abc1234..def5678` for the subtask, `abc1234` for the commit. |
 | Message | On a subtask, its title and its commits, each short sha and subject. On a commit, its message: subject and short sha, then the body. On `all`, which subtasks or commits the diff covers. `m` hides it. |
 | Files | `+N -N path` for the selected subtask, from its first commit's parent to its last commit, for the selected commit alone, or for the whole branch on `all`. `✓ read` marks a read file. |
 | Keys | The keys for the panel in focus, or the result of the last action. |
@@ -44,7 +44,8 @@ The panel in focus has a blue border. `tab` moves the focus from the tabs to the
 
 | Where | Key | Action |
 | --- | --- | --- |
-| view | `←` `→`, `h` `l` | The previous or next tab: a subtask, then its commits when it is selected. Subtasks without a commit are skipped; before the first is `all`. |
+| view | `←` `→`, `h` `l` | The previous or next subtask, all its commits as one diff. Subtasks without a commit are skipped; before the first is `all`. |
+| view | `shift-←` `shift-→`, `H` `L` | The previous or next commit alone, on into the next subtask's commits; a subtask selected whole stands before its first commit. |
 | view | `↑` `↓`, `j` `k` | The previous or next file. nvim shows it at once. |
 | view | click | A tab selects that subtask, a file shows that file. The wheel scrolls the files. |
 | view | `a` | Accept the selected subtask, every commit in it, or the selected commit, then go to the next subtask waiting; on an accepted one, withdraw the acceptance. |
@@ -82,7 +83,7 @@ The panel in focus has a blue border. `tab` moves the focus from the tabs to the
 | Event | Result |
 | --- | --- |
 | The review opens | On the first subtask waiting for your accept, else on `all`. |
-| A comment | Typed into Claude's input box as `path:line — text`, not submitted. Several pile up until you press Enter there. In a subtask's or a commit's diff, the line is that version's: `path:line in abc1234 — text`, with the subtask's last commit for a subtask. |
+| A comment | Typed into Claude's input box as `path:line — text`, not submitted. Several pile up until you press Enter there. In a subtask's or a commit's diff, the line is that version's: `path:line in abc1234 — text`, or `in abc1234..def5678` for a subtask, the line as its last commit has it. |
 | Saving a file opened with `o` or `-` | Reported to Claude as `path:lines — edited by me during the review` when you go back to the diff. Unsaved edits ask to be saved or discarded first. |
 | Files change on disk | The view's list follows within two seconds. An open diff of the whole branch marks itself `changed on disk`; `u` reloads it. |
 | A read file changes | It loses its `✓ read`. |

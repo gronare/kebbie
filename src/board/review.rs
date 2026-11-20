@@ -288,10 +288,12 @@ impl View {
 
     pub fn title(&self) -> String {
         let noun = if self.entries.steps { "subtask" } else { "commit" };
-        if let Some(commit) = self.selected_commit().filter(|_| self.entries.steps) {
-            return format!("{noun} {} · {}", self.selected.as_ref().map_or(0, Sel::number), data::short(&commit.sha));
+        if let (Some(commit), Some((_, entry))) = (self.selected_commit().filter(|_| self.entries.steps), self.selected_entry()) {
+            let at = entry.commits.iter().position(|held| held.sha == commit.sha).unwrap_or(0) + 1;
+            return format!("{noun} {} · commit {at}/{}", entry.number, entry.commits.len());
         }
         match self.selected_entry() {
+            Some((_, entry)) if entry.commits.len() > 1 => format!("{noun} {} · {} commits", entry.number, entry.commits.len()),
             Some((_, entry)) => format!("{noun} {}", entry.number),
             None => {
                 let numbers: Vec<usize> = self.entries.committed().map(|(_, entry)| entry.number).collect();
@@ -318,22 +320,34 @@ impl View {
         entry.commits.len() > 1 && self.selected.as_ref().is_some_and(|selected| selected.number() == entry.number)
     }
 
-    fn tabs(&self) -> Vec<Option<Sel>> {
-        let mut tabs = vec![None];
-        for (_, entry) in self.entries.committed() {
-            tabs.push(Some(self.sel_of(entry)));
-            if self.expanded(entry) {
-                tabs.extend(entry.commits.iter().map(|commit| Some(Sel::Commit(entry.number, commit.sha.clone()))));
-            }
-        }
-        tabs
-    }
-
     pub fn step(&mut self, forward: bool) {
-        let tabs = self.tabs();
-        let at = tabs.iter().position(|tab| *tab == self.selected).unwrap_or(0);
+        let mut tabs = vec![None];
+        tabs.extend(self.entries.committed().map(|(_, entry)| Some(self.sel_of(entry))));
+        let number = self.selected.as_ref().map(Sel::number);
+        let at = tabs.iter().position(|tab| tab.as_ref().map(Sel::number) == number).unwrap_or(0);
         let to = if forward { (at + 1).min(tabs.len() - 1) } else { at.saturating_sub(1) };
         self.select(tabs[to].clone());
+    }
+
+    // Every commit of the branch in order, crossing subtasks; a subtask picked whole stands just before its first commit.
+    pub fn step_commit(&mut self, forward: bool) {
+        let commits: Vec<Sel> = self.entries.committed().flat_map(|(_, entry)| entry.commits.iter().map(|commit| Sel::Commit(entry.number, commit.sha.clone()))).collect();
+        let before = match &self.selected {
+            None => 0,
+            Some(Sel::Commit(..)) => match commits.iter().position(|commit| Some(commit) == self.selected.as_ref()) {
+                Some(at) => at + 1,
+                None => 0,
+            },
+            Some(Sel::Step(number)) => commits.iter().position(|commit| commit.number() == *number).unwrap_or(0),
+        };
+        let back = if matches!(self.selected, Some(Sel::Commit(..))) { 2 } else { 1 };
+        let to = match forward {
+            true => commits.get(before).cloned().map(Some),
+            false => Some(before.checked_sub(back).map(|at| commits[at].clone())),
+        };
+        if let Some(to) = to {
+            self.select(to);
+        }
     }
 
     pub fn move_file(&mut self, down: bool) {
@@ -494,6 +508,10 @@ impl View {
         match key.code {
             KeyCode::Tab => self.cycle(true),
             KeyCode::BackTab => self.cycle(false),
+            KeyCode::Left if key.modifiers.contains(KeyModifiers::SHIFT) => self.step_commit(false),
+            KeyCode::Right if key.modifiers.contains(KeyModifiers::SHIFT) => self.step_commit(true),
+            KeyCode::Char('H') => self.step_commit(false),
+            KeyCode::Char('L') => self.step_commit(true),
             KeyCode::Left | KeyCode::Char('h') => self.step(false),
             KeyCode::Right | KeyCode::Char('l') => self.step(true),
             KeyCode::Up | KeyCode::Char('k') => self.move_file(false),
