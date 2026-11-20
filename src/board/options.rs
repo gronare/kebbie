@@ -650,7 +650,7 @@ mod tests {
             ('4', "Open the mock".to_string(), long),
             ('5', "Open the pull request".to_string(), "https://github.com/acme/web/pull/7".to_string()),
             ('6', "Open docs.example.org".to_string(), "https://docs.example.org/guide".to_string()),
-            ('7', "Open the note".to_string(), "obsidian://open?file=Projects%2Fsearch%20filters.md".to_string()),
+            ('7', "Open in Obsidian".to_string(), "obsidian://open?file=Projects%2Fsearch%20filters.md".to_string()),
         ]);
         let groups: Vec<&str> = app.choices().iter().map(|choice| menu_group(choice.act)).collect();
         let first = groups.iter().position(|group| *group == "LINKS").unwrap();
