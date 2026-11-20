@@ -433,7 +433,7 @@ pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {
         let upstream = default_branch(&repo)?;
         let tracked = crate::repo::tracking(&upstream);
         let base = from.unwrap_or(&tracked);
-        let slot = claim_slot(&repo, &upstream, |slot| {
+        let slot = claim_slot(&repo, &upstream, &task, |slot| {
             let switch: &[&str] = if branch_exists(&repo, &task) { &["switch", "--quiet", &task] } else { &["switch", "--quiet", "-c", &task, base] };
             git_writing(&slot.path, switch).map(|_| ())
         })?;

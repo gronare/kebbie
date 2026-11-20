@@ -31,15 +31,18 @@ pub fn task_slots(repo: &Path) -> Result<Vec<Slot>> {
 
 fn listed(repo: &Path, read_free: bool) -> Result<Vec<Slot>> {
     let mut list = Vec::new();
-    for worktree in worktrees(repo)? {
+    let all = worktrees(repo)?;
+    let checked_out: HashSet<&str> = all.iter().filter_map(|worktree| worktree.branch.as_deref()).collect();
+    for worktree in &all {
         let Some(number) = slot_number(repo, &worktree.path) else { continue };
         if !worktree.path.exists() {
             continue;
         }
         let placeholder = worktree.branch.as_deref().is_none_or(|branch| branch == format!("wt{number}"));
-        let free = placeholder && read_free && is_clean(&worktree.path).unwrap_or(false);
-        let task = if placeholder { None } else { worktree.branch };
-        list.push(Slot { number, path: worktree.path, task, free, head: worktree.head });
+        let recorded = recorded_task(&worktree.path).filter(|task| worktree.branch.as_deref() != Some(task.as_str()) && !checked_out.contains(task.as_str()) && branch_exists(repo, task));
+        let task = recorded.or_else(|| if placeholder { None } else { worktree.branch.clone() });
+        let free = task.is_none() && read_free && is_clean(&worktree.path).unwrap_or(false);
+        list.push(Slot { number, path: worktree.path.clone(), task, free, head: worktree.head.clone() });
     }
     list.sort_by_key(|slot| slot.number);
     Ok(list)
@@ -55,6 +58,15 @@ pub fn find_task(repo: &Path, name: Option<&str>, cwd: &Path) -> Result<Slot> {
         Some(name) => format!("No task \"{name}\" in {}'s worktrees", name_of(repo)),
         None => "Not inside a task's worktree; name the task".to_string(),
     })
+}
+
+// The task a slot was claimed for, so a task whose worktree is on another commit or branch stays that task while its own branch is checked out nowhere.
+fn task_record(path: &Path) -> Option<PathBuf> {
+    crate::repo::git_dir_of(path).map(|git_dir| git_dir.join("kebbie-task"))
+}
+
+fn recorded_task(path: &Path) -> Option<String> {
+    std::fs::read_to_string(task_record(path)?).ok().map(|text| text.trim().to_string()).filter(|task| !task.is_empty())
 }
 
 pub fn task_of(slot: &Slot) -> &str {
@@ -112,6 +124,9 @@ pub(super) fn release_with(repo: &Path, slot: &Slot, upstream: &str, folders: &[
         None => run_release(&command, &slot.path, RELEASE_CEILING),
     });
     clear_tmp(&slot.path);
+    if let Some(record) = task_record(&slot.path) {
+        let _ = std::fs::remove_file(record);
+    }
     git(repo, &["branch", "-D", task_of(slot)])?;
     let removed = clean_build_output(&slot.path, folders);
     let freed = (!removed.is_empty()).then(|| format!("removed {}", removed.iter().map(|(folder, bytes)| format!("{folder}/ ({})", size(*bytes))).collect::<Vec<_>>().join(", ")));
@@ -217,13 +232,16 @@ impl Drop for SlotLock {
 }
 
 // A free slot, or a new one, with `onto` putting the task's branch on it before another start may look.
-pub(super) fn claim_slot(repo: &Path, upstream: &str, onto: impl FnOnce(&Slot) -> Result<()>) -> Result<Slot> {
+pub(super) fn claim_slot(repo: &Path, upstream: &str, task: &str, onto: impl FnOnce(&Slot) -> Result<()>) -> Result<Slot> {
     let _alone = SlotLock::take(repo)?;
     let slot = match slots(repo)?.into_iter().find(|slot| slot.free) {
         Some(slot) => slot,
         None => create_slot(repo, upstream)?,
     };
     onto(&slot)?;
+    if let Some(record) = task_record(&slot.path) {
+        let _ = std::fs::write(record, task);
+    }
     Ok(slot)
 }
 
@@ -268,7 +286,7 @@ pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, f
         }
     }
 
-    let slot = claim_slot(&repo, &upstream, |slot| {
+    let slot = claim_slot(&repo, &upstream, &task, |slot| {
         crate::push_block::warn_if_off(crate::push_block::install(&slot.path, &state_dir()?)?);
         git_writing(&slot.path, &["switch", "--quiet", &task]).map(|_| ())
     }).map_err(stashed)?;
@@ -446,7 +464,7 @@ mod tests {
         let held = SlotLock::take(&dir).unwrap();
         let second = std::thread::spawn({
             let dir = dir.clone();
-            move || claim_slot(&dir, "HEAD", |slot| git(&slot.path, &["switch", "--quiet", "-c", "search"]).map(|_| ())).unwrap().path
+            move || claim_slot(&dir, "HEAD", "search", |slot| git(&slot.path, &["switch", "--quiet", "-c", "search"]).map(|_| ())).unwrap().path
         });
         std::thread::sleep(std::time::Duration::from_millis(300));
         assert!(!second.is_finished(), "the second start looks for a slot only once the first has let go");
@@ -460,6 +478,25 @@ mod tests {
             git(&dir, &["worktree", "remove", "--force", &path.to_string_lossy()]).unwrap();
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_task_whose_worktree_is_on_another_commit_or_branch_stays_that_task_until_released() {
+        let (dir, origin, first, upstream) = task_with_a_commit("billing");
+        let slot = claim_slot(&dir, &upstream, "search", |slot| git(&slot.path, &["switch", "--quiet", "-c", "search", &upstream]).map(|_| ())).unwrap();
+        let listed = || slots(&dir).unwrap().into_iter().find(|listed| listed.path == slot.path).map(|listed| (listed.task, listed.free)).unwrap();
+        git(&slot.path, &["switch", "--quiet", "--detach", "HEAD~1"]).unwrap();
+        assert_eq!(listed(), (Some("search".to_string()), false), "a detached task is still its task, and never handed to a start");
+        assert_eq!(find_task(&dir, None, &slot.path.join("sub")).unwrap().path, slot.path, "kebbie ask and tell find it from its worktree");
+        git(&slot.path, &["switch", "--quiet", "-c", "spike"]).unwrap();
+        assert_eq!(listed(), (Some("search".to_string()), false), "a new branch of its own is no new task");
+        git(&slot.path, &["switch", "--quiet", "search"]).unwrap();
+        git(&dir, &["branch", "-D", "spike"]).unwrap();
+        let found = find_task(&dir, Some("search"), &dir).unwrap();
+        release(&dir, &found, &upstream).unwrap();
+        assert_eq!(listed(), (None, true), "a released slot is free again");
+        git(&dir, &["worktree", "remove", "--force", &slot.path.to_string_lossy()]).unwrap();
+        cleanup(dir, origin, &first);
     }
 
     #[test]
