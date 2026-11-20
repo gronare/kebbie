@@ -97,9 +97,9 @@ fn said(text: &str) -> Span<'static> {
     Span::styled(text.to_string(), style(MUTED))
 }
 
-fn option(letter: &str, label: &str, on: bool) -> Vec<Span<'static>> {
+fn option(label: &str, on: bool) -> Vec<Span<'static>> {
     let lit = if on { Style::new().bg(SURFACE) } else { Style::new() };
-    vec![Span::styled(" ", lit), Span::styled(letter.to_string(), style(MAUVE).patch(lit)), Span::styled(format!(" {label} "), style(TEXT).patch(lit))]
+    vec![Span::styled(format!(" {label} "), style(TEXT).patch(lit))]
 }
 
 // The typed text wrapped as typed: every space stays, so one typed at the end shows at once, and a word longer than the line breaks inside it.
@@ -140,15 +140,15 @@ pub(super) fn draw(frame: &mut Frame, new: &NewTask) {
     match new.choice {
         None => lines.push(Line::from(vec![keyed("⏎"), said(" continue · "), keyed("shift-⏎"), said(" new line · "), keyed("esc"), said(" cancel")])),
         Some(choice) if new.backlog => {
-            let mut row = option("s", "Start now", choice == Choice::Start);
+            let mut row = option("Add to the backlog", choice == Choice::Backlog);
             row.push(Span::raw("  "));
-            row.extend(option("b", "Add to the backlog", choice == Choice::Backlog));
+            row.extend(option("Start now", choice == Choice::Start));
             lines.extend([Line::from(row), Line::default()]);
-            lines.push(Line::from(vec![keyed("← →"), said(" choose · "), keyed("⏎"), said(" do it · "), keyed("s"), said(" / "), keyed("b"), said(" directly · "), keyed("esc"), said(" back to the text")]));
+            lines.push(Line::from(vec![keyed("← →"), said(" choose · "), keyed("⏎"), said(" do it · "), keyed("esc"), said(" or typing goes back to the text")]));
         }
         Some(_) => {
-            lines.extend([Line::from(option("s", "Start now", true)), Line::default()]);
-            lines.push(Line::from(vec![keyed("⏎"), said(" / "), keyed("s"), said(" start · "), keyed("esc"), said(" back to the text")]));
+            lines.extend([Line::from(option("Start now", true)), Line::default()]);
+            lines.push(Line::from(vec![keyed("⏎"), said(" start · "), keyed("esc"), said(" or typing goes back to the text")]));
         }
     }
     modal(frame, HEAD.to_string(), lines, width as u16 + 4);
@@ -182,7 +182,7 @@ impl App {
             None => match key.code {
                 KeyCode::Esc => return,
                 KeyCode::Enter if key.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::SHIFT) => new.text.push('\n'),
-                KeyCode::Enter if !new.text.trim().is_empty() => new.choice = Some(Choice::Start),
+                KeyCode::Enter if !new.text.trim().is_empty() => new.choice = Some(if new.backlog { Choice::Backlog } else { Choice::Start }),
                 KeyCode::Backspace => {
                     new.text.pop();
                 }
@@ -196,8 +196,15 @@ impl App {
                 }
                 KeyCode::Left | KeyCode::Right | KeyCode::Tab if new.backlog => new.choice = Some(if choice == Choice::Start { Choice::Backlog } else { Choice::Start }),
                 KeyCode::Enter => return self.do_new_task(new, choice),
-                KeyCode::Char('s') => return self.do_new_task(new, Choice::Start),
-                KeyCode::Char('b') if new.backlog => return self.do_new_task(new, Choice::Backlog),
+                // A ⏎ meant as a new line lands here where the terminal can't tell shift-⏎ from ⏎, so a letter must never pick a choice.
+                KeyCode::Char(character) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    (new.choice, new.failed) = (None, None);
+                    new.text.push(character);
+                }
+                KeyCode::Backspace => {
+                    (new.choice, new.failed) = (None, None);
+                    new.text.pop();
+                }
                 _ => {}
             },
         }
@@ -291,7 +298,7 @@ mod tests {
     }
 
     #[test]
-    fn enter_offers_start_now_or_the_backlog_and_s_files_it_for_the_writer_to_start_once_written() {
+    fn enter_offers_the_backlog_first_or_start_now_which_files_it_for_the_writer_to_start_once_written() {
         let mut app = app_on("kebbie");
         let seen = recorded(&mut app);
         press(&mut app, key(KeyCode::Char('n')));
@@ -301,17 +308,19 @@ mod tests {
         press(&mut app, key(KeyCode::Enter));
         let (rows, _) = render(&mut app, 100, 30);
         let screen = rows.join("\n");
-        assert!(screen.contains("s Start now") && screen.contains("b Add to the backlog") && screen.contains("← → choose · ⏎ do it · s / b directly · esc back to the text"), "{screen}");
+        assert!(screen.contains("Add to the backlog    Start now") && screen.contains("← → choose · ⏎ do it · esc or typing goes back to the text"), "{screen}");
+        assert!(matches!(&app.mode, Mode::NewTask(new) if new.choice == Some(Choice::Backlog)), "the backlog is chosen first");
         press(&mut app, key(KeyCode::Esc));
         assert!(matches!(&app.mode, Mode::NewTask(new) if new.choice.is_none() && new.text == "Fix the disk warning on the board"), "esc goes back to the text");
         press(&mut app, key(KeyCode::Enter));
-        press(&mut app, key(KeyCode::Char('s')));
+        press(&mut app, key(KeyCode::Right));
+        press(&mut app, key(KeyCode::Enter));
         settle_jobs(&mut app);
         assert_eq!(seen.lock().unwrap().as_slice(), ["file to start [kebbie] Fix the disk warning on the board"], "no task starts before the item is written");
     }
 
     #[test]
-    fn b_or_right_and_enter_files_it_in_the_backlog_with_the_repos_the_board_knows_for_the_writer() {
+    fn enter_twice_files_it_in_the_backlog_with_the_repos_the_board_knows_for_the_writer() {
         let mut app = app_on("kebbie");
         app.checkouts = vec![crate::status::Checkout { name: "kebbie".to_string(), changed: 0, free_slots: 0, busy_slots: 1 }];
         app.tasks.push({ let mut other = app.tasks[0].clone(); other.name = "hub".to_string(); other.repo = Some(PathBuf::from("/nowhere/kebbie-hub")); other });
@@ -321,10 +330,32 @@ mod tests {
         press(&mut app, key(KeyCode::Tab));
         assert!(matches!(&app.mode, Mode::NewTask(new) if new.text == "Rerun a flaky test once"), "tab switches nothing");
         press(&mut app, key(KeyCode::Enter));
-        press(&mut app, key(KeyCode::Right));
         press(&mut app, key(KeyCode::Enter));
         settle_jobs(&mut app);
         assert_eq!(seen.lock().unwrap().as_slice(), ["file [kebbie, kebbie-hub] Rerun a flaky test once"]);
+    }
+
+    #[test]
+    fn typing_on_after_a_plain_enter_keeps_typing_and_never_starts_a_task() {
+        for backlog in [true, false] {
+            let mut app = app_on("kebbie");
+            if !backlog {
+                app.sources = Vec::new();
+            }
+            let seen = recorded(&mut app);
+            press(&mut app, key(KeyCode::Char('n')));
+            typed(&mut app, "We are working to get");
+            press(&mut app, key(KeyCode::Enter));
+            typed(&mut app, "some banners");
+            assert!(matches!(&app.mode, Mode::NewTask(new) if new.choice.is_none() && new.text == "We are working to getsome banners"), "backlog {backlog}: the letters are typed");
+            assert!(seen.lock().unwrap().is_empty(), "backlog {backlog}: nothing started");
+            if backlog {
+                press(&mut app, key(KeyCode::Enter));
+                press(&mut app, key(KeyCode::Enter));
+                settle_jobs(&mut app);
+                assert_eq!(seen.lock().unwrap().as_slice(), ["file [kebbie] We are working to getsome banners"], "two plain ⏎ file it, never start it");
+            }
+        }
     }
 
     fn failing(app: &mut App) {
@@ -333,7 +364,7 @@ mod tests {
 
     #[test]
     fn a_start_or_filing_that_fails_keeps_the_description_and_the_choice_and_says_why() {
-        for (letter, choice, said, backlog) in [('s', Choice::Start, "read-only", true), ('b', Choice::Backlog, "read-only", true), ('s', Choice::Start, "no such repo", false)] {
+        for (moves, choice, said, backlog) in [(1, Choice::Start, "read-only", true), (0, Choice::Backlog, "read-only", true), (0, Choice::Start, "no such repo", false)] {
             let mut app = app_on("kebbie");
             if !backlog {
                 app.sources = Vec::new();
@@ -342,8 +373,12 @@ mod tests {
             press(&mut app, key(KeyCode::Char('n')));
             typed(&mut app, "Fix the disk warning");
             press(&mut app, key(KeyCode::Enter));
-            press(&mut app, key(KeyCode::Char(letter)));
+            for _ in 0..moves {
+                press(&mut app, key(KeyCode::Right));
+            }
+            press(&mut app, key(KeyCode::Enter));
             settle_jobs(&mut app);
+            let letter = format!("{choice:?}");
             assert!(matches!(&app.mode, Mode::NewTask(new) if new.text == "Fix the disk warning" && new.choice == Some(choice)), "{letter}: the dialog comes back");
             assert!(render(&mut app, 100, 30).0.join("\n").contains(said), "{letter}: the error shows in the dialog");
             press(&mut app, key(KeyCode::Esc));
@@ -360,10 +395,9 @@ mod tests {
         typed(&mut app, "Fix the disk warning");
         press(&mut app, key(KeyCode::Enter));
         let screen = render(&mut app, 100, 30).0.join("\n");
-        assert!(screen.contains("s Start now") && !screen.contains("backlog") && screen.contains("⏎ / s start · esc back to the text"), "{screen}");
-        press(&mut app, key(KeyCode::Char('b')));
+        assert!(screen.contains("Start now") && !screen.contains("backlog") && screen.contains("⏎ start · esc or typing goes back to the text"), "{screen}");
         press(&mut app, key(KeyCode::Right));
-        assert!(matches!(&app.mode, Mode::NewTask(new) if new.choice == Some(Choice::Start)) && seen.lock().unwrap().is_empty(), "b and → do nothing");
+        assert!(matches!(&app.mode, Mode::NewTask(new) if new.choice == Some(Choice::Start)) && seen.lock().unwrap().is_empty(), "→ does nothing");
         press(&mut app, key(KeyCode::Enter));
         settle_jobs(&mut app);
         assert_eq!(seen.lock().unwrap().as_slice(), ["start /nowhere/kebbie fix-disk-warning Fix the disk warning"]);

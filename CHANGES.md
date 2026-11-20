@@ -14,6 +14,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task's options name its vault note's link Open in Obsidian, under LINKS.
 - The questions window's comment field wraps long text onto new rows and grows with it.
 - The n box shows each space as you type it, is larger, and takes shift+⏎ for a new line.
+- Typing on in the n box after ⏎ keeps typing, and ⏎ twice files it rather than starting a task.
 
 ## 0.41.3
 
