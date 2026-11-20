@@ -9,7 +9,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph, Wrap};
 use ratatui::Frame;
-use ratatui_textarea::TextArea;
+use ratatui_textarea::{TextArea, WrapMode};
 
 use crate::herdr;
 use crate::keys::{self, Act};
@@ -41,7 +41,15 @@ fn comment_field() -> TextArea<'static> {
     comment.set_placeholder_text("comment (optional)");
     comment.set_cursor_line_style(Style::new());
     comment.set_style(style(TEXT));
+    comment.set_wrap_mode(WrapMode::WordOrGlyph);
     comment
+}
+
+// The field grows a row for each line the text wraps to inside its border, so nothing typed goes out of sight, up to a height that still leaves the question in view.
+fn comment_rows(comment: &TextArea, width: usize) -> usize {
+    let inside = width.saturating_sub(2).max(1);
+    let wrapped: usize = comment.lines().iter().map(|line| line.chars().count() / inside + 1).sum();
+    (wrapped + 2).clamp(3, 10)
 }
 
 impl QuestionWindow {
@@ -541,7 +549,7 @@ pub(super) fn draw_questions(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit
     window.option = window.option.min(answers.len().saturating_sub(1));
     let shown = if planned { crate::plan_brief::title(&message.text) } else { message.text.as_str() };
     let asked: Vec<Line> = rich_wrap(shown, width, 4, TEXT).into_iter().map(|line| line.style(Style::new().add_modifier(Modifier::BOLD))).collect();
-    let comment_rows = (window.comment.lines().len() as u16 + 2).clamp(3, 8);
+    let comment_rows = comment_rows(&window.comment, width) as u16;
     let answer_height = if window.typing { 2 + comment_rows } else { 3 };
     let [asked_area, plan_area, answer_area] = Layout::vertical([Constraint::Length(asked.len() as u16), Constraint::Min(0), Constraint::Length(answer_height)]).areas(main);
     frame.render_widget(Paragraph::new(asked), asked_area);
@@ -692,7 +700,7 @@ fn draw_ask(frame: &mut Frame, window: &mut QuestionWindow, message: &Message, c
     let inner_width = width.saturating_sub(4) as usize;
     let answers = answers(message);
     window.option = window.option.min(answers.len().saturating_sub(1));
-    let comment_rows = (window.comment.lines().len() + 2).clamp(3, 8);
+    let comment_rows = comment_rows(&window.comment, inner_width.saturating_sub(INDENT));
     let body = ask_body(message, &answers, window.option, window.typing, comment_rows, inner_width);
     let area = centered(full, width, body.lines.len() as u16 + 4);
     frame.render_widget(Clear, area);
@@ -1182,6 +1190,20 @@ mod tests {
         }
         press(&mut app, KeyCode::Enter);
         assert!(typing(&app).1, "with text it sends");
+    }
+
+    #[test]
+    fn a_long_comment_wraps_onto_new_rows_and_the_field_grows_so_none_of_it_goes_out_of_sight() {
+        let mut app = test_app(Vec::new());
+        with_changes(&mut app);
+        app.open_questions(Some(0));
+        press(&mut app, KeyCode::Char('w'));
+        let words = "first second third fourth fifth sixth seventh eighth ninth tenth eleventh twelfth thirteenth fourteenth fifteenth sixteenth seventeenth lastword";
+        for character in words.chars() {
+            press(&mut app, KeyCode::Char(character));
+        }
+        let screen = render(&mut app, 60, 30).0.join("\n");
+        assert!(screen.contains("first") && screen.contains("lastword"), "{screen}");
     }
 
     fn snapshot_without(app: &mut App, id: &str) {
