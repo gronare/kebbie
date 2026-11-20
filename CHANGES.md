@@ -7,6 +7,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### What's new
 
 ### Fixed
+- The n box shows each space as you type it, is larger, and takes shift+⏎ for a new line.
 
 ## 0.41.3
 

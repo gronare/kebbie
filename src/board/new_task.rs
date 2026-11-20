@@ -103,17 +103,33 @@ fn option(letter: &str, label: &str, on: bool) -> Vec<Span<'static>> {
     vec![Span::styled(" ", lit), Span::styled(letter.to_string(), style(MAUVE).patch(lit)), Span::styled(format!(" {label} "), style(TEXT).patch(lit))]
 }
 
-pub(super) fn draw(frame: &mut Frame, new: &NewTask) {
-    let width = 64usize.min(frame.area().width.saturating_sub(8) as usize);
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    for paragraph in new.text.split('\n') {
-        let wrapped = wrap(paragraph, width, usize::MAX);
-        lines.extend(if wrapped.is_empty() { vec![Line::default()] } else { wrapped.into_iter().map(|text| Line::from(Span::styled(text, style(TEXT)))).collect() });
+// The typed text wrapped as typed: every space stays, so one typed at the end shows at once, and a word longer than the line breaks inside it.
+pub(super) fn typed_lines(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut out = Vec::new();
+    for paragraph in text.split('\n') {
+        let mut rest: Vec<char> = paragraph.chars().collect();
+        while rest.len() > width {
+            let cut = rest[..=width].iter().rposition(|character| *character == ' ').filter(|at| *at > 0).map_or(width, |at| at + 1);
+            out.push(rest.drain(..cut).collect());
+        }
+        out.push(rest.into_iter().collect());
     }
+    out
+}
+
+const TEXT_ROWS: usize = 6;
+
+pub(super) fn draw(frame: &mut Frame, new: &NewTask) {
+    let width = 88usize.min(frame.area().width.saturating_sub(8) as usize);
+    let mut lines: Vec<Line<'static>> = typed_lines(&new.text, width.saturating_sub(1)).into_iter().map(|text| Line::from(Span::styled(text, style(TEXT)))).collect();
     if new.choice.is_none()
         && let Some(last) = lines.last_mut()
     {
         last.spans.push(Span::styled("▏", style(MAUVE)));
+    }
+    while lines.len() < TEXT_ROWS {
+        lines.push(Line::default());
     }
     let repo = new.repos.get(new.repo).map(|repo| name_of(repo)).unwrap_or_default();
     let mut where_ = vec![said("repo "), Span::styled(repo, style(TEAL))];
@@ -128,7 +144,7 @@ pub(super) fn draw(frame: &mut Frame, new: &NewTask) {
         lines.push(Line::default());
     }
     match new.choice {
-        None => lines.push(Line::from(vec![keyed("⏎"), said(" continue · "), keyed("alt-⏎"), said(" new line · "), keyed("esc"), said(" cancel")])),
+        None => lines.push(Line::from(vec![keyed("⏎"), said(" continue · "), keyed("shift-⏎"), said(" new line · "), keyed("esc"), said(" cancel")])),
         Some(choice) if new.backlog => {
             let mut row = option("s", "Start now", choice == Choice::Start);
             row.push(Span::raw("  "));
@@ -274,7 +290,7 @@ mod tests {
         let (rows, _) = render(&mut app, 100, 30);
         let screen = rows.join("\n");
         assert!(screen.contains("New · what do you want done?") && screen.contains("The disk warning says how much is free") && screen.contains("and which worktree is largest."), "alt-⏎ makes a new line: {screen}");
-        assert!(screen.contains("repo kebbie") && screen.contains("⏎ continue · alt-⏎ new line · esc cancel") && !screen.contains("name"), "{screen}");
+        assert!(screen.contains("repo kebbie") && screen.contains("⏎ continue · shift-⏎ new line · esc cancel") && !screen.contains("name"), "{screen}");
         press(&mut app, key(KeyCode::Esc));
         assert!(matches!(app.mode, Mode::Normal), "esc cancels");
     }
@@ -363,6 +379,24 @@ mod tests {
         assert_eq!(crate::status::kept_title(&state, "fix-disk@kebbie"), None, "a refused start leaves no title");
         assert!(titled(&state, repo, "fix-disk", "Fix the disk warning", || Ok("started".to_string())).is_ok());
         assert!(crate::status::kept_title(&state, "fix-disk@kebbie").is_some());
+    }
+
+    #[test]
+    fn the_box_shows_every_typed_space_at_once_and_wraps_long_words_inside_the_line() {
+        assert_eq!(super::typed_lines("fix the ", 20), vec!["fix the ".to_string()], "a space typed last shows");
+        assert_eq!(super::typed_lines("two  spaces", 20), vec!["two  spaces".to_string()]);
+        assert_eq!(super::typed_lines("aaaa bbbb cccc", 10), vec!["aaaa bbbb ".to_string(), "cccc".to_string()]);
+        assert_eq!(super::typed_lines("abcdefghijkl", 5), vec!["abcde".to_string(), "fghij".to_string(), "kl".to_string()]);
+        assert_eq!(super::typed_lines("one\ntwo", 10), vec!["one".to_string(), "two".to_string()]);
+        let mut app = app_on("/work/shop");
+        app.open_new_task();
+        typed(&mut app, "make it ");
+        press(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+        typed(&mut app, "x");
+        let rows = render(&mut app, 140, 40).0.join("\n");
+        assert!(rows.contains("make it ") && rows.contains("shift-⏎ new line"), "{rows}");
+        let crate::board::Mode::NewTask(new) = &app.mode else { panic!("the dialog stays") };
+        assert_eq!(new.text, "make it \nx");
     }
 
     #[test]

@@ -1366,6 +1366,7 @@ pub fn run(overlay: bool) -> Result<String> {
     let renewed = std::env::var_os(RESTART_STATE).is_some() && std::env::var_os(SCREEN_KEPT).is_some();
     let mut terminal = if renewed { terminal::continue_terminal() } else { init_terminal() };
     let mut hold = renewed.then(|| Instant::now() + RENEW_HOLD);
+    let mut shift_enter = false;
     app.focus_tint = background::focus_tint(background::ask());
     let graphics = GraphicsEnv::current();
     (app.graphics, app.cell_guessed) = graphics.startup();
@@ -1511,6 +1512,11 @@ pub fn run(overlay: bool) -> Result<String> {
             if app.may_restart() && ((std::mem::take(&mut app.restart_after_update) && rebuild.changed()) || rebuild.ready()) {
                 let error = rebuild.restart(&app);
                 app.show_as(Err(error), true);
+            }
+            let typing = matches!(&app.mode, Mode::NewTask(new) if new.choice.is_none());
+            if typing != shift_enter {
+                shift_enter = typing;
+                terminal::shift_enter(&mut std::io::stdout(), typing);
             }
             let wait = if app.page == Page::Areas && app.areas.waiting() { 20 } else { 250 };
             if event::poll(Duration::from_millis(wait)).map_err(|error| error.to_string())? {

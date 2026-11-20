@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use ratatui::crossterm::event::{DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange, EnableMouseCapture};
+use ratatui::crossterm::event::{DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags};
 use ratatui::crossterm::cursor::Show;
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{Clear, ClearType, EnterAlternateScreen};
@@ -17,7 +17,12 @@ fn modes_on(out: &mut impl Write) {
 
 // The board hides the cursor and ratatui::restore never shows it again, so a shell or prompt after the board would type blind.
 fn modes_off(out: &mut impl Write) {
-    let _ = execute!(out, DisableMouseCapture, DisableBracketedPaste, DisableFocusChange, Show);
+    let _ = execute!(out, PopKeyboardEnhancementFlags, DisableMouseCapture, DisableBracketedPaste, DisableFocusChange, Show);
+}
+
+// The terminal tells shift+⏎ from ⏎ only once asked to, and only a text box asks: every other key the board takes arrives as it always has.
+pub fn shift_enter(out: &mut impl Write, on: bool) {
+    let _ = if on { execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)) } else { execute!(out, PopKeyboardEnhancementFlags) };
 }
 
 pub fn init_terminal() -> DefaultTerminal {
