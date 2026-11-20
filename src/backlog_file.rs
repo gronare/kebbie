@@ -51,7 +51,7 @@ impl State {
     }
 }
 
-// Blocking questions waiting on the user, answers of theirs the lead has yet to fold in, and the state those leave; Linear has none. `into` is the older note a kept row was merged into; `writing` is when the user asked for the item to be written out, while the lead writes it.
+// Blocking questions waiting on the user, answers of theirs the lead has yet to fold in, and the state those leave; Linear has none. `into` is the older note a kept row was merged into; `writing` is when the user asked for the item to be written out, while the lead writes it; `start` says kebbie starts it as a task once it is written.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Shape {
     pub state: Option<State>,
@@ -61,6 +61,7 @@ pub struct Shape {
     pub filed: String,
     pub into: String,
     pub writing: Option<u64>,
+    pub start: bool,
 }
 
 // A draft: kebbie's or the vault's draft text, or no more than one line of text, whatever the item's shape.
@@ -243,7 +244,7 @@ pub fn placeholder_title(words: &str) -> String {
     if all.len() > WORDS { format!("{}…", title.trim_end_matches(|c: char| c.is_ascii_punctuation())) } else { title }
 }
 
-// `words` is a description in the user's own words, and `line` then only a placeholder title the lead replaces.
+// `words` is a description in the user's own words, and `line` then only a placeholder title the lead replaces; `start` asks kebbie to start it once written, and `repos` are the repos the writer may choose from when `repo` is empty.
 pub struct Filing<'a> {
     pub priority: &'a str,
     pub repo: &'a str,
@@ -251,6 +252,8 @@ pub struct Filing<'a> {
     pub words: Option<&'a str>,
     pub body: Option<&'a str>,
     pub by: &'a str,
+    pub start: bool,
+    pub repos: &'a [String],
 }
 
 fn checked_priority(priority: &str) -> Result<String> {
@@ -390,14 +393,29 @@ pub fn write_out_text(who: &str, title: &str, place: &str, words: Option<&str>) 
     format!("{who} asks you to write out the backlog item \"{title}\" ({place}) with the skill `{SKILL}`:{words} read it, the code and the notes, write it out in place, and show the user the written item.")
 }
 
-fn lead_text(filing: &Filing, priority: &str, place: &str) -> String {
+fn lead_text(filing: &Filing, priority: &str, repo: &str, place: &str) -> String {
     let (who, line) = (filing.by, filing.line);
     let priority = if priority == "none" { String::new() } else { format!(" [{priority}]") };
-    if let Some(words) = filing.words {
-        return format!("{who} added an idea to the backlog{priority}, in their words:\n\n{}\n\nIts title \"{}\" is a placeholder. Write it out now with the skill `{SKILL}` from what you know (your conversation with the user, the code, the notes), give it a short title in the user's words, show the user the written item, and save it {place}. If it reached you only now, say that it waited for you.", quoted_block(words), line.trim());
-    }
-    format!("{who} added a quick item to the backlog: \"{}\"{priority}. Write it out now with the skill `{SKILL}` from what you know (your conversation with the user, the code, the notes), show the user the written item, and save it {place}. If it reached you only now, say that it waited for you.", line.trim())
+    let asked = if let Some(words) = filing.words {
+        format!("{who} added an idea to the backlog{priority}, in their words:\n\n{}\n\nIts title \"{}\" is a placeholder. Write it out now with the skill `{SKILL}` from what you know (your conversation with the user, the code, the notes), give it a short title in the user's words, show the user the written item, and save it {place}. If it reached you only now, say that it waited for you.", quoted_block(words), line.trim())
+    } else {
+        format!("{who} added a quick item to the backlog: \"{}\"{priority}. Write it out now with the skill `{SKILL}` from what you know (your conversation with the user, the code, the notes), show the user the written item, and save it {place}. If it reached you only now, say that it waited for you.", line.trim())
+    };
+    format!("{asked}{}{}", repo_text(repo, filing.repos), if filing.start { START_TEXT } else { "" })
 }
+
+const START_TEXT: &str = " The user asked to start it once it is written: kebbie starts it as a task by itself once it is saved with its repo and no `- [ ]` question is left, so keep the blocking questions to what the start needs, and do not start it yourself.";
+
+// An item filed without a repo has the writer choose one from its words.
+fn repo_text(repo: &str, repos: &[String]) -> String {
+    if !repo.trim().is_empty() {
+        return String::new();
+    }
+    let known = if repos.is_empty() { "the repos `kebbie areas` lists".to_string() } else { format!("the repos kebbie knows ({}, and those `kebbie areas` lists)", repos.join(", ")) };
+    format!(" The user named no repo: choose the one the work happens in from their words and {known}, and save it as the item's repo; when none fits, or two fit equally, ask which as a blocking question.")
+}
+
+const STARTS: &str = "The lead writes it out and picks its repo; once no question of it waits on you, kebbie starts it as a task.";
 
 // Where an item is filed and how the lead hears of it: the backlog folder, kebbie's state and the lead's inbox.
 pub struct Shelf<'a> {
@@ -420,16 +438,19 @@ pub fn file_item_on(shelf: &Shelf, sources: &[Source], filing: &Filing, from_lea
     match crate::config::filing(sources) {
         Some(Source::Local) => {
             let (path, item) = add_in(shelf.dir, filing, &filed)?;
-            let mut shown = Notice::new(Tone::Done, "Added to the backlog").detail("item", format!("\"{}\" [{}]", item.title, item.priority)).detail("ref", item.reference()).detail("file", path.display().to_string());
+            if filing.start {
+                crate::backlog_kept::ask_start(shelf.state, &item.reference(), crate::messages::now())?;
+            }
+            let mut shown = Notice::new(Tone::Done, if filing.start { "Added to the backlog to start once written" } else { "Added to the backlog" }).detail("item", format!("\"{}\" [{}]", item.title, item.priority)).detail("ref", item.reference()).detail("file", path.display().to_string());
             if item.to_write() {
                 if from_lead {
                     mark_told(shelf.state, shelf.dir, std::slice::from_ref(&item.stem));
                     shown = shown.next(format!("Write it out now with the skill {SKILL}, in that file."));
                 } else {
-                    if (shelf.write)(&lead_text(filing, &item.priority, &format!("in its file {}", path.display()))).is_ok() {
+                    if (shelf.write)(&lead_text(filing, &item.priority, &item.repo, &format!("in its file {}", path.display()))).is_ok() {
                         mark_told(shelf.state, shelf.dir, std::slice::from_ref(&item.stem));
                     }
-                    shown = shown.next("The lead writes it out; it waits for the lead when none runs.");
+                    shown = shown.next(if filing.start { STARTS } else { "The lead writes it out; it waits for the lead when none runs." });
                 }
             }
             shown.ok()
@@ -440,17 +461,23 @@ pub fn file_item_on(shelf: &Shelf, sources: &[Source], filing: &Filing, from_lea
                 return Notice::new(Tone::You, "Not added: new items go to the vault here").you(format!("Write it as a task note in the vault with the skill {SKILL}.")).err();
             }
             let id = crate::backlog_kept::keep(shelf.state, filing.line, filing.words.unwrap_or_default(), &item.priority, &item.repo, crate::messages::now())?;
+            let reference = format!("{}{id}", crate::backlog_kept::PREFIX);
+            if filing.start && let Err(error) = crate::backlog_kept::ask_start(shelf.state, &reference, crate::messages::now()) {
+                let _ = crate::backlog_kept::release(shelf.state, &id);
+                return Err(error);
+            }
             let filed = format!("Then run `kebbie backlog filed {}{id} <the note's path>`, so the row kebbie keeps for it on the board gives way to your note; when you filed it into an existing note, the row stays a week pointing at that note.", crate::backlog_kept::PREFIX);
             let text = if item.to_write() {
-                format!("{} {filed}", lead_text(filing, &item.priority, "as a task note in the vault's backlog"))
+                format!("{} {filed}", lead_text(filing, &item.priority, &item.repo, "as a task note in the vault's backlog"))
             } else {
                 format!("{} filed a written-out backlog item; file it as a task note in the vault's backlog as it stands (title \"{}\", priority {}, repo {}). {filed}\n\n{}", filing.by, item.title, item.priority, if item.repo.is_empty() { "not given" } else { &item.repo }, item.body)
             };
             if let Err(error) = (if item.to_write() { shelf.write } else { shelf.tell })(&text) {
                 let _ = crate::backlog_kept::release(shelf.state, &id);
+                let _ = crate::backlog_kept::drop_start(shelf.state, &reference);
                 return Err(error);
             }
-            Notice::new(Tone::Moving, "Sent to the lead").next("It writes the item out and files it in the vault. Its row waits here until the note replaces it.").ok()
+            Notice::new(Tone::Moving, if filing.start { "Sent to the lead to write out and start" } else { "Sent to the lead" }).next(if filing.start { STARTS } else { "It writes the item out and files it in the vault. Its row waits here until the note replaces it." }).ok()
         }
         None => Notice::new(Tone::You, "Not added: no backlog takes new items").you(format!("List \"local\" or \"vault\" under [board.backlog] sources in {}.", crate::config::path().display())).err(),
     }
@@ -472,6 +499,11 @@ pub fn filed_in(state: &Path, id: &str, note: Option<&str>, now: u64, note_of: i
         Some((note, (title, _))) => crate::backlog_kept::merge(state, id, note, title, now)?,
         None => crate::backlog_kept::release(state, id)?,
     };
+    let kept = format!("{}{}", crate::backlog_kept::PREFIX, id.strip_prefix(crate::backlog_kept::PREFIX).unwrap_or(id));
+    match note {
+        Some(note) => crate::backlog_kept::move_start(state, &kept, note)?,
+        None => crate::backlog_kept::drop_start(state, &kept)?,
+    }
     match (done, merged) {
         (true, Some((note, (title, _)))) => Notice::new(Tone::Done, "Its row stays a week, pointing at the note it was merged into").detail("kept", id).detail("note", format!("\"{title}\" ({note})")).ok(),
         (true, None) => Notice::new(Tone::Done, "Its row gives way to the note").detail("kept", id).ok(),
@@ -546,7 +578,7 @@ pub fn add(priority: Option<&str>, repo: Option<&str>, words: &[String], from_st
     let caller = crate::permit::caller();
     let by = caller_name();
     let from_lead = matches!(caller, crate::permit::Caller::Lead | crate::permit::Caller::LeadSandboxed);
-    file_item(&crate::config::sources()?, &Filing { priority: priority.unwrap_or_default(), repo: repo.unwrap_or_default(), line: &line, words: None, body: body.as_deref(), by: &by }, from_lead)
+    file_item(&crate::config::sources()?, &Filing { priority: priority.unwrap_or_default(), repo: repo.unwrap_or_default(), line: &line, words: None, body: body.as_deref(), by: &by, start: false, repos: &[] }, from_lead)
 }
 
 #[cfg(test)]
@@ -560,7 +592,7 @@ mod tests {
     }
 
     fn quick<'a>(line: &'a str, priority: &'a str) -> Filing<'a> {
-        Filing { priority, repo: "", line, words: None, body: None, by: "The user" }
+        Filing { priority, repo: "", line, words: None, body: None, by: "The user", start: false, repos: &[] }
     }
 
     fn written() -> String {
@@ -739,6 +771,49 @@ mod tests {
         assert_eq!(rows.iter().map(|row| (row.id.as_str(), row.merged.as_ref().map(|merged| merged.into.as_str()))).collect::<Vec<_>>(), [(merged.as_str(), Some("Projects/older.md"))]);
         assert!(filed_in(&state, &format!("kept:{merged}"), None, at + 120, notes).unwrap().contains("gives way"), "without a note the row gives way as before");
         let _ = std::fs::remove_dir_all(state);
+    }
+
+    #[test]
+    fn words_filed_with_no_repo_have_the_writer_choose_one_and_a_start_once_written_is_kept_for_the_item() {
+        let repos = ["kebbie".to_string(), "web".to_string()];
+        for source in [Source::Local, Source::Vault] {
+            let (state, dir) = (crate::sh::test_dir("backlog-no-repo-state"), crate::sh::test_dir("backlog-no-repo-dir"));
+            let (told, written) = (std::cell::RefCell::new(Vec::new()), std::cell::RefCell::new(Vec::new()));
+            let tell = |text: &str| -> Result<()> { told.borrow_mut().push(text.to_string()); Ok(()) };
+            let write = |text: &str| -> Result<()> { written.borrow_mut().push(text.to_string()); Ok(()) };
+            let shelf = Shelf { dir: &dir, state: &state, tell: &tell, write: &write };
+            let words = "Rerun a flaky red test once by itself";
+            let title = placeholder_title(words);
+            let filing = Filing { words: Some(words), start: true, repos: &repos, ..quick(&title, "") };
+            let shown = file_item_on(&shelf, &[source], &filing, false).unwrap();
+            assert!(shown.contains("kebbie starts it as a task"), "{source:?}: {shown}");
+            let request = written.borrow()[0].clone();
+            assert!(request.contains("The user named no repo: choose the one the work happens in from their words and the repos kebbie knows (kebbie, web, and those `kebbie areas` lists)") && request.contains(START_TEXT), "{source:?}: {request}");
+            let reference = match source {
+                Source::Local => {
+                    let item = items(&dir).pop().expect("the draft is filed");
+                    assert_eq!((item.repo.as_str(), item.to_write()), ("", true), "filed with no repo");
+                    item.reference()
+                }
+                _ => {
+                    let kept = crate::backlog_kept::kept_in(&state).pop().expect("a kept row");
+                    assert_eq!(kept.repo, "", "kept with no repo");
+                    format!("kept:{}", kept.id)
+                }
+            };
+            assert_eq!(crate::backlog_kept::starts_in(&state).iter().map(|start| start.item.clone()).collect::<Vec<_>>(), std::slice::from_ref(&reference));
+            if source == Source::Vault {
+                filed_in(&state, &reference, Some("Projects/retry-flaky.md"), crate::messages::now(), |_| None).unwrap();
+                assert_eq!(crate::backlog_kept::starts_in(&state)[0].item, "Projects/retry-flaky.md", "the ask moves to the note the lead filed");
+            }
+            let plain = file_item_on(&shelf, &[source], &Filing { words: Some("Dark mode on the board"), ..quick("Dark mode on the board", "") }, false).unwrap();
+            assert!(!plain.contains("starts it") && !written.borrow()[1].contains(START_TEXT), "{source:?}: only a start asks to start");
+            assert!(written.borrow()[1].contains("from their words and the repos `kebbie areas` lists"), "{}", written.borrow()[1]);
+            assert_eq!(crate::backlog_kept::starts_in(&state).len(), 1);
+            assert!(told.borrow().is_empty());
+            let _ = (std::fs::remove_dir_all(state), std::fs::remove_dir_all(dir));
+        }
+        assert_eq!(repo_text("web", &repos), "", "a repo given is not asked about");
     }
 
     #[test]

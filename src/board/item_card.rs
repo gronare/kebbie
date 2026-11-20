@@ -28,7 +28,10 @@ pub(super) const GO_AGAIN_FOR: std::time::Duration = std::time::Duration::from_s
 
 // The selected backlog row's right field, the word in it that is tinted, its line under the row while the lead works on it, and its about line when selected.
 pub(super) fn row_facts(entry: &Entry) -> (String, Option<(String, Color)>) {
-    let with_age = |word: String| if entry.age.is_empty() { word } else { format!("{word} · {}", entry.age) };
+    let with_age = |word: String| {
+        let word = if entry.shape.start { format!("{word} · then starts") } else { word };
+        if entry.age.is_empty() { word } else { format!("{word} · {}", entry.age) }
+    };
     if let Some(at) = entry.shape.writing {
         return (with_age(crate::backlog_file::writing_word(at, crate::messages::now())), None);
     }
@@ -57,6 +60,11 @@ fn waits(count: usize) -> String {
 }
 
 pub(super) fn about(entry: &Entry) -> String {
+    let said = about_state(entry);
+    if entry.shape.start && entry.shape.into.is_empty() && entry.shape.state != Some(State::Ready) { format!("{said}; kebbie starts it as a task once it is written") } else { said }
+}
+
+fn about_state(entry: &Entry) -> String {
     if !entry.shape.into.is_empty() {
         return format!("merged into the note {}: ⏎ opens it", entry.shape.into);
     }

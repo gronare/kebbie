@@ -10,6 +10,7 @@ mod backlog;
 mod backlog_file;
 mod backlog_writer;
 mod backlog_kept;
+mod backlog_start;
 mod backlog_style;
 mod card;
 mod card_images;

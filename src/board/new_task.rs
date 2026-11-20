@@ -13,11 +13,11 @@ use crate::repo::name_of;
 use crate::sh::Result;
 use super::columns::suggested_name;
 use super::input::{StartWith, start_in_background};
-use super::widgets::{MAUVE, MUTED, RED, SURFACE, TEAL, TEXT, modal, style, wrap};
+use super::widgets::{MAUVE, MUTED, RED, SURFACE, TEXT, modal, style, wrap};
 use super::{App, Mode};
 
 pub(super) type Start = Arc<dyn Fn(&Path, &str, &str) -> Result<String> + Send + Sync>;
-pub(super) type File = Arc<dyn Fn(&[Source], &str, &str) -> Result<String> + Send + Sync>;
+pub(super) type File = Arc<dyn Fn(&[Source], &str, bool, &[String]) -> Result<String> + Send + Sync>;
 
 // How a new task starts and how its description is filed, apart so tests start nothing.
 pub(super) struct Io {
@@ -31,11 +31,10 @@ impl Default for Io {
     }
 }
 
-// The new-task dialog: the description, the repos it can go to, and the choice once ⏎ was pressed.
+// The new-task dialog: the description and the choice once ⏎ was pressed; `fallback` is the repo a start goes to when there is no backlog to write it out in.
 pub(super) struct NewTask {
     pub text: String,
-    pub repos: Vec<PathBuf>,
-    pub repo: usize,
+    pub fallback: PathBuf,
     pub choice: Option<Choice>,
     pub backlog: bool,
     pub failed: Option<String>,
@@ -64,10 +63,10 @@ fn titled(state: &Path, repo: &Path, name: &str, text: &str, start: impl FnOnce(
     Ok(started)
 }
 
-// The description filed as the phone files an idea: a draft under its first words that the lead writes out.
-fn file(sources: &[Source], repo: &str, text: &str) -> Result<String> {
+// The description filed as the phone files an idea, with no repo: a draft under its first words that the writer writes out and places in one of `repos`, started once written when `start` asks it.
+fn file(sources: &[Source], text: &str, start: bool, repos: &[String]) -> Result<String> {
     let title = backlog_file::placeholder_title(text);
-    backlog_file::file_item(sources, &Filing { priority: "", repo, line: &title, words: Some(text.trim()), body: None, by: "The user" }, false)
+    backlog_file::file_item(sources, &Filing { priority: "", repo: "", line: &title, words: Some(text.trim()), body: None, by: "The user", start, repos }, false)
 }
 
 // A task name from the description's first words as kebbie start keeps it, made unique with -2, -3 and on against what is taken.
@@ -131,12 +130,7 @@ pub(super) fn draw(frame: &mut Frame, new: &NewTask) {
     while lines.len() < TEXT_ROWS {
         lines.push(Line::default());
     }
-    let repo = new.repos.get(new.repo).map(|repo| name_of(repo)).unwrap_or_default();
-    let mut where_ = vec![said("repo "), Span::styled(repo, style(TEAL))];
-    if new.choice.is_none() && new.repos.len() > 1 {
-        where_.push(said(" · tab switches"));
-    }
-    lines.extend([Line::default(), Line::from(where_), Line::default()]);
+    lines.push(Line::default());
     if let Some(failed) = &new.failed {
         for line in failed.lines() {
             lines.extend(wrap(line, width, usize::MAX).into_iter().map(|text| Line::from(Span::styled(text, style(RED)))));
@@ -161,26 +155,26 @@ pub(super) fn draw(frame: &mut Frame, new: &NewTask) {
 }
 
 impl App {
-    // n on the Work page: the dialog opens on the selected task's repo, else the one a new task starts in today.
+    // n on the Work page: herdr's Spaces are read meanwhile, so the repos the writer chooses from are known by ⏎.
     pub(super) fn open_new_task(&mut self) {
         self.space_repos(std::time::Duration::ZERO);
-        let first = self.any_repo();
+        let fallback = self.any_repo();
         let backlog = crate::config::filing(&self.sources).is_some();
-        self.mode = Mode::NewTask(Box::new(NewTask { text: String::new(), repos: vec![first], repo: 0, choice: None, backlog, failed: None }));
-        self.add_space_repos();
+        self.mode = Mode::NewTask(Box::new(NewTask { text: String::new(), fallback, choice: None, backlog, failed: None }));
     }
 
-    // The dialog opens at once; the repos of the board's checkouts join its list as herdr's Spaces are read.
-    pub(super) fn add_space_repos(&mut self) {
-        let checkouts: Vec<String> = self.checkouts.iter().map(|checkout| checkout.name.clone()).collect();
-        let mut known: Vec<PathBuf> = self.tasks.iter().filter_map(|item| item.repo.clone()).collect();
-        known.extend(checkouts.iter().filter_map(|name| self.repo_named(name)));
-        let Mode::NewTask(new) = &mut self.mode else { return };
-        for repo in known {
-            if !new.repos.contains(&repo) {
-                new.repos.push(repo);
+    // The repos the board knows, by folder name: its tasks', its checkouts' and herdr's Spaces'.
+    fn known_repos(&mut self) -> Vec<String> {
+        let mut all: Vec<String> = self.tasks.iter().filter_map(|item| item.repo.as_deref().map(name_of)).collect();
+        all.extend(self.checkouts.iter().map(|checkout| checkout.name.clone()));
+        all.extend(self.space_repos(std::time::Duration::ZERO).iter().map(|repo| name_of(repo)));
+        let mut known: Vec<String> = Vec::new();
+        for name in all {
+            if !name.is_empty() && !known.contains(&name) {
+                known.push(name);
             }
         }
+        known
     }
 
     pub(super) fn handle_new_task(&mut self, mut new: Box<NewTask>, key: KeyEvent) {
@@ -189,8 +183,6 @@ impl App {
                 KeyCode::Esc => return,
                 KeyCode::Enter if key.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::SHIFT) => new.text.push('\n'),
                 KeyCode::Enter if !new.text.trim().is_empty() => new.choice = Some(Choice::Start),
-                KeyCode::Tab if !new.repos.is_empty() => new.repo = (new.repo + 1) % new.repos.len(),
-                KeyCode::BackTab if !new.repos.is_empty() => new.repo = (new.repo + new.repos.len() - 1) % new.repos.len(),
                 KeyCode::Backspace => {
                     new.text.pop();
                 }
@@ -212,24 +204,27 @@ impl App {
         self.mode = Mode::NewTask(new);
     }
 
+    // With a backlog both choices file the text for the writer, which picks the repo; Start now also marks it to start once written. Without one, Start now starts it at once in the fallback repo.
     fn do_new_task(&mut self, mut new: Box<NewTask>, choice: Choice) {
-        let Some(repo) = new.repos.get(new.repo).cloned() else { return };
         let text = new.text.trim().to_string();
         let job = match choice {
+            _ if new.backlog => {
+                self.subject = Some(super::notices::Subject::plain("backlog"));
+                let (file, sources, repos, start) = (self.new_io.file.clone(), self.sources.clone(), self.known_repos(), choice == Choice::Start);
+                let label = if start { "Writing it out to start it" } else { "Adding it to the backlog" };
+                Some(self.in_background(label.to_string(), move || file(&sources, &text, start, &repos)))
+            }
             Choice::Start => {
+                let repo = new.fallback.clone();
                 let tasks: Vec<String> = self.tasks.iter().filter(|item| item.repo.as_ref() == Some(&repo)).map(|item| item.name.clone()).collect();
                 let (shown, start) = (task_name(&text, |name| tasks.iter().any(|task| task == name)), self.new_io.start.clone());
                 self.subject = Some(super::notices::Subject { kind: "start".to_string(), title: shown.clone(), task: false });
-                self.task_in_background(&shown, None, "starting", format!("Starting {shown}"), move || {
+                self.task_in_background(&shown, None, "starting", format!("Starting {shown} in {}", name_of(&repo)), move || {
                     let name = task_name(&text, |name| tasks.iter().any(|task| task == name) || branch_exists(&repo, name));
                     start(&repo, &name, &text)
                 })
             }
-            Choice::Backlog => {
-                self.subject = Some(super::notices::Subject::plain("backlog"));
-                let (file, sources) = (self.new_io.file.clone(), self.sources.clone());
-                Some(self.in_background(format!("Adding it to {}'s backlog", name_of(&repo)), move || file(&sources, &name_of(&repo), &text)))
-            }
+            Choice::Backlog => None,
         };
         if let Some(job) = job {
             job.ask_again(move |error| {
@@ -264,8 +259,8 @@ mod tests {
                 started.lock().unwrap().push(format!("start {} {name} {text}", repo.display()));
                 crate::notice::Notice::new(crate::notice::Tone::Done, "Started").ok()
             }),
-            file: Arc::new(move |_, repo, text| {
-                filed.lock().unwrap().push(format!("file {repo} {text}"));
+            file: Arc::new(move |_, text, start, repos| {
+                filed.lock().unwrap().push(format!("file{} [{}] {text}", if start { " to start" } else { "" }, repos.join(", ")));
                 crate::notice::Notice::new(crate::notice::Tone::Done, "Added").ok()
             }),
         };
@@ -280,7 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn n_opens_one_box_for_what_you_want_done_on_the_selected_tasks_repo_with_no_name_field() {
+    fn n_opens_one_box_for_what_you_want_done_with_no_name_or_repo_field() {
         let mut app = app_on("kebbie");
         press(&mut app, key(KeyCode::Char('n')));
         assert!(matches!(app.mode, Mode::NewTask(_)));
@@ -290,13 +285,13 @@ mod tests {
         let (rows, _) = render(&mut app, 100, 30);
         let screen = rows.join("\n");
         assert!(screen.contains("New · what do you want done?") && screen.contains("The disk warning says how much is free") && screen.contains("and which worktree is largest."), "alt-⏎ makes a new line: {screen}");
-        assert!(screen.contains("repo kebbie") && screen.contains("⏎ continue · shift-⏎ new line · esc cancel") && !screen.contains("name"), "{screen}");
+        assert!(screen.contains("⏎ continue · shift-⏎ new line · esc cancel") && !screen.contains("name") && !screen.contains("repo kebbie") && !screen.contains("tab switches"), "{screen}");
         press(&mut app, key(KeyCode::Esc));
         assert!(matches!(app.mode, Mode::Normal), "esc cancels");
     }
 
     #[test]
-    fn enter_offers_start_now_or_the_backlog_and_s_starts_it_under_a_name_from_its_first_words() {
+    fn enter_offers_start_now_or_the_backlog_and_s_files_it_for_the_writer_to_start_once_written() {
         let mut app = app_on("kebbie");
         let seen = recorded(&mut app);
         press(&mut app, key(KeyCode::Char('n')));
@@ -312,11 +307,11 @@ mod tests {
         press(&mut app, key(KeyCode::Enter));
         press(&mut app, key(KeyCode::Char('s')));
         settle_jobs(&mut app);
-        assert_eq!(seen.lock().unwrap().as_slice(), ["start /nowhere/kebbie fix-disk-warning-board Fix the disk warning on the board"]);
+        assert_eq!(seen.lock().unwrap().as_slice(), ["file to start [kebbie] Fix the disk warning on the board"], "no task starts before the item is written");
     }
 
     #[test]
-    fn b_or_right_and_enter_files_it_in_the_backlog_and_tab_switches_the_repo() {
+    fn b_or_right_and_enter_files_it_in_the_backlog_with_the_repos_the_board_knows_for_the_writer() {
         let mut app = app_on("kebbie");
         app.checkouts = vec![crate::status::Checkout { name: "kebbie".to_string(), changed: 0, free_slots: 0, busy_slots: 1 }];
         app.tasks.push({ let mut other = app.tasks[0].clone(); other.name = "hub".to_string(); other.repo = Some(PathBuf::from("/nowhere/kebbie-hub")); other });
@@ -324,22 +319,25 @@ mod tests {
         press(&mut app, key(KeyCode::Char('n')));
         typed(&mut app, "Rerun a flaky test once");
         press(&mut app, key(KeyCode::Tab));
-        assert!(render(&mut app, 100, 30).0.join("\n").contains("repo kebbie-hub · tab switches"));
+        assert!(matches!(&app.mode, Mode::NewTask(new) if new.text == "Rerun a flaky test once"), "tab switches nothing");
         press(&mut app, key(KeyCode::Enter));
         press(&mut app, key(KeyCode::Right));
         press(&mut app, key(KeyCode::Enter));
         settle_jobs(&mut app);
-        assert_eq!(seen.lock().unwrap().as_slice(), ["file kebbie-hub Rerun a flaky test once"]);
+        assert_eq!(seen.lock().unwrap().as_slice(), ["file [kebbie, kebbie-hub] Rerun a flaky test once"]);
     }
 
     fn failing(app: &mut App) {
-        app.new_io = Io { start: Arc::new(|_, _, _| Err("kebbie start: no such repo".to_string())), file: Arc::new(|_, _, _| Err("the backlog file is read-only".to_string())) };
+        app.new_io = Io { start: Arc::new(|_, _, _| Err("kebbie start: no such repo".to_string())), file: Arc::new(|_, _, _, _| Err("the backlog file is read-only".to_string())) };
     }
 
     #[test]
     fn a_start_or_filing_that_fails_keeps_the_description_and_the_choice_and_says_why() {
-        for (letter, choice, said) in [('s', Choice::Start, "no such repo"), ('b', Choice::Backlog, "read-only")] {
+        for (letter, choice, said, backlog) in [('s', Choice::Start, "read-only", true), ('b', Choice::Backlog, "read-only", true), ('s', Choice::Start, "no such repo", false)] {
             let mut app = app_on("kebbie");
+            if !backlog {
+                app.sources = Vec::new();
+            }
             failing(&mut app);
             press(&mut app, key(KeyCode::Char('n')));
             typed(&mut app, "Fix the disk warning");
@@ -354,7 +352,7 @@ mod tests {
     }
 
     #[test]
-    fn with_nowhere_to_file_the_dialog_offers_only_start_now() {
+    fn with_nowhere_to_file_the_dialog_offers_only_start_now_and_starts_at_once_in_the_selected_tasks_repo() {
         let mut app = app_on("kebbie");
         app.sources = Vec::new();
         let seen = recorded(&mut app);
@@ -368,7 +366,7 @@ mod tests {
         assert!(matches!(&app.mode, Mode::NewTask(new) if new.choice == Some(Choice::Start)) && seen.lock().unwrap().is_empty(), "b and → do nothing");
         press(&mut app, key(KeyCode::Enter));
         settle_jobs(&mut app);
-        assert_eq!(seen.lock().unwrap().len(), 1);
+        assert_eq!(seen.lock().unwrap().as_slice(), ["start /nowhere/kebbie fix-disk-warning Fix the disk warning"]);
     }
 
     #[test]

@@ -265,7 +265,7 @@ fn refused(reason: Reason, text: &str) -> Done {
 pub fn idea_on(shelf: &Shelf, sources: &[Source], caller: &Caller, idea: &Idea) -> Done {
     let title = backlog_file::placeholder_title(&idea.text);
     let by = who(caller);
-    let filing = Filing { priority: "", repo: idea.repo.as_deref().unwrap_or_default(), line: &title, words: Some(idea.text.trim()), body: None, by: &by };
+    let filing = Filing { priority: "", repo: idea.repo.as_deref().unwrap_or_default(), line: &title, words: Some(idea.text.trim()), body: None, by: &by, start: false, repos: &[] };
     match backlog_file::file_item_on(shelf, sources, &filing, false) {
         Ok(text) => (Outcome::Done, plain(&text)),
         Err(text) => (Outcome::Failed, plain(&text)),
@@ -493,11 +493,16 @@ fn free_name(repo: &Path, title: &str) -> String {
 }
 
 fn start_found(found: &Found) -> Result<String> {
-    let repo: PathBuf = crate::repo::locate(&found.entry.area)?;
-    let name = free_name(&repo, &found.entry.title);
-    let prompt = crate::backlog::task_prompt(&found.entry, &crate::config::sources()?, crate::vault_cli::known_on());
     let device = super::commands::acting();
-    crate::board::start_in_background(&repo, &name, Some(&prompt), &crate::board::StartWith { backlog: Some(&found.entry.reference), device: device.as_ref().map(Id::as_str), ..Default::default() })?;
+    start_entry(&found.entry, device.as_ref().map(Id::as_str))
+}
+
+// A backlog item started as a task in its repo, under a free name from its title, with the item as its prompt.
+pub(crate) fn start_entry(entry: &Entry, device: Option<&str>) -> Result<String> {
+    let repo: PathBuf = crate::repo::locate(&entry.area)?;
+    let name = free_name(&repo, &entry.title);
+    let prompt = crate::backlog::task_prompt(entry, &crate::config::sources()?, crate::vault_cli::known_on());
+    crate::board::start_in_background(&repo, &name, Some(&prompt), &crate::board::StartWith { backlog: Some(&entry.reference), device, ..Default::default() })?;
     Ok(crate::peers::address(&name, &crate::repo::name_of(&repo)))
 }
 

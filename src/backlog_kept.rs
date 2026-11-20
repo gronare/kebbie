@@ -55,6 +55,10 @@ fn writing_file(state: &Path) -> PathBuf {
     state.join("backlog-writing.json")
 }
 
+fn starts_file(state: &Path) -> PathBuf {
+    state.join("backlog-start.json")
+}
+
 // Held across each read, change and write of one of the files, so the board, the keeper and the CLI never drop each other's change.
 pub(crate) struct Locked(std::fs::File);
 
@@ -300,6 +304,50 @@ pub fn settle_writing(state: &Path, listed: &[&str], done: &[&str]) -> Vec<Writi
         let _ = write_writing(state, &kept);
     }
     kept
+}
+
+// An item the user asked to start once it is written, and when: kebbie starts it as a task once it is ready and names its repo.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Start {
+    pub item: String,
+    pub at: u64,
+}
+
+pub fn starts_in(state: &Path) -> Vec<Start> {
+    read(&starts_file(state)).iter().map(|value| Start { item: text(value, "item"), at: value["at"].as_u64().unwrap_or(0) }).filter(|start| !start.item.is_empty()).collect()
+}
+
+fn change_starts(state: &Path, change: impl FnOnce(&mut Vec<Start>)) -> Result<()> {
+    let _locked = Locked::take(&starts_file(state))?;
+    let mut starts = starts_in(state);
+    change(&mut starts);
+    let values: Vec<Value> = starts.iter().map(|start| json!({ "item": start.item, "at": start.at })).collect();
+    crate::state::write(&starts_file(state), Value::Array(values).to_string())
+}
+
+pub fn ask_start(state: &Path, item: &str, at: u64) -> Result<()> {
+    change_starts(state, |starts| {
+        starts.retain(|other| !same_item(&other.item, item));
+        starts.push(Start { item: item.to_string(), at });
+    })
+}
+
+pub fn drop_start(state: &Path, item: &str) -> Result<()> {
+    change_starts(state, |starts| starts.retain(|other| !same_item(&other.item, item)))
+}
+
+// A kept row the lead filed as a note: the ask to start it moves to that note.
+pub fn move_start(state: &Path, from: &str, to: &str) -> Result<()> {
+    if !starts_in(state).iter().any(|start| same_item(&start.item, from)) {
+        return Ok(());
+    }
+    change_starts(state, |starts| starts.iter_mut().filter(|start| same_item(&start.item, from)).for_each(|start| start.item = to.to_string()))
+}
+
+// One item by two references: the same text, or a vault note's path inside the vault against the same path with the vault's root before it.
+pub fn same_item(one: &str, other: &str) -> bool {
+    let (one, other) = (one.trim_start_matches("vault:"), other.trim_start_matches("vault:"));
+    one == other || (!one.is_empty() && !other.is_empty() && (one.ends_with(&format!("/{other}")) || other.ends_with(&format!("/{one}"))))
 }
 
 #[cfg(test)]

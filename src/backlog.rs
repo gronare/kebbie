@@ -255,12 +255,15 @@ pub(crate) fn shape_all(items: &mut [(Entry, Option<String>)], local: &std::coll
     let listed: Vec<&str> = items.iter().map(|(entry, _)| entry.reference.as_str()).collect();
     let written: Vec<&str> = items.iter().zip(&read).filter(|(_, read)| read.as_ref().is_some_and(|read| read.state != crate::backlog_file::State::ToWrite && !read.marked)).map(|((entry, _), _)| entry.reference.as_str()).collect();
     let writing = crate::backlog_kept::settle_writing(state, &listed, &written);
+    let starts = crate::backlog_kept::starts_in(state);
     for ((entry, body), read) in items.iter_mut().zip(read) {
         let asked = writing.iter().find(|writing| writing.item == entry.reference).map(|writing| writing.at);
+        let start = starts.iter().any(|start| crate::backlog_kept::same_item(&start.item, &entry.reference));
         let Some(read) = read else {
             if asked.is_some() {
                 (entry.shape.state, entry.shape.writing) = (Some(crate::backlog_file::State::Drafting), asked);
             }
+            entry.shape.start = start;
             continue;
         };
         let template = templates.of(&entry.source);
@@ -269,6 +272,7 @@ pub(crate) fn shape_all(items: &mut [(Entry, Option<String>)], local: &std::coll
         if asked.is_some() {
             (entry.shape.state, entry.shape.writing) = (Some(crate::backlog_file::State::Drafting), asked);
         }
+        entry.shape.start = start;
         if entry.summary.is_empty() && read.state == crate::backlog_file::State::Ready {
             entry.summary = template.first_line(&read.body);
         }
@@ -641,7 +645,8 @@ pub fn show() -> Result<String> {
             (None, state) => state.filter(|state| *state != crate::backlog_file::State::Ready).map_or(String::new(), |state| format!("  {}", state.word())),
         };
         let file = item.as_ref().map_or(String::new(), |(path, _)| format!("  {}", path.display()));
-        lines.push(format!("  [{}] {}  ({} · {}){state}{file}", entry.priority, entry.title, entry.reference, entry.area));
+        let start = if entry.shape.start { "  starts once written" } else { "" };
+        lines.push(format!("  [{}] {}  ({} · {}){state}{start}{file}", entry.priority, entry.title, entry.reference, entry.area));
     }
     Ok(lines.join("\n"))
 }

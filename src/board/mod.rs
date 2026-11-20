@@ -1463,10 +1463,7 @@ pub fn run(overlay: bool) -> Result<String> {
             changed |= app.reads.take();
             changed |= app.loads.take();
             changed |= app.screens.take();
-            if app.space_repos.take() {
-                app.add_space_repos();
-                changed = true;
-            }
+            changed |= app.space_repos.take();
             changed |= app.plan_reads.take();
             changed |= app.settings.take_reads();
             changed |= app.take_item_card_read();

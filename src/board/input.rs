@@ -75,7 +75,7 @@ impl App {
             Purpose::BacklogPriority(item) => {
                 self.subject = Some(super::notices::Subject::plain("backlog"));
                 let sources = self.sources.clone();
-                self.in_background("Adding it to the backlog".to_string(), move || crate::backlog_file::file_item(&sources, &crate::backlog_file::Filing { priority: &text, repo: "", line: &item, words: None, body: None, by: "The user" }, false));
+                self.in_background("Adding it to the backlog".to_string(), move || crate::backlog_file::file_item(&sources, &crate::backlog_file::Filing { priority: &text, repo: "", line: &item, words: None, body: None, by: "The user", start: false, repos: &[] }, false));
             }
             Purpose::BacklogName(entry) | Purpose::ClaimedName(entry) | Purpose::BacklogLaterAt(entry, _) if entry.area.is_empty() => {
                 self.subject = Some(super::notices::Subject::plain("start"));

@@ -25,6 +25,8 @@ Working detail (research, paths, commits, history, reasoning) goes in your own v
 1. **Search first**, with the vault's `search` on the item's words and, as the lead, `kebbie backlog`. Found: add what it lacks, save it, and stop, one item per problem. When kebbie's message names a kept row (`kept:<id>`), run `kebbie backlog filed kept:<id> <note path>`.
 2. **Mark it drafting** before you research: a local item gets `status = "drafting"` in its header; a vault item is a note in `Projects/` with its title, `priority`, `area` and status `draft` (then `kebbie backlog filed kept:<id> <path>` when a kept row is named). Done when `kebbie backlog` marks it `drafting`.
 3. **Research** the code, the notes on its area, the history and your conversation with the user. What you cannot establish becomes an open question, never a guess written as fact.
+   - **No repo given**: choose it from the user's words, the repos kebbie's message lists and `kebbie areas`, by where the code the work touches lives. When none fits, or two fit equally, ask which as a `- [ ] ` question.
+   - **Started once written**: when kebbie's message says the user asked to start it once written, kebbie starts it as a task itself once it is saved with its repo and no `- [ ] ` question is left. Keep `- [ ] ` for what the start truly needs, and never start it yourself.
 4. **Write** it by the style, and save:
    - **the vault**: the note in `Projects/`, status `backlog`;
    - **the local backlog**: `kebbie backlog add --priority <priority> --repo <repo> "<Title>" -` with the body on stdin in a quoted heredoc (`<<'EOF'`); an item already filed you rewrite in its own file, keeping its `+++` header and setting `status = "backlog"`.

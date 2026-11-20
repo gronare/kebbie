@@ -368,7 +368,7 @@ kebbie never posts a reply.
 | `i` | The inbox: the questions waiting on you, opened at the first. Works on the Areas page too. |
 | `m` | Messages: once shows them on one line, again opens them, again hides them. |
 | `H` | The [hub](#the-hub-window) window, to see this board on your phone. |
-| `n` | New: one box for what you want done, in your words (`alt-⏎` a new line), and the repo, the selected task's at first (`tab` switches). `⏎` then offers *Start now* (`s`), which starts a task named from your first words with your text as its prompt, its row showing those words until its Claude titles it, or *Add to the backlog* (`b`), which files it as an idea from your phone is filed, for the lead to write out; `esc` goes back to the text. On the Backlog page, a new item. |
+| `n` | New: one box for what you want done, in your words (`shift-⏎` a new line). `⏎` then offers *Start now* (`s`) or *Add to the backlog* (`b`). Either files your text in the backlog for the lead to write out: it picks the repo from your words, writes the card and asks its questions on it. *Start now* also marks the row `then starts`, and kebbie starts it as a task once it is written and no question waits on you. With no backlog to file in, *Start now* starts a task at once in the selected task's repo, named from your first words. `esc` goes back to the text. On the Backlog page, a new item. |
 | `/` | Filter the selected column: type part of a name, `⏎` keeps the filter, `esc` clears it. |
 | `R` | Ask the lead to refresh the backlog. |
 | `A` | Away mode on or off. |
