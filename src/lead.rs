@@ -242,11 +242,9 @@ pub fn profile_in(dir: &Path, named: Option<&str>) -> Result<Option<crate::profi
     Ok(Some(profile))
 }
 
-fn with_advisor(settings: &str, profile: Option<&crate::profiles::Profile>) -> String {
-    let Some(advisor) = profile.and_then(|profile| profile.advisor.as_ref()) else { return settings.to_string() };
-    let mut written: Value = serde_json::from_str(settings).expect("kebbie writes the lead's settings as JSON");
-    written["advisorModel"] = json!(advisor);
-    written.to_string()
+fn with_advisor(settings: &str, profile: Option<&crate::profiles::Profile>, choose: &dyn Fn(&crate::advisor::Wanted, Option<&str>) -> Option<String>) -> String {
+    let wanted = profile.map(|profile| profile.advisor.clone()).unwrap_or_default();
+    crate::advisor::with_advisor(settings, choose(&wanted, profile.and_then(|profile| profile.model.as_deref())).as_deref())
 }
 
 fn chat_args(role: &Path, settings: &Path, session: &Session, profile: Option<&crate::profiles::Profile>) -> Vec<String> {
@@ -280,7 +278,7 @@ fn start_chat(pane: &str, session: Session) -> Result<()> {
         eprintln!("kebbie: {error}; the lead starts on Claude Code's own model (kebbie doctor)");
         None
     });
-    let settings = write_settings(&roles_dir()?, LEAD_LABEL, &with_advisor(&settings(&peers::kebbie_command()?), profile.as_ref()))?;
+    let settings = write_settings(&roles_dir()?, LEAD_LABEL, &with_advisor(&settings(&peers::kebbie_command()?), profile.as_ref(), &crate::advisor::chosen))?;
     let args = chat_args(&role, &settings, &session, profile.as_ref());
     tasks::wait_for_prompt(pane)?;
     herdr::run_in_pane(pane, &cd_line(&lead_dir()?))?;
@@ -1119,9 +1117,12 @@ mod tests {
         let deep = profile_in(&dir, Some("deep")).unwrap().unwrap();
         let args = chat_args(Path::new("/s/roles/lead.md"), Path::new("/s/roles/lead.settings.json"), &Session::Resume("1b2c".to_string()), Some(&deep));
         assert_eq!(args, ["--append-system-prompt-file", "/s/roles/lead.md", "--settings", "/s/roles/lead.settings.json", "--model", "opus", "--effort", "high", "--resume", "1b2c"]);
-        let advised: Value = serde_json::from_str(&with_advisor(&settings("/k"), Some(&deep))).unwrap();
-        assert_eq!((&advised["advisorModel"], advised["hooks"].is_object()), (&json!("fable"), true), "the profile's advisor goes in the lead's settings, beside kebbie's own");
-        assert_eq!(with_advisor(&settings("/k"), None), settings("/k"), "no lead.profile leaves the advisor to Claude Code's settings");
+        let asked = std::cell::RefCell::new(Vec::new());
+        let choose = |wanted: &crate::advisor::Wanted, model: Option<&str>| { asked.borrow_mut().push((wanted.clone(), model.map(str::to_string))); Some("fable".to_string()) };
+        let advised: Value = serde_json::from_str(&with_advisor(&settings("/k"), Some(&deep), &choose)).unwrap();
+        assert_eq!((&advised["advisorModel"], advised["hooks"].is_object()), (&json!("fable"), true), "the chosen advisor goes in the lead's settings, beside kebbie's own");
+        with_advisor(&settings("/k"), None, &choose);
+        assert_eq!(*asked.borrow(), [(crate::advisor::Wanted::Models(vec!["fable".to_string()]), Some("opus".to_string())), (crate::advisor::Wanted::Default, None)], "the profile's advisor and model are what is chosen from, and no lead.profile chooses as kebbie does by default");
         assert!(profile_in(&dir, Some("coder")).unwrap_err().contains("runs Codex, and the lead runs on Claude"));
         assert!(profile_in(&dir, Some(crate::profiles::REVIEWER)).unwrap_err().contains("is a review profile"));
         assert!(profile_in(&dir, Some("gone")).unwrap_err().starts_with("lead.profile: No profile \"gone\""));

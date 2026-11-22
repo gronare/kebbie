@@ -27,7 +27,7 @@ pub struct Profile {
     pub agent: Agent,
     pub model: Option<String>,
     pub effort: Option<String>,
-    pub advisor: Option<String>,
+    pub advisor: crate::advisor::Wanted,
     pub role: Option<PathBuf>,
     pub skills: Vec<String>,
     pub permission_mode: Option<String>,
@@ -52,7 +52,7 @@ pub fn built_in(name: &str) -> Option<Profile> {
     };
     let sandbox = if name == OPS { Policy { excluded: crate::sandbox::OPS_COMMANDS.map(str::to_string).to_vec(), ..Policy::default() } } else { Policy::default() };
     Some(Profile {
-        name: name.to_string(), about: about.to_string(), fits: fits.to_string(), agent: Agent::Claude, model: None, effort: None, advisor: None, role: None,
+        name: name.to_string(), about: about.to_string(), fits: fits.to_string(), agent: Agent::Claude, model: None, effort: None, advisor: crate::advisor::Wanted::Default, role: None,
         skills: Vec::new(), permission_mode: None, deny: Vec::new(), allow: Vec::new(), plugins: Vec::new(), sandbox, file: None, review: name == REVIEWER,
     })
 }
@@ -206,7 +206,7 @@ pub fn parse(contents: &str, name: &str, file: &Path, base: Option<Profile>) -> 
     }
     config::unknown_keys(&table, "", known).map_err(|error| format!("{source}: {error}"))?;
     let mut profile = base.unwrap_or(Profile {
-        name: name.to_string(), about: String::new(), fits: String::new(), agent: Agent::Claude, model: None, effort: None, advisor: None, role: None,
+        name: name.to_string(), about: String::new(), fits: String::new(), agent: Agent::Claude, model: None, effort: None, advisor: crate::advisor::Wanted::Default, role: None,
         skills: Vec::new(), permission_mode: None, deny: Vec::new(), allow: Vec::new(), plugins: Vec::new(), sandbox: Policy::default(), file: None, review,
     });
     profile.file = Some(file.to_path_buf());
@@ -234,7 +234,9 @@ pub fn parse(contents: &str, name: &str, file: &Path, base: Option<Profile>) -> 
         }
         profile.effort = Some(effort);
     }
-    profile.advisor = text(&table, "advisor", &source)?.or(profile.advisor);
+    if let Some(advisor) = table.get("advisor") {
+        profile.advisor = crate::advisor::parse(advisor, &source)?;
+    }
     if let Some(role) = text(&table, "role", &source)? {
         if !config::inside(&role) {
             return Err(format!("{source}: role: \"{role}\" leaves the profiles folder; name a file in it, without / at the start or .."));
@@ -541,7 +543,7 @@ pub fn role_section(profile: &Profile) -> Result<String> {
 
 pub fn to_json(profile: &Profile) -> Value {
     json!({
-        "name": profile.name, "about": profile.about, "for": profile.fits, "agent": profile.agent.key(), "model": profile.model, "effort": profile.effort, "advisor": profile.advisor,
+        "name": profile.name, "about": profile.about, "for": profile.fits, "agent": profile.agent.key(), "model": profile.model, "effort": profile.effort, "advisor": profile.advisor.to_json(),
         "permission_mode": profile.permission_mode, "skills": profile.skills, "role": profile.role, "deny": profile.deny, "allow": profile.allow,
         "plugins": profile.plugins, "built_in": built_in(&profile.name).is_some(), "file": profile.file, "kind": if profile.review { REVIEW_KIND } else { "task" },
         "sandbox": { "enabled": profile.sandbox.enabled, "allowed_domains": profile.sandbox.domains, "allow_write": profile.sandbox.writes, "excluded_commands": profile.sandbox.excluded, "kubeconfig": profile.sandbox.kubeconfig },
@@ -569,7 +571,7 @@ pub fn describe(profiles: &[Profile], errors: &[String], chosen: &[Agent], codex
         runs.extend(profile.model.iter().map(|model| format!("model {model}")));
         runs.extend(codex_model.filter(|_| profile.agent == Agent::Codex && profile.model.is_none()).map(|model| format!("model {model} from Codex's config.toml")));
         runs.extend(profile.effort.iter().map(|effort| format!("effort {effort}")));
-        runs.extend(profile.advisor.iter().map(|advisor| format!("advisor {advisor}")));
+        runs.extend(profile.advisor.describe());
         runs.extend(profile.permission_mode.iter().map(|mode| format!("mode {mode}")));
         runs.extend((!profile.skills.is_empty()).then(|| format!("skills {}", profile.skills.join(", "))));
         runs.extend((profile.sandbox.enabled == Some(false)).then(|| "sandbox off".to_string()));
@@ -630,7 +632,7 @@ mod tests {
         let dir = folder("profile-fields", &[("designer.toml", DESIGNER), ("designer.md", "Measure in the browser.\n")]);
         let profile = load_in(&dir, "designer").unwrap();
         assert_eq!((profile.about.as_str(), profile.fits.as_str(), profile.agent), ("UI work: mockup first", "UI, CSS, new surfaces", Agent::Claude));
-        assert_eq!((profile.model.as_deref(), profile.effort.as_deref(), profile.advisor.as_deref(), profile.permission_mode.as_deref()), (Some("opus"), Some("high"), Some("fable"), Some("acceptEdits")));
+        assert_eq!((profile.model.as_deref(), profile.effort.as_deref(), &profile.advisor, profile.permission_mode.as_deref()), (Some("opus"), Some("high"), &crate::advisor::Wanted::Models(vec!["fable".to_string()]), Some("acceptEdits")));
         assert_eq!(profile.role, Some(dir.join("designer.md")));
         assert_eq!(profile.skills, ["impeccable", "frontend-design:frontend-design"]);
         assert_eq!((profile.deny, profile.allow, profile.plugins), (vec!["Bash(rm -rf:*)".to_string()], vec!["Bash(npx playwright:*)".to_string()], vec!["design@claude-plugins".to_string()]));

@@ -5,7 +5,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
-- A profile's advisor sets the advisor model its tasks, or the lead, consult.
+- Tasks and the lead consult an advisor, the best one your account can use, or the profile's advisor.
 - n asks only what you want done: Claude picks the repo, writes the card and asks its questions, then starts it or files it.
 
 ### Fixed

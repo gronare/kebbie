@@ -1,4 +1,5 @@
 mod actions;
+mod advisor;
 mod agent;
 mod agent_check;
 mod area_page;

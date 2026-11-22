@@ -590,11 +590,19 @@ fn prepare(place: &Launch, resumed: bool) -> Result<Prepared> {
         dirs.halves = crate::sandbox::halves(&state, task, worktree);
     }
     let written = profile.agent.task_settings(&peers::kebbie_command()?, &address, Some(&dirs), profile, shell);
+    let written = advised(written, profile);
     let settings = crate::lead::write_settings(&crate::lead::roles_dir()?, &address, &written)?;
     let added = profiles::role_section(profile)?;
     let (role, text) = peers::role_file(task, &peers::Place { agent: profile.agent, repo, worktree, setup_skill, setup_command, rules_skill, note, profile: &added, sandboxed: shell })?;
     let notice = crate::known::began_untold(&address, &text, resumed);
     Ok(Prepared { settings, role, sandboxed: shell, git_dir, tmp, notice })
+}
+
+fn advised(written: String, profile: &Profile) -> String {
+    if profile.agent != Agent::Claude {
+        return written;
+    }
+    crate::advisor::with_advisor(&written, crate::advisor::chosen(&profile.advisor, profile.model.as_deref()).as_deref())
 }
 
 pub(crate) fn task_at(cwd: &Path) -> Option<(PathBuf, Slot)> {
@@ -1447,7 +1455,7 @@ mod tests {
     fn a_task_started_with_a_profile_runs_its_model_effort_mode_and_rules_on_top_of_kebbies_own() {
         let task = profiles::built_in(profiles::TASK).unwrap();
         let designer = Profile {
-            name: "designer".to_string(), model: Some("opus".to_string()), effort: Some("high".to_string()), advisor: Some("fable".to_string()), permission_mode: Some("acceptEdits".to_string()),
+            name: "designer".to_string(), model: Some("opus".to_string()), effort: Some("high".to_string()), permission_mode: Some("acceptEdits".to_string()),
             deny: vec!["Bash(rm -rf:*)".to_string()], allow: vec!["Bash(npx playwright:*)".to_string()], plugins: vec!["design@claude-plugins".to_string()], ..task.clone()
         };
         let mut plain: Value = serde_json::from_str(&crate::agent::claude::with_build_guard(&crate::inbox::with_inbox(&settings("/bin/kebbie", "billing@app", None, None), "/bin/kebbie", "billing@app"), "/bin/kebbie")).unwrap();
@@ -1465,7 +1473,6 @@ mod tests {
         assert!(written["permissions"]["allow"].as_array().unwrap().contains(&json!("Bash(npx playwright:*)")) && written["permissions"]["allow"].as_array().unwrap().contains(&json!("Bash(/bin/kebbie ask:*)")));
         assert_eq!((&written["hooks"], &written["env"]), (&plain["hooks"], &plain["env"]), "the hooks and the push block's env are kebbie's whatever the profile");
         assert_eq!(written["enabledPlugins"], json!({ "design@claude-plugins": true }));
-        assert_eq!((&written["advisorModel"], &ours["advisorModel"]), (&json!("fable"), &Value::Null), "the profile's advisor is the task's, and without one Claude Code's own setting holds");
         let configured = designer.permission_mode.clone().or(Some("plan".to_string()));
         assert_eq!(chosen_mode(None, None, configured.as_deref()), Some("acceptEdits"), "the profile's mode goes ahead of task.permission_mode");
         assert_eq!(chosen_mode(Some(BYPASS), None, configured.as_deref()), Some(BYPASS), "--mode goes ahead of the profile's");
