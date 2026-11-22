@@ -13,7 +13,7 @@ pub const REVIEWER: &str = "reviewer";
 pub const OPS: &str = "ops";
 pub const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 pub const CODEX_EFFORTS: [&str; 9] = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "persistent"];
-pub const KEYS: [&str; 13] = ["about", "for", "agent", "model", "effort", "role", "skills", "permission_mode", "deny", "allow", "claude", "sandbox", "kind"];
+pub const KEYS: [&str; 14] = ["about", "for", "agent", "model", "effort", "advisor", "role", "skills", "permission_mode", "deny", "allow", "claude", "sandbox", "kind"];
 const SANDBOX_KEYS: [&str; 5] = ["enabled", "allowed_domains", "allow_write", "excluded_commands", "kubeconfig"];
 const REVIEWER_KEYS: [&str; 7] = ["about", "for", "agent", "model", "effort", "role", "kind"];
 pub const REVIEW_KIND: &str = "review";
@@ -27,6 +27,7 @@ pub struct Profile {
     pub agent: Agent,
     pub model: Option<String>,
     pub effort: Option<String>,
+    pub advisor: Option<String>,
     pub role: Option<PathBuf>,
     pub skills: Vec<String>,
     pub permission_mode: Option<String>,
@@ -51,7 +52,7 @@ pub fn built_in(name: &str) -> Option<Profile> {
     };
     let sandbox = if name == OPS { Policy { excluded: crate::sandbox::OPS_COMMANDS.map(str::to_string).to_vec(), ..Policy::default() } } else { Policy::default() };
     Some(Profile {
-        name: name.to_string(), about: about.to_string(), fits: fits.to_string(), agent: Agent::Claude, model: None, effort: None, role: None,
+        name: name.to_string(), about: about.to_string(), fits: fits.to_string(), agent: Agent::Claude, model: None, effort: None, advisor: None, role: None,
         skills: Vec::new(), permission_mode: None, deny: Vec::new(), allow: Vec::new(), plugins: Vec::new(), sandbox, file: None, review: name == REVIEWER,
     })
 }
@@ -177,7 +178,7 @@ pub fn releases_guard(rule: &str) -> bool {
 
 // Claude Code's permission rules, plugins and sandbox lists have no Codex counterpart kebbie can set, so a Codex profile is refused them rather than silently running without them.
 fn claude_only(table: &Table) -> Option<String> {
-    let keys = ["deny", "allow", "claude"].into_iter().find(|key| table.contains_key(*key)).map(str::to_string);
+    let keys = ["deny", "allow", "claude", "advisor"].into_iter().find(|key| table.contains_key(*key)).map(str::to_string);
     let sandbox = table.get("sandbox").and_then(toml::Value::as_table).and_then(|sandbox| sandbox.keys().find(|key| !["enabled", "kubeconfig"].contains(&key.as_str())).map(|key| format!("sandbox.{key}")));
     keys.or(sandbox)
 }
@@ -205,7 +206,7 @@ pub fn parse(contents: &str, name: &str, file: &Path, base: Option<Profile>) -> 
     }
     config::unknown_keys(&table, "", known).map_err(|error| format!("{source}: {error}"))?;
     let mut profile = base.unwrap_or(Profile {
-        name: name.to_string(), about: String::new(), fits: String::new(), agent: Agent::Claude, model: None, effort: None, role: None,
+        name: name.to_string(), about: String::new(), fits: String::new(), agent: Agent::Claude, model: None, effort: None, advisor: None, role: None,
         skills: Vec::new(), permission_mode: None, deny: Vec::new(), allow: Vec::new(), plugins: Vec::new(), sandbox: Policy::default(), file: None, review,
     });
     profile.file = Some(file.to_path_buf());
@@ -233,6 +234,7 @@ pub fn parse(contents: &str, name: &str, file: &Path, base: Option<Profile>) -> 
         }
         profile.effort = Some(effort);
     }
+    profile.advisor = text(&table, "advisor", &source)?.or(profile.advisor);
     if let Some(role) = text(&table, "role", &source)? {
         if !config::inside(&role) {
             return Err(format!("{source}: role: \"{role}\" leaves the profiles folder; name a file in it, without / at the start or .."));
@@ -539,7 +541,7 @@ pub fn role_section(profile: &Profile) -> Result<String> {
 
 pub fn to_json(profile: &Profile) -> Value {
     json!({
-        "name": profile.name, "about": profile.about, "for": profile.fits, "agent": profile.agent.key(), "model": profile.model, "effort": profile.effort,
+        "name": profile.name, "about": profile.about, "for": profile.fits, "agent": profile.agent.key(), "model": profile.model, "effort": profile.effort, "advisor": profile.advisor,
         "permission_mode": profile.permission_mode, "skills": profile.skills, "role": profile.role, "deny": profile.deny, "allow": profile.allow,
         "plugins": profile.plugins, "built_in": built_in(&profile.name).is_some(), "file": profile.file, "kind": if profile.review { REVIEW_KIND } else { "task" },
         "sandbox": { "enabled": profile.sandbox.enabled, "allowed_domains": profile.sandbox.domains, "allow_write": profile.sandbox.writes, "excluded_commands": profile.sandbox.excluded, "kubeconfig": profile.sandbox.kubeconfig },
@@ -567,6 +569,7 @@ pub fn describe(profiles: &[Profile], errors: &[String], chosen: &[Agent], codex
         runs.extend(profile.model.iter().map(|model| format!("model {model}")));
         runs.extend(codex_model.filter(|_| profile.agent == Agent::Codex && profile.model.is_none()).map(|model| format!("model {model} from Codex's config.toml")));
         runs.extend(profile.effort.iter().map(|effort| format!("effort {effort}")));
+        runs.extend(profile.advisor.iter().map(|advisor| format!("advisor {advisor}")));
         runs.extend(profile.permission_mode.iter().map(|mode| format!("mode {mode}")));
         runs.extend((!profile.skills.is_empty()).then(|| format!("skills {}", profile.skills.join(", "))));
         runs.extend((profile.sandbox.enabled == Some(false)).then(|| "sandbox off".to_string()));
@@ -620,14 +623,14 @@ mod tests {
         dir
     }
 
-    const DESIGNER: &str = "about = \"UI work: mockup first\"\nfor = \"UI, CSS, new surfaces\"\nagent = \"claude\"\nmodel = \"opus\"\neffort = \"high\"\nrole = \"designer.md\"\nskills = [\"impeccable\", \"frontend-design:frontend-design\"]\npermission_mode = \"acceptEdits\"\ndeny = [\"Bash(rm -rf:*)\"]\nallow = [\"Bash(npx playwright:*)\"]\n\n[claude]\nplugins = [\"design@claude-plugins\"]\n";
+    const DESIGNER: &str = "about = \"UI work: mockup first\"\nfor = \"UI, CSS, new surfaces\"\nagent = \"claude\"\nmodel = \"opus\"\neffort = \"high\"\nadvisor = \"fable\"\nrole = \"designer.md\"\nskills = [\"impeccable\", \"frontend-design:frontend-design\"]\npermission_mode = \"acceptEdits\"\ndeny = [\"Bash(rm -rf:*)\"]\nallow = [\"Bash(npx playwright:*)\"]\n\n[claude]\nplugins = [\"design@claude-plugins\"]\n";
 
     #[test]
     fn a_profile_file_loads_every_field_and_its_role_beside_it() {
         let dir = folder("profile-fields", &[("designer.toml", DESIGNER), ("designer.md", "Measure in the browser.\n")]);
         let profile = load_in(&dir, "designer").unwrap();
         assert_eq!((profile.about.as_str(), profile.fits.as_str(), profile.agent), ("UI work: mockup first", "UI, CSS, new surfaces", Agent::Claude));
-        assert_eq!((profile.model.as_deref(), profile.effort.as_deref(), profile.permission_mode.as_deref()), (Some("opus"), Some("high"), Some("acceptEdits")));
+        assert_eq!((profile.model.as_deref(), profile.effort.as_deref(), profile.advisor.as_deref(), profile.permission_mode.as_deref()), (Some("opus"), Some("high"), Some("fable"), Some("acceptEdits")));
         assert_eq!(profile.role, Some(dir.join("designer.md")));
         assert_eq!(profile.skills, ["impeccable", "frontend-design:frontend-design"]);
         assert_eq!((profile.deny, profile.allow, profile.plugins), (vec!["Bash(rm -rf:*)".to_string()], vec!["Bash(npx playwright:*)".to_string()], vec!["design@claude-plugins".to_string()]));
@@ -645,7 +648,7 @@ mod tests {
         assert!(refused("agent = \"gemini\"\n").contains("agent: \"gemini\" is not an agent kebbie runs"));
         assert!(refused("permission_mode = \"yolo\"\n").contains("x.toml: permission_mode: \"yolo\" is not a Claude Code permission mode"), "the same check as task.permission_mode");
         assert!(refused("effort = \"huge\"\n").contains("effort: \"huge\" is not an effort level; use \"low\", \"medium\", \"high\", \"xhigh\", \"max\""));
-        assert!(refused("colour = \"red\"\n").contains("x.toml: colour: unknown key; known keys here: about, for, agent, model, effort, role, skills, permission_mode, deny, allow, claude"));
+        assert!(refused("colour = \"red\"\n").contains("x.toml: colour: unknown key; known keys here: about, for, agent, model, effort, advisor, role, skills, permission_mode, deny, allow, claude"));
         assert!(refused("role = \"gone.md\"\n").contains("role: ") && refused("role = \"gone.md\"\n").contains("is not a file"));
         std::fs::write(dir.join("outside.md"), "x").unwrap();
         std::fs::create_dir_all(dir.join("sub")).unwrap();

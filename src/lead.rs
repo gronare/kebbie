@@ -229,17 +229,24 @@ pub fn role_file() -> Result<(PathBuf, String)> {
     Ok((file, role))
 }
 
-// lead.profile's model and effort are the lead's; its role, skills and rules are a task's, so they stay off.
+// lead.profile's model, effort and advisor are the lead's; its role, skills and rules are a task's, so they stay off.
 pub fn profile_in(dir: &Path, named: Option<&str>) -> Result<Option<crate::profiles::Profile>> {
     let Some(name) = named else { return Ok(None) };
     let profile = crate::profiles::load_in(dir, name).map_err(|error| format!("lead.profile: {error}"))?;
     if profile.review {
-        return Err(format!("lead.profile: {name} is a review profile; the lead takes a Claude profile with a model or an effort"));
+        return Err(format!("lead.profile: {name} is a review profile; the lead takes a Claude profile with a model, an effort or an advisor"));
     }
     if profile.agent != Agent::Claude {
         return Err(format!("lead.profile: {name} runs {}, and the lead runs on Claude; name a Claude profile", profile.agent.name()));
     }
     Ok(Some(profile))
+}
+
+fn with_advisor(settings: &str, profile: Option<&crate::profiles::Profile>) -> String {
+    let Some(advisor) = profile.and_then(|profile| profile.advisor.as_ref()) else { return settings.to_string() };
+    let mut written: Value = serde_json::from_str(settings).expect("kebbie writes the lead's settings as JSON");
+    written["advisorModel"] = json!(advisor);
+    written.to_string()
 }
 
 fn chat_args(role: &Path, settings: &Path, session: &Session, profile: Option<&crate::profiles::Profile>) -> Vec<String> {
@@ -269,11 +276,11 @@ fn cd_line(dir: &Path) -> String {
 fn start_chat(pane: &str, session: Session) -> Result<()> {
     let (role, text) = role_file()?;
     crate::known::began(LEAD_LABEL, &text, matches!(session, Session::Resume(_)));
-    let settings = write_settings(&roles_dir()?, LEAD_LABEL, &settings(&peers::kebbie_command()?))?;
     let profile = profile_in(&crate::profiles::dir(), config::lead_profile()?.as_deref()).unwrap_or_else(|error| {
         eprintln!("kebbie: {error}; the lead starts on Claude Code's own model (kebbie doctor)");
         None
     });
+    let settings = write_settings(&roles_dir()?, LEAD_LABEL, &with_advisor(&settings(&peers::kebbie_command()?), profile.as_ref()))?;
     let args = chat_args(&role, &settings, &session, profile.as_ref());
     tasks::wait_for_prompt(pane)?;
     herdr::run_in_pane(pane, &cd_line(&lead_dir()?))?;
@@ -1104,14 +1111,17 @@ mod tests {
     }
 
     #[test]
-    fn the_lead_starts_with_its_profiles_model_and_effort_and_only_a_claude_task_profile_is_its() {
+    fn the_lead_starts_with_its_profiles_model_effort_and_advisor_and_only_a_claude_task_profile_is_its() {
         let dir = crate::sh::test_dir("lead-profile");
-        fs::write(dir.join("deep.toml"), "agent = \"claude\"\nmodel = \"opus\"\neffort = \"high\"\n").unwrap();
+        fs::write(dir.join("deep.toml"), "agent = \"claude\"\nmodel = \"opus\"\neffort = \"high\"\nadvisor = \"fable\"\n").unwrap();
         fs::write(dir.join("coder.toml"), "agent = \"codex\"\nmodel = \"gpt-5.5\"\n").unwrap();
         assert!(profile_in(&dir, None).unwrap().is_none(), "no lead.profile is Claude Code's own model");
         let deep = profile_in(&dir, Some("deep")).unwrap().unwrap();
         let args = chat_args(Path::new("/s/roles/lead.md"), Path::new("/s/roles/lead.settings.json"), &Session::Resume("1b2c".to_string()), Some(&deep));
         assert_eq!(args, ["--append-system-prompt-file", "/s/roles/lead.md", "--settings", "/s/roles/lead.settings.json", "--model", "opus", "--effort", "high", "--resume", "1b2c"]);
+        let advised: Value = serde_json::from_str(&with_advisor(&settings("/k"), Some(&deep))).unwrap();
+        assert_eq!((&advised["advisorModel"], advised["hooks"].is_object()), (&json!("fable"), true), "the profile's advisor goes in the lead's settings, beside kebbie's own");
+        assert_eq!(with_advisor(&settings("/k"), None), settings("/k"), "no lead.profile leaves the advisor to Claude Code's settings");
         assert!(profile_in(&dir, Some("coder")).unwrap_err().contains("runs Codex, and the lead runs on Claude"));
         assert!(profile_in(&dir, Some(crate::profiles::REVIEWER)).unwrap_err().contains("is a review profile"));
         assert!(profile_in(&dir, Some("gone")).unwrap_err().starts_with("lead.profile: No profile \"gone\""));

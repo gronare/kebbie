@@ -355,6 +355,9 @@ pub(crate) fn with_profile(settings: &str, profile: &Profile) -> String {
             deny.extend(["Read", "Edit"].map(|tool| json!(format!("{tool}(/{})", kubeconfig.display()))));
         }
     }
+    if let Some(advisor) = &profile.advisor {
+        written["advisorModel"] = json!(advisor);
+    }
     if !profile.plugins.is_empty() {
         written["enabledPlugins"] = profile.plugins.iter().map(|plugin| (plugin.clone(), json!(true))).collect::<serde_json::Map<_, _>>().into();
     }

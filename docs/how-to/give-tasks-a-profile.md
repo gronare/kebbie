@@ -108,7 +108,7 @@ The lead runs on the model your Claude Code settings name, like your other Claud
 
 4. Check it took: `kebbie doctor` shows `lead.profile names "deep", a Claude profile there is`.
 
-The lead takes the profile's `model` and `effort` alone, and keeps its own role. If the profile does not load, the lead starts on Claude Code's own model and `kebbie doctor` says why.
+The lead takes the profile's `model`, `effort` and `advisor` alone, and keeps its own role. If the profile does not load, the lead starts on Claude Code's own model and `kebbie doctor` says why.
 
 ## Open the sandbox for a kind of work
 

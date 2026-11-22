@@ -224,7 +224,7 @@ ideas_machine = "workstation"
 
 `lead.profile`: the lead runs another model than your other Claude sessions. See [Run the lead on another model](../how-to/give-tasks-a-profile.md#run-the-lead-on-another-model).
 
-- It takes the profile's `model` and `effort` alone. Its role, skills and rules are a task's, and the lead keeps its own.
+- It takes the profile's `model`, `effort` and `advisor` alone. Its role, skills and rules are a task's, and the lead keeps its own.
 - It names a Claude profile. A Codex profile or a review profile is refused, and so is one that does not load: the lead then starts on Claude Code's own model, and `kebbie doctor` warns.
 - It takes effect when the lead starts or restarts: `L` on the board, `kebbie lead --restart`, or the restart after an update.
 - The Settings page picks it under This machine from the Claude profiles that set a model or an effort. `none` removes the key.
@@ -570,6 +570,7 @@ The board's [Settings page](board.md#profiles) sets a profile's `model` and `eff
 | `agent` | `"claude"` | The agent CLI the task runs: `"claude"` or `"codex"`. The built-in profiles run Claude. |
 | `model` | none | The model, as `claude --model` or `codex --model` takes it. Unset leaves it to the agent's default. |
 | `effort` | none | `"low"`, `"medium"`, `"high"`, `"xhigh"` or `"max"`, as `claude --effort` takes it. A Codex profile takes Codex's own levels, `"none"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`, `"ultra"` or `"persistent"`, and its task gets it as `model_reasoning_effort`. Which a model takes is Codex's list for it. |
+| `advisor` | none | The advisor model Claude Code consults, such as `"fable"`, written as `advisorModel` in the task's settings. Without it, Claude Code's own `advisorModel` holds. A Codex profile does not take it. |
 | `role` | none | A markdown file in the profiles folder, carried in the task's role after kebbie's own, under `## Your profile: <name>`. |
 | `skills` | `[]` | Skills the task's Claude runs once its worktree is set up, named as `task.rules_skill` is. |
 | `permission_mode` | none | The permission mode, one of `task.permission_mode`'s values, ahead of it and behind `kebbie start --mode`. |
