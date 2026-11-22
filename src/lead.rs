@@ -242,9 +242,9 @@ pub fn profile_in(dir: &Path, named: Option<&str>) -> Result<Option<crate::profi
     Ok(Some(profile))
 }
 
-fn with_advisor(settings: &str, profile: Option<&crate::profiles::Profile>, choose: &dyn Fn(&crate::advisor::Wanted, Option<&str>) -> Option<String>) -> String {
+fn with_advisor(settings: &str, profile: Option<&crate::profiles::Profile>, choose: &dyn Fn(&crate::advisor::Wanted) -> Option<String>) -> String {
     let wanted = profile.map(|profile| profile.advisor.clone()).unwrap_or_default();
-    crate::advisor::with_advisor(settings, choose(&wanted, profile.and_then(|profile| profile.model.as_deref())).as_deref())
+    crate::advisor::with_advisor(settings, choose(&wanted).as_deref())
 }
 
 fn chat_args(role: &Path, settings: &Path, session: &Session, profile: Option<&crate::profiles::Profile>) -> Vec<String> {
@@ -1118,11 +1118,11 @@ mod tests {
         let args = chat_args(Path::new("/s/roles/lead.md"), Path::new("/s/roles/lead.settings.json"), &Session::Resume("1b2c".to_string()), Some(&deep));
         assert_eq!(args, ["--append-system-prompt-file", "/s/roles/lead.md", "--settings", "/s/roles/lead.settings.json", "--model", "opus", "--effort", "high", "--resume", "1b2c"]);
         let asked = std::cell::RefCell::new(Vec::new());
-        let choose = |wanted: &crate::advisor::Wanted, model: Option<&str>| { asked.borrow_mut().push((wanted.clone(), model.map(str::to_string))); Some("fable".to_string()) };
+        let choose = |wanted: &crate::advisor::Wanted| { asked.borrow_mut().push(wanted.clone()); Some("fable".to_string()) };
         let advised: Value = serde_json::from_str(&with_advisor(&settings("/k"), Some(&deep), &choose)).unwrap();
         assert_eq!((&advised["advisorModel"], advised["hooks"].is_object()), (&json!("fable"), true), "the chosen advisor goes in the lead's settings, beside kebbie's own");
         with_advisor(&settings("/k"), None, &choose);
-        assert_eq!(*asked.borrow(), [(crate::advisor::Wanted::Models(vec!["fable".to_string()]), Some("opus".to_string())), (crate::advisor::Wanted::Default, None)], "the profile's advisor and model are what is chosen from, and no lead.profile chooses as kebbie does by default");
+        assert_eq!(*asked.borrow(), [crate::advisor::Wanted::Models(vec!["fable".to_string()]), crate::advisor::Wanted::Default], "the profile's advisor is what is chosen from, and no lead.profile chooses as kebbie does by default");
         assert!(profile_in(&dir, Some("coder")).unwrap_err().contains("runs Codex, and the lead runs on Claude"));
         assert!(profile_in(&dir, Some(crate::profiles::REVIEWER)).unwrap_err().contains("is a review profile"));
         assert!(profile_in(&dir, Some("gone")).unwrap_err().starts_with("lead.profile: No profile \"gone\""));

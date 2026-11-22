@@ -602,7 +602,7 @@ fn advised(written: String, profile: &Profile) -> String {
     if profile.agent != Agent::Claude {
         return written;
     }
-    crate::advisor::with_advisor(&written, crate::advisor::chosen(&profile.advisor, profile.model.as_deref()).as_deref())
+    crate::advisor::with_advisor(&written, crate::advisor::chosen(&profile.advisor).as_deref())
 }
 
 pub(crate) fn task_at(cwd: &Path) -> Option<(PathBuf, Slot)> {

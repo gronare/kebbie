@@ -40,7 +40,7 @@ case "$*" in
   --version) echo '2.1.316 (Claude Code)'; exit 0;;
   'auth status') echo '{"loggedIn": true}'; exit 0;;
   plugin*) echo "$*" >> "$d/claude-plugin.log"; exit 0;;
-  *--advisor*) echo "$*" >> "$d/claude-advisor.log"; echo '{"is_error":false,"result":"ok"}'; exit 0;;
+  *--advisor*) echo "$*" >> "$d/claude-advisor.log"; log=$(printf '%s\n' "$@" | sed -n '/^--debug-file$/{n;p;}'); [ -n "$log" ] && echo '[AdvisorTool] Server-side tool enabled with claude-fable-5-2 as the advisor model' > "$log"; echo '{"is_error":false,"result":"ok"}'; exit 0;;
 esac
 input=$(cat)
 case "$input" in

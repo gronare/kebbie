@@ -50,6 +50,8 @@ fn a_claude_task_runs_from_the_leads_start_through_its_report_review_and_push_to
     lives(&lab, "task");
     let start = lab.herdr_calls().into_iter().find(|call| call[..2] == ["agent", "start"]).unwrap();
     assert!(start.contains(&"claude".to_string()) && start.iter().any(|arg| arg == "--append-system-prompt-file"), "{start:?}");
+    let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(lab.state.join("roles/search@app.settings.json")).unwrap()).unwrap();
+    assert_eq!(settings["advisorModel"], "fable", "the task consults the first advisor the account takes");
 }
 
 #[test]
