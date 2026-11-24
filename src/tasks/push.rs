@@ -402,7 +402,8 @@ pub(crate) fn push_as(caller: &Caller, address: &str, head: Option<&str>) -> Dev
         Ok(state) => state,
         Err(error) => return DevicePush::Failed(error),
     };
-    device_push(&state, caller, &repo, &slot, head, &super::line::live_read(), &mut live_push(&state))
+    let (read, working) = super::line::live_claude();
+    device_push(&state, caller, &repo, &slot, head, &read, &working, &mut live_push(&state))
 }
 
 // An open commit short of the last is pushed through only while it still ends the pushable run the phone saw; a head on the default branch already is settled; a head no longer on the branch pushes the whole branch only while all of it can go out, since it may have ended a run a rebase rewrote; any other head pushes the whole branch.
@@ -430,7 +431,8 @@ fn through_head(state: &Path, slot: &Slot, address: &str, upstream: &str, head: 
     Ok(Through::First { count: at + 1, of: open.len() })
 }
 
-pub(super) fn device_push(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, head: Option<&str>, read: super::line::Read, push: super::line::Push) -> DevicePush {
+#[allow(clippy::too_many_arguments)]
+pub(super) fn device_push(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, head: Option<&str>, read: super::line::Read, working: super::line::Working, push: super::line::Push) -> DevicePush {
     let task = task_of(slot);
     let address = peers::address(task, &name_of(repo));
     if let Err(refused) = super::waiting::refuse_push(state, &address, task) {
@@ -454,7 +456,7 @@ pub(super) fn device_push(state: &Path, caller: &Caller, repo: &Path, slot: &Slo
     if let Err(refused) = join(state, caller, repo, slot, through) {
         return DevicePush::Refused(refused);
     }
-    let driven = super::line::drive(state, repo, Some(&address), &messages::load(), messages::now(), read, push);
+    let driven = super::line::drive(state, repo, Some(&address), &messages::load(), messages::now(), read, working, push);
     let said = match driven.mine {
         Some(Err(error)) => return DevicePush::Failed(error),
         Some(Ok(said)) => said,
@@ -476,9 +478,9 @@ pub(super) fn push_task(caller: &Caller, repo: &Path, slot: &Slot, through: Thro
     let state = state_dir()?;
     let address = peers::address(task_of(slot), &name_of(repo));
     join(&state, caller, repo, slot, through)?;
-    let read = super::line::live_read();
+    let (read, working) = super::line::live_claude();
     let mut push = live_push(&state);
-    let driven = super::line::drive(&state, repo, Some(&address), &messages::load(), messages::now(), &read, &mut push);
+    let driven = super::line::drive(&state, repo, Some(&address), &messages::load(), messages::now(), &read, &working, &mut push);
     driven.mine.unwrap_or_else(|| queued_notice(&state, &address, task_of(slot)))
 }
 
@@ -689,7 +691,7 @@ fn prepare(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Thr
                     .you("Push again; if this repeats, rebase it yourself in its worktree.").detail("task", &task).detail("files", files.join(" · ")).detail("folder", slot.path.display().to_string()).detail("error", cannot).err();
             }
             crate::phase::record(state, &address, by.key(), &crate::phase::Event::PushHanded);
-            tell_lead(&format!("{}; rebasing onto {upstream} conflicted, so its Claude resolves it as part of the push. When it reports ready, the reviewer checks the resolved commits against the rules and kebbie pushes them for {} then; you hear only of a break, or when the reviewer gives no verdict. The task keeps the head of its repo's push line meanwhile, for up to {} minutes.", who_pushed(&pusher, &address), by.word(), super::line::CEILING / 60));
+            tell_lead(&format!("{}; rebasing onto {upstream} conflicted, so its Claude resolves it as part of the push. When it reports ready, the reviewer checks the resolved commits against the rules and kebbie pushes them for {} then; you hear only of a break, or when the reviewer gives no verdict. The task keeps the head of its repo's push line while its Claude works, and for up to {} minutes once another push waits behind it.", who_pushed(&pusher, &address), by.word(), super::line::CEILING / 60));
             return Ok(Prepared::Handed(Notice::new(Tone::Moving, format!("Not pushed yet: it conflicts with {}", main_of(&upstream)))
                 .next(format!("Its Claude resolves the conflict, the reviewer checks the result against the rules, then kebbie pushes it{}.", for_whom(&pusher))).detail("task", &task).detail("files", files.join(" · ")).to_string()));
         }
@@ -1730,7 +1732,7 @@ mod tests {
         let ask = super::super::waiting::Asked { address: &pushing.address, repo: &dir, on: &["rounding@api"], then: None };
         super::super::waiting::wait_in(&pushing.state, &Caller::User, &ask, &known, 100, &mut |_, _| {}).unwrap();
         let (typed, hand) = handed();
-        let pushed = device_push(&pushing.state, &Caller::hub("acc_01"), &dir, &slot, None, &|_, _| None, &mut device_pushes(&pushing.state, &hand));
+        let pushed = device_push(&pushing.state, &Caller::hub("acc_01"), &dir, &slot, None, &|_, _| None, &|_| false, &mut device_pushes(&pushing.state, &hand));
         let said = super::super::waiting::refuse_push(&pushing.state, &pushing.address, "billing").unwrap_err();
         assert_eq!(pushed, DevicePush::Refused(said), "the phone's push gets the words kebbie push gives");
         assert!(typed.borrow().is_empty() && intent::load(&pushing.state, &pushing.address).is_none(), "nothing joined the line");
@@ -1747,7 +1749,7 @@ mod tests {
         upstream_commit(&dir, "elsewhere", "x", "landed after the phone showed the task");
         let (_, hand) = handed();
         let phone = Caller::hub("acc_01");
-        let pushed = device_push(&pushing.state, &phone, &dir, &slot, None, &|_, _| None, &mut device_pushes(&pushing.state, &hand));
+        let pushed = device_push(&pushing.state, &phone, &dir, &slot, None, &|_, _| None, &|_| false, &mut device_pushes(&pushing.state, &hand));
         let main = main_of(&upstream).to_string();
         let short = git(&origin, &["rev-parse", "--short=7", &main]).unwrap();
         assert_eq!(pushed, DevicePush::Pushed { short, main: main.clone() }, "HEAD and main both moved since the phone saw {seen}, and it is pushed all the same");
@@ -1775,7 +1777,7 @@ mod tests {
         let main = main_of(&upstream).to_string();
         let before = git(&origin, &["rev-parse", &main]).unwrap();
         let (_, hand) = handed();
-        let pushed = device_push(&pushing.state, &Caller::hub("acc_01"), &dir, &slot, Some(&run.through), &|_, _| None, &mut device_pushes(&pushing.state, &hand));
+        let pushed = device_push(&pushing.state, &Caller::hub("acc_01"), &dir, &slot, Some(&run.through), &|_, _| None, &|_| false, &mut device_pushes(&pushing.state, &hand));
         assert!(matches!(&pushed, DevicePush::HeadMoved(said) if said.contains("what can go out changed")), "{pushed:?}");
         assert_eq!(git(&origin, &["rev-parse", &main]).unwrap(), before, "nothing went out");
         cleanup(dir, origin, &slot);
@@ -1793,7 +1795,7 @@ mod tests {
         let second = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
         let (_, hand) = handed();
         let phone = Caller::hub("acc_01");
-        let through = |head: &str| device_push(&pushing.state, &phone, &dir, &slot, Some(head), &|_, _| None, &mut device_pushes(&pushing.state, &hand));
+        let through = |head: &str| device_push(&pushing.state, &phone, &dir, &slot, Some(head), &|_, _| None, &|_| false, &mut device_pushes(&pushing.state, &hand));
         let moved = through(&first);
         assert!(matches!(&moved, DevicePush::HeadMoved(said) if said.contains("what can go out changed")), "the model is not accepted, so no run ends at its commit: {moved:?}");
         let key = super::super::accept::open_commits(&slot.path, &upstream).unwrap()[0].key.clone();
@@ -1819,7 +1821,7 @@ mod tests {
         upstream_commit(&dir, "d", "theirs", "d on main");
         let (texts, hand) = handed();
         let phone = Caller::hub("acc_01");
-        let pushed = device_push(&pushing.state, &phone, &dir, &slot, None, &|_, _| None, &mut device_pushes(&pushing.state, &hand));
+        let pushed = device_push(&pushing.state, &phone, &dir, &slot, None, &|_, _| None, &|_| false, &mut device_pushes(&pushing.state, &hand));
         let DevicePush::Conflict { files, .. } = &pushed else { panic!("the rebase conflicts: {pushed:?}") };
         assert_eq!(files, &["d".to_string()]);
         assert_eq!(texts.borrow().len(), 1, "its Claude got the rebase");

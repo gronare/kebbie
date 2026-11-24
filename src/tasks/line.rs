@@ -11,10 +11,11 @@ use super::intent::{self, By, Intent, Next, Work};
 use super::pool::{Slot, find_task, slots};
 use super::push::{Sent, pushed_fingerprint, rejected};
 
-// How long the head of a line waits for its task's Claude before the pushes behind it go on without it.
+// How long the head of a line holds a push waiting behind it, or holds the line alone once its Claude stopped without a ready report.
 pub(crate) const CEILING: u64 = 30 * 60;
 
 pub(super) type Read<'a> = &'a dyn Fn(&Intent, &Slot) -> Option<String>;
+pub(super) type Working<'a> = &'a dyn Fn(&Intent) -> bool;
 pub(super) type Push<'a> = &'a mut dyn FnMut(&Intent, &Slot) -> Result<Sent>;
 
 // Held while one driver works a repo's line, so the keeper, a board and kebbie push never send two pushes of one repo at once.
@@ -72,24 +73,28 @@ enum Turn {
 }
 
 pub fn complete(state: &Path) -> Vec<String> {
-    let read = live_read();
+    let (read, working) = live_claude();
     let mut push = super::push::live_push(state);
-    complete_in(state, &messages::load(), messages::now(), &read, &mut push)
+    complete_in(state, &messages::load(), messages::now(), &read, &working, &mut push)
 }
 
-pub(super) fn live_read() -> impl Fn(&Intent, &Slot) -> Option<String> {
-    let sessions = crate::peers::sessions().unwrap_or_default();
-    move |intent: &Intent, slot: &Slot| {
+// What herdr says of each task's Claude this round: its transcript, and whether it is working; no herdr counts as not working.
+pub(super) fn live_claude() -> (impl Fn(&Intent, &Slot) -> Option<String>, impl Fn(&Intent) -> bool) {
+    let sessions = std::rc::Rc::new(crate::peers::sessions().unwrap_or_default());
+    let seen = sessions.clone();
+    let read = move |intent: &Intent, slot: &Slot| {
         let pane = sessions.iter().find(|session| session.address == intent.address).and_then(|session| session.pane.clone());
         let file = pane.and_then(|pane| crate::typing::transcript_of(&pane)).or_else(|| super::launch::transcript(&intent.repo, slot).map(|(_, file)| file))?;
         std::fs::read_to_string(file).ok()
-    }
+    };
+    let working = move |intent: &Intent| seen.iter().any(|session| session.address == intent.address && session.pane.is_some() && session.status.as_deref() == Some("working"));
+    (read, working)
 }
 
-pub(super) fn complete_in(state: &Path, log: &[Message], now: u64, read: Read, push: Push) -> Vec<String> {
+pub(super) fn complete_in(state: &Path, log: &[Message], now: u64, read: Read, working: Working, push: Push) -> Vec<String> {
     let mut notes = fixes(state, log, now, read);
     for repo in intent::repos(state) {
-        notes.extend(drive(state, &repo, None, log, now, read, push).notes);
+        notes.extend(drive(state, &repo, None, log, now, read, working, push).notes);
     }
     notes
 }
@@ -123,7 +128,8 @@ fn fixes(state: &Path, log: &[Message], now: u64, read: Read) -> Vec<String> {
 }
 
 // Works the head of a repo's line until one waits; with `mine`, only while that push is the head, and the outcome of its turn comes back.
-pub(super) fn drive(state: &Path, repo: &Path, mine: Option<&str>, log: &[Message], now: u64, read: Read, push: Push) -> Driven {
+#[allow(clippy::too_many_arguments)]
+pub(super) fn drive(state: &Path, repo: &Path, mine: Option<&str>, log: &[Message], now: u64, read: Read, working: Working, push: Push) -> Driven {
     let mut driven = Driven::default();
     let Some(_turnstile) = Turnstile::try_take(state, repo) else { return driven };
     let mut seen = Vec::new();
@@ -150,7 +156,8 @@ pub(super) fn drive(state: &Path, repo: &Path, mine: Option<&str>, log: &[Messag
             break;
         }
         seen.push(head.address.clone());
-        let turn = turn(state, &head, log, now, read, push);
+        let behind = intent::line(state, repo).len() > 1;
+        let turn = turn(state, &head, log, now, read, working(&head), behind, push);
         let goes_on = matches!(turn, Turn::Pushed(_) | Turn::Out(_));
         let (note, said) = match turn {
             Turn::Waits => break,
@@ -175,7 +182,13 @@ fn unlisted(repo: &Path) -> bool {
     repo.exists() && slots(repo).is_err()
 }
 
-fn turn(state: &Path, head: &Intent, log: &[Message], now: u64, read: Read, push: Push) -> Turn {
+// Past the ceiling the head gives way to a push waiting behind it; alone, it keeps the line while its Claude still goes on.
+fn outlasted(head: &Intent, now: u64, behind: bool, goes_on: bool) -> bool {
+    now.saturating_sub(head.at) >= CEILING && (behind || !goes_on)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn turn(state: &Path, head: &Intent, log: &[Message], now: u64, read: Read, working: bool, behind: bool, push: Push) -> Turn {
     if unlisted(&head.repo) {
         return Turn::Waits;
     }
@@ -187,7 +200,7 @@ fn turn(state: &Path, head: &Intent, log: &[Message], now: u64, read: Read, push
         return Turn::Out(why);
     };
     if crate::repo::rebase_in_progress(&slot.path) {
-        if now.saturating_sub(head.at) >= CEILING {
+        if outlasted(head, now, behind, working) {
             let whose = if head.work == Work::Turn { "a rebase in its worktree" } else { "its Claude's rebase" };
             return leave(state, head, &format!("{whose} did not finish within {} minutes, so the pushes behind it went on", CEILING / 60));
         }
@@ -209,7 +222,7 @@ fn turn(state: &Path, head: &Intent, log: &[Message], now: u64, read: Read, push
         }
         match intent::next(head, report, Some(&slot), current.as_deref(), approved) {
             Next::Push => {}
-            Next::Wait if now.saturating_sub(head.at) >= CEILING => {
+            Next::Wait if outlasted(head, now, behind, working || since("ready")) => {
                 let why = if since("ready") { "the lead did not approve its new commits" } else { "its Claude did not report ready" };
                 return leave(state, head, &format!("{why} within {} minutes, so the pushes behind it went on", CEILING / 60));
             }
@@ -302,7 +315,7 @@ mod tests {
         let pushes = |log: Vec<Message>, transcript: Option<String>| {
             save(&state, &Intent { hand: Some("h1".to_string()), ..intent(By::User, &dir, &current) }).unwrap();
             let mut pushed = false;
-            complete_in(&state, &log, 300, &|_, _| transcript.clone(), &mut |_, _| { pushed = true; Ok(Sent::Pushed(String::new())) });
+            complete_in(&state, &log, 300, &|_, _| transcript.clone(), &|_| false, &mut |_, _| { pushed = true; Ok(Sent::Pushed(String::new())) });
             forget(&state, &address);
             pushed
         };
@@ -325,28 +338,28 @@ mod tests {
         let ready = |id: &str| { let mut message = report(id, 200, "ready"); message.from = address.clone(); vec![message] };
         save(&state, &intent(By::Lead, &dir, &current)).unwrap();
         let mut pushed = Vec::new();
-        complete_in(&state, &[], 300, &|_, _| None, &mut |intent, _| { pushed.push(intent.by.clone()); Ok(Sent::Pushed(String::new())) });
+        complete_in(&state, &[], 300, &|_, _| None, &|_| false, &mut |intent, _| { pushed.push(intent.by.clone()); Ok(Sent::Pushed(String::new())) });
         assert!(pushed.is_empty() && load(&state, &address).is_some(), "no report yet: it waits");
-        complete_in(&state, &ready("r1"), 300, &|_, _| None, &mut |intent, _| { pushed.push(intent.by.clone()); Ok(Sent::Pushed(String::new())) });
+        complete_in(&state, &ready("r1"), 300, &|_, _| None, &|_| false, &mut |intent, _| { pushed.push(intent.by.clone()); Ok(Sent::Pushed(String::new())) });
         assert_eq!(pushed, [By::Lead], "pushed as the lead that asked, under its own checks");
         assert!(load(&state, &address).is_none());
-        complete_in(&state, &ready("r1"), 300, &|_, _| None, &mut |intent, _| { pushed.push(intent.by.clone()); Ok(Sent::Pushed(String::new())) });
+        complete_in(&state, &ready("r1"), 300, &|_, _| None, &|_| false, &mut |intent, _| { pushed.push(intent.by.clone()); Ok(Sent::Pushed(String::new())) });
         assert_eq!(pushed.len(), 1, "an intent pushes once");
         save(&state, &intent(By::User, &dir, &current)).unwrap();
         commit(&slot.path, "e", "a fix while testing");
-        complete_in(&state, &ready("r2"), 300, &|_, _| None, &mut |intent, _| { pushed.push(intent.by.clone()); Ok(Sent::Pushed(String::new())) });
+        complete_in(&state, &ready("r2"), 300, &|_, _| None, &|_| false, &mut |intent, _| { pushed.push(intent.by.clone()); Ok(Sent::Pushed(String::new())) });
         assert_eq!(pushed.len(), 1, "changed commits are never pushed on the old commits' word");
         assert!(load(&state, &address).is_some(), "the push stays under way while the fix is checked");
         crate::tasks::approval::record_approval(&state, &address, &fingerprint(&slot.path, &upstream).unwrap(), crate::tasks::ApprovedBy::Reviewer).unwrap();
-        complete_in(&state, &ready("r2"), 300, &|_, _| None, &mut |intent, _| { pushed.push(intent.by.clone()); Ok(Sent::Pushed(String::new())) });
+        complete_in(&state, &ready("r2"), 300, &|_, _| None, &|_| false, &mut |intent, _| { pushed.push(intent.by.clone()); Ok(Sent::Pushed(String::new())) });
         assert_eq!(pushed, [By::Lead, By::User], "the lead's approval of the fix lets the user's push go out");
         assert!(load(&state, &address).is_none());
         let current = fingerprint(&slot.path, &upstream).unwrap();
         save(&state, &intent(By::User, &dir, &current)).unwrap();
         let rejected = "Pushing billing failed: ! [rejected]        4333c9f -> main (non-fast-forward)";
-        let notes = complete_in(&state, &ready("r3"), 300, &|_, _| None, &mut |_, _| Err(rejected.to_string()));
+        let notes = complete_in(&state, &ready("r3"), 300, &|_, _| None, &|_| false, &mut |_, _| Err(rejected.to_string()));
         assert!(load(&state, &address).is_some_and(|waiting| waiting.work == Work::Turn) && notes[0].contains("tries again"), "a push main kept outrunning keeps the head for the next round, never dropped: {notes:?}");
-        complete_in(&state, &ready("r3"), 300, &|_, _| None, &mut |_, _| Err("the reviewer has not passed it".to_string()));
+        complete_in(&state, &ready("r3"), 300, &|_, _| None, &|_| false, &mut |_, _| Err("the reviewer has not passed it".to_string()));
         assert!(load(&state, &address).is_none(), "any other failure goes to the lead");
         assert_eq!(phase::load(&state, &address).map(|record| record.phase), Some(Phase::NeedsYou(Why::Failed)));
         cleanup(dir, origin, &slot);
@@ -359,11 +372,11 @@ mod tests {
         let address = format!("billing@{}", crate::repo::name_of(&dir));
         save(&state, &intent(By::User, &dir, &fingerprint(&slot.path, &upstream).unwrap())).unwrap();
         std::fs::rename(dir.join(".git"), dir.join(".git-away")).unwrap();
-        let notes = complete_in(&state, &[], 300, &|_, _| None, &mut pushed);
+        let notes = complete_in(&state, &[], 300, &|_, _| None, &|_| false, &mut pushed);
         assert!(notes.is_empty() && load(&state, &address).is_some(), "a list git cannot give is no sign the task is gone: {notes:?}");
         std::fs::rename(dir.join(".git-away"), dir.join(".git")).unwrap();
         git(&slot.path, &["switch", "--quiet", "--detach"]).unwrap();
-        let notes = complete_in(&state, &[], 300, &|_, _| None, &mut pushed);
+        let notes = complete_in(&state, &[], 300, &|_, _| None, &|_| false, &mut pushed);
         assert!(notes.iter().any(|note| note.contains("is gone")) && load(&state, &address).is_none(), "{notes:?}");
         git(&slot.path, &["switch", "--quiet", "billing"]).unwrap();
         cleanup(dir, origin, &slot);
@@ -385,22 +398,22 @@ mod tests {
         let done = Notice::new(Tone::Done, "Pushed 1 commit to main").to_string();
         queue(By::Lead);
         let mut pushed = Vec::new();
-        let notes = complete_in(&state, &ready, 300, &|_, _| None, &mut |intent, _| { pushed.push(intent.task.clone()); Ok(Sent::Pushed(done.clone())) });
+        let notes = complete_in(&state, &ready, 300, &|_, _| None, &|_| false, &mut |intent, _| { pushed.push(intent.task.clone()); Ok(Sent::Pushed(done.clone())) });
         assert_eq!(pushed, ["copy"], "the held push steps aside and the one behind it goes out: {notes:?}");
         assert!(load(&state, &address).is_some() && notes.iter().any(|note| note.contains(&format!("held in the push line until {first} lands"))), "{notes:?}");
         forget(&state, &address);
         queue(By::User);
         let mut said = Vec::new();
-        complete_in(&state, &ready, 300, &|_, _| None, &mut |intent, _| { said.push((intent.task.clone(), intent.by.clone())); Ok(Sent::Pushed(done.clone())) });
+        complete_in(&state, &ready, 300, &|_, _| None, &|_| false, &mut |intent, _| { said.push((intent.task.clone(), intent.by.clone())); Ok(Sent::Pushed(done.clone())) });
         assert_eq!(said[0], ("billing".to_string(), By::User), "the user's own push goes out");
         let mut out = Vec::new();
         save(&state, &Intent { work: Work::Turn, ..intent(By::User, &dir, &fingerprint(&slot.path, &upstream).unwrap()) }).unwrap();
-        let driven = drive(&state, &dir, Some(&address), &ready, 300, &|_, _| None, &mut |_, _| { out.push(()); Ok(Sent::Pushed(done.clone())) });
+        let driven = drive(&state, &dir, Some(&address), &ready, 300, &|_, _| None, &|_| false, &mut |_, _| { out.push(()); Ok(Sent::Pushed(done.clone())) });
         assert!(driven.mine.unwrap().unwrap().contains(&format!("pushed before {first}, which its ready report says goes out first")), "the user hears which task it should have followed");
         git(&api_slot.path, &["switch", "--quiet", "--detach"]).unwrap();
         save(&state, &Intent { work: Work::Turn, ..intent(By::Lead, &dir, &fingerprint(&slot.path, &upstream).unwrap()) }).unwrap();
         let mut landed = Vec::new();
-        complete_in(&state, &ready, 300, &|_, _| None, &mut |intent, _| { landed.push(intent.task.clone()); Ok(Sent::Pushed(done.clone())) });
+        complete_in(&state, &ready, 300, &|_, _| None, &|_| false, &mut |intent, _| { landed.push(intent.task.clone()); Ok(Sent::Pushed(done.clone())) });
         assert_eq!(landed, ["billing"], "once the task it follows has landed, the lead's push goes out");
         git(&api_slot.path, &["switch", "--quiet", "payload"]).unwrap();
         cleanup(api, api_origin, &api_slot);
@@ -417,12 +430,12 @@ mod tests {
         assert!(crate::repo::rebase_in_progress(&slot.path));
         assert_eq!(find_task(&dir, Some("billing"), &dir).map(|found| found.path).ok(), Some(slot.path.clone()), "the rebasing worktree is still the task's");
         let mut pushed = 0;
-        let notes = complete_in(&state, &[], 300, &|_, _| None, &mut |_, _| { pushed += 1; Ok(Sent::Pushed(String::new())) });
+        let notes = complete_in(&state, &[], 300, &|_, _| None, &|_| false, &mut |_, _| { pushed += 1; Ok(Sent::Pushed(String::new())) });
         assert!(notes.is_empty() && load(&state, &address).is_some(), "the push waits through the rebase: {notes:?}");
         git(&slot.path, &["rebase", "--continue"]).unwrap();
         let mut ready = report("r1", 200, "ready");
         ready.from = address.clone();
-        complete_in(&state, &[ready], 300, &|_, _| None, &mut |_, _| { pushed += 1; Ok(Sent::Pushed(String::new())) });
+        complete_in(&state, &[ready], 300, &|_, _| None, &|_| false, &mut |_, _| { pushed += 1; Ok(Sent::Pushed(String::new())) });
         assert_eq!(pushed, 1, "the task's ready report sends the push");
         assert!(load(&state, &address).is_none());
         cleanup(dir, origin, &slot);
@@ -490,14 +503,14 @@ mod tests {
         upstream_commit(&dir, "elsewhere", "x", "someone else's work");
         let before = head(&beta);
         let (typed, mut push) = real_push(&state);
-        let driven = drive(&state, &dir, Some(&second), &[], 1000, &|_, _| None, &mut push);
+        let driven = drive(&state, &dir, Some(&second), &[], 1000, &|_, _| None, &|_| false, &mut push);
         assert!(driven.mine.is_none() && !landed(&origin, &upstream).contains("fourth"), "kebbie push of beta leaves alpha's turn to the keeper and says where beta stands: {driven:?}");
-        let driven = drive(&state, &dir, Some(&first), &[], 1000, &|_, _| None, &mut push);
+        let driven = drive(&state, &dir, Some(&first), &[], 1000, &|_, _| None, &|_| false, &mut push);
         assert!(matches!(&driven.mine, Some(Ok(said)) if said == "pushed 1"), "kebbie push pushes its own task at the head of the line: {driven:?}");
         assert!(landed(&origin, &upstream).starts_with("fourth\nsomeone else's work\n"));
         assert_eq!(head(&beta), before, "beta is never rebased before its turn");
         assert_eq!(phase_of(&state, &second), Some(Phase::Pushing { ahead: 0 }), "beta moved up");
-        let driven = drive(&state, &dir, None, &[], 1000, &|_, _| None, &mut push);
+        let driven = drive(&state, &dir, None, &[], 1000, &|_, _| None, &|_| false, &mut push);
         assert_eq!(driven.notes, [format!("push: {second}: pushed 1")]);
         assert!(landed(&origin, &upstream).starts_with("beta\nfourth\nsomeone else's work\n"), "beta went out on top of alpha: {}", landed(&origin, &upstream));
         assert!(intent::line(&state, &dir).is_empty() && typed.borrow().is_empty());
@@ -517,11 +530,11 @@ mod tests {
         super::super::push::join(&state, &Caller::User, &dir, &beta, Through::All).unwrap();
         let before = head(&beta);
         let (typed, mut push) = real_push(&state);
-        drive(&state, &dir, None, &[], 1000, &|_, _| None, &mut push);
+        drive(&state, &dir, None, &[], 1000, &|_, _| None, &|_| false, &mut push);
         assert_eq!(typed.borrow().len(), 1, "alpha's Claude resolves the conflict");
         let waiting = load(&state, &first).unwrap();
         assert_eq!((waiting.work, intent::line(&state, &dir)[0].address.as_str()), (Work::Conflict, first.as_str()), "alpha keeps the head while its Claude works");
-        let driven = drive(&state, &dir, None, &[], 1000 + CEILING - 1, &|_, _| None, &mut push);
+        let driven = drive(&state, &dir, None, &[], 1000 + CEILING - 1, &|_, _| None, &|_| false, &mut push);
         assert!(driven.notes.is_empty() && head(&beta) == before && typed.borrow().len() == 1, "beta waits, untouched: {driven:?}");
         assert!(!landed(&origin, &upstream).contains("beta"));
         drop_worktree(&dir, &beta);
@@ -539,9 +552,9 @@ mod tests {
         super::super::push::join(&state, &Caller::User, &dir, &alpha, Through::All).unwrap();
         super::super::push::join(&state, &Caller::User, &dir, &beta, Through::All).unwrap();
         let (_, mut push) = real_push(&state);
-        drive(&state, &dir, None, &[], 1000, &|_, _| None, &mut push);
+        drive(&state, &dir, None, &[], 1000, &|_, _| None, &|_| false, &mut push);
         let handed = load(&state, &first).unwrap().at;
-        let driven = drive(&state, &dir, None, &[], handed + CEILING, &|_, _| None, &mut push);
+        let driven = drive(&state, &dir, None, &[], handed + CEILING, &|_, _| None, &|_| false, &mut push);
         assert!(driven.notes[0].contains("its Claude did not report ready within 30 minutes"), "{driven:?}");
         assert!(load(&state, &first).is_none() && phase_of(&state, &first) == Some(Phase::NeedsYou(Why::LeftLine)), "alpha is under Needs you, out of the line");
         assert!(intent::left(&state, &first).is_some_and(|why| why.contains("did not report ready")), "the row says why");
@@ -550,12 +563,48 @@ mod tests {
         needs.from = first.clone();
         super::super::push::join(&state, &Caller::User, &dir, &alpha, Through::All).unwrap();
         assert!(intent::left(&state, &first).is_none(), "pushed again, it is back in the line and the old reason goes");
-        drive(&state, &dir, None, &[], 2000, &|_, _| None, &mut push);
+        drive(&state, &dir, None, &[], 2000, &|_, _| None, &|_| false, &mut push);
         let handed = load(&state, &first).unwrap();
         needs.at = handed.at + 1;
-        let driven = drive(&state, &dir, None, &[needs], handed.at + 2, &|_, _| None, &mut push);
+        let driven = drive(&state, &dir, None, &[needs], handed.at + 2, &|_, _| None, &|_| false, &mut push);
         assert!(driven.notes[0].contains("reported needs-you") && load(&state, &first).is_none(), "a red test leaves the line at once: {driven:?}");
         drop_worktree(&dir, &beta);
+        cleanup(dir, origin, &alpha);
+    }
+
+    #[test]
+    fn a_head_alone_keeps_its_place_past_the_ceiling_while_its_claude_works_and_gives_way_once_a_push_waits_behind_it() {
+        let (dir, origin, alpha, upstream) = task_with_a_commit("alpha");
+        let beta = another_task(&dir, "beta", "e");
+        let state = crate::lead::state_dir().unwrap();
+        let (first, second) = (crate::peers::address("alpha", &name_of(&dir)), crate::peers::address("beta", &name_of(&dir)));
+        let _line = Line { state: state.clone(), addresses: vec![first.clone(), second.clone()] };
+        upstream_commit(&dir, "d", "theirs", "d on main");
+        super::super::push::join(&state, &Caller::User, &dir, &alpha, Through::All).unwrap();
+        let (typed, mut push) = real_push(&state);
+        drive(&state, &dir, None, &[], 1000, &|_, _| None, &|_| false, &mut push);
+        assert_eq!(typed.borrow().len(), 1, "alpha's Claude resolves the conflict");
+        let handed = load(&state, &first).unwrap().at;
+        let late = handed + 3 * CEILING;
+        let driven = drive(&state, &dir, None, &[], late, &|_, _| None, &|queued| queued.address == first, &mut push);
+        assert!(driven.notes.is_empty() && load(&state, &first).is_some(), "its Claude still runs the tests and nobody waits: alpha keeps the head: {driven:?}");
+        let mut ready = report("r1", handed + 1, "ready");
+        ready.from = first.clone();
+        let driven = drive(&state, &dir, None, std::slice::from_ref(&ready), late, &|_, _| None, &|_| false, &mut push);
+        assert!(load(&state, &first).is_some(), "it reported ready and waits for the check of its rebased commits, with nobody behind it: {driven:?}");
+        super::super::push::join(&state, &Caller::User, &dir, &beta, Through::All).unwrap();
+        let driven = drive(&state, &dir, None, &[], late, &|_, _| None, &|queued| queued.address == first, &mut push);
+        assert!(driven.notes[0].contains("its Claude did not report ready within 30 minutes"), "a push waits behind it, so the ceiling holds though its Claude works: {driven:?}");
+        assert_eq!(phase_of(&state, &first), Some(Phase::NeedsYou(Why::LeftLine)));
+        assert!(landed(&origin, &upstream).starts_with("beta\nd on main\n"), "beta went out: {}", landed(&origin, &upstream));
+        drop_worktree(&dir, &beta);
+        super::super::push::join(&state, &Caller::User, &dir, &alpha, Through::All).unwrap();
+        drive(&state, &dir, None, &[], 2000, &|_, _| None, &|_| false, &mut push);
+        let handed = load(&state, &first).unwrap().at;
+        let driven = drive(&state, &dir, None, &[], handed + CEILING - 1, &|_, _| None, &|_| false, &mut push);
+        assert!(driven.notes.is_empty() && load(&state, &first).is_some(), "within the ceiling an idle Claude keeps the head: {driven:?}");
+        let driven = drive(&state, &dir, None, &[], handed + CEILING, &|_, _| None, &|_| false, &mut push);
+        assert!(driven.notes[0].contains("its Claude did not report ready within 30 minutes") && load(&state, &first).is_none(), "alone, but its Claude stopped without a ready report: it leaves as before: {driven:?}");
         cleanup(dir, origin, &alpha);
     }
 
@@ -579,7 +628,7 @@ mod tests {
         assert_eq!(phase_of(&state, &address("gamma")), Some(Phase::Pushing { ahead: 0 }), "gamma moved up when beta ended");
         commit(&gamma.path, "g", "after push was chosen");
         let (_, mut push) = real_push(&state);
-        let driven = drive(&state, &dir, None, &[], 1000, &|_, _| None, &mut push);
+        let driven = drive(&state, &dir, None, &[], 1000, &|_, _| None, &|_| false, &mut push);
         assert!(driven.notes[0].contains("its commits changed after the user chose push"), "{driven:?}");
         assert_eq!(phase_of(&state, &address("gamma")), Some(Phase::NeedsYou(Why::LeftLine)));
         assert!(!landed(&origin, &upstream).contains("gamma"), "never pushed unseen commits");
@@ -599,12 +648,12 @@ mod tests {
         super::super::push::join(&state, &Caller::User, &dir, &beta, Through::All).unwrap();
         let rejected = "! [rejected] main (non-fast-forward)";
         let later = messages::now() + 100;
-        drive(&state, &dir, None, &[], later, &|_, _| None, &mut |_, _| Err(rejected.to_string()));
+        drive(&state, &dir, None, &[], later, &|_, _| None, &|_| false, &mut |_, _| Err(rejected.to_string()));
         assert!(load(&state, &first).unwrap().at == later, "the retry is recorded as new");
         assert_eq!((intent::line(&state, &dir)[0].address.as_str(), intent::pending(&state, &second).unwrap().ahead), (first.as_str(), 1), "rejected, alpha still goes first");
         upstream_commit(&dir, "d", "theirs", "d on main");
         let (typed, mut push) = real_push(&state);
-        drive(&state, &dir, None, &[], later, &|_, _| None, &mut push);
+        drive(&state, &dir, None, &[], later, &|_, _| None, &|_| false, &mut push);
         assert_eq!(typed.borrow().len(), 1);
         assert_eq!((intent::line(&state, &dir)[0].address.as_str(), intent::pending(&state, &second).unwrap().ahead), (first.as_str(), 1), "handed over, alpha still goes first");
         let said = super::super::push::queued_notice(&state, &second, "beta").unwrap();
@@ -627,10 +676,10 @@ mod tests {
         assert!(git(&alpha.path, &["rebase", "--exec", "false", &upstream]).is_err());
         let (typed, mut push) = real_push(&state);
         let at = load(&state, &first).unwrap().at;
-        let driven = drive(&state, &dir, None, &[], at + CEILING - 1, &|_, _| None, &mut push);
+        let driven = drive(&state, &dir, None, &[], at + CEILING - 1, &|_, _| None, &|_| false, &mut push);
         assert!(driven.notes.is_empty() && typed.borrow().is_empty() && crate::repo::rebase_in_progress(&alpha.path), "the rebase under way is left alone, never aborted for a made-up conflict: {driven:?}");
         assert!(load(&state, &first).is_some() && !landed(&origin, &upstream).contains("beta"));
-        let driven = drive(&state, &dir, None, &[], at + CEILING, &|_, _| None, &mut push);
+        let driven = drive(&state, &dir, None, &[], at + CEILING, &|_, _| None, &|_| false, &mut push);
         assert!(driven.notes[0].contains("a rebase in its worktree did not finish within 30 minutes"), "{driven:?}");
         assert_eq!(phase_of(&state, &first), Some(Phase::NeedsYou(Why::LeftLine)));
         assert!(landed(&origin, &upstream).starts_with("beta\n"), "an abandoned rebase never holds the line: {}", landed(&origin, &upstream));
@@ -672,7 +721,7 @@ mod tests {
         super::super::push::join(&state, &Caller::User, &dir, &alpha, Through::All).unwrap();
         super::super::push::join(&state, &Caller::User, &other, &delta, Through::All).unwrap();
         let (typed, mut push) = real_push(&state);
-        complete_in(&state, &[], 1000, &|_, _| None, &mut push);
+        complete_in(&state, &[], 1000, &|_, _| None, &|_| false, &mut push);
         assert_eq!(typed.borrow().len(), 1, "alpha waits for its Claude");
         assert!(landed(&other_origin, &other_upstream).starts_with("fourth\n"), "delta's repo did not wait for alpha's");
         drop(push);
@@ -691,10 +740,10 @@ mod tests {
         let mut ready = report("r1", load(&state, &address).unwrap().at + 1, "ready");
         ready.from = address.clone();
         let mut pushed = 0;
-        complete_in(&state, std::slice::from_ref(&ready), 1000, &|_, _| None, &mut |_, _| { pushed += 1; Ok(Sent::Pushed(String::new())) });
+        complete_in(&state, std::slice::from_ref(&ready), 1000, &|_, _| None, &|_| false, &mut |_, _| { pushed += 1; Ok(Sent::Pushed(String::new())) });
         assert_eq!(pushed, 0, "the fix waits for the lead's check");
         crate::tasks::approval::record_approval(&state, &address, &fingerprint(&slot.path, &upstream).unwrap(), crate::tasks::ApprovedBy::Reviewer).unwrap();
-        complete_in(&state, &[ready], 1000, &|_, _| None, &mut |intent, _| { assert_eq!((intent.work, intent.queued), (Work::Turn, Some(1000))); pushed += 1; Ok(Sent::Pushed(String::new())) });
+        complete_in(&state, &[ready], 1000, &|_, _| None, &|_| false, &mut |intent, _| { assert_eq!((intent.work, intent.queued), (Work::Turn, Some(1000))); pushed += 1; Ok(Sent::Pushed(String::new())) });
         assert!(pushed == 1 && load(&state, &address).is_none());
         cleanup(dir, origin, &slot);
     }
@@ -708,9 +757,9 @@ mod tests {
         assert!(Turnstile::try_take(&state, &dir).is_none());
         let mut ready = report("r1", 200, "ready");
         ready.from = crate::peers::address("billing", &name_of(&dir));
-        assert!(drive(&state, &dir, None, std::slice::from_ref(&ready), 300, &|_, _| None, &mut pushed).notes.is_empty(), "two drivers never push one repo at once");
+        assert!(drive(&state, &dir, None, std::slice::from_ref(&ready), 300, &|_, _| None, &|_| false, &mut pushed).notes.is_empty(), "two drivers never push one repo at once");
         drop(held);
-        assert_eq!(drive(&state, &dir, None, &[ready], 300, &|_, _| None, &mut pushed).notes.len(), 1);
+        assert_eq!(drive(&state, &dir, None, &[ready], 300, &|_, _| None, &|_| false, &mut pushed).notes.len(), 1);
         cleanup(dir, origin, &slot);
     }
 }
