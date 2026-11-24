@@ -10,6 +10,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 
 ### Fixed
 - A task stays a task, with its questions and kebbie tell, while its worktree is on another commit or branch.
+- A queued task starts once the task it waits for is done, even when that done takes minutes.
 - A pushed task in a repo without workflow files closes after three minutes instead of waiting under CI running.
 - The review steps subtask by subtask with ← → and commit by commit with shift+← →, and its label names what the diff shows.
 - A task's options name its vault note's link Open in Obsidian, under LINKS.

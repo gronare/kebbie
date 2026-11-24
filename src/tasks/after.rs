@@ -232,6 +232,7 @@ pub(crate) struct Facts {
     pub queued: HashSet<String>,
     pub ci: HashMap<String, bool>,
     pub unlisted: HashSet<PathBuf>,
+    pub state: Option<PathBuf>,
 }
 
 pub(crate) fn latest_ends(log: &[Message]) -> HashMap<String, Message> {
@@ -247,7 +248,7 @@ impl Facts {
         let mut queued: HashSet<String> = waits.iter().map(Wait::address).collect();
         queued.extend(waits.iter().flat_map(|wait| wait.after.iter()).filter(|dep| starting(state, &dep.address)).map(|dep| dep.address.clone()));
         let ci = crate::ci::all(state).into_iter().map(|watch| (watch.address.clone(), watch.running())).collect();
-        Facts { ends: latest_ends(log), open, queued, ci, unlisted: HashSet::new() }
+        Facts { ends: latest_ends(log), open, queued, ci, unlisted: HashSet::new(), state: Some(state.to_path_buf()) }
     }
 
     // A running task's wait reads the same facts, with the open tasks of the repos it and the tasks it waits for are in.
@@ -276,7 +277,7 @@ impl Facts {
                 how => DepState::Ended(how.unwrap_or("ended").to_string()),
             };
         }
-        if self.open.contains(address) {
+        if self.open.contains(address) || self.state.as_deref().is_some_and(|state| super::finish::closing(state, address)) {
             DepState::Open
         } else if self.queued.contains(address) {
             DepState::Queued
@@ -1380,6 +1381,26 @@ mod tests {
         let mut open = Facts::read(&state, &[], &all(&state));
         open.open.insert("billing@api".to_string());
         assert_eq!(next(&load(&state, "web-billing@web").unwrap(), &open, 9_999), Next::Wait, "back again, it waits as before");
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_task_whose_done_runs_longer_than_the_grace_is_not_gone_while_it_closes() {
+        let state = crate::sh::test_dir("after-closing");
+        save(&state, &wait_for("web-billing", "web", &["billing@api"])).unwrap();
+        let closing = super::super::finish::Closing::take(&state, "billing@api").unwrap();
+        ticked(&state, &[], 1_000);
+        let (started, told) = ticked(&state, &[], 1_000 + 10 * GRACE);
+        assert!(started.is_empty() && told.is_empty(), "its worktree freed and its end not yet logged, a task being closed is not gone");
+        assert_eq!(load(&state, "web-billing@web").unwrap().blocked, None);
+        let (started, _) = ticked(&state, &[end("billing@api", 2_000, "done", None)], 1_000 + 10 * GRACE + 1);
+        assert_eq!(started.len(), 1, "its end line starts the wait");
+        save(&state, &wait_for("search", "web", &["billing@api"])).unwrap();
+        std::mem::drop(closing);
+        ticked(&state, &[], 5_000);
+        ticked(&state, &[], 5_000 + GRACE);
+        assert_eq!(load(&state, "search@web").unwrap().blocked.as_deref(), Some("billing@api is gone without being done, so search did not start"), "a close that ended without its end line still blocks after the grace");
+        assert!(super::super::finish::Closing::take(&state, "billing@api").is_ok(), "the probe leaves the lock free for the next done");
         fs::remove_dir_all(state).unwrap();
     }
 

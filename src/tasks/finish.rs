@@ -183,14 +183,53 @@ pub(super) fn stashed(path: &Path, branch: &str) -> bool {
 // The task is looked up again once this is held: a close that won the race has freed it already.
 pub(super) struct Closing(std::fs::File);
 
+fn closing_file(state: &Path, address: &str) -> std::path::PathBuf {
+    state.join("closing").join(format!("{address}.lock"))
+}
+
+const CLOSING_TRIES: u32 = 40;
+
 impl Closing {
+    // A probe holds the lock shared for an instant, so a busy lock is tried again for a moment before it counts as another close.
     pub(super) fn take(state: &Path, address: &str) -> Result<Closing> {
-        let file = crate::state::append_to(&state.join("closing").join(format!("{address}.lock"))).map_err(|error| error.to_string())?;
-        // SAFETY: flock on a descriptor this File owns.
-        if unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            return Notice::new(Tone::NotNow, "It is being closed already").detail("task", address).err();
+        let file = crate::state::append_to(&closing_file(state, address)).map_err(|error| error.to_string())?;
+        for _ in 0..CLOSING_TRIES {
+            if try_flock(&file, libc::LOCK_EX)? {
+                return Ok(Closing(file));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        Ok(Closing(file))
+        Notice::new(Tone::NotNow, "It is being closed already").detail("task", address).err()
+    }
+}
+
+// Ok(false) only when another descriptor holds the lock; an interrupted call is made again.
+fn try_flock(file: &std::fs::File, operation: libc::c_int) -> Result<bool> {
+    loop {
+        // SAFETY: flock on a descriptor this File owns.
+        if unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(file), operation | libc::LOCK_NB) } == 0 {
+            return Ok(true);
+        }
+        let error = std::io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::EINTR) => continue,
+            Some(libc::EWOULDBLOCK) => return Ok(false),
+            _ => return Err(format!("could not lock the close lock: {error}")),
+        }
+    }
+}
+
+// Whether a done, drop or reset of the task holds its lock now; the probe creates no file and unlocks at once, and a take waits out that instant.
+pub(super) fn closing(state: &Path, address: &str) -> bool {
+    let Ok(file) = std::fs::File::open(closing_file(state, address)) else { return false };
+    match try_flock(&file, libc::LOCK_SH) {
+        Ok(true) => {
+            // SAFETY: unlocks the descriptor this File owns, for every forked copy of it.
+            unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_UN) };
+            false
+        }
+        Ok(false) => true,
+        Err(_) => false,
     }
 }
 
@@ -381,6 +420,22 @@ mod tests {
     use crate::tasks::launch::task_tmp;
     use crate::tasks::pool::{find_task, release, slots};
     use crate::tasks::started::{record_start, started_file_in};
+
+    #[test]
+    fn a_close_waits_out_a_probe_of_its_lock_but_not_another_close() {
+        let state = crate::sh::test_dir("closing-probe");
+        let first = Closing::take(&state, "billing@web").unwrap();
+        assert!(closing(&state, "billing@web"));
+        assert!(Closing::take(&state, "billing@web").is_err(), "a second close of the same task is refused");
+        std::mem::drop(first);
+        assert!(!closing(&state, "billing@web") && !closing(&state, "never@web"), "a free lock and one never taken are not closing");
+        let probe = std::fs::File::open(closing_file(&state, "billing@web")).unwrap();
+        assert_eq!(try_flock(&probe, libc::LOCK_SH), Ok(true));
+        let held = std::thread::spawn(move || { std::thread::sleep(std::time::Duration::from_millis(30)); std::mem::drop(probe); });
+        assert!(Closing::take(&state, "billing@web").is_ok(), "a probe holding the lock for an instant never fails a done");
+        held.join().unwrap();
+        std::fs::remove_dir_all(state).unwrap();
+    }
 
     #[test]
     fn done_and_drop_name_the_tasks_other_open_halves_and_close_none_of_them() {

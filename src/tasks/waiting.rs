@@ -463,7 +463,7 @@ pub(crate) fn mark(state: &Path, log: &[Message], items: &mut [crate::status::It
         let open: HashSet<String> = items.iter().filter(|item| item.git.is_some()).map(address).collect();
         let queued = items.iter().filter(|item| item.queued.is_some()).map(address).collect();
         let ci = crate::ci::all(state).into_iter().map(|watch| (watch.address.clone(), watch.running())).collect();
-        let facts = Facts { ends: after::latest_ends(log), open, queued, ci, unlisted: HashSet::new() };
+        let facts = Facts { ends: after::latest_ends(log), open, queued, ci, unlisted: HashSet::new(), state: Some(state.to_path_buf()) };
         let shown: Vec<(String, WaitsOn)> = waits.iter().map(|wait| {
             let deps: Vec<(String, String, String)> = wait.on.iter().map(|dep| {
                 let item = items.iter().find(|item| item.git.is_some() && address(item) == dep.address);
@@ -516,7 +516,7 @@ mod tests {
     }
 
     fn facts(ends: &[Message], open: &[&str]) -> Facts {
-        Facts { ends: latest_ends(ends), open: open.iter().map(|address| address.to_string()).collect(), queued: HashSet::new(), ci: HashMap::new(), unlisted: HashSet::new() }
+        Facts { ends: latest_ends(ends), open: open.iter().map(|address| address.to_string()).collect(), queued: HashSet::new(), ci: HashMap::new(), unlisted: HashSet::new(), state: None }
     }
 
     fn asked<'a>(address: &'a str, on: &'a [&'a str], then: Option<&'a str>) -> Asked<'a> {
@@ -580,6 +580,27 @@ mod tests {
         let mut asks = vec![named(asking("billing", "web", 1), "billing", "web")];
         mark(&state, &[], &mut asks);
         assert_eq!(asks[0].group(), Group::NeedsYou, "a question on its screen still wants the user");
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_running_task_waits_on_through_a_done_that_outlasts_the_grace_and_the_board_shows_it_open() {
+        use crate::next::tests::ready;
+        let state = crate::sh::test_dir("waiting-closing");
+        save(&state, &Waiting { address: "billing@web".to_string(), repo: PathBuf::from("/repos/web"), on: vec![dep("rounding@web")], then: None, by: "user".to_string(), at: 100, gone_since: None, unlisted_since: None, unlisted_told: false }).unwrap();
+        let closing = super::super::finish::Closing::take(&state, "rounding@web").unwrap();
+        let facts = Facts { state: Some(state.clone()), ..facts(&[], &["billing@web"]) };
+        told(&state, &facts, 300, Some("unused"));
+        let (_, tasks, lead) = told(&state, &facts, 300 + 10 * after::GRACE, Some("unused"));
+        assert!(tasks.is_empty() && lead.is_empty() && load(&state, "billing@web").is_some(), "a task being closed is not gone to the task waiting for it");
+        let mut items = vec![ready("billing", "web", 5)];
+        mark(&state, &[], &mut items);
+        assert_eq!(items[0].waits_on.as_ref().map(|waits| waits.after.clone()), Some(vec![("rounding@web".to_string(), "open".to_string())]), "nor on the board");
+        std::mem::drop(closing);
+        let (_, tasks, _) = told(&state, &facts, 300 + 10 * after::GRACE + 1, Some("unused"));
+        assert!(tasks.is_empty(), "closed without its end line, it gets its grace again");
+        let (_, tasks, _) = told(&state, &facts, 300 + 11 * after::GRACE + 1, Some("unused"));
+        assert!(tasks[0].1.contains("rounding@web, which is gone without being done"), "{tasks:?}");
         fs::remove_dir_all(state).unwrap();
     }
 
