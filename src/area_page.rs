@@ -813,7 +813,7 @@ impl Page {
         }
         lines.push(kv("backlog", plural(area.backlog.len(), "item"), TEXT));
         if let Some(repo) = area.repo_name() {
-            let (text, color) = if permit::repo_permitted(&repo) { ("the lead may push reviewed tasks", GREEN) } else { ("you, and the lead for tasks you permit", TEXT) };
+            let (text, color) = if permit::repo_permitted(&repo) { ("the lead may push reviewed and no-review tasks", GREEN) } else { ("you, and the lead for tasks you permit", TEXT) };
             lines.push(kv("pushes", text.to_string(), color));
         }
         if !area.sandbox {

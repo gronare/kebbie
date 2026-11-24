@@ -13,6 +13,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - An Also noticed line that says nothing, such as nothing or none, files no found item.
 - The investigator's task decision points at a task already queued under that name instead of queueing it again.
 - A test run with flag values, such as xcodebuild test -project App -scheme App, counts as the whole suite.
+- A repo's push permission lets the lead push a task the assessor said needs no review, once its rules check passed.
 - A deploy cancelled outside the repo's ci.deploy_window stays under CI running and is re-run when it opens.
 - A blocked task shows under Working again once its obstacle is decided or the lead answers it.
 - A task leaves Needs you for Working once the lead settles its question with kebbie decide.

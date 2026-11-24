@@ -12,14 +12,13 @@ The lead may now push the task once its commits pass the rules check of the read
 - If you want the permission back, press `a` again. `done`, `drop` and `reset` take it back too.
 - If a fix routine has `push = true`, each of its runs' tasks gets this permission when the run starts. See [Routines](../explanation/routines.md#the-push-exception).
 
-## Every reviewed task in a repo
+## Every reviewed task in a repo, and every task that needs no review
 
 1. Press `3` on the board for the Areas page.
 2. Select the repo's area.
 3. Press `a`.
-4. Send tasks in that repo to review with `v`.
 
-The lead may now push any task in that repo once its reviewer has passed its current code.
+The lead may now push any task in that repo once its reviewer has passed its current code, or once the assessor has said its current code needs no review. Send the others to review with `v`.
 
 - If you want the permission back, press `a` on the area again.
 - If you run without the vault, there is no Areas page: it needs the vault.

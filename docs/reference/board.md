@@ -887,7 +887,7 @@ It reads a snapshot of the vault where the vault server answers one, which works
 | --- | --- | --- |
 | `g` | Open the main checkout's Space. | The repo is on this machine. |
 | `n` | New task in this repo, told the area's notes. | The repo is on this machine. |
-| `a` | Let the lead push every task here whose reviewer passed its current code, or take that back. | The repo is on this machine. |
+| `a` | Let the lead push every task here whose reviewer passed its current code, or whose assessor said it needs no review, or take that back. | The repo is on this machine. |
 | `b` | Ask the lead to refresh this area's backlog. | Always. |
 | `l` | Show the area's vault log, newest first. | Always. |
 | `p` | Push main as you, after showing the commits, on `y`. | Main is ahead of origin. |

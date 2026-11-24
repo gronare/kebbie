@@ -86,6 +86,11 @@ pub fn word_in(state: &Path, address: &str) -> Option<Word> {
     record_in(state, address).map(|record| record.word)
 }
 
+// The assessor said no review on the code the task holds now; a commit since, or a push of its first steps, needs its word again.
+pub fn no_review_now(state: &Path, address: &str, worktree: &Path, upstream: &str) -> bool {
+    record_in(state, address).is_some_and(|record| matches!(record.word, Word::NoReview { .. }) && code(state, address, worktree, upstream).is_ok_and(|now| now == record.code))
+}
+
 // When the assessor gave its word: the time its record was written.
 pub fn at_in(state: &Path, address: &str) -> Option<u64> {
     let modified = fs::metadata(file(state, address)).and_then(|meta| meta.modified()).ok()?;
@@ -329,7 +334,7 @@ fn tell_task(address: &str, text: &str) -> Result<()> {
 }
 
 // What an assessment, or none, does under review.auto, said to the lead too when it suggests or starts a review.
-fn settle(state: &Path, address: &str, worktree: &Path, auto: ReviewAuto, assessment: Option<&Assessment>) -> String {
+pub(crate) fn settle(state: &Path, address: &str, worktree: &Path, auto: ReviewAuto, assessment: Option<&Assessment>) -> String {
     let word = Word::of(assessment, auto);
     let reason = word.text();
     let _ = write_word(state, address, word.clone(), record_in(state, address).map(|record| record.code).unwrap_or_default());
@@ -347,7 +352,10 @@ fn settle(state: &Path, address: &str, worktree: &Path, auto: ReviewAuto, assess
         _ => Ok(""),
     };
     let said = format!("{address}: {reason}.{}", started.unwrap_or(" The reviewer could not be asked for; send it with kebbie review."));
-    if !matches!(word, Word::NoReview { .. }) && let Err(error) = crate::messages::to_lead(crate::messages::ToLead::Notice, &said) {
+    // The lead's push is refused while the assessor reads, so this notice is the only word that tells the lead a permitted no-review task is now its to push.
+    let permitted = address.split_once('@').is_some_and(|(_, repo)| crate::permit::in_state(state, address, repo).is_some());
+    let said = if matches!(word, Word::NoReview { .. }) && permitted { format!("{said} Its push permission covers it once a rules approval matches its commits.") } else { said };
+    if (permitted || !matches!(word, Word::NoReview { .. })) && let Err(error) = crate::messages::to_lead(crate::messages::ToLead::Notice, &said) {
         eprintln!("Could not tell the lead: {error}");
     }
     said
@@ -464,6 +472,28 @@ mod tests {
         assert!(!ask(&state, &address, &slot.path, ReviewAuto::Suggest).unwrap(), "the ready report after the task noted its assessment finds the same code");
         commit(&slot.path, "e", "Add e");
         assert!(ask(&state, &address, &slot.path, ReviewAuto::Suggest).unwrap(), "changed code is assessed again");
+        forget_in(&state, &address);
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_no_review_word_covers_only_the_code_it_was_given_on() {
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let address = peers::address("billing", &name_of(&dir));
+        let upstream = default_branch(&dir).unwrap();
+        assert!(!no_review_now(&state, &address, &slot.path, &upstream), "no word yet");
+        ask(&state, &address, &slot.path, ReviewAuto::Suggest).unwrap();
+        QUEUE.unwant(&state, &address);
+        assert!(!no_review_now(&state, &address, &slot.path, &upstream), "still being assessed");
+        settle(&state, &address, &slot.path, ReviewAuto::Suggest, Some(&Assessment { needed: false, reason: "wording".to_string() }));
+        assert!(no_review_now(&state, &address, &slot.path, &upstream));
+        commit(&slot.path, "e", "Add e");
+        assert!(!no_review_now(&state, &address, &slot.path, &upstream), "a commit after the word is not covered by it");
+        ask(&state, &address, &slot.path, ReviewAuto::Suggest).unwrap();
+        QUEUE.unwant(&state, &address);
+        settle(&state, &address, &slot.path, ReviewAuto::Suggest, Some(&Assessment { needed: true, reason: "changes rounding".to_string() }));
+        assert!(!no_review_now(&state, &address, &slot.path, &upstream), "a word that asks for review covers nothing");
         forget_in(&state, &address);
         cleanup(dir, origin, &slot);
     }
