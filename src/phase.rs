@@ -135,6 +135,7 @@ fn phase_of(value: &Value) -> Option<Phase> {
 pub enum Event<'a> {
     Started { prompted: bool },
     TurnBegan { by_user: bool },
+    Resumed,
     TurnEndedUnreported,
     Reported { state: &'a str, head: Option<&'a str>, committed: bool, pushing: bool },
     Asked,
@@ -192,6 +193,10 @@ pub fn next(current: Option<&Phase>, event: &Event) -> Option<Phase> {
         Event::TurnBegan { by_user } => match current {
             Some(Phase::Starting) => Phase::Working,
             Some(Phase::Idle | Phase::NeedsYou(_) | Phase::CiRed { .. }) if *by_user => Phase::Working,
+            _ => return None,
+        },
+        Event::Resumed => match current {
+            Some(Phase::Idle) => Phase::Working,
             _ => return None,
         },
         Event::TurnEndedUnreported => match current {
@@ -433,6 +438,10 @@ mod tests {
         assert_eq!(next(Some(&Phase::Working), &Event::TurnEndedUnreported), Some(Phase::NeedsYou(Why::Unreported)));
         assert_eq!(next(Some(&Phase::NeedsYou(Why::Question)), &Event::Answered), Some(Phase::Working));
         assert_eq!(next(Some(&Phase::Ready { head: None }), &Event::Answered), None);
+        assert_eq!(next(Some(&Phase::Idle), &Event::Resumed), Some(Phase::Working), "an obstacle's decision or the lead's word hands a waiting task its work");
+        for current in [Phase::Ready { head: None }, Phase::NeedsYou(Why::Stopped), Phase::CiRunning { sha: "abc".to_string() }] {
+            assert_eq!(next(Some(&current), &Event::Resumed), None, "{current:?}");
+        }
         let staged = Phase::Staged { head: Some("abc".to_string()) };
         assert_eq!(reported(staged.clone(), "ready", true, false), None, "a ready report leaves it on local main");
         assert_eq!(reported(staged.clone(), "working", true, false), Some(Phase::Working));
@@ -451,7 +460,7 @@ mod tests {
         };
         for (file, name, event) in [
             ("questions.rs", "answer_as", "Event::Answered"), ("tasks/push.rs", "prepare", "Event::PushHanded"), ("tasks/launch.rs", "restart", "Event::Started"),
-            ("tasks/line.rs", "turn", "Event::PushFailed"), ("tasks/push.rs", "join", "Event::PushQueued"), ("tasks/line.rs", "leave", "Why::LeftLine"), ("recover.rs", "apply", "Event::Stopped"), ("tasks/red_ci.rs", "dismiss_as", "Event::Dismissed"), ("tasks/finish.rs", "forget_address", "phase::forget("), ("tasks/stage.rs", "stage_in", "Event::Staged"), ("tasks/stage.rs", "unstage_in", "Event::Unstaged"),
+            ("tasks/line.rs", "turn", "Event::PushFailed"), ("tasks/push.rs", "join", "Event::PushQueued"), ("tasks/line.rs", "leave", "Why::LeftLine"), ("recover.rs", "apply", "Event::Stopped"), ("tasks/red_ci.rs", "dismiss_as", "Event::Dismissed"), ("tasks/finish.rs", "forget_address", "phase::forget("), ("tasks/stage.rs", "stage_in", "Event::Staged"), ("tasks/stage.rs", "unstage_in", "Event::Unstaged"), ("obstacle.rs", "record_and_tell", "Event::Resumed"),
         ] {
             assert!(body(file, name).contains(event), "{file} {name} writes {event}");
         }

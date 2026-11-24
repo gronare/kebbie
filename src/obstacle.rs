@@ -805,7 +805,9 @@ fn record_and_tell(state: &Path, address: &str, obstacle: &Obstacle, decision: &
     let note = crate::decisions::write(state, address, &line, crate::messages::now())?;
     let write = crate::decisions::for_the_task(&note, &line).map(|line| format!("\n{line}")).unwrap_or_default();
     let from = if decision.by == By::You { USER_LABEL } else { QUESTION_FROM };
-    tell_task(address, from, &format!("{said}{write}")).map(|_| ())
+    tell_task(address, from, &format!("{said}{write}"))?;
+    crate::phase::record(state, address, "obstacle", &crate::phase::Event::Resumed);
+    Ok(())
 }
 
 fn file_real_fix(address: &str, obstacle: &Obstacle) -> Result<String> {
@@ -1052,6 +1054,21 @@ mod tests {
         assert_eq!(load(&state, address)[0].state, State::Asked);
         let plan_after = fs::read_to_string(state.join("steps").join(format!("{address}.json"))).unwrap();
         assert!(!plan_after.contains("Store each note"), "nothing was added to the plan: {plan_after}");
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_decision_moves_a_task_that_reported_blocked_back_to_working() {
+        let state = crate::sh::test_dir("obstacle-resumes");
+        let address = "billing@app";
+        crate::phase::record(&state, address, "report", &crate::phase::Event::Reported { state: "blocked", head: None, committed: false, pushing: false });
+        let (obstacle, _) = raised(&state, address, "the index stores titles only", "Lint");
+        carry_out(&state, address, &obstacle.unwrap(), &parse(BLOCK).unwrap(), 2_000).unwrap();
+        assert_eq!(crate::phase::load(&state, address).map(|record| record.phase), Some(crate::phase::Phase::Working));
+        let (lead, _) = raised(&state, address, "the parser rejects tabs", "Lint");
+        crate::phase::record(&state, address, "report", &crate::phase::Event::Reported { state: "blocked", head: None, committed: false, pushing: false });
+        decided_by(&state, address, &lead.unwrap(), By::Lead, "normalise tabs first").unwrap();
+        assert_eq!(crate::phase::load(&state, address).map(|record| record.phase), Some(crate::phase::Phase::Working), "the lead's decision too");
         fs::remove_dir_all(state).unwrap();
     }
 

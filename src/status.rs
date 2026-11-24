@@ -2226,6 +2226,24 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_task_takes_up_its_decided_obstacle_under_working_and_a_notice_alone_leaves_it_waiting() {
+        let mut item = task(Some("idle"), Some("blocked"), 1);
+        moved(&mut item, &Event::Reported { state: "blocked", head: None, committed: false, pushing: false });
+        item.obstacle = Some(crate::obstacle::Shown { id: "o1".to_string(), state: crate::obstacle::State::Investigating, text: "the index stores titles only".to_string() });
+        assert_eq!(item.group(), Group::Working);
+        item.obstacle = None;
+        moved(&mut item, &Event::TurnBegan { by_user: false });
+        assert_eq!(at(&mut item, Some("working")), Group::Idle, "a notice of kebbie's it reads is no work");
+        moved(&mut item, &Event::Resumed);
+        moved(&mut item, &Event::TurnBegan { by_user: false });
+        for status in [Some("working"), Some("idle")] {
+            assert_eq!(at(&mut item, status), Group::Working, "the decision delivered and taken up, herdr {status:?}");
+        }
+        moved(&mut item, &Event::Reported { state: "blocked", head: None, committed: false, pushing: false });
+        assert_eq!(item.group(), Group::Idle, "its next blocked report waits again");
+    }
+
+    #[test]
     fn a_blocked_wait_shows_under_needs_you_with_its_reason() {
         let state = crate::sh::test_dir("status-blocked");
         let items = queued(&state, Some("billing@api was dropped, so web-billing did not start"));
