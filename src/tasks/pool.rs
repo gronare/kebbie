@@ -39,6 +39,7 @@ fn listed(repo: &Path, read_free: bool) -> Result<Vec<Slot>> {
             continue;
         }
         let placeholder = worktree.branch.as_deref().is_none_or(|branch| branch == format!("wt{number}"));
+        // Without branch_exists a stale record on a clean detached slot reads as a live task.
         let recorded = recorded_task(&worktree.path).filter(|task| worktree.branch.as_deref() != Some(task.as_str()) && !checked_out.contains(task.as_str()) && branch_exists(repo, task));
         let task = recorded.or_else(|| if placeholder { None } else { worktree.branch.clone() });
         let free = task.is_none() && read_free && is_clean(&worktree.path).unwrap_or(false);
