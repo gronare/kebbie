@@ -840,7 +840,7 @@ After a ready report the keeper starts the reviewer. It checks the commits again
 | `kebbie setup [--yes]` | The setup guide in six steps, from this machine's name to one review of everything it writes. `--yes` applies the defaults and prints each write. See [below](#kebbie-setup). |
 | `kebbie setup claude [--yes]` | The guide at its Agents step. `--yes` installs Claude Code's lines from the review without the guide. See [below](#kebbie-setup-claude-and-kebbie-setup-codex). |
 | `kebbie setup codex [--yes]` | The guide at its Agents step. `--yes` writes Codex's lines from the review: kebbie's plugin, its rules file and, with a vault, Codex's vault server. See [below](#kebbie-setup-claude-and-kebbie-setup-codex). |
-| `kebbie setup vault` | The guide at its Vault step. Without a terminal, it shows the vault command it would run and where the vault lives, or the line that installs mindin, and writes nothing. |
+| `kebbie setup mindin` | The guide at its mindin step; `kebbie setup vault` is the same command. Without a terminal, it shows the vault command it would run and where the vault lives, or the line that installs mindin, and writes nothing. |
 | `kebbie setup codex --uninstall` | Remove kebbie's Codex plugin, on your `y`. |
 | `kebbie update` | Update everything to this machine's channel and restart idle Claude sessions. See [below](#kebbie-update). |
 | `kebbie update --check` | Fetch and show the installed versions against the channel's latest. Changes nothing else. |
@@ -883,8 +883,8 @@ Safe to run again. Yours alone: a task cannot run it. In a terminal it is a guid
 | --- | --- | --- |
 | This machine | How your phone and other machines show this one, from `machine.name` or the host's short name. | `machine.name` |
 | Agents | One row per agent kebbie supports, Claude Code and Codex: the version found or `not found` (greyed), `signed in` or `not signed in: run claude auth login` (or `codex login`), and `kebbie's plugin current`, `out of date` or `missing`. Tick the ones kebbie uses; every agent found is ticked, and Claude Code stays on, as it runs the lead and the reviewer. | Each ticked agent's plugin and approval rules; an unticked Codex loses kebbie's plugin |
-| Vault | Where the vault lives: `Hosted mindin` (`coming soon`, not yet selectable), `Your own server` with its address, `S3 bucket` with its endpoint, bucket and optional prefix and region, `Local folder` with its path, or `None`. The choice in use is preselected from the vault's `status`, such as `Your own server  https://vault.example.com · signed in`. Under the list, `runs` names the command kebbie runs the vault with. See [Setup chooses where the vault lives](../explanation/vault.md#setup-chooses-where-the-vault-lives). | `mindin setup` when the place changes, `vault.command`, and the vault in each ticked agent |
-| Backlog | Local file or vault, one of them, where new items are written; Linear can be ticked beside either. | `board.backlog.sources` |
+| mindin | Your notes vault, where it lives: `Hosted mindin` (`coming soon`, not yet selectable), `Your own server` with its address, `S3 bucket` with its endpoint, bucket and optional prefix and region, `Local folder` with its path, or `None`. The choice in use is preselected from the vault's `status`, such as `Your own server  https://vault.example.com · signed in`. Under the list, `runs` names the command kebbie runs the vault with. See [Setup chooses where the vault lives](../explanation/vault.md#setup-chooses-where-the-vault-lives). | `mindin setup` when the place changes, `vault.command`, and the vault in each ticked agent |
+| Backlog | Local file or mindin, one of them, where new items are written; Linear can be ticked beside either. | `board.backlog.sources` |
 | Error signals | Turn them on or keep them off; No is preselected. `--yes` leaves it unset. | `report.signals` |
 | Review and apply | Every write, grouped by tool. | Everything, on `⏎` |
 
@@ -895,7 +895,7 @@ Safe to run again. Yours alone: a task cannot run it. In a terminal it is a guid
 | `space` | Tick or untick a box. |
 | `⏎` | The next step; on the last one, apply all. |
 | `←` | The step before, keeping your answers. |
-| `s` | Skip the Vault, Backlog or Error signals step, leaving what it sets as it is. |
+| `s` | Skip the mindin, Backlog or Error signals step, leaving what it sets as it is. |
 | `esc` | Quit without writing anything. |
 
 The review lists each write under the tool whose files it changes:
@@ -904,7 +904,7 @@ The review lists each write under the tool whose files it changes:
 | --- | --- |
 | `mindin` | `mindin`, when no command found can run `mindin setup`: `curl -fsSL https://mindin.dev/install.sh \| sh`. `vault server`, `vault bucket` or `vault folder`, the place you chose: `already` when the vault answers for it now, else `mindin setup --server <url>`, `--folder <path>` or `--s3 <bucket> --endpoint <url> [--prefix <prefix>] [--region <region>]`. Both run first, in the terminal: the server signs this machine in through the browser, and S3 asks for its access key and secret, the secret hidden, unless `S3_ACCESS_KEY` and `S3_SECRET_KEY` are set. |
 | `kebbie` | `link`, `machine`, `vault command` (`vault.command`), `backlog`, `signals`, and `keeper` when it needs starting or stopping. |
-| `Claude Code` | `plugin` (kebbie's plugin), `approvals` (nothing to write: kebbie gives each Claude task its permissions as it starts it), `vault plugin` (the vault plugin `vault@gronare`, installed or turned on) and `usage` (kebbie's `statusLine`). |
+| `Claude Code` | `plugin` (kebbie's plugin), `approvals` (nothing to write: kebbie gives each Claude task its permissions as it starts it), `mindin plugin` (the mindin plugin `vault@gronare`, installed or turned on) and `usage` (kebbie's `statusLine`). |
 | `Codex` | `codex plugin` (kebbie's [Codex plugin](#kebbie-setup-codex---yes)), `codex approvals` (`$CODEX_HOME/rules/kebbie.rules`) and `codex vault` (`[mcp_servers.vault]` in Codex's `config.toml`). |
 | `herdr` | `keys` (`prefix+space`, `prefix+f` and `prefix+t` at the end of herdr's `config.toml`) and `herdr` when kebbie's herdr plugin is disabled. |
 
@@ -955,7 +955,7 @@ Under `Next steps`, what needs you outside setup, a command and why:
 
 In a terminal, each opens the guide at its Agents step.
 
-`kebbie setup claude --yes` installs or updates kebbie's Claude Code plugin, and the vault plugin when `vault.command` is set, each printed. Without a terminal and without `--yes`, it installs or updates kebbie's plugin and names the rest under `kebbie setup claude --yes also writes:`.
+`kebbie setup claude --yes` installs or updates kebbie's Claude Code plugin, and the mindin plugin (`vault@gronare`) when `vault.command` is set, each printed. Without a terminal and without `--yes`, it installs or updates kebbie's plugin and names the rest under `kebbie setup claude --yes also writes:`.
 
 ### `kebbie setup codex --yes`
 

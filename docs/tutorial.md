@@ -46,11 +46,11 @@ If you installed from herdr's plugin list with `herdr plugin install gronare/keb
 
 ## 3. Setup
 
-The script opens the setup guide. Its steps are on the left; `↑` `↓` choose, `space` ticks a box, `⏎` goes on, `←` goes back, `s` skips the Vault, Backlog or Error signals step and `esc` quits without writing anything.
+The script opens the setup guide. Its steps are on the left; `↑` `↓` choose, `space` ticks a box, `⏎` goes on, `←` goes back, `s` skips the mindin, Backlog or Error signals step and `esc` quits without writing anything.
 
 1. **This machine.** Keep the name it offers, or type one, such as `mac`. Your phone and your other machines show it.
 2. **Agents.** Each agent kebbie found has a row: its version, whether it is signed in and whether kebbie's plugin is in it. Claude Code stays ticked. Untick Codex for now, or keep it, as in [Run a task with Codex](how-to/run-a-task-with-codex.md#set-up-codex). If Claude Code reads `not signed in`, run `claude auth login`.
-3. **Vault.** Keep **No vault**. [Connect the vault](how-to/connect-the-vault.md) later if you keep notes in one.
+3. **mindin**, your notes vault. Keep **No vault**. [Connect the vault](how-to/connect-the-vault.md) later if you keep notes in one.
 4. **Backlog.** Keep **Local file**: new items go to a `backlog/` folder beside kebbie's config, one file each.
 5. **Error signals.** Read what a signal holds, below. **No, keep them off** is preselected; choose **Yes, turn them on** to send them.
 6. **Review and apply.** Read the list of what it writes, grouped by tool: kebbie's own config, kebbie's plugin in each agent you ticked, herdr's three keys, and the `kebbie doctor` warnings setup fixes itself, such as starting the keeper. Then press `⏎`.
@@ -65,7 +65,7 @@ Each line then turns `done` or `already`, and setup ends with `Setup done` and `
 
 Updating kebbie is `U` on the board.
 
-You can run `kebbie setup` again at any time: it starts from what this machine has and changes only what you change. `kebbie setup codex` opens it at the Agents step, `kebbie setup vault` at the Vault step.
+You can run `kebbie setup` again at any time: it starts from what this machine has and changes only what you change. `kebbie setup codex` opens it at the Agents step, `kebbie setup mindin` (or `kebbie setup vault`) at the mindin step.
 
 ### Error signals
 

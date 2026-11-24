@@ -155,11 +155,15 @@ impl Step {
         match self {
             Step::Name => "This machine",
             Step::Agents => "Agents",
-            Step::Vault => "Vault",
+            Step::Vault => "mindin",
             Step::Backlog => "Backlog",
             Step::Signals => "Signals",
             Step::Review => "Review and apply",
         }
+    }
+
+    fn subtitle(self) -> Option<&'static str> {
+        (self == Step::Vault).then_some("your notes vault")
     }
 
     fn help(self) -> &'static str {
@@ -525,7 +529,7 @@ fn with_caret(text: &str, caret: usize) -> String {
 fn source_line(source: Source) -> (&'static str, &'static str) {
     match source {
         Source::Local => ("Local file", "an item file each in backlog/ beside your config"),
-        Source::Vault => ("Vault", "backlog notes in your notes vault"),
+        Source::Vault => ("mindin", "backlog notes in your notes vault"),
         Source::Linear => ("Linear", "issues from a Linear team, needs an API key"),
     }
 }
@@ -1108,9 +1112,9 @@ impl Guide {
         rows.push(row("approvals", "already", "kebbie gives each Claude task its permissions as it starts it".to_string(), Act::Nothing));
         if self.vault_used().is_some() {
             rows.push(match &facts.vault {
-                Plugin::Enabled { id, .. } => row("vault plugin", "already", format!("the vault plugin {id}"), Act::Nothing),
-                Plugin::Disabled { id, .. } => row("vault plugin", "to do", format!("turn on the vault plugin {id}"), Act::ClaudeVault),
-                Plugin::Missing => row("vault plugin", "to do", format!("the vault plugin {}", setup::VAULT_PLUGIN), Act::ClaudeVault),
+                Plugin::Enabled { id, .. } => row("mindin plugin", "already", format!("the mindin plugin ({id})"), Act::Nothing),
+                Plugin::Disabled { id, .. } => row("mindin plugin", "to do", format!("turn on the mindin plugin ({id})"), Act::ClaudeVault),
+                Plugin::Missing => row("mindin plugin", "to do", format!("install the mindin plugin ({})", setup::VAULT_PLUGIN), Act::ClaudeVault),
             });
         }
         rows.extend(self.repair_rows(CLAUDE));
@@ -1322,19 +1326,19 @@ fn codex_vault(env: &Env, command: &[String]) -> Outcome {
     }
 }
 
-// Read again here, since mindin's installer may have added the vault plugin itself.
+// Read again here, since mindin's installer may have added the mindin plugin itself.
 fn claude_vault(env: &Env) -> Outcome {
     let claude_dir = &env.machine.claude_dir;
     let steps = setup::steps(&env.machine.claude, &crate::vault_cli::plugin(claude_dir), setup::marketplace_known(claude_dir, "gronare"));
     if steps.is_empty() {
-        return Outcome::new("already", format!("the vault plugin {}", setup::VAULT_PLUGIN));
+        return Outcome::new("already", format!("the mindin plugin ({})", setup::VAULT_PLUGIN));
     }
     for step in &steps {
         if let Err(error) = crate::sh::run(&step[0], &step[1..].iter().map(String::as_str).collect::<Vec<_>>(), None) {
             return Outcome::new("failed", error);
         }
     }
-    Outcome::new("done", format!("the vault plugin {}", setup::VAULT_PLUGIN))
+    Outcome::new("done", format!("the mindin plugin ({})", setup::VAULT_PLUGIN))
 }
 
 fn keys(env: &Env, plan: &KeyPlan, bindings: &[toml::Table]) -> Outcome {
@@ -1387,7 +1391,7 @@ fn apply_row(row: &Planned, env: &Env, hooks: &mut dyn Hooks, installed: &mut Op
             *installed = mindin;
             outcome
         }
-        Act::SignIn => Outcome::new("skipped", "the sign-in happens on step 3 Vault"),
+        Act::SignIn => Outcome::new("skipped", "the sign-in happens on step 3 mindin"),
         Act::VaultSetup(command, flags) => match resolved(command, installed) {
             Ok(command) if flags.first().is_some_and(|flag| flag == "--s3") && !s3_keys_set() => match hooks.outside(&setup_script(&command, flags)) {
                 Ok(()) => Outcome::new("done", row.detail.clone()),
@@ -1509,8 +1513,8 @@ fn vault_unasked(facts: &Facts, config: &Path) -> Option<Outcome> {
 pub fn vault_text(env: &Env) -> String {
     let facts = Facts::read(env);
     match facts.runner() {
-        Some(found) => format!("Vault: {} · {} · {} · from {}\nkebbie setup --yes uses it, or kebbie setup in a terminal lets you choose.", found.answered(), lives(found), found.shown(), found.source),
-        None => format!("Vault: no vault command answers on this machine.\nTo install mindin, which then asks where the vault lives, run: {MINDIN_INSTALL}\nkebbie setup in a terminal offers the same, and then adds the vault to your agents."),
+        Some(found) => format!("mindin: {} · {} · {} · from {}\nkebbie setup --yes uses it, or kebbie setup in a terminal lets you choose.", found.answered(), lives(found), found.shown(), found.source),
+        None => format!("mindin: no vault command answers on this machine.\nTo install mindin, which then asks where the vault lives, run: {MINDIN_INSTALL}\nkebbie setup in a terminal offers the same, and then adds the vault to your agents."),
     }
 }
 
@@ -1865,7 +1869,7 @@ impl Guide {
             (block, lines, width, height)
         });
         let below = phone.as_ref().map_or(0, |(_, _, _, height)| height + 1);
-        let block = framed(if self.done { "Done" } else { self.step.title() });
+        let block = framed(&if self.done { "Done".to_string() } else { self.step.subtitle().map_or(self.step.title().to_string(), |subtitle| format!("{} · {subtitle}", self.step.title())) });
         let shown = Rect { height: tall(&block, &lines, boxed.width).min(boxed.height.saturating_sub(below)), ..boxed };
         frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), shown);
         let mut hint_at = hint.y + 1;
@@ -2020,7 +2024,7 @@ impl Guide {
             Act::CodexPlugin(_) | Act::Rules(_) | Act::CodexVault(_) => "kebbie setup codex --yes".to_string(),
             Act::Name(_) | Act::Sources(_) | Act::Signals(_) | Act::VaultCommand(_) => "kebbie setup".to_string(),
             Act::InstallMindin => MINDIN_INSTALL_ONLY.to_string(),
-            Act::SignIn => "kebbie setup vault".to_string(),
+            Act::SignIn => "kebbie setup mindin".to_string(),
             Act::VaultSetup(command, flags) => setup_script(&shown_command(command), flags),
             Act::MindinSignals(command, on) => setup_script(&shown_command(command), &["--signals".to_string(), yes_no(*on).to_string()]),
             Act::ClaudeVault => setup::steps(&claude, &self.facts.vault, self.facts.gronare).iter().map(|step| step.join(" ")).collect::<Vec<_>>().join(", then "),
@@ -2341,7 +2345,7 @@ mod tests {
         let origin = match source {
             _ if source.starts_with("mindin") => Origin::Mindin,
             _ if source.starts_with("kebbie's") => Origin::Kept,
-            _ if source.contains("vault plugin") => Origin::Plugin,
+            _ if source.contains("mindin plugin") => Origin::Plugin,
             _ => Origin::Other,
         };
         Found { source: source.to_string(), command: command.split(' ').map(str::to_string).collect(), answer: Some(answer), origin }
@@ -2380,7 +2384,7 @@ mod tests {
     }
 
     fn vault_rows(guide: &Guide) -> Vec<String> {
-        plan(guide).into_iter().filter(|row| row.starts_with("mindin ") || row.contains(" vault ")).collect()
+        plan(guide).into_iter().filter(|row| row.starts_with("mindin ") || row.contains(" vault ") || row.contains(" mindin plugin ")).collect()
     }
 
     #[test]
@@ -2388,7 +2392,7 @@ mod tests {
         let lab = Lab::new("guide-walk");
         let mut guide = fresh(&lab);
         let shown = screen(&guide);
-        assert!(shown.contains("kebbie setup  step 1 of 6") && shown.contains("▸ 1 This machine") && shown.contains("· 2 Agents") && shown.contains("· 3 Vault") && shown.contains("· 4 Backlog") && shown.contains("· 5 Signals") && shown.contains("· 6 Review and apply"), "{shown}");
+        assert!(shown.contains("kebbie setup  step 1 of 6") && shown.contains("▸ 1 This machine") && shown.contains("· 2 Agents") && shown.contains("· 3 mindin") && shown.contains("· 4 Backlog") && shown.contains("· 5 Signals") && shown.contains("· 6 Review and apply"), "{shown}");
         for gone in ["Plugin", "Login", "Approvals", "Updates", "herdr keys", "Vault for kebbie", "Vault in Codex"] {
             assert!(!shown.contains(gone), "{gone} is no step of its own: {shown}");
         }
@@ -2558,7 +2562,7 @@ mod tests {
         press(&mut guide, &[KeyCode::Enter]);
         assert_eq!(guide.step, Step::Backlog);
         assert_eq!(guide.answers.chosen_sources(), [Source::Vault], "a vault chosen a step before is where new items go");
-        assert!(screen(&guide).contains("[x] Vault  · backlog notes in your notes vault · new items go here"), "{}", screen(&guide));
+        assert!(screen(&guide).contains("[x] mindin  · backlog notes in your notes vault · new items go here"), "{}", screen(&guide));
         let rerun = vault_step(&lab, vec![found("mindin on PATH", "mindin")], None);
         assert_eq!((rerun.answers.vault.chosen(), rerun.answers.vault.address.as_str()), (Place::Server, "https://vault.example.com"), "the server mindin answers with is chosen");
         assert_eq!(rerun.answers.chosen_sources(), [Source::Vault]);
@@ -2633,7 +2637,7 @@ mod tests {
         assert_eq!(guide.answers.chosen_sources(), [Source::Vault, Source::Linear], "← and ⏎ keep the boxes ticked");
         let plan = plan(&guide);
         assert!(plan.contains(&"kebbie skipped vault command stays as it is".to_string()) && plan.contains(&"kebbie skipped signals stay off".to_string()) && plan.contains(&"kebbie to do backlog vault, linear".to_string()), "{plan:?}");
-        assert!(plan.iter().all(|row| !row.ends_with(" vault [mcp_servers.vault]") && !row.contains("the vault plugin")), "a skipped vault adds it to no agent: {plan:?}");
+        assert!(plan.iter().all(|row| !row.ends_with(" vault [mcp_servers.vault]") && !row.contains("mindin plugin")), "a skipped vault adds it to no agent: {plan:?}");
         press(&mut guide, &[KeyCode::Left]);
         assert_eq!(guide.step, Step::Signals);
         let mut name = fresh(&lab);
@@ -2669,7 +2673,7 @@ mod tests {
             probe.setup = false;
         };
         let kept = "uv run -q --project /src/notes-vault-mcp notes-vault-mcp";
-        let mut guide = vault_step(&lab, vec![answering(found("kebbie's [vault] command", kept), old), answering(found("the Claude Code vault plugin vault@gronare", "uvx notes-vault-mcp==0.13.0"), old)], Some(kept));
+        let mut guide = vault_step(&lab, vec![answering(found("kebbie's [vault] command", kept), old), answering(found("the Claude Code mindin plugin vault@gronare", "uvx notes-vault-mcp==0.13.0"), old)], Some(kept));
         let shown = screen(&guide);
         for line in [
             "( ) Hosted mindin    coming soon",
@@ -2692,7 +2696,7 @@ mod tests {
         assert_eq!(vault_rows(&guide), [
             "mindin already vault server your own server https://notes.example.com · signed in".to_string(),
             format!("kebbie already vault command vault.command = \"{kept}\""),
-            "Claude Code to do vault plugin the vault plugin vault@gronare".to_string(),
+            "Claude Code to do mindin plugin install the mindin plugin (vault@gronare)".to_string(),
             format!("Codex to do codex vault [mcp_servers.vault] in {}/codex/config.toml", lab.dir.display()),
         ], "the place in use runs nothing");
         guide.go(Step::Vault);
@@ -2730,7 +2734,7 @@ mod tests {
     #[test]
     fn a_mindin_that_answers_is_the_command_and_moves_the_vault_without_an_install() {
         let lab = Lab::new("guide-vault-mindin");
-        let mut guide = vault_step(&lab, vec![found("the Claude Code vault plugin vault@gronare", "uvx mindin==0.14.0"), found("mindin on PATH", "mindin")], None);
+        let mut guide = vault_step(&lab, vec![found("the Claude Code mindin plugin vault@gronare", "uvx mindin==0.14.0"), found("mindin on PATH", "mindin")], None);
         assert!(screen(&guide).contains("runs  mindin · mindin on PATH"), "a mindin found comes before the plugin's: {}", screen(&guide));
         press(&mut guide, &[KeyCode::Down, KeyCode::Down]);
         assert_eq!(guide.answers.vault.chosen(), Place::S3, "the address field sits between the server and the next place");
@@ -2926,7 +2930,7 @@ mod tests {
         let applied = apply_agent(&lab.env(), Agent::Codex);
         assert!(applied.iter().any(|line| line.starts_with("done") && line.contains("rules/kebbie.rules")), "{applied:?}");
         assert!(lab.dir.join("codex/rules/kebbie.rules").is_file());
-        assert!(offers(&lab.env(), Agent::Claude).iter().all(|line| !line.contains("vault")), "Claude Code without a vault gets no vault plugin");
+        assert!(offers(&lab.env(), Agent::Claude).iter().all(|line| !line.contains("vault") && !line.contains("mindin")), "Claude Code without a vault gets no mindin plugin");
     }
 
     #[test]
@@ -3031,7 +3035,7 @@ mod tests {
     fn where_the_vault_lives_reads_from_its_status() {
         let lab = Lab::new("guide-vault-text");
         let mut facts = fresh(&lab).facts;
-        facts.vault_found = vec![found("Codex's [mcp_servers.notes]", "uvx mindin"), found("the Claude Code vault plugin vault@gronare", "uvx mindin==0.14.0")];
+        facts.vault_found = vec![found("Codex's [mcp_servers.notes]", "uvx mindin"), found("the Claude Code mindin plugin vault@gronare", "uvx mindin==0.14.0")];
         assert_eq!(facts.runner().map(Found::shown), Some("uvx mindin==0.14.0".to_string()), "the plugin's command comes before one found elsewhere");
         let mut server = found("x", "mindin");
         assert_eq!(lives(&server), "server https://vault.example.com · signed in");
@@ -3084,7 +3088,8 @@ mod tests {
         let lab = Lab::new("guide-open");
         let mut guide = Guide::new(Facts::read(&lab.env()), Step::Vault);
         assert_eq!(guide.step, Step::Vault);
-        assert!(screen(&guide).contains("▸ 3 Vault"), "{}", screen(&guide));
+        assert!(screen(&guide).contains("▸ 3 mindin") && screen(&guide).contains(" mindin · your notes vault "), "the rail names the step mindin and its frame says what it is: {}", screen(&guide));
+        assert_eq!(guide.later(&Act::SignIn).as_deref(), Some("kebbie setup mindin"), "a failed sign-in points at the step by its name");
         guide.go(Step::Review);
         guide.applied = Some(vec![("link".to_string(), Outcome::new("done", "~/.local/bin/kebbie"))]);
         let shown = screen(&guide);
@@ -3198,9 +3203,9 @@ mod tests {
         let lab = Lab::new("guide-wrap");
         let mut guide = finished(&lab);
         let error = "claude plugin install vault@gronare failed: ✘ Failed to install plugin \"vault@gronare\": Failed to clone repository\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.";
-        guide.applied.as_mut().unwrap().push(("vault plugin".to_string(), Outcome::new("failed", error)));
+        guide.applied.as_mut().unwrap().push(("mindin plugin".to_string(), Outcome::new("failed", error)));
         let shown = render(&guide, 110, 40);
-        let rows: Vec<&str> = shown.lines().skip_while(|line| !line.contains("failed   vault plugin")).take(3).collect();
+        let rows: Vec<&str> = shown.lines().skip_while(|line| !line.contains("failed   mindin plugin")).take(3).collect();
         let column = rows[0][..rows[0].find("claude plugin").unwrap()].chars().count();
         assert_eq!(rows[1].chars().position(|character| !matches!(character, ' ' | '│')), Some(column), "the second line starts under the detail, not at the box's edge:\n{shown}");
         assert!(rows[1].trim_end_matches([' ', '│']).ends_with(MORE) && !rows[2].contains("repository exists"), "two lines, then where the rest is:\n{shown}");
@@ -3208,7 +3213,7 @@ mod tests {
         assert!(!one_line(error).contains("rightsand"));
         assert_eq!(wrapped("abcdefghij kl", 4), ["abcd", "efgh", "ij", "kl"], "a word longer than the column is split");
         guide.done = false;
-        guide.applied = Some(vec![("vault plugin".to_string(), Outcome::new("failed", error))]);
+        guide.applied = Some(vec![("mindin plugin".to_string(), Outcome::new("failed", error))]);
         let review = render(&guide, 70, 40);
         assert!(review.contains("and the repository exists.") && !review.contains(MORE), "the review before the end is never cut short:\n{review}");
     }

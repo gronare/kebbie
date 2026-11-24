@@ -463,10 +463,10 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   you, and the hub as an offer (h); safe to run again, from this machine's values
                                   (--yes applies the defaults and prints each write; a run without a terminal only
                                   links kebbie onto PATH, installs or updates its plugins and names the rest)
-  kebbie setup vault              the guide at its Vault step; without a terminal, show the vault command found, or
-                                  the line that installs mindin
+  kebbie setup mindin             the guide at its mindin step (kebbie setup vault too); without a terminal, show the
+                                  vault command found, or the line that installs mindin
   kebbie setup claude [--yes]     the guide at its Agents step; with --yes or without a terminal, install or update
-                                  kebbie's Claude Code plugin (with --yes also the vault plugin when kebbie's vault
+                                  kebbie's Claude Code plugin (with --yes also the mindin plugin when kebbie's vault
                                   is on), naming the rest without --yes
   kebbie setup codex [--yes] [--uninstall]
                                   the guide at its Agents step; with --yes or without a terminal, install or update
@@ -535,7 +535,7 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   --from <branch or path> installs that branch on origin or that checkout's commits
                                   until --stable returns to the channel)
 
-With the vault plugin installed, enabled and configured, the vault holds each task: start opens the task's note
+With the mindin plugin installed, enabled and configured, the vault holds each task: start opens the task's note
 (or claims the vault backlog note it starts from), edits wait until the note's Problem is written (with a vault
 that has note templates, the task template's required sections), push writes the repo's log line from the
 commit subjects, done waits for the note's solution and decisions (or those sections) and then closes it, and
@@ -910,11 +910,11 @@ fn run(arguments: &Arguments) -> Result<String> {
         },
         Some("issues") => Ok(issues::list_in(&issues::dir(&lead::state_dir()?), arguments.flag("--all"), arguments.flag("--json"))),
         Some("issue") => issue(arguments, name),
-        Some("setup") if name == Some("vault") => setup::vault(),
+        Some("setup") if matches!(name, Some("mindin" | "vault")) => setup::vault(),
         Some("setup") if name == Some("codex") => setup::codex(arguments.flag("--uninstall"), arguments.flag("--yes")),
         Some("setup") if name == Some("claude") => setup::claude(arguments.flag("--yes")),
         Some("setup") if name.is_none() => setup::install(arguments.flag("--yes")),
-        Some("setup") => Err("kebbie setup knows claude, codex and vault: kebbie setup, kebbie setup claude [--yes], kebbie setup codex [--yes] [--uninstall], kebbie setup vault".to_string()),
+        Some("setup") => Err("kebbie setup knows claude, codex and mindin: kebbie setup, kebbie setup claude [--yes], kebbie setup codex [--yes] [--uninstall], kebbie setup mindin".to_string()),
         Some("restart") => restart::now_cli(arguments.flag("--all")),
         Some("keeper") if arguments.flag("--status") => keeper::status_cli(),
         Some("keeper") if arguments.flag("--stop") => keeper::stop(),

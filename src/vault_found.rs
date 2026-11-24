@@ -76,7 +76,7 @@ fn asked(places: &Places) -> Vec<(Origin, String, Vec<String>)> {
 
 // The Claude plugin's server is the command Claude Code starts, so it is offered whatever it answers; every other one only when it answers as a vault.
 pub fn candidates(places: &Places, probe: impl Fn(&[String]) -> Option<Probe> + Sync) -> Vec<Found> {
-    let plugin = crate::vault_cli::installed(places.claude_dir).and_then(|(id, _, root)| Some((format!("the Claude Code vault plugin {id}"), crate::vault_cli::server_command(&root)?)));
+    let plugin = crate::vault_cli::installed(places.claude_dir).and_then(|(id, _, root)| Some((format!("the Claude Code mindin plugin {id}"), crate::vault_cli::server_command(&root)?)));
     let asked: Vec<(Origin, String, Vec<String>)> = plugin.into_iter().map(|(source, command)| (Origin::Plugin, source, command)).chain(asked(places)).collect();
     let answers = crate::sh::in_parallel(&asked, 4, |(_, _, command)| probe(command));
     let mut found: Vec<Found> = Vec::new();
@@ -137,7 +137,7 @@ mod tests {
         let shown: Vec<(String, String, Origin)> = found.iter().map(|found| (found.source.clone(), found.shown(), found.origin)).collect();
         let mindin = local_bin.join("mindin").display().to_string();
         assert_eq!(shown, [
-            ("the Claude Code vault plugin vault@gronare".to_string(), "uvx mindin==0.14.0".to_string(), Origin::Plugin),
+            ("the Claude Code mindin plugin vault@gronare".to_string(), "uvx mindin==0.14.0".to_string(), Origin::Plugin),
             ("notes-vault-mcp on PATH".to_string(), "notes-vault-mcp".to_string(), Origin::Other),
             ("mindin in ~/.local/bin".to_string(), mindin, Origin::Mindin),
             ("Codex's [mcp_servers.notes]".to_string(), "uv run --project /src/mindin mindin".to_string(), Origin::Other),

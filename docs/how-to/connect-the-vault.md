@@ -2,17 +2,17 @@
 
 Give every task a note in your vault, such as [mindin](https://mindin.dev), and log every push.
 
-1. Open the setup guide at its Vault step:
+1. Open the setup guide at its mindin step:
 
    ```bash
-   kebbie setup vault
+   kebbie setup mindin
    ```
 
 2. Choose where the vault lives: **Your own server**, **S3 bucket** or **Local folder**, and fill in its fields, such as the address `https://vault.example.com`. The place in use is preselected, such as `Your own server  https://vault.example.com · signed in`. Press `⏎`.
 
-3. To list the vault's backlog notes on the board and file new items there, tick Vault in the Backlog step. It takes the local file's place.
+3. To list the vault's backlog notes on the board and file new items there, tick mindin in the Backlog step. It takes the local file's place.
 
-4. On the last step, read the `mindin` and `vault` lines and press `⏎`. When the place is new, `mindin setup` runs first, in the terminal: a server opens the browser to sign you in, and S3 asks for its access key and secret. The guide then writes `vault.command` to kebbie's `config.toml`, installs the vault plugin in Claude Code and adds `[mcp_servers.vault]` to Codex's `config.toml` when you ticked Codex.
+4. On the last step, read the `mindin` and `vault` lines and press `⏎`. When the place is new, `mindin setup` runs first, in the terminal: a server opens the browser to sign you in, and S3 asks for its access key and secret. The guide then writes `vault.command` to kebbie's `config.toml`, installs the mindin plugin (`vault@gronare`) in Claude Code and adds `[mcp_servers.vault]` to Codex's `config.toml` when you ticked Codex.
 
 5. Restart the lead so it picks up the vault in its role:
 
@@ -31,7 +31,7 @@ Give every task a note in your vault, such as [mindin](https://mindin.dev), and 
 - If you choose **Local folder**, make the folder first: `mindin setup` takes only a folder that exists.
 - If the `vault` line reads `too old`, run `claude plugin update vault@gronare`, or point `vault.command` at a newer vault.
 - If the `vault` line names the package's new name, run `kebbie doctor --fix` and answer `y` to write the new `vault.command`.
-- If you run it without a terminal, `kebbie setup vault` shows the vault command it would run, or the line that installs mindin, and writes nothing.
+- If you run it without a terminal, `kebbie setup mindin` shows the vault command it would run, or the line that installs mindin, and writes nothing.
 - If a task runs in Cursor, add the vault to Cursor's `mcp.json` yourself. See [Each agent reaches the vault on its own](../explanation/vault.md#each-agent-reaches-the-vault-on-its-own).
 
 ## Share the vault between machines

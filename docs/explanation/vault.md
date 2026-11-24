@@ -12,7 +12,7 @@ Without `vault.command`, kebbie runs the Claude vault plugin's pinned command fr
 
 ## Setup chooses where the vault lives
 
-The Vault step of `kebbie setup` asks one thing: where the vault lives, on your own server, in an S3 bucket, in a local folder, or nowhere. It preselects the place the vault answers for now, read from its `status`, so two commands that reach the same server show as one place.
+The mindin step of `kebbie setup` asks one thing: where the vault lives, on your own server, in an S3 bucket, in a local folder, or nowhere. It preselects the place the vault answers for now, read from its `status`, so two commands that reach the same server show as one place.
 
 When you choose another place, kebbie runs `mindin setup` with it as you apply, in the terminal, where the server signs you in through the browser and S3 asks for its secret. The vault saves the place; kebbie keeps no copy of it. Hosted mindin is listed first and opens once the service is live.
 

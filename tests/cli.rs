@@ -199,7 +199,10 @@ fn help_lists_every_command_and_an_unknown_command_fails_with_the_usage() {
     assert!(!unknown.status.success());
     assert!(stderr(&unknown).starts_with("Unknown command \"frobnicate\""));
     let setup = lab.run(&["setup", "linear"]);
-    assert!(!setup.status.success() && stderr(&setup).contains("kebbie setup vault"));
+    assert!(!setup.status.success() && stderr(&setup).contains("kebbie setup mindin"));
+    let (mindin, vault) = (lab.run(&["setup", "mindin"]), lab.run(&["setup", "vault"]));
+    assert!(mindin.status.success() && stdout(&mindin).starts_with("mindin: "), "{}{}", stdout(&mindin), stderr(&mindin));
+    assert_eq!(stdout(&mindin), stdout(&vault), "kebbie setup vault keeps working as the same command");
 }
 
 #[test]

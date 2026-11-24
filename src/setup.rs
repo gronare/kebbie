@@ -39,7 +39,7 @@ pub fn steps(claude: &str, plugin: &Plugin, marketplace: bool) -> Vec<Vec<String
 }
 
 pub fn vault() -> Result<String> {
-    crate::permit::user_only("kebbie setup vault")?;
+    crate::permit::user_only("kebbie setup mindin")?;
     let machine = machine()?;
     let env = crate::setup_guide::Env::current(&machine)?;
     if in_terminal() {

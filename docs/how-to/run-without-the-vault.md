@@ -4,7 +4,7 @@ Run kebbie with no vault: the backlog comes from the local file and each task's 
 
 With no `vault.command` and no vault plugin, there is nothing to do. Otherwise:
 
-1. Take `vault.command` out of `~/.config/kebbie/config.toml`, or pick **No vault** at the Vault step of `kebbie setup`.
+1. Take `vault.command` out of `~/.config/kebbie/config.toml`, or pick **No vault** at the mindin step of `kebbie setup`.
 
 2. If the vault plugin is installed in Claude Code, disable it:
 
