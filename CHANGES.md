@@ -9,6 +9,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - n asks only what you want done: Claude picks the repo, writes the card and asks its questions, then starts it or files it.
 
 ### Fixed
+- cargo test runs in a sandboxed task, since the tests no longer write a .gitconfig into their own home.
 - A task stays a task, with its questions and kebbie tell, while its worktree is on another commit or branch.
 - A queued task starts once the task it waits for is done, even when that done takes minutes.
 - A pushed task in a repo without workflow files closes after three minutes instead of waiting under CI running.

@@ -22,9 +22,7 @@ extern "C" fn seal_at_start() {
     for dir in ["home", "state", "tmp", "bin"] {
         fs::create_dir_all(root.join(dir)).expect("the sealed test root");
     }
-    for file in ["gitconfig", "home/.gitconfig"] {
-        fs::write(root.join(file), GIT_CONFIG).expect("the sealed git config");
-    }
+    fs::write(root.join("gitconfig"), GIT_CONFIG).expect("the sealed git config");
     fake_ps(&root.join("bin/ps"));
     let path = std::env::var("PATH").unwrap_or_default();
     // SAFETY: before main, so no other thread reads the environment.
@@ -143,6 +141,11 @@ mod tests {
             assert!(!["CLAUDE_CONFIG_DIR", "KEBBIE_CONFIG", "VAULT_PATH", "TERM_PROGRAM", "XDG_CONFIG_HOME"].contains(&name.as_str()), "{name} reaches the test from the shell it ran in");
         }
         assert_eq!(std::env::temp_dir(), root.join("tmp"));
+    }
+
+    #[test]
+    fn the_seal_writes_no_dotfile_into_home_which_a_sandbox_refuses() {
+        assert!(!root().join("home/.gitconfig").exists(), "a sandboxed task refuses .gitconfig under HOME, and a refused write before main aborts every test binary");
     }
 
     #[test]
