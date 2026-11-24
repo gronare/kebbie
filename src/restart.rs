@@ -528,9 +528,9 @@ fn sticky(entry: &Value) -> Vec<&str> {
     entry["reasons"].as_array().into_iter().flatten().filter_map(Value::as_str).filter(|reason| binary_reason(reason) || *reason == NO_ROLE || *reason == LEAD_NO_ROLE || *reason == HOOKS_GONE).collect()
 }
 
-// A session kebbie recorded starting on the installed kebbie already runs it, whatever the update's time says.
+// A session kebbie recorded starting on the installed kebbie, or on a newer one, has no update to take, whatever the update's time says.
 pub fn on_installed(reasons: &mut Vec<String>, started: Option<&str>, installed: &str) {
-    if started == Some(installed) {
+    if started.is_some_and(|started| started == installed || crate::known::older(installed, started)) {
         reasons.retain(|reason| reason != KEBBIE_UPDATE);
     }
 }
@@ -1251,6 +1251,20 @@ mod tests {
         assert_eq!(reasons, ["plugin kebbie updated"], "a session that started on the installed kebbie is not");
         on_installed(&mut reasons, None, "kebbie 0.31.0");
         assert_eq!(reasons, ["plugin kebbie updated"]);
+    }
+
+    #[test]
+    fn a_session_on_a_newer_kebbie_than_the_installed_one_is_not_restarted_onto_it() {
+        let stale = || vec![KEBBIE_UPDATE.to_string()];
+        let mut reasons = stale();
+        on_installed(&mut reasons, Some("kebbie 0.41.3 (b223228 2026-11-24)"), "kebbie 0.41.3 (e05660a 2026-11-19)");
+        assert!(reasons.is_empty(), "restarting would move it back to an older build");
+        let mut reasons = stale();
+        on_installed(&mut reasons, Some("kebbie 0.41.3 (e05660a 2026-11-19)"), "kebbie 0.41.3 (b223228 2026-11-24)");
+        assert_eq!(reasons, [KEBBIE_UPDATE], "an older session takes the update");
+        let mut reasons = stale();
+        on_installed(&mut reasons, Some("kebbie 0.41.3 (aaaaaaa 2026-11-24)"), "kebbie 0.41.3 (b223228 2026-11-24)");
+        assert_eq!(reasons, [KEBBIE_UPDATE], "two builds of one day cannot be ordered, so the installed one is taken as before");
     }
     use std::sync::atomic::{AtomicUsize, Ordering};
 

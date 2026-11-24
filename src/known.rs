@@ -176,7 +176,7 @@ pub fn resumed_message(record: Option<&Record>, new: &Snapshot) -> Option<String
 // A line for the session's prompt hook while it runs an older kebbie than is installed.
 pub fn stale_line(record: Option<&Record>, installed: &str, role_file: &Path, restart: &str) -> Option<String> {
     let record = record?;
-    if record.started.as_deref() == Some(installed) {
+    if record.started.as_deref().is_some_and(|started| started == installed || older(installed, started)) {
         return None;
     }
     let told = if record.known.kebbie == installed { format!("kebbie has sent you what changed for you, and your role as it is now is in {}", role_file.display()) } else { "What changed for you reaches you as a message from kebbie".to_string() };
@@ -242,7 +242,7 @@ fn role_now(session: &Session, cwd: Option<&Path>) -> Result<Option<(PathBuf, St
 pub fn announce() -> Result<Vec<String>> {
     let dir = crate::lead::roles_dir()?;
     let sessions = crate::peers::sessions()?;
-    if !sessions.iter().any(|session| due(&dir, session, &this_kebbie())) || !installed_is_me() {
+    if !sessions.iter().any(|session| due(&dir, session, &this_kebbie())) || !installed_is_me(Path::new(&std::env::var("HOME").unwrap_or_default())) {
         return Ok(Vec::new());
     }
     let agents = crate::herdr::agents()?;
@@ -256,18 +256,32 @@ pub fn announce() -> Result<Vec<String>> {
     })
 }
 
-// The kebbie on PATH, which a keeper left running on an older binary is not.
+// The kebbie the install link points to, whichever binary asks: a keeper left running on an older one, or a session started from another install.
 pub fn installed() -> String {
-    crate::peers::kebbie_command().ok().and_then(|kebbie| crate::sh::run(&kebbie, &crate::BUILT_VERSION, None).ok()).map(|version| version.trim().to_string()).filter(|version| !version.is_empty()).unwrap_or_else(this_kebbie)
+    installed_at(Path::new(&std::env::var("HOME").unwrap_or_default()))
+}
+
+fn installed_at(home: &Path) -> String {
+    crate::peers::installed_command_in(home, crate::peers::kebbie_command).ok().and_then(|kebbie| crate::sh::run(&kebbie, &crate::BUILT_VERSION, None).ok()).map(|version| version.trim().to_string()).filter(|version| !version.is_empty()).unwrap_or_else(this_kebbie)
 }
 
 // A keeper left running on an older binary than is installed must not tell sessions its own, older kebbie.
-fn installed_is_me() -> bool {
-    crate::peers::kebbie_command().ok().and_then(|kebbie| crate::sh::run(&kebbie, &crate::BUILT_VERSION, None).ok()).is_some_and(|version| version.trim() == this_kebbie())
+fn installed_is_me(home: &Path) -> bool {
+    crate::peers::installed_command_in(home, crate::peers::kebbie_command).ok().and_then(|kebbie| crate::sh::run(&kebbie, &crate::BUILT_VERSION, None).ok()).is_some_and(|version| version.trim() == this_kebbie())
 }
 
 fn due(dir: &Path, session: &Session, installed: &str) -> bool {
-    session.pane.is_some() && load_in(dir, &session.address).is_none_or(|record| record.known.kebbie != installed)
+    session.pane.is_some() && load_in(dir, &session.address).is_none_or(|record| record.known.kebbie != installed && !older(installed, &record.known.kebbie))
+}
+
+// Whether kebbie version one is older than other by its number, then the day it was built; two builds of one day cannot be ordered, so neither is older.
+pub fn older(one: &str, other: &str) -> bool {
+    let key = |text: &str| crate::doctor::version(text).map(|parts| ((0..3).map(|index| parts.get(index).copied().unwrap_or(0)).collect::<Vec<_>>(), built_day(text).map(str::to_string)));
+    matches!((key(one), key(other)), (Some(one), Some(other)) if one < other)
+}
+
+fn built_day(version: &str) -> Option<&str> {
+    version.trim_end_matches(')').split_whitespace().last().filter(|word| word.len() == 10 && word.as_bytes()[4] == b'-' && word.as_bytes()[7] == b'-')
 }
 
 type Now<'a> = dyn FnMut(&Session) -> Result<Option<(PathBuf, Snapshot)>> + 'a;
@@ -418,6 +432,35 @@ mod tests {
         assert_eq!((lead.started.as_deref(), &lead.known), (Some("kebbie 0.22.4"), &new), "the start version stays, what it knows moves on");
         assert_eq!(load_in(&dir, "search@app").unwrap().started, None);
         assert!(run(&mut sent).is_empty(), "each is told once");
+    }
+
+    #[test]
+    fn a_session_that_knows_a_newer_kebbie_than_the_installed_one_is_told_nothing_and_sees_no_stale_line() {
+        let dir = scratch("announce-older");
+        let newer = snap("kebbie 0.41.3 (b223228 2026-11-24)", "Ask the user.", &[], &[]);
+        began_in(&dir, "billing@app", &newer, false, &mut |_| Ok(())).unwrap();
+        let installed = "kebbie 0.41.3 (e05660a 2026-11-19)";
+        let sessions = [session("billing@app", Some("p1"))];
+        let told = announce_in(&dir, &sessions, installed, &mut |_| Ok(Some((PathBuf::from("/r/billing@app.md"), snap(installed, "", &[], &[])))), &mut |session, _| Ok(vec![format!("Told {}.", session.address)])).unwrap();
+        assert!(told.is_empty(), "an older install is no update");
+        assert_eq!(load_in(&dir, "billing@app").unwrap().known.kebbie, "kebbie 0.41.3 (b223228 2026-11-24)", "and what it knows stays the newer one");
+        assert_eq!(stale_line(load_in(&dir, "billing@app").as_ref(), installed, Path::new("/r/billing@app.md"), "a restart brings it in"), None);
+        assert!(older("kebbie 0.41.2 (fffffff 2026-12-01)", "kebbie 0.41.3 (aaaaaaa 2026-11-01)"), "the number comes before the day");
+        assert!(!older("kebbie 0.41.3 (aaaaaaa 2026-11-24)", "kebbie 0.41.3 (bbbbbbb 2026-11-24)") && !older("kebbie 0.41.3 (bbbbbbb 2026-11-24)", "kebbie 0.41.3 (aaaaaaa 2026-11-24)"));
+        assert!(!older("no version", "kebbie 0.41.3"));
+    }
+
+    #[test]
+    fn the_installed_kebbie_is_the_one_the_install_link_runs_not_the_asking_binary() {
+        let home = scratch("installed-link");
+        let link = home.join(".local/share/kebbie/current/target/release/kebbie");
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        crate::executable::write(&link, "#!/bin/sh\necho 'kebbie 9.9.9 (abcdef0 2026-11-30)'\n").unwrap();
+        assert_eq!(installed_at(&home), "kebbie 9.9.9 (abcdef0 2026-11-30)");
+        assert!(!installed_is_me(&home), "a keeper on another build than the link runs is not the installed one");
+        crate::executable::write(&link, format!("#!/bin/sh\necho '{}'\n", this_kebbie())).unwrap();
+        assert!(installed_is_me(&home), "the link runs this very build");
+        std::fs::remove_dir_all(home).unwrap();
     }
 
     #[test]
