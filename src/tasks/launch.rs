@@ -100,6 +100,11 @@ fn session_file(task: &str, repo: &Path) -> Result<PathBuf> {
     Ok(session_file_in(&crate::lead::state_location()?, &peers::address(task, &name_of(repo))))
 }
 
+// A task kebbie started and has not released; when kebbie cannot read its state, it takes the task as live.
+pub(super) fn has_session(task: &str, repo: &Path) -> bool {
+    session_file(task, repo).map_or(true, |file| file.exists())
+}
+
 fn session_file_in(state: &Path, address: &str) -> PathBuf {
     state.join("sessions").join(address)
 }

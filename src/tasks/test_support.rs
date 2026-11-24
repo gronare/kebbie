@@ -63,6 +63,10 @@ pub(crate) fn state_of(dir: &Path) -> PathBuf {
     state
 }
 
+pub(crate) fn unrecord(worktree: &Path) {
+    let _ = std::fs::remove_file(super::pool::task_record(worktree).unwrap());
+}
+
 pub(crate) fn cleanup(dir: PathBuf, origin: PathBuf, slot: &Slot) {
     let _ = std::fs::remove_dir_all(dir.with_extension("state"));
     git(&dir, &["worktree", "remove", "--force", &slot.path.to_string_lossy()]).unwrap();

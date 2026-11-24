@@ -388,6 +388,7 @@ mod tests {
         let notes = complete_in(&state, &[], 300, &|_, _| None, &|_| false, &mut pushed);
         assert!(notes.is_empty() && load(&state, &address).is_some(), "a list git cannot give is no sign the task is gone: {notes:?}");
         std::fs::rename(dir.join(".git-away"), dir.join(".git")).unwrap();
+        super::super::test_support::unrecord(&slot.path);
         git(&slot.path, &["switch", "--quiet", "--detach"]).unwrap();
         let notes = complete_in(&state, &[], 300, &|_, _| None, &|_| false, &mut pushed);
         assert!(notes.iter().any(|note| note.contains("is gone")) && load(&state, &address).is_none(), "{notes:?}");
@@ -425,6 +426,7 @@ mod tests {
         save(&state, &Intent { work: Work::Turn, ..intent(By::User, &dir, &fingerprint(&slot.path, &upstream).unwrap()) }).unwrap();
         let driven = drive(&state, &dir, Some(&address), &ready, 300, &|_, _| None, &|_| false, &mut |_, _| { out.push(()); Ok(Sent::Pushed(done.clone())) });
         assert!(driven.mine.unwrap().unwrap().contains(&format!("pushed before {first}, which its ready report says goes out first")), "the user hears which task it should have followed");
+        super::super::test_support::unrecord(&api_slot.path);
         git(&api_slot.path, &["switch", "--quiet", "--detach"]).unwrap();
         save(&state, &Intent { work: Work::Turn, ..intent(By::Lead, &dir, &fingerprint(&slot.path, &upstream).unwrap()) }).unwrap();
         let mut landed = Vec::new();

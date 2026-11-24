@@ -448,6 +448,7 @@ mod tests {
         crate::sandbox::record_half(&state, "payload", &dirs).unwrap();
         assert_eq!(open_halves("payload", &dir, &state, &[]), std::slice::from_ref(&api_address), "a half a sandboxed task recorded counts without knowing its repo");
         assert!(find_task(&api, Some("payload"), &api).is_ok(), "nothing is closed");
+        super::super::test_support::unrecord(&api_slot.path);
         git(&api_slot.path, &["switch", "--quiet", "--detach"]).unwrap();
         assert!(open_halves("payload", &dir, &state, std::slice::from_ref(&api)).is_empty(), "a half that ended is not named");
         git(&api_slot.path, &["switch", "--quiet", "payload"]).unwrap();

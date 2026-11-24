@@ -1341,6 +1341,7 @@ mod tests {
     #[test]
     fn a_task_without_commits_that_ends_done_counts_as_finished() {
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        super::super::test_support::unrecord(&slot.path);
         git(&slot.path, &["switch", "--quiet", "--create", "research", &upstream]).unwrap();
         let research = super::super::pool::find_task(&dir, Some("research"), &dir).unwrap();
         let (state, wait) = waiting_on(&dir, "research");
@@ -1536,6 +1537,7 @@ mod tests {
         let mut told = Vec::new();
         let log = [end("other@web", 200, "done", None)];
         let mut claims_then_fails = |_: &Path, _: &str, _: &Start| -> Result<Begun> {
+            super::super::test_support::unrecord(&slot.path);
             crate::repo::git(&slot.path, &["switch", "--quiet", "-c", "search"])?;
             Err(shell_asks.to_string())
         };

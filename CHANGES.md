@@ -12,6 +12,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task's build refuses to start when the disk is nearly full, and says how much is free.
 
 ### Fixed
+- A task keeps its own name until it is released.
 - A task is never restarted onto an older kebbie.
 - The line under a task's row on the board says only what you do next, on one line; review findings, rule breaks and review suggestions go to the lead.
 - The lead never compacts its conversation, so it keeps its rules: near restart.lead_context it writes a handover and starts fresh on it.

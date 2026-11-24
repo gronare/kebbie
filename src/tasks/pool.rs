@@ -39,9 +39,19 @@ fn listed(repo: &Path, read_free: bool) -> Result<Vec<Slot>> {
             continue;
         }
         let placeholder = worktree.branch.as_deref().is_none_or(|branch| branch == format!("wt{number}"));
-        // Without branch_exists a stale record on a clean detached slot reads as a live task.
-        let recorded = recorded_task(&worktree.path).filter(|task| worktree.branch.as_deref() != Some(task.as_str()) && !checked_out.contains(task.as_str()) && branch_exists(repo, task));
+        // A release that did not remove its record leaves it behind, and the slot may hold another task since; with its branch gone, only a live session keeps it.
+        let record = recorded_task(&worktree.path).filter(|task| {
+            let live = worktree.branch.as_deref() == Some(task.as_str()) || branch_exists(repo, task) || super::launch::has_session(task, repo);
+            if !live && let Some(file) = task_record(&worktree.path) {
+                let _ = std::fs::remove_file(file);
+            }
+            live
+        });
+        let recorded = record.clone().filter(|task| worktree.branch.as_deref() != Some(task.as_str()) && !checked_out.contains(task.as_str()));
         let task = recorded.or_else(|| if placeholder { None } else { worktree.branch.clone() });
+        if let (None, Some(task), Some(file)) = (&record, &task, task_record(&worktree.path).filter(|file| !file.exists())) {
+            let _ = std::fs::write(file, task);
+        }
         let free = task.is_none() && read_free && is_clean(&worktree.path).unwrap_or(false);
         list.push(Slot { number, path: worktree.path.clone(), task, free, head: worktree.head.clone() });
     }
@@ -62,7 +72,7 @@ pub fn find_task(repo: &Path, name: Option<&str>, cwd: &Path) -> Result<Slot> {
 }
 
 // The task a slot was claimed for, so a task whose worktree is on another commit or branch stays that task while its own branch is checked out nowhere.
-fn task_record(path: &Path) -> Option<PathBuf> {
+pub(super) fn task_record(path: &Path) -> Option<PathBuf> {
     crate::repo::git_dir_of(path).map(|git_dir| git_dir.join("kebbie-task"))
 }
 
@@ -112,7 +122,9 @@ pub fn list(cwd: &Path) -> Result<Vec<Value>> {
 // -D because callers have already checked the commits are on upstream; git's -d checks the main checkout's local branch, which is still behind right after a push.
 pub(super) fn release(repo: &Path, slot: &Slot, upstream: &str) -> Result<Option<String>> {
     let command = config::resolve(Some(repo)).ok().and_then(|loaded| loaded.settings.release_command.value);
-    release_with(repo, slot, upstream, &build_folders(repo), command, crate::repo::sandboxed_worktree(&slot.path))
+    let freed = release_with(repo, slot, upstream, &build_folders(repo), command, crate::repo::sandboxed_worktree(&slot.path))?;
+    crate::lead::forget_roles(&crate::peers::address(task_of(slot), &name_of(repo)));
+    Ok(freed)
 }
 
 pub(super) fn build_folders(repo: &Path) -> Vec<String> {
@@ -132,19 +144,41 @@ pub(super) fn tidy(repo: &Path, worktree: &Path, upstream: &str, folders: &[Stri
 
 // The worktree is back on upstream before the release command runs, so the repo's own version of it runs and never one the task changed; in a sandboxed worktree a program path git does not track as upstream has it is not run at all.
 pub(super) fn release_with(repo: &Path, slot: &Slot, upstream: &str, folders: &[String], command: Option<String>, sandboxed: bool) -> Result<Option<String>> {
+    let on = git(&slot.path, &["branch", "--show-current"]).unwrap_or_default();
+    let claimed = task_record(&slot.path).and_then(|record| record.metadata().ok()?.modified().ok());
     git_writing(&slot.path, &["switch", "--quiet", "--detach", &crate::repo::tracking(upstream)])?;
     let ran = config::setup_command_in(command, &slot.path).map(|command| match foreign_program(&command, &slot.path).filter(|_| sandboxed) {
         Some(program) => format!("{command} not run: {program} is not {upstream}'s own"),
         None => run_release(&command, &slot.path, RELEASE_CEILING),
     });
     clear_tmp(&slot.path);
-    if let Some(record) = task_record(&slot.path) {
-        let _ = std::fs::remove_file(record);
+    if let Some(record) = task_record(&slot.path)
+        && let Err(error) = std::fs::remove_file(&record)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(format!("{} could not be removed, so the slot would still read as {}: {error}", record.display(), task_of(slot)));
     }
-    git(repo, &["branch", "-D", task_of(slot)])?;
+    let default = upstream.split_once('/').map_or(upstream, |(_, branch)| branch);
+    let mine = |branch: &str| !branch.is_empty() && branch != default && branch != format!("wt{}", slot.number) && branch_exists(repo, branch);
+    let task = task_of(slot);
+    if mine(task) {
+        git(repo, &["branch", "-D", task])?;
+    }
+    // The slot may be on a branch the user had before the task, with commits only there; only one created since the slot was claimed is the task's.
+    if on != task && mine(&on) && claimed.is_some_and(|claimed| created_since(repo, &on, claimed)) {
+        git(repo, &["branch", "-D", &on])?;
+    }
     let freed = tidy(repo, &slot.path, upstream, folders);
     let said: Vec<String> = ran.into_iter().chain(freed).collect();
     Ok((!said.is_empty()).then(|| said.join("; ")))
+}
+
+fn created_since(repo: &Path, branch: &str, since: std::time::SystemTime) -> bool {
+    let since = since.duration_since(std::time::UNIX_EPOCH).map_or(u64::MAX, |since| since.as_secs());
+    // A reflog expires, and its oldest entry left may then be a commit on a branch the user had long before; only its creation line dates it.
+    let reflog = git(repo, &["reflog", "show", "--date=unix", "--format=%gd%x09%gs", &format!("refs/heads/{branch}")]).unwrap_or_default();
+    let created = reflog.lines().last().and_then(|oldest| oldest.split_once('\t')).filter(|(_, subject)| subject.starts_with("branch: Created from")).and_then(|(at, _)| at.rsplit_once('{')?.1.trim_end_matches('}').parse::<u64>().ok());
+    created.is_some_and(|created| created >= since)
 }
 
 fn foreign_program(command: &str, worktree: &Path) -> Option<String> {
@@ -526,6 +560,75 @@ mod tests {
     }
 
     #[test]
+    fn a_task_claimed_before_slots_kept_records_keeps_its_name_once_listed_even_after_its_branch_is_gone_until_released() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let address = crate::peers::address("billing", &name_of(&dir));
+        let state = crate::lead::state_location().unwrap();
+        let session = state.join("sessions").join(&address);
+        std::fs::create_dir_all(session.parent().unwrap()).unwrap();
+        std::fs::write(&session, "").unwrap();
+        let roles = crate::lead::roles_dir().unwrap();
+        std::fs::write(roles.join(format!("{address}.md")), "role").unwrap();
+        let _ = std::fs::remove_file(task_record(&slot.path).unwrap());
+        let listed = || slots(&dir).unwrap().into_iter().find(|listed| listed.path == slot.path).map(|listed| (listed.task, listed.free)).unwrap();
+        assert_eq!(listed(), (Some("billing".to_string()), false));
+        assert_eq!(recorded_task(&slot.path).as_deref(), Some("billing"), "a live slot without a record gets one from its branch");
+        git(&slot.path, &["switch", "--quiet", "-c", "billing-v2"]).unwrap();
+        git(&dir, &["branch", "-D", "billing"]).unwrap();
+        assert_eq!(listed(), (Some("billing".to_string()), false), "its name is its record's, not the new branch's, though the old branch is gone");
+        let found = find_task(&dir, Some("billing"), &dir).unwrap();
+        release(&dir, &found, &upstream).unwrap();
+        assert_eq!(listed(), (None, true), "released, it is free");
+        assert!(!branch_exists(&dir, "billing-v2") && recorded_task(&slot.path).is_none(), "the branch it made and moved to goes with its record");
+        assert!(!roles.join(format!("{address}.md")).exists(), "and its role file");
+        std::fs::remove_file(&session).unwrap();
+        git(&slot.path, &["switch", "--quiet", "-c", "search"]).unwrap();
+        std::fs::write(task_record(&slot.path).unwrap(), "billing").unwrap();
+        assert_eq!(listed(), (Some("search".to_string()), false), "a record an older release left, of a task with no branch and no session, is not the task now on the slot");
+        assert_eq!(recorded_task(&slot.path).as_deref(), Some("search"), "it is replaced by the slot's own");
+        git(&slot.path, &["switch", "--quiet", "-c", "billing"]).unwrap();
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_release_deletes_only_branches_the_task_made_and_never_the_default_branch() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let default = upstream.split_once('/').unwrap().1.to_string();
+        git(&slot.path, &["switch", "--quiet", "-c", "shared"]).unwrap();
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        std::fs::File::options().write(true).open(task_record(&slot.path).unwrap()).unwrap().set_modified(later).unwrap();
+        git(&dir, &["switch", "--quiet", "--detach"]).unwrap();
+        release_with(&dir, &slot, &upstream, &[], None, false).unwrap();
+        assert!(!branch_exists(&dir, "billing") && branch_exists(&dir, "shared"), "a branch the slot is on that is older than its claim keeps its commits");
+        git(&slot.path, &["switch", "--quiet", "-c", "main-work"]).unwrap();
+        let named_for_default = Slot { task: Some(default.clone()), ..find_task(&dir, Some("main-work"), &dir).unwrap() };
+        release_with(&dir, &named_for_default, &upstream, &[], None, false).unwrap();
+        assert!(branch_exists(&dir, &default), "a task named for the default branch never deletes it");
+        git(&slot.path, &["switch", "--quiet", "-c", "long-held"]).unwrap();
+        commit(&slot.path, "e", "fifth");
+        git(&dir, &["reflog", "delete", "refs/heads/long-held@{1}"]).unwrap();
+        let task = Slot { task: Some("search".to_string()), ..find_task(&dir, Some("long-held"), &dir).unwrap() };
+        release_with(&dir, &task, &upstream, &[], None, false).unwrap();
+        assert!(branch_exists(&dir, "long-held"), "a branch whose reflog lost its creation is not taken for the task's, though its oldest entry left is newer than the claim");
+        git(&dir, &["switch", "--quiet", &default]).unwrap();
+        git(&slot.path, &["switch", "--quiet", "-c", "billing"]).unwrap();
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_release_that_cannot_remove_the_slots_record_fails_and_keeps_the_tasks_branch() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let record = task_record(&slot.path).unwrap();
+        let _ = std::fs::remove_file(&record);
+        std::fs::create_dir_all(record.join("held")).unwrap();
+        let error = release_with(&dir, &slot, &upstream, &[], None, false).unwrap_err();
+        assert!(error.contains("could not be removed") && error.contains("billing"), "{error}");
+        assert!(branch_exists(&dir, "billing"), "the task's branch stays for a release that can finish");
+        std::fs::remove_dir_all(&record).unwrap();
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
     fn a_free_slot_git_cannot_read_counts_as_busy_and_leaves_the_other_slots_listed() {
         let (dir, origin, slot, _) = task_with_a_commit("billing");
         let broken = create_slot(&dir, "HEAD").unwrap();
@@ -544,6 +647,7 @@ mod tests {
         let slots_now = slots(&dir).unwrap();
         assert_eq!(slots_now.len(), 1);
         assert!(!slots_now[0].free && slots_now[0].task.as_deref() == Some("billing"));
+        std::fs::remove_file(task_record(&slot.path).unwrap()).unwrap();
         git(&slot.path, &["switch", "--quiet", "--detach"]).unwrap();
         assert!(slots(&dir).unwrap()[0].free, "a detached clean slot is free");
         std::fs::write(slot.path.join("scratch"), "x").unwrap();

@@ -39,6 +39,26 @@ pub fn state_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
+pub fn forget_roles(address: &str) {
+    if let Ok(dir) = roles_dir() {
+        forget_roles_in(&dir, address);
+    }
+}
+
+pub fn forget_roles_in(dir: &Path, address: &str) {
+    const OWN: [&str; 3] = ["md", "known.json", "settings.json"];
+    const REVIEWERS: [&str; 5] = ["assess", "rules", "review", "second", "investigate"];
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Some(rest) = name.strip_prefix(address).and_then(|rest| rest.strip_prefix('.')) else { continue };
+        let reviewer = rest.split_once('.').is_some_and(|(role, kind)| REVIEWERS.contains(&role) && ["md", "settings.json", "answer"].contains(&kind));
+        if OWN.contains(&rest) || reviewer {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 pub fn roles_dir() -> Result<PathBuf> {
     let dir = state_dir()?.join("roles");
     crate::state::private_dir(&dir)?;
@@ -1345,5 +1365,20 @@ mod tests {
         let state = state_location().unwrap();
         assert_eq!(state, PathBuf::from(std::env::var("KEBBIE_STATE_DIR").unwrap()), "every test runs against its own state dir");
         assert!(roles_dir().unwrap().starts_with(&state));
+    }
+
+    #[test]
+    fn a_released_tasks_role_files_go_and_no_other_tasks_do() {
+        let dir = std::env::temp_dir().join(format!("kebbie-forget-roles-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let gone = ["billing@app.md", "billing@app.known.json", "billing@app.settings.json", "billing@app.assess.settings.json", "billing@app.review.md", "billing@app.rules.answer", "billing@app.investigate.md"];
+        let kept = ["billing@app.c.md", "billing@app-two.md", "search@app.md", "lead.md", "billing@app.notes.txt"];
+        for name in gone.iter().chain(&kept) {
+            std::fs::write(dir.join(name), "x").unwrap();
+        }
+        forget_roles_in(&dir, "billing@app");
+        assert!(gone.iter().all(|name| !dir.join(name).exists()), "the task's own and its reviewers' files go");
+        assert!(kept.iter().all(|name| dir.join(name).exists()), "another task's, a repo named app.c's and unknown files stay");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
