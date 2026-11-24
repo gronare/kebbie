@@ -2061,7 +2061,8 @@ fn a_task_raises_an_obstacle_which_is_kept_queued_listed_and_decided_by_you_and_
     assert!(stderr(&lab.run(&["obstacles", "decide", "billing", "again"])).contains("No open obstacle of \"billing\""));
     let found = lab.run(&["found"]);
     assert!(stdout(&found).starts_with("Nothing under Found by tasks"), "{}", stdout(&found));
-    assert!(!lab.run(&["obstacle", "outside", "a", "task"]).status.success(), "a raise outside a task's worktree is refused");
+    // Without -C the run inherits cargo's directory, which is a live task when the suite runs in a kebbie worktree.
+    assert!(!lab.run(&["-C", lab.home.to_str().unwrap(), "obstacle", "outside", "a", "task"]).status.success(), "a raise outside a task's worktree is refused");
 }
 
 #[test]
