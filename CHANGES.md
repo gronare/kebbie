@@ -10,6 +10,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 
 ### Fixed
 - A deploy cancelled outside the repo's ci.deploy_window stays under CI running and is re-run when it opens.
+- A blocked task shows under Working again once its obstacle is decided or the lead answers it.
 - The head of a push line keeps its place while its Claude works, until another push waits behind it.
 - cargo test runs in a sandboxed task, since the tests no longer write a .gitconfig into their own home.
 - A task stays a task, with its questions and kebbie tell, while its worktree is on another commit or branch.

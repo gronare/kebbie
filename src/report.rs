@@ -495,6 +495,9 @@ pub fn record_turn(state: &Path, me: &str, prompt: Option<&str>, at: u64) {
     }
     let by_user = prompt.is_none_or(crate::phase::by_user);
     crate::phase::record(state, me, "turn", &crate::phase::Event::TurnBegan { by_user });
+    if prompt.is_some_and(crate::phase::from_lead) {
+        crate::phase::record(state, me, "lead", &crate::phase::Event::Resumed);
+    }
 }
 
 // Claude Code sets stop_hook_active on the stop that follows a block, so a session is asked once per turn.
@@ -717,6 +720,20 @@ mod tests {
         assert!(crate::ci::load(&state, &me).is_none());
         assert_eq!(phase(), Some(Phase::Ready { head: Some("abc".to_string()) }));
         fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn the_leads_word_to_a_task_that_reported_blocked_puts_it_back_to_work() {
+        let state = crate::sh::test_dir("report-lead-resumes");
+        let blocked = || crate::phase::record(&state, "billing@app", "report", &crate::phase::Event::Reported { state: "blocked", head: None, committed: false, pushing: false });
+        let phase = || crate::phase::load(&state, "billing@app").map(|record| record.phase);
+        blocked();
+        record_turn(&state, "billing@app", Some(&crate::messages::delivered("kebbie", "kebbie was updated")), 10);
+        record_turn(&state, "billing@app", Some(&crate::messages::delivered("billing@api", "the field is in")), 11);
+        assert_eq!(phase(), Some(crate::phase::Phase::Idle), "kebbie's notice or another task's word leaves it waiting");
+        record_turn(&state, "billing@app", Some(&crate::messages::delivered(crate::status::LEAD_LABEL, "split it per repo")), 12);
+        assert_eq!(phase(), Some(crate::phase::Phase::Working));
+        std::fs::remove_dir_all(state).unwrap();
     }
 
     #[test]

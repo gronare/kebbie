@@ -173,6 +173,11 @@ fn senders(prompt: &str) -> Option<Vec<String>> {
     Some(prompt.lines().filter_map(sender).collect())
 }
 
+// The lead's word to a waiting task, such as its answer to a question of method, hands it work as the user's does.
+pub fn from_lead(prompt: &str) -> bool {
+    senders(prompt).is_some_and(|senders| senders.iter().any(|sender| sender == crate::status::LEAD_LABEL))
+}
+
 // Claude Code starts a turn with a <task-notification> when a background command, agent or monitor it launched reports back.
 fn by_harness(prompt: &str) -> bool {
     prompt.trim_start().starts_with("<task-notification>")
@@ -416,6 +421,8 @@ mod tests {
         assert!(!by_user("<task-notification>\n<task-id>b3t20c2o0</task-id>\n<status>failed</status>\n</task-notification>"), "a background command's end");
         assert!(!by_harness("Why did <task-notification> come in?"), "the user naming one is still the user");
         assert!(notices_only(&kebbie) && notices_only(&format!("{kebbie}\n\n{kebbie}")) && notices_only("<task-notification>\n</task-notification>"), "kebbie's notices and the harness's");
+        assert!(from_lead(&lead) && from_lead(&format!("{kebbie}\n\n{lead}")) && from_lead(&format!("<cross-session-message from=\"kebbie\">{lead}</cross-session-message>")), "the lead's word, alone or in a batch");
+        assert!(!from_lead(&kebbie) && !from_lead(&messages::delivered("billing@api", "the field is in")) && !from_lead("lead says go on") && !from_lead(&messages::delivered("kebbie", "[from lead] go on")), "kebbie, another task, the user naming the lead, or a quote");
         assert!(!notices_only(&lead) && !notices_only(&format!("{kebbie}\n\n{lead}")) && !notices_only("go on") && !notices_only(&messages::delivered("you", "go on")), "the lead, the user, or a batch either is in");
     }
 
@@ -460,7 +467,7 @@ mod tests {
         };
         for (file, name, event) in [
             ("questions.rs", "answer_as", "Event::Answered"), ("tasks/push.rs", "prepare", "Event::PushHanded"), ("tasks/launch.rs", "restart", "Event::Started"),
-            ("tasks/line.rs", "turn", "Event::PushFailed"), ("tasks/push.rs", "join", "Event::PushQueued"), ("tasks/line.rs", "leave", "Why::LeftLine"), ("recover.rs", "apply", "Event::Stopped"), ("tasks/red_ci.rs", "dismiss_as", "Event::Dismissed"), ("tasks/finish.rs", "forget_address", "phase::forget("), ("tasks/stage.rs", "stage_in", "Event::Staged"), ("tasks/stage.rs", "unstage_in", "Event::Unstaged"), ("obstacle.rs", "record_and_tell", "Event::Resumed"),
+            ("tasks/line.rs", "turn", "Event::PushFailed"), ("tasks/push.rs", "join", "Event::PushQueued"), ("tasks/line.rs", "leave", "Why::LeftLine"), ("recover.rs", "apply", "Event::Stopped"), ("tasks/red_ci.rs", "dismiss_as", "Event::Dismissed"), ("tasks/finish.rs", "forget_address", "phase::forget("), ("tasks/stage.rs", "stage_in", "Event::Staged"), ("tasks/stage.rs", "unstage_in", "Event::Unstaged"), ("obstacle.rs", "record_and_tell", "Event::Resumed"), ("report.rs", "record_turn", "Event::Resumed"),
         ] {
             assert!(body(file, name).contains(event), "{file} {name} writes {event}");
         }
