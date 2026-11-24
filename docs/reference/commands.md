@@ -925,7 +925,8 @@ The review lists each write under the tool whose files it changes:
 
 - A warning that needs your choice, such as a `statusLine` command of your own or `task.sandbox = false`, stays with `kebbie doctor`.
 - Setup never touches the hub. Once it is done, a machine that is not connected gets a box, **Your board on your phone**: `h` connects it as [`kebbie hub connect`](#the-hub) does, after setup prints its lines, then opens the board where setup ran.
-- Any other key opens the board. Inside herdr it takes you to the lead Space instead, and creates it when there is none: a board there on an older kebbie restarts on the new one, and an idle lead restarts on it too, resuming its conversation. A lead that is working keeps running, setup says why, and `L` on the board restarts it later.
+- `⏎` opens the board. Inside herdr it takes you to the lead Space instead, and creates it when there is none: a board there on an older kebbie restarts on the new one, and an idle lead restarts on it too, resuming its conversation. A lead that is working keeps running, setup says why, and `L` on the board restarts it later.
+- Outside herdr, `kebbie setup` opens no board: after `h` connects, or on `⏎`, it ends with its lines, `herdr` first under the next steps, and its hint reads `⏎ ends setup`. `kebbie board` run outside herdr before setup still opens the board after its guide.
 
 herdr's config is `$HERDR_CONFIG_PATH`, else `$XDG_CONFIG_HOME/herdr/config.toml`, else `~/.config/herdr/config.toml`.
 
@@ -942,6 +943,7 @@ Under `Next steps`, what needs you outside setup, a command and why:
 
 | Line | When |
 | --- | --- |
+| `herdr` | Setup ran outside herdr, always first: start herdr, where the lead and the board run. |
 | `codex login` | You ticked Codex and `codex login status` says it is not logged in, or Codex gives no answer. |
 | `kebbie doctor` | Warnings remain after applying; it says what is left and how to fix it. |
 | `prefix+space` | Always, last: tell the lead what you want done. |

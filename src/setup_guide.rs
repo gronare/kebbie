@@ -502,6 +502,7 @@ pub struct Guide {
     pub applied: Option<Vec<(String, Outcome)>>,
     pub done: bool,
     pub ending: Vec<String>,
+    pub opens_board: bool,
     pub vault_job: Option<Job>,
     mindin: Option<Mindin>,
     signed: Option<(String, Signed, Option<u64>)>,
@@ -537,7 +538,7 @@ fn short(wanted: &setup::Wanted) -> String {
 impl Guide {
     pub fn new(facts: Facts, at: Step) -> Guide {
         let answers = Answers::from(&facts);
-        let mut guide = Guide { step: Step::Name, cursor: 0, caret: 0, sources_touched: false, answers, facts, visited: [false; Step::ALL.len()], skipped: [false; Step::ALL.len()], fresh: true, error: None, applied: None, done: false, ending: Vec::new(), vault_job: None, mindin: None, signed: None, planned: Vec::new() };
+        let mut guide = Guide { step: Step::Name, cursor: 0, caret: 0, sources_touched: false, answers, facts, visited: [false; Step::ALL.len()], skipped: [false; Step::ALL.len()], fresh: true, error: None, applied: None, done: false, ending: Vec::new(), opens_board: true, vault_job: None, mindin: None, signed: None, planned: Vec::new() };
         guide.go(at);
         guide
     }
@@ -1544,6 +1545,7 @@ pub fn apply_agent(env: &Env, agent: Agent) -> Vec<String> {
 const DONE: &str = "Setup done";
 const NEXT: &str = "Next steps";
 const LEAD: (&str, &str) = ("prefix+space", "tell the lead what you want done");
+const HERDR_START: (&str, &str) = ("herdr", "start it: kebbie's lead and board run inside it");
 pub const PHONE: [&str; 3] = ["", "Your board on your phone: kebbie hub connect, or H on the board", "kebbie.dev/hub"];
 
 fn next_step(command: &str, why: &str) -> String {
@@ -1563,11 +1565,14 @@ fn path_step(shell: &str) -> String {
     next_step("PATH", &format!("add {line} to {file}, then open a new terminal"))
 }
 
-pub fn ending(codex: Option<Login>, checks: &[crate::doctor::Check], shell: &str) -> Vec<String> {
+pub fn ending(codex: Option<Login>, checks: &[crate::doctor::Check], shell: &str, in_herdr: bool) -> Vec<String> {
     let count = |ok: bool| checks.iter().filter(|check| if ok { check.level == crate::doctor::Level::Ok } else { matches!(check.level, crate::doctor::Level::Warn | crate::doctor::Level::Fail) }).count();
     let open = count(false);
     let left = if open > 0 { format!(", {open} to look at") } else { String::new() };
     let mut lines = vec![String::new(), format!("{DONE} · doctor: {} ok{left}", count(true)), String::new(), NEXT.to_string()];
+    if !in_herdr {
+        lines.push(next_step(HERDR_START.0, HERDR_START.1));
+    }
     if checks.iter().any(|check| check.name == crate::doctor::ON_PATH && check.fact == crate::doctor::NOT_ON_PATH) {
         lines.push(path_step(shell));
     }
@@ -1806,7 +1811,8 @@ impl Guide {
             _ if self.applied.is_some() => {
                 let retry = if self.failed_rows().is_empty() { "" } else { "r tries the failed steps again · " };
                 let phone = if self.offers_hub() { "h connects your phone · " } else { "" };
-                format!("{retry}{phone}⏎ opens your board")
+                let enter = if self.opens_board { "⏎ opens your board" } else { "⏎ ends setup" };
+                format!("{retry}{phone}{enter}")
             }
             Step::Vault if self.vault_job.is_some() => self.job_hint(),
             Step::Name => "type to change · ← → move in the text · ⏎ next · esc quit".to_string(),
@@ -2106,9 +2112,11 @@ impl Guide {
     }
 }
 
-fn ask(env: &Env, at: Step) -> Result<(Next, Guide)> {
+fn ask(env: &Env, at: Step, board_follows: bool) -> Result<(Next, Guide)> {
     use ratatui::crossterm::event::{self, Event, KeyEventKind};
     let mut guide = Guide::new(Facts::read(env), at);
+    let in_herdr = in_herdr();
+    guide.opens_board = opens_board(in_herdr, board_follows);
     let mut terminal = crate::board::terminal::init_terminal();
     let result = (|| -> Result<Next> {
         loop {
@@ -2131,7 +2139,7 @@ fn ask(env: &Env, at: Step) -> Result<(Next, Guide)> {
                         guide.applied = Some(Vec::new());
                         let rows = apply(&planned, env, &mut Screen { terminal: &mut terminal, guide: &mut guide, again: None });
                         let codex = guide.codex_on().then(|| login::codex(guide.facts.codex_bin.as_deref(), login::TIMEOUT));
-                        guide.ending = ending(codex, &crate::doctor::checks(&crate::doctor::Env::current()), &std::env::var("SHELL").unwrap_or_default());
+                        guide.ending = ending(codex, &crate::doctor::checks(&crate::doctor::Env::current()), &std::env::var("SHELL").unwrap_or_default(), in_herdr);
                         guide.ending.splice(0..0, crate::backlog_style::sync_here());
                         guide.applied = Some(rows);
                         guide.done = true;
@@ -2147,21 +2155,47 @@ fn ask(env: &Env, at: Step) -> Result<(Next, Guide)> {
     Ok((result?, guide))
 }
 
-pub fn run(env: &Env, at: Step) -> Result<String> {
-    let (next, guide) = ask(env, at)?;
+pub fn in_herdr() -> bool {
+    std::env::var("HERDR_PANE_ID").is_ok_and(|pane| !pane.is_empty())
+}
+
+#[derive(Debug, PartialEq)]
+enum After {
+    Lead,
+    Board,
+    Done,
+}
+
+// kebbie board opens the board after the guide wherever it runs; kebbie setup opens it only inside herdr.
+fn opens_board(in_herdr: bool, board_follows: bool) -> bool {
+    in_herdr || board_follows
+}
+
+// Outside herdr the board has no Spaces to show, so setup ends with the line that starts herdr.
+fn after(next: &Next, in_herdr: bool) -> After {
     match next {
-        Next::Board if std::env::var("HERDR_PANE_ID").is_ok_and(|pane| !pane.is_empty()) => {
-            println!("{}\n", guide.text());
-            return crate::lead::show();
-        }
-        Next::Board => println!("{}\n", guide.text()),
-        Next::Connect => {
-            println!("{}\n", guide.said(false));
-            println!("{}", crate::hub::cli(Some("connect"), &[], None)?);
-        }
-        _ => return Ok(guide.text()),
+        Next::Board | Next::Connect if !in_herdr => After::Done,
+        Next::Board => After::Lead,
+        Next::Connect => After::Board,
+        _ => After::Done,
     }
-    crate::board::run(false)
+}
+
+pub fn run(env: &Env, at: Step) -> Result<String> {
+    let (next, guide) = ask(env, at, false)?;
+    if let Next::Connect = next {
+        println!("{}\n", guide.said(false));
+        println!("{}", crate::hub::cli(Some("connect"), &[], None)?);
+    }
+    match after(&next, in_herdr()) {
+        After::Lead => {
+            println!("{}\n", guide.text());
+            crate::lead::show()
+        }
+        After::Board => crate::board::run(false),
+        After::Done if matches!(next, Next::Connect) => Ok(String::new()),
+        After::Done => Ok(guide.text()),
+    }
 }
 
 pub fn first_run(claude_dir: &Path, terminal: bool) -> bool {
@@ -2174,7 +2208,7 @@ pub fn board(overlay: bool) -> Result<String> {
     if first_run(&claude_dir, setup::in_terminal()) && crate::permit::user_only("kebbie setup").is_ok() {
         let machine = setup::machine()?;
         let env = Env::current(&machine)?;
-        let (next, guide) = ask(&env, Step::Name)?;
+        let (next, guide) = ask(&env, Step::Name, true)?;
         match next {
             Next::Connect => {
                 println!("{}\n", guide.said(false));
@@ -2183,7 +2217,7 @@ pub fn board(overlay: bool) -> Result<String> {
             Next::Quit => {}
             _ => println!("{}\n", guide.text()),
         }
-        if !matches!(next, Next::Quit) && std::env::var("HERDR_PANE_ID").is_ok_and(|pane| !pane.is_empty()) {
+        if !matches!(next, Next::Quit) && in_herdr() {
             let _ = crate::lead::restart(false, false);
         }
     }
@@ -3017,23 +3051,23 @@ mod tests {
     fn the_end_names_the_path_line_and_the_file_for_the_users_shell_when_kebbie_is_not_on_path() {
         use crate::doctor::{Level, NOT_ON_PATH, ON_PATH};
         let missing = [check(Level::Warn, ON_PATH, NOT_ON_PATH, &[])];
-        let step = |shell: &str| ending(None, &missing, shell)[4].clone();
+        let step = |shell: &str| ending(None, &missing, shell, true)[4].clone();
         assert_eq!(step("/bin/zsh"), "  PATH                 add export PATH=\"$HOME/.local/bin:$PATH\" to ~/.zshrc, then open a new terminal");
         assert!(step("/usr/bin/fish").contains("fish_add_path ~/.local/bin to ~/.config/fish/config.fish"));
         assert!(step("").contains("to your shell's profile"));
         let found = [check(Level::Ok, ON_PATH, "~/.local/bin/kebbie → kebbie", &[])];
-        assert!(!ending(None, &found, "/bin/zsh").iter().any(|line| line.contains("PATH")), "on PATH, no line");
+        assert!(!ending(None, &found, "/bin/zsh", true).iter().any(|line| line.contains("PATH")), "on PATH, no line");
     }
 
     #[test]
     fn the_end_counts_the_doctor_and_lists_only_what_needs_the_user_in_two_columns() {
         use crate::doctor::Level;
-        let clean = ending(Some(Login::In), &[check(Level::Ok, "git", "/usr/bin/git", &[]), check(Level::Ok, "jq", "/usr/bin/jq", &[])], "/bin/zsh");
+        let clean = ending(Some(Login::In), &[check(Level::Ok, "git", "/usr/bin/git", &[]), check(Level::Ok, "jq", "/usr/bin/jq", &[])], "/bin/zsh", true);
         assert_eq!(clean, ["", "Setup done · doctor: 2 ok", "", "Next steps", "  prefix+space         tell the lead what you want done"], "the lead is the one step left when nothing else is");
-        let unchecked = ending(Some(Login::In), &[check(Level::Ok, "git", "/usr/bin/git", &[]), check(Level::Skip, "claude login", "login not checked", &[])], "/bin/zsh");
+        let unchecked = ending(Some(Login::In), &[check(Level::Ok, "git", "/usr/bin/git", &[]), check(Level::Skip, "claude login", "login not checked", &[])], "/bin/zsh", true);
         assert_eq!(unchecked[1], "Setup done · doctor: 1 ok", "a check that got no answer is neither ok nor to look at");
         let checks = [check(Level::Ok, "git", "/usr/bin/git", &[]), check(Level::Fail, "jq", "jq is missing", &["macOS: brew install jq"]), check(Level::Warn, "status line", "statusLine runs \"my-line\"", &["have your statusLine command pipe its stdin to `kebbie statusline`"])];
-        assert_eq!(ending(Some(Login::Out), &checks, "/bin/zsh"), [
+        assert_eq!(ending(Some(Login::Out), &checks, "/bin/zsh", true), [
             "",
             "Setup done · doctor: 1 ok, 2 to look at",
             "",
@@ -3042,7 +3076,7 @@ mod tests {
             "  kebbie doctor        says what is left and how to fix it",
             "  prefix+space         tell the lead what you want done",
         ], "a fix setup cannot make is one line to kebbie doctor, never its text");
-        assert!(ending(Some(Login::Unknown), &[], "/bin/zsh").contains(&"  codex login          if you have not yet, so codex tasks can start".to_string()));
+        assert!(ending(Some(Login::Unknown), &[], "/bin/zsh", true).contains(&"  codex login          if you have not yet, so codex tasks can start".to_string()));
     }
 
     #[test]
@@ -3075,7 +3109,7 @@ mod tests {
             ("signals".to_string(), Outcome::new("already", "on")),
         ]);
         let ok: Vec<crate::doctor::Check> = (0..36).map(|at| check(crate::doctor::Level::Ok, &format!("check {at}"), "fine", &[])).collect();
-        guide.ending = ending(Some(Login::Out), &ok, "/bin/zsh");
+        guide.ending = ending(Some(Login::Out), &ok, "/bin/zsh", true);
         guide.done = true;
         guide
     }
@@ -3108,6 +3142,28 @@ mod tests {
         assert!(!shown.contains("Your board on your phone") && shown.contains("⏎ opens your board") && !shown.contains("h connects"), "a connected machine is offered nothing: {shown}");
         assert!(!guide.text().contains("kebbie.dev/hub"));
         assert!(matches!(guide.key(KeyEvent::from(KeyCode::Char('h'))), Next::Stay), "h does nothing once connected");
+    }
+
+    #[test]
+    fn setup_outside_herdr_ends_with_how_to_start_herdr_and_never_opens_the_board() {
+        let lab = Lab::new("guide-outside-herdr");
+        let mut guide = finished(&lab);
+        guide.opens_board = opens_board(false, false);
+        guide.ending = ending(Some(Login::In), &[], "/bin/zsh", false);
+        let shown = screen(&guide);
+        assert!(shown.contains("herdr                start it: kebbie's lead and board run inside it") && shown.contains("h connects your phone · ⏎ ends setup") && !shown.contains("opens your board"), "{shown}");
+        assert!(guide.text().contains("Next steps\n  herdr                start it: kebbie's lead and board run inside it\n  prefix+space         tell the lead what you want done"), "{}", guide.text());
+        assert_eq!((after(&Next::Board, false), after(&Next::Connect, false)), (After::Done, After::Done), "outside herdr neither ⏎ nor h opens the board");
+        assert_eq!((after(&Next::Board, true), after(&Next::Connect, true), after(&Next::Quit, true)), (After::Lead, After::Board, After::Done));
+        assert!(!ending(Some(Login::In), &[], "/bin/zsh", true).iter().any(|line| line.contains("start it")), "inside herdr there is nothing to start");
+        use crate::doctor::{Level, NOT_ON_PATH, ON_PATH};
+        let checks = [check(Level::Warn, ON_PATH, NOT_ON_PATH, &[]), check(Level::Fail, "jq", "jq is missing", &[])];
+        let steps: Vec<String> = ending(Some(Login::Out), &checks, "/bin/zsh", false).iter().skip(4).map(|line| line.split_whitespace().next().unwrap_or_default().to_string()).collect();
+        assert_eq!(steps, ["herdr", "PATH", "codex", "kebbie", "prefix+space"], "herdr comes first, before every other next step");
+        guide.opens_board = opens_board(false, true);
+        let shown = screen(&guide);
+        assert!(shown.contains("herdr                start it") && shown.contains("⏎ opens your board") && !shown.contains("ends setup"), "kebbie board outside herdr opens the board after its guide, and its hint says so: {shown}");
+        assert!(opens_board(true, false) && opens_board(true, true), "inside herdr ⏎ always leads on to the board");
     }
 
     #[test]

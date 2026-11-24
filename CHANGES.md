@@ -9,6 +9,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - n asks only what you want done: Claude picks the repo, writes the card and asks its questions, then starts it or files it.
 
 ### Fixed
+- kebbie setup run outside herdr ends with how to start herdr instead of opening the board on its error page.
 - An Also noticed line that says nothing, such as nothing or none, files no found item.
 - The investigator's task decision points at a task already queued under that name instead of queueing it again.
 - A test run with flag values, such as xcodebuild test -project App -scheme App, counts as the whole suite.
