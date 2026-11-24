@@ -551,6 +551,7 @@ pub fn decide(to: &str, answer: &str) -> Result<String> {
     let task = sessions.iter().find(|session| session.address == question.from).ok_or_else(|| format!("{} has no session to answer", question.from))?;
     let text = format!("Your question is about how to build it, so this is the lead's call, not the user's: {}", answer.trim());
     let report = messages::send_locked(LEAD_LABEL, &[task], &text, &sessions, Some(&question.id), Some("decision"))?;
+    crate::phase::record(&state_dir()?, &question.from, "decide", &crate::phase::Event::Answered);
     let recorded = if away { "Recorded as your call for the user's return." } else { "Recorded as your call; it left the board." };
     Ok(format!("{} {recorded}", report.join(" ")))
 }
