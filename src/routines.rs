@@ -143,7 +143,7 @@ pub fn parse_every(text: &str) -> Result<u64> {
     Ok(count * unit)
 }
 
-fn clock(text: &str) -> Option<u32> {
+pub fn clock(text: &str) -> Option<u32> {
     let (hours, minutes) = text.split_once(':')?;
     let valid = (1..=2).contains(&hours.len()) && minutes.len() == 2 && hours.bytes().chain(minutes.bytes()).all(|byte| byte.is_ascii_digit());
     let (hours, minutes): (u32, u32) = (hours.parse().ok()?, minutes.parse().ok()?);

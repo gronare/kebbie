@@ -267,17 +267,22 @@ pub(crate) fn passed_later(watch: &crate::ci::Watch, failed: &[String], gh: &str
     passing_later(watch, failed, gh).iter().any(|sha| ancestor(&watch.repo, &watch.sha, sha))
 }
 
-// What became of a cancelled watch's workflows on the branch: a later push that holds the commit passed them, or still runs them, which a concurrency cancel hands the watch to.
+// What became of a cancelled watch's workflows on the branch: a later push that holds the commit passed them, still runs them, which a concurrency cancel hands the watch to, or ran them without passing; or gh could not read the branch.
 #[derive(Debug, PartialEq)]
 pub(crate) enum AfterCancel {
     Passed,
     Following(String),
+    Superseded,
     Nothing,
+    Unread(String),
 }
 
 // The later commit must be known here for the ancestry check, so a clone that lacks one fetches first.
 pub(crate) fn after_cancel(watch: &crate::ci::Watch, cancelled: &[String], gh: &str) -> AfterCancel {
-    let later = later_runs(watch, cancelled, gh);
+    let later = match later_runs(watch, cancelled, gh) {
+        Ok(later) => later,
+        Err(error) => return AfterCancel::Unread(error),
+    };
     if later.iter().any(|run| !crate::sh::succeeds("git", &["cat-file", "-e", &format!("{}^{{commit}}", run.sha)], Some(&watch.repo))) {
         let _ = super::fetch(&watch.repo);
     }
@@ -289,7 +294,11 @@ pub(crate) fn after_cancel(watch: &crate::ci::Watch, cancelled: &[String], gh: &
     if passed.values().any(|workflows| cancelled.iter().all(|workflow| workflows.contains(&workflow.as_str()))) {
         return AfterCancel::Passed;
     }
-    holding.iter().find(|run| run.status != "completed").map_or(AfterCancel::Nothing, |run| AfterCancel::Following(run.sha.clone()))
+    match holding.iter().find(|run| run.status != "completed") {
+        Some(run) => AfterCancel::Following(run.sha.clone()),
+        None if holding.is_empty() => AfterCancel::Nothing,
+        None => AfterCancel::Superseded,
+    }
 }
 
 struct LaterRun {
@@ -300,24 +309,24 @@ struct LaterRun {
 }
 
 // The runs of the named workflows on later pushes to the branch, newest first as gh lists them.
-fn later_runs(watch: &crate::ci::Watch, workflows: &[String], gh: &str) -> Vec<LaterRun> {
+fn later_runs(watch: &crate::ci::Watch, workflows: &[String], gh: &str) -> Result<Vec<LaterRun>> {
     if workflows.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let target = if watch.pushed.target.is_empty() { default_branch(&watch.repo).map(|upstream| upstream.trim_start_matches("origin/").to_string()).unwrap_or_default() } else { watch.pushed.target.clone() };
-    let Ok(listed) = crate::sh::run(gh, &["run", "list", "-R", &watch.slug, "--branch", &target, "--event", "push", "--limit", "100", "--json", "databaseId,name,status,conclusion,workflowName,url,headSha,event"], Some(&watch.repo)) else { return Vec::new() };
-    let Ok(Value::Array(entries)) = serde_json::from_str::<Value>(&listed) else { return Vec::new() };
-    entries.iter().filter(|entry| entry["event"] == "push").filter_map(|entry| {
+    let listed = crate::sh::run(gh, &["run", "list", "-R", &watch.slug, "--branch", &target, "--event", "push", "--limit", "100", "--json", "databaseId,name,status,conclusion,workflowName,url,headSha,event"], Some(&watch.repo))?;
+    let Ok(Value::Array(entries)) = serde_json::from_str::<Value>(&listed) else { return Err(format!("gh run list --branch {target} gave no list")) };
+    Ok(entries.iter().filter(|entry| entry["event"] == "push").filter_map(|entry| {
         let sha = entry["headSha"].as_str()?;
         let run = crate::ci::parse_runs(&Value::Array(vec![entry.clone()]).to_string()).unwrap_or_default().pop()?;
         (sha != watch.sha && workflows.iter().any(|workflow| workflow == run.title())).then(|| LaterRun { sha: sha.to_string(), workflow: run.title().to_string(), status: run.status.clone(), conclusion: run.conclusion.clone() })
-    }).collect()
+    }).collect())
 }
 
 // The shas of later pushes on the branch on which every named workflow passed.
 fn passing_later(watch: &crate::ci::Watch, failed: &[String], gh: &str) -> Vec<String> {
     let mut passed: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for run in later_runs(watch, failed, gh).into_iter().filter(|run| run.status == "completed" && run.conclusion == "success") {
+    for run in later_runs(watch, failed, gh).unwrap_or_default().into_iter().filter(|run| run.status == "completed" && run.conclusion == "success") {
         passed.entry(run.sha).or_default().push(run.workflow);
     }
     passed.into_iter().filter(|(_, workflows)| failed.iter().all(|workflow| workflows.contains(workflow))).map(|(sha, _)| sha).collect()

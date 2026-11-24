@@ -77,6 +77,8 @@ pub struct Pushed {
     pub check: Option<Check>,
     pub stages: Vec<String>,
     pub deploy: Option<String>,
+    pub window: Option<String>,
+    pub held: Option<u64>,
 }
 
 // What the task named to verify once its push lands; asked is when kebbie told it to run it, passed once it reported that it held.
@@ -174,6 +176,7 @@ impl Watch {
             State::Running if self.checking().is_some_and(|check| check.passed) => "the check after the push held · kebbie closes it".to_string(),
             State::Running if self.check_unreported() => format!("its check after the push was never reported in {} min: {}; ask it again, or kebbie done", CHECK_UNREPORTED_AFTER / 60, self.checking().map_or("", |check| check.what.as_str())),
             State::Running if self.checking().is_some() => format!("checking after push: {}", self.checking().map_or("", |check| check.what.as_str())),
+            State::Running if !cancelled.is_empty() && self.pushed.held.is_some() => format!("CI running: {} cancelled while the deploy window ({}) was shut; kebbie re-runs it once the window opens{}{}", cancelled.join(", "), self.pushed.window.as_deref().unwrap_or_default(), self.then_checks(), self.unread()),
             State::Running if !cancelled.is_empty() => format!("CI running: {} cancelled for a newer run on {}, follows it on {}{}{}", cancelled.join(", "), self.branch(), self.following.as_deref().map_or("", |sha| &sha[..7.min(sha.len())]), self.then_checks(), self.unread()),
             State::Running if self.runs.is_empty() && self.unseen_for() >= UNSEEN_AFTER => format!("no CI run of {} seen in {} min, though {} has workflows; check they run on a push{}, or kebbie done{}", self.short(), UNSEEN_AFTER / 60, self.slug, if self.pushed.target.is_empty() { String::new() } else { format!(" to {}", self.pushed.target) }, self.unread()),
             State::Running if self.runs.is_empty() && self.unseen_for() >= APPEAR_SECONDS => format!("CI running: no run of {} seen for {} min, though {} has workflows{}{}", self.short(), self.unseen_for() / 60, self.slug, self.then_checks(), self.unread()),
@@ -213,7 +216,7 @@ impl Watch {
             "started_at": self.started_at, "checked_at": self.checked_at, "close": self.close,
             "runs": self.runs.iter().map(Run::to_json).collect::<Vec<_>>(),
             "state": state, "failed_at": failed_at, "failure": failure, "failure_url": failure_url, "error": self.error, "erring_since": self.erring_since, "following": self.following,
-            "pushed": { "pusher": self.pushed.pusher, "target": self.pushed.target, "commits": self.pushed.commits, "note": self.pushed.note, "logged": self.pushed.logged, "check": self.pushed.check.as_ref().map(Check::to_json), "stages": self.pushed.stages, "deploy": self.pushed.deploy },
+            "pushed": { "pusher": self.pushed.pusher, "target": self.pushed.target, "commits": self.pushed.commits, "note": self.pushed.note, "logged": self.pushed.logged, "check": self.pushed.check.as_ref().map(Check::to_json), "stages": self.pushed.stages, "deploy": self.pushed.deploy, "window": self.pushed.window, "held": self.pushed.held },
         })
     }
 
@@ -234,7 +237,8 @@ impl Watch {
             runs: value["runs"].as_array().map(|runs| runs.iter().filter_map(Run::from_json).collect()).unwrap_or_default(),
             state, error: text("error"), erring_since: value["erring_since"].as_u64(), following: text("following"),
             pushed: Pushed { pusher: pushed_text("pusher"), target: pushed_text("target"), commits: pushed_text("commits"), note: pushed["note"].as_str().map(str::to_string), logged: pushed["logged"].as_bool(), check: Check::from_json(&pushed["check"]),
-                stages: pushed["stages"].as_array().map(|ids| ids.iter().filter_map(|id| id.as_str().map(str::to_string)).collect()).unwrap_or_default(), deploy: pushed["deploy"].as_str().map(str::to_string) },
+                stages: pushed["stages"].as_array().map(|ids| ids.iter().filter_map(|id| id.as_str().map(str::to_string)).collect()).unwrap_or_default(), deploy: pushed["deploy"].as_str().map(str::to_string),
+                window: pushed["window"].as_str().map(str::to_string), held: pushed["held"].as_u64() },
         })
     }
 }
@@ -470,9 +474,11 @@ pub enum Begin {
 
 pub fn begin(state: &Path, repo: &Path, address: &str, sha: &str, close: bool, pushed: Pushed) -> Begin {
     let _ = mark_pushing(state, address, messages::now());
-    if !crate::config::resolve(Some(repo)).map(|loaded| loaded.settings.ci_watch.value).unwrap_or(true) {
+    let settings = crate::config::resolve(Some(repo)).ok().map(|loaded| loaded.settings);
+    if !settings.as_ref().is_none_or(|settings| settings.ci_watch.value) {
         return Begin::Off;
     }
+    let pushed = Pushed { window: settings.and_then(|settings| settings.ci_deploy_window.value), ..pushed };
     let slug = match target(repo, &gh()) {
         Ok(slug) => slug,
         Err(reason) => return Begin::NotWatched(reason),
@@ -540,7 +546,7 @@ pub fn rerun_with(state: &Path, address: &str, gh: &str, now: u64) -> Result<Str
     }
     let names: Vec<&str> = again.iter().map(|run| run.title()).collect();
     crate::phase::record(state, address, "ci", &crate::phase::Event::PushOut { sha: &watch.sha });
-    save(state, &Watch { state: State::Running, started_at: now, checked_at: None, runs: Vec::new(), error: None, erring_since: None, following: None, ..watch.clone() })?;
+    save(state, &Watch { state: State::Running, started_at: now, checked_at: None, runs: Vec::new(), error: None, erring_since: None, following: None, pushed: Pushed { held: None, ..watch.pushed.clone() }, ..watch.clone() })?;
     if let Err(error) = messages::to_lead(messages::ToLead::CiGreen, &format!("The user re-ran CI for {address} ({}): {}. kebbie watches the new runs as after a push.", watch.short(), names.join(", "))) {
         eprintln!("Could not tell the lead: {error}");
     }
@@ -572,6 +578,7 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
             forget(state, &watch.address);
             continue;
         }
+        let (read_before, erring_before) = (watch.checked_at.unwrap_or(watch.started_at), watch.erring_since);
         let listed = crate::sh::run(gh, &["run", "list", "-R", &watch.slug, "--commit", &watch.sha, "--limit", "50", "--json", "databaseId,name,status,conclusion,workflowName,url"], Some(&watch.repo)).and_then(|text| parse_runs(&text));
         watch.checked_at = Some(now);
         let listed = listed.and_then(|runs| if runs.is_empty() && !watch.runs.is_empty() { Err(format!("gh lists no runs of {} any more", watch.short())) } else { Ok(runs) });
@@ -621,9 +628,20 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
                 crate::tasks::AfterCancel::Passed => events.push(green(state, &watch, format!("CI is green for {}: {} was cancelled and a later run on {} that holds it passed", watch.short(), cancelled.join(", "), watch.branch()), now)),
                 crate::tasks::AfterCancel::Following(sha) => {
                     watch.following = Some(sha);
+                    watch.pushed.held = None;
                     let _ = save(state, &watch);
                 }
-                crate::tasks::AfterCancel::Nothing => events.push(cancelled_run(state, gh, &mut watch, now)),
+                crate::tasks::AfterCancel::Superseded => events.push(cancelled_run(state, gh, &mut watch, now)),
+                // Trap: a branch gh cannot read may hold a newer push, so it is read again next round and never taken as nothing newer.
+                crate::tasks::AfterCancel::Unread(error) => {
+                    let since = *watch.erring_since.insert(erring_before.unwrap_or(now));
+                    watch.error = Some(error);
+                    let _ = save(state, &watch);
+                    if now.saturating_sub(since) >= UNREADABLE_AFTER {
+                        events.push(unknown(state, &mut watch, now));
+                    }
+                }
+                crate::tasks::AfterCancel::Nothing => events.extend(held_for_window(state, gh, &mut watch, read_before, now, &crate::recover::local_offset)),
             },
             Verdict::Failed(failed) => events.push(failed_run(state, gh, &mut watch, &failed[0], now)),
         }
@@ -639,12 +657,55 @@ fn cancelled_run(state: &Path, gh: &str, watch: &mut Watch, now: u64) -> Event {
     crate::phase::record(state, &watch.address, "ci", &crate::phase::Event::CiCancelled);
     watch.state = State::Cancelled { at: now, what: what.clone(), url: run.url.clone() };
     watch.following = None;
+    watch.pushed.held = None;
     let _ = save(state, watch);
     let text = format!("CI was cancelled for {} ({}): {what}. Nothing on {} that holds it is running; re-run it or dismiss it on the board, and kebbie closes the task once a later run there passes. {}", watch.address, watch.short(), watch.branch(), run.url);
     if let Err(error) = messages::to_lead(messages::ToLead::Notice, &text) {
         eprintln!("Could not tell the lead: {error}");
     }
     Event { address: watch.address.clone(), kind: Kind::Cancelled, text }
+}
+
+// Trap: GitHub cannot say when a deploy window opens, so ci.deploy_window is the only source, and a run GitHub cancelled while it was open is a person's and never re-run.
+fn held_for_window(state: &Path, gh: &str, watch: &mut Watch, read_before: u64, now: u64, offset: &dyn Fn(i64) -> i64) -> Option<Event> {
+    let Some(window) = watch.pushed.window.as_deref().and_then(|text| crate::deploy_window::parse(text).ok()) else { return Some(cancelled_run(state, gh, watch, now)) };
+    let since = match watch.pushed.held {
+        Some(since) => since,
+        None => {
+            let cancelled_at = watch.runs.iter().find(|run| run.cancelled()).and_then(|run| cancel_time(gh, watch, run));
+            let by_window = cancelled_at.map_or_else(|| !window.open_throughout(read_before, now, offset), |at| !window.open(at, offset));
+            if !by_window {
+                return Some(cancelled_run(state, gh, watch, now));
+            }
+            *watch.pushed.held.insert(cancelled_at.unwrap_or(read_before))
+        }
+    };
+    if !(window.open(now, offset) && window.opens_between(since, now, offset)) {
+        let _ = save(state, watch);
+        return None;
+    }
+    let again: Vec<Run> = watch.rerunnable().into_iter().cloned().collect();
+    for run in &again {
+        if let Err(error) = crate::sh::run(gh, &["run", "rerun", &run.id.to_string(), "-R", &watch.slug], Some(&watch.repo)) {
+            watch.error = Some(error);
+            let _ = save(state, watch);
+            return None;
+        }
+    }
+    let names: Vec<&str> = again.iter().map(Run::title).collect();
+    let text = format!("The deploy window opened, so kebbie re-ran {} for {} ({}), cancelled while it was shut, and watches the new runs as after a push.", names.join(", "), watch.address, watch.short());
+    *watch = Watch { state: State::Running, started_at: now, checked_at: None, runs: Vec::new(), error: None, erring_since: None, following: None, pushed: Pushed { held: None, ..watch.pushed.clone() }, ..watch.clone() };
+    let _ = save(state, watch);
+    if let Err(error) = messages::to_lead(messages::ToLead::CiGreen, &text) {
+        eprintln!("Could not tell the lead: {error}");
+    }
+    None
+}
+
+// When GitHub last changed the run, which for a cancelled run is when it was cancelled.
+fn cancel_time(gh: &str, watch: &Watch, run: &Run) -> Option<u64> {
+    let text = crate::sh::run(gh, &["run", "view", &run.id.to_string(), "-R", &watch.slug, "--json", "updatedAt"], Some(&watch.repo)).ok()?;
+    serde_json::from_str::<Value>(&text).ok()?["updatedAt"].as_str().and_then(crate::restart::iso_seconds)
 }
 
 // gh has not read the runs for a while: the watch ends rather than reading CI running for good.
@@ -999,6 +1060,169 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    // The watched commit's runs read cancelled until gh re-runs them, then green; the file updated holds the run's updatedAt, branch-fails fails the branch's list, and every call is logged.
+    fn window_gh(state: &Path, branch: &str) -> String {
+        let path = state.join("window-gh");
+        let file = |name: &str| state.join(name).display().to_string();
+        let green = r#"[{"databaseId":2,"name":"ci","workflowName":"ci","status":"completed","conclusion":"success","url":"u"}]"#;
+        let (calls, reran, updated, fails) = (file("calls"), file("reran"), file("updated"), file("branch-fails"));
+        crate::executable::write(&path, format!("#!/bin/sh\necho \"$*\" >> '{calls}'\ncase \"$*\" in\n*rerun*) touch '{reran}';;\n*updatedAt*) [ -e '{updated}' ] || exit 1; echo \"{{\\\"updatedAt\\\":\\\"$(cat '{updated}')\\\"}}\";;\n*--commit*) if [ -e '{reran}' ]; then echo '{green}'; else echo '{CANCELLED_ON_COMMIT}'; fi;;\n*--branch*) [ -e '{fails}' ] && {{ echo 'HTTP 502' >&2; exit 1; }}; echo '[{branch}]';;\n*jobs*) echo '{{\"jobs\":[]}}';;\nesac\n")).unwrap();
+        path.to_string_lossy().to_string()
+    }
+
+    fn held_watch(dir: &Path, state: &Path, sha: &str, branch: &str, at: u64) {
+        let mut watch = cancel_watch(dir, sha, branch);
+        watch.started_at = at;
+        watch.pushed.window = Some("mon-fri 08:00-17:00 UTC".to_string());
+        save(state, &watch).unwrap();
+    }
+
+    const MONDAY: u64 = 1_795_392_000;
+    const FRIDAY_EVENING: u64 = MONDAY + 4 * 24 * 3600 + 18 * 3600;
+    const NEXT_MONDAY_MORNING: u64 = MONDAY + 7 * 24 * 3600 + 8 * 3600 + 60;
+
+    #[test]
+    fn a_held_deploy_is_not_re_run_while_gh_cannot_read_the_branch_for_newer_pushes() {
+        let dir = crate::tasks::test_support::repo();
+        let state = crate::sh::test_dir("ci-held-branch-unread");
+        let branch = crate::repo::git(&dir, &["branch", "--show-current"]).unwrap();
+        let watched = crate::repo::git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        held_watch(&dir, &state, &watched, &branch, FRIDAY_EVENING);
+        let gh = window_gh(&state, &branch_run(&watched, "completed", "cancelled"));
+        assert!(tick_with(&state, &gh, FRIDAY_EVENING + 300).is_empty());
+        assert!(load(&state, "billing@app").unwrap().pushed.held.is_some());
+        fs::write(state.join("branch-fails"), "").unwrap();
+        assert!(tick_with(&state, &gh, NEXT_MONDAY_MORNING).is_empty(), "a branch kebbie cannot read may hold a newer push");
+        let waiting = load(&state, "billing@app").unwrap();
+        assert!(waiting.running() && waiting.error.as_deref().is_some_and(|error| error.contains("502")), "{:?}", waiting.error);
+        assert!(!fs::read_to_string(state.join("calls")).unwrap().contains("rerun"));
+        assert!(tick_with(&state, &gh, NEXT_MONDAY_MORNING + CANCELLED_POLL).is_empty(), "still within the unreadable grace");
+        let events = tick_with(&state, &gh, NEXT_MONDAY_MORNING + UNREADABLE_AFTER + CANCELLED_POLL);
+        assert!(events.len() == 1 && events[0].kind == Kind::Unknown, "a branch unread for good ends as CI unknown: {events:?}");
+        fs::remove_file(state.join("branch-fails")).unwrap();
+        held_watch(&dir, &state, &watched, &branch, FRIDAY_EVENING);
+        tick_with(&state, &gh, FRIDAY_EVENING + 300);
+        assert!(tick_with(&state, &gh, NEXT_MONDAY_MORNING).is_empty());
+        assert!(fs::read_to_string(state.join("calls")).unwrap().contains("run rerun 2 -R acme/app"), "once gh reads it, the window's opening re-runs it");
+        fs::remove_dir_all(state).unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_cancel_read_late_is_judged_by_when_github_cancelled_it_not_by_when_kebbie_read_it() {
+        let dir = crate::tasks::test_support::repo();
+        let state = crate::sh::test_dir("ci-cancel-read-late");
+        let branch = crate::repo::git(&dir, &["branch", "--show-current"]).unwrap();
+        let watched = crate::repo::git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        let gh = window_gh(&state, &branch_run(&watched, "completed", "cancelled"));
+        held_watch(&dir, &state, &watched, &branch, MONDAY + 7 * 3600);
+        fs::write(state.join("updated"), "2026-11-23T12:00:00Z").unwrap();
+        let events = tick_with(&state, &gh, MONDAY + 20 * 3600);
+        assert!(events.len() == 1 && events[0].kind == Kind::Cancelled, "cancelled at noon inside the window, by a person, though kebbie slept through the evening: {events:?}");
+        assert!(!fs::read_to_string(state.join("calls")).unwrap().contains("rerun"));
+        held_watch(&dir, &state, &watched, &branch, MONDAY + 12 * 3600);
+        fs::write(state.join("updated"), "2026-11-27T18:00:00Z").unwrap();
+        assert!(tick_with(&state, &gh, NEXT_MONDAY_MORNING).is_empty(), "cancelled Friday evening, read on Monday in the window");
+        assert!(fs::read_to_string(state.join("calls")).unwrap().contains("run rerun 2 -R acme/app"), "the window has opened since the cancel, so it is re-run at once");
+        fs::remove_dir_all(state).unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_held_watch_that_ends_and_is_re_run_by_hand_holds_nothing_from_before() {
+        let dir = crate::tasks::test_support::repo();
+        let state = crate::sh::test_dir("ci-held-ends");
+        let branch = crate::repo::git(&dir, &["branch", "--show-current"]).unwrap();
+        let watched = crate::repo::git(&dir, &["rev-parse", "HEAD~1"]).unwrap();
+        let later = crate::repo::git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        held_watch(&dir, &state, &watched, &branch, FRIDAY_EVENING);
+        assert!(tick_with(&state, &window_gh(&state, &branch_run(&watched, "completed", "cancelled")), FRIDAY_EVENING + 300).is_empty());
+        assert!(load(&state, "billing@app").unwrap().pushed.held.is_some());
+        let newer = window_gh(&state, &branch_run(&later, "completed", "cancelled"));
+        let events = tick_with(&state, &newer, FRIDAY_EVENING + 300 + CANCELLED_POLL);
+        assert!(events.len() == 1 && events[0].kind == Kind::Cancelled, "{events:?}");
+        let ended = load(&state, "billing@app").unwrap();
+        assert!(ended.pushed.held.is_none(), "the watch left the hold when it ended");
+        rerun_with(&state, "billing@app", &newer, FRIDAY_EVENING + 3600).unwrap();
+        let again = load(&state, "billing@app").unwrap();
+        assert!(again.running() && again.pushed.held.is_none());
+        fs::remove_dir_all(state).unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_deploy_cancelled_outside_the_deploy_window_stays_ci_running_and_is_re_run_once_the_window_opens() {
+        let dir = crate::tasks::test_support::repo();
+        let state = crate::sh::test_dir("ci-cancelled-window");
+        let branch = crate::repo::git(&dir, &["branch", "--show-current"]).unwrap();
+        let watched = crate::repo::git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        let (monday, hour) = (1_795_392_000, 3600);
+        let friday_evening = monday + 4 * 24 * hour + 18 * hour;
+        let mut watch = cancel_watch(&dir, &watched, &branch);
+        watch.started_at = friday_evening;
+        watch.pushed.window = Some("mon-fri 08:00-17:00 UTC".to_string());
+        save(&state, &watch).unwrap();
+        crate::phase::record(&state, "billing@app", "push", &crate::phase::Event::PushOut { sha: &watched });
+        let gh = window_gh(&state, &branch_run(&watched, "completed", "cancelled"));
+        let running = |at: u64| {
+            let events = tick_with(&state, &gh, at);
+            let watch = load(&state, "billing@app").unwrap();
+            assert!(events.is_empty() && watch.running(), "{events:?} {:?}", watch.state);
+            assert_eq!(crate::phase::load(&state, "billing@app").map(|record| record.phase), Some(crate::phase::Phase::CiRunning { sha: watched.clone() }), "not Needs you");
+            watch
+        };
+        let held = running(friday_evening + 5 * 60);
+        assert_eq!(held.note(), "CI running: ci cancelled while the deploy window (mon-fri 08:00-17:00 UTC) was shut; kebbie re-runs it once the window opens");
+        running(friday_evening + 16 * hour);
+        let calls = || fs::read_to_string(state.join("calls")).unwrap();
+        assert!(!calls().contains("rerun"), "nothing is re-run while the window is shut: {}", calls());
+        let monday_morning = monday + 7 * 24 * hour + 8 * hour + 60;
+        let reran = running(monday_morning);
+        assert!(calls().contains("run rerun 2 -R acme/app"), "{}", calls());
+        assert!(reran.runs.is_empty() && reran.pushed.held.is_none() && reran.started_at == monday_morning, "watched as after a push");
+        assert!(tick_with(&state, &gh, monday_morning + SETTLE_SECONDS + 1).iter().any(|event| event.kind == Kind::Green), "the re-run's green ends the watch as green");
+        assert_eq!(calls().matches("rerun").count(), 1);
+        fs::remove_dir_all(state).unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_run_cancelled_while_the_deploy_window_stayed_open_ends_the_watch_as_before() {
+        let dir = crate::tasks::test_support::repo();
+        let state = crate::sh::test_dir("ci-cancelled-window-open");
+        let branch = crate::repo::git(&dir, &["branch", "--show-current"]).unwrap();
+        let watched = crate::repo::git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        let monday_noon = 1_795_392_000 + 12 * 3600;
+        let mut watch = cancel_watch(&dir, &watched, &branch);
+        watch.started_at = monday_noon;
+        watch.pushed.window = Some("mon-fri 08:00-17:00 UTC".to_string());
+        save(&state, &watch).unwrap();
+        let events = tick_with(&state, &window_gh(&state, &branch_run(&watched, "completed", "cancelled")), monday_noon + 5 * 60);
+        assert!(events.len() == 1 && events[0].kind == Kind::Cancelled, "a person cancelled it: {events:?}");
+        assert!(!fs::read_to_string(state.join("calls")).unwrap().contains("rerun"));
+        fs::remove_dir_all(state).unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_deploy_cancelled_outside_the_window_is_not_re_run_once_a_newer_push_holds_it() {
+        let dir = crate::tasks::test_support::repo();
+        let state = crate::sh::test_dir("ci-cancelled-window-newer");
+        let branch = crate::repo::git(&dir, &["branch", "--show-current"]).unwrap();
+        let watched = crate::repo::git(&dir, &["rev-parse", "HEAD~1"]).unwrap();
+        let later = crate::repo::git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        let friday_evening = 1_795_392_000 + 4 * 24 * 3600 + 18 * 3600;
+        let mut watch = cancel_watch(&dir, &watched, &branch);
+        watch.started_at = friday_evening;
+        watch.pushed.window = Some("mon-fri 08:00-17:00 UTC".to_string());
+        save(&state, &watch).unwrap();
+        let events = tick_with(&state, &window_gh(&state, &branch_run(&later, "completed", "cancelled")), friday_evening + 5 * 60);
+        assert!(events.len() == 1 && events[0].kind == Kind::Cancelled, "the newer push is followed as without a window: {events:?}");
+        assert!(!fs::read_to_string(state.join("calls")).unwrap().contains("rerun"), "the older commit is never deployed over the newer one");
+        fs::remove_dir_all(state).unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn a_run_cancelled_for_a_newer_run_on_the_branch_follows_the_newer_run() {
         let dir = crate::tasks::test_support::repo();
@@ -1036,7 +1260,7 @@ mod tests {
         let mut watch = Watch {
             address: "billing@app".to_string(), repo: PathBuf::from("/src/app"), slug: "acme/app".to_string(), sha: "abcdef0123".to_string(),
             started_at: 100, checked_at: Some(130), close: true, runs: vec![run("in_progress", "")], state: State::Running, error: None, erring_since: None, following: None,
-            pushed: Pushed { pusher: "the user".to_string(), target: "main".to_string(), commits: "abc Add refunds".to_string(), note: Some("Projects/x.md".to_string()), logged: Some(true), check: Some(Check { what: "the old key gets 401".to_string(), asked: Some(120), passed: false }), stages: Vec::new(), deploy: None },
+            pushed: Pushed { pusher: "the user".to_string(), target: "main".to_string(), commits: "abc Add refunds".to_string(), note: Some("Projects/x.md".to_string()), logged: Some(true), check: Some(Check { what: "the old key gets 401".to_string(), asked: Some(120), passed: false }), stages: Vec::new(), deploy: None, window: None, held: None },
         };
         save(&state, &watch).unwrap();
         assert_eq!(load(&state, "billing@app").as_ref(), Some(&watch));

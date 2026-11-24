@@ -120,6 +120,17 @@ fn ci_watch_is_on_by_default_and_a_repo_can_turn_it_off() {
 }
 
 #[test]
+fn a_repo_names_its_deploy_window_and_config_toml_cannot() {
+    assert_eq!(settings(&Worktree::default(), &Machine::default()).ci_deploy_window, Setting { value: None, layer: Layer::Default });
+    let set = settings(&repo("[ci]\ndeploy_window = \"mon-fri 08:00-17:00\"\n"), &Machine::default());
+    assert_eq!(set.ci_deploy_window, Setting { value: Some("mon-fri 08:00-17:00".to_string()), layer: Layer::Repo });
+    assert!(parse_repo("[ci]\ndeploy_window = \"office hours\"\n", "app.toml").unwrap_err().contains("ci.deploy_window: \"office hours\" is not a deploy window"));
+    assert!(parse_machine("[ci]\ndeploy_window = \"08:00-17:00\"\n", "config.toml").unwrap_err().contains("ci.deploy_window: each repo opts in on its own"));
+    let shown = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: set });
+    assert!(shown.contains("ci.deploy_window = \"mon-fri 08:00-17:00\"  (repo config)") || shown.contains("ci.deploy_window = mon-fri 08:00-17:00  (repo config)"), "{shown}");
+}
+
+#[test]
 fn comments_are_watched_for_a_week_by_default_and_a_repo_can_change_either() {
     let default = settings(&Worktree::default(), &Machine::default());
     assert_eq!((default.comments_watch.value, default.comments_days.value), (true, 7));
@@ -705,6 +716,7 @@ fn sample(entry: &Entry) -> String {
         return entry.value.clone();
     }
     match &entry.kind {
+        _ if entry.key == "ci.deploy_window" => "\"08:00-17:00\"".to_string(),
         Kind::Choice(options) => format!("{:?}", options[1]),
         Kind::Secret => "\"kha_token\"".to_string(),
         _ => "\"x\"".to_string(),
@@ -715,7 +727,7 @@ fn sample(entry: &Entry) -> String {
 fn each_keys_scope_is_the_files_that_take_it_and_what_its_text_says() {
     let loaded = Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
     let all = entries(&loaded);
-    assert_eq!(all.len(), 62);
+    assert_eq!(all.len(), 63);
     for entry in all {
         let (section, field) = entry.key.rsplit_once('.').unwrap();
         let text = format!("[{section}]\n{field} = {}\n", sample(&entry));

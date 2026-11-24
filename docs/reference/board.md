@@ -205,7 +205,7 @@ A listed test command inside a loop, a condition or `xargs` is not recorded eith
 | Working | Tasks at work since their prompt, their last report or your answer. |
 | In review | Reported ready and sent to the reviewer, waiting for a pass on its current code. The row says who acts next: `review running · waits on the reviewer`, or, with findings and its Claude idle, `withdraw with v to push without a pass`. With no reviewer running, the line under it shows the verdict's first finding, as `review asks for changes: <finding> (+N more)`. |
 | Ready to push | Reported ready with its commits, and pushes under way. |
-| CI running | Pushed, with its worktree kept until every workflow run for the pushed commit is green and the task's check after the push holds; then it closes as done. A run cancelled for a newer run on the default branch follows that run. |
+| CI running | Pushed, with its worktree kept until every workflow run for the pushed commit is green and the task's check after the push holds; then it closes as done. A run cancelled for a newer run on the default branch follows that run, and one cancelled while the repo's [`ci.deploy_window`](configuration.md#ci-updates-and-the-keeper) was shut is re-run once it opens. |
 | Waiting for work | Started without work, blocked on something outside you, or kept open with nothing left on top. |
 | Waiting on | Running, and waiting for other tasks to land. See [Waiting on](#waiting-on). |
 | Queued | Waiting to start after other tasks or at a time, with no worktree, Space or Claude. |
@@ -234,7 +234,7 @@ kebbie keeps one phase per task, and only what changes it writes it: its start, 
 - A push under way whose Claude reported needs-you.
 - A push that left its repo's push line unpushed, marked `out of the push line: <why>`: its Claude did not report ready within 30 minutes, it reported needs-you, or it has commits nobody checked since you chose push. Push again and it joins the end of the line.
 - A push or close kebbie could not finish.
-- A pushed task whose CI was cancelled with no newer run on the branch to follow, marked `CI cancelled: <workflow> · <job>`. `G` runs it again, `C` dismisses it, and a later run that passes closes it.
+- A pushed task whose CI was cancelled with no newer run on the branch to follow, and not by a shut deploy window, marked `CI cancelled: <workflow> · <job>`. `G` runs it again, `C` dismisses it, and a later run that passes closes it.
 - A pushed task whose CI gh has not been able to read for 15 minutes, marked `CI unknown`, its row marked `gh cannot read it: <error>` meanwhile. `C` dismisses it.
 - A task an API error stopped that kebbie will not resume, marked `stopped by <reason>: <Claude Code's words>`.
 - A task whose worktree git cannot read, such as one whose index names a missing object, marked `git cannot read its worktree: <git's error>`. The other tasks show as usual.

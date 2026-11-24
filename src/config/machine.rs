@@ -336,6 +336,9 @@ pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     if worktree.stage_on_main.is_some() {
         return Err(fail(per_repo("worktree.stage_on_main")));
     }
+    if worktree.ci_deploy_window.is_some() {
+        return Err(fail(per_repo("ci.deploy_window")));
+    }
     if worktree.tests_full_command.is_some() {
         return Err(fail(format!("tests.full_command: each repo has its own full suite, so it lives in its repo config; set it in {}/<repo>.toml", repos_dir().display())));
     }

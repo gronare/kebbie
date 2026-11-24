@@ -33,6 +33,7 @@ pub struct Worktree {
     pub worker_name: Option<String>,
     pub ci_watch: Option<bool>,
     pub ci_deploy: Option<String>,
+    pub ci_deploy_window: Option<String>,
     pub tests_per_commit: Option<bool>,
     pub tests_before_push: Option<BeforePush>,
     pub tests_full_command: Option<String>,
@@ -72,6 +73,7 @@ fn worktree(table: &Table) -> Result<Worktree> {
         worker_name: text(worktree, "worker_name", "worktree.worker_name")?,
         ci_watch: None,
         ci_deploy: None,
+        ci_deploy_window: None,
         tests_per_commit: None,
         tests_before_push: None,
         tests_full_command: None,
@@ -169,6 +171,10 @@ fn with_ci(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     if let Some(ci) = subtable(table, "ci", "ci")? {
         worktree.ci_watch = flag(ci, "watch", "ci.watch")?;
         worktree.ci_deploy = unsettable(ci, "deploy", "ci.deploy")?;
+        worktree.ci_deploy_window = text(ci, "deploy_window", "ci.deploy_window")?;
+        if let Some(window) = &worktree.ci_deploy_window {
+            crate::deploy_window::parse(window).map_err(|error| format!("ci.deploy_window: {error}"))?;
+        }
     }
     if let Some(tests) = subtable(table, "tests", "tests")? {
         worktree.tests_per_commit = flag(tests, "per_commit", "tests.per_commit")?;

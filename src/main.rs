@@ -23,6 +23,7 @@ mod commit_tests;
 mod config;
 mod config_edit;
 mod decisions;
+mod deploy_window;
 mod doctor;
 mod doctor_view;
 mod docs;
