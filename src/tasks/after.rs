@@ -400,14 +400,21 @@ pub(crate) type Begin<'a> = &'a mut dyn FnMut(&Path, &str, &Start) -> Result<Beg
 fn launch(state: &Path, wait: &Wait, intro: &str, begin: Begin, tell: &mut dyn FnMut(Told)) -> Result<String> {
     let prompt = if intro.is_empty() { wait.prompt.clone() } else { format!("{intro}\n\n{}", wait.prompt) };
     let options = Start { prompt: Some(&prompt), focus: false, from: None, mode: wait.mode.as_deref(), profile: wait.profile.as_deref(), backlog: wait.backlog.as_deref(), note: true, anyway: false };
-    let started = begin(&wait.repo, &wait.task, &options);
+    let first = begin(&wait.repo, &wait.task, &options);
+    let (started, retried) = match first {
+        Err(error) if pane_gone(&error) => (begin(&wait.repo, &wait.task, &options), Some(error)),
+        first => (first, None),
+    };
     unclaim(state, &wait.address());
     match started {
         Ok(begun) => {
             if let Err(error) = crate::recipe::note_started(state, &wait.address(), messages::now()) {
                 eprintln!("kebbie: the recipe of {} did not reach its note: {error}", wait.address());
             }
-            Ok(begun.said)
+            Ok(match retried {
+                Some(error) => Notice::read(&begun.said, false).detail("retried", format!("the first start lost its pane ({}), so kebbie started it again", Notice::read(&error, true).details.iter().find(|(label, _)| label == "error").map_or(error.clone(), |(_, error)| error.clone()))).to_string(),
+                None => begun.said,
+            })
         }
         Err(error) => {
             let reason = format!("kebbie could not start it: {}", Notice::read(&error, true).details.iter().find(|(label, _)| label == "error").map_or(error.clone(), |(_, error)| error.clone()));
@@ -416,6 +423,11 @@ fn launch(state: &Path, wait: &Wait, intro: &str, begin: Begin, tell: &mut dyn F
             Notice::new(Tone::Failed, "kebbie could not start it").detail("task", wait.address()).detail("error", error).err()
         }
     }
+}
+
+// herdr lost the pane a start was typing into, as when a closing Space takes it: a second start opens a fresh one.
+fn pane_gone(error: &str) -> bool {
+    error.contains("pane_not_found")
 }
 
 fn blocked_text(wait: &Wait, reason: &str) -> String {
@@ -1441,6 +1453,28 @@ mod tests {
         assert_eq!(load(&state, "web-billing@web").unwrap().blocked.as_deref(), Some("kebbie could not start it: herdr is not running"));
         assert!(!claimed_file(&state, "web-billing@web").exists());
         assert!(matches!(told.as_slice(), [Told::Blocked { .. }]) && notes[0].contains("herdr is not running"), "{notes:?}");
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_queued_start_that_loses_its_pane_is_started_again_and_stays_off_needs_you() {
+        let state = crate::sh::test_dir("after-pane-gone");
+        save(&state, &wait_for("web-billing", "web", &["billing@api"])).unwrap();
+        let gone = "herdr pane process-info refused: pane not found (pane_not_found)";
+        let (mut tries, mut told) = (0, Vec::new());
+        tick_in(&state, &[end("billing@api", 200, "done", None)], 210, &mut |_, _, _| { tries += 1; if tries == 1 { Err(gone.to_string()) } else { begun("Started.") } }, &mut |said| told.push(said));
+        assert_eq!(tries, 2, "the lost pane gets one more start");
+        assert!(load(&state, "web-billing@web").is_none(), "started, the wait is gone");
+        assert!(matches!(told.as_slice(), [Told::Started { text, .. }] if text.contains("started it again") && text.contains("pane_not_found")), "the lead hears it started, and why it took two");
+        save(&state, &wait_for("web-billing", "web", &["billing@api"])).unwrap();
+        let (mut tries, mut told) = (0, Vec::new());
+        tick_in(&state, &[end("billing@api", 200, "done", None)], 210, &mut |_, _, _| { tries += 1; Err(gone.to_string()) }, &mut |said| told.push(said));
+        assert_eq!(tries, 2, "one more start, never a loop");
+        assert!(load(&state, "web-billing@web").unwrap().blocked.is_some() && matches!(told.as_slice(), [Told::Blocked { .. }]), "lost twice, it is the user's");
+        let (mut tries, mut told) = (0, Vec::new());
+        save(&state, &wait_for("search", "web", &["billing@api"])).unwrap();
+        tick_in(&state, &[end("billing@api", 200, "done", None)], 210, &mut |_, task, _| { if task == "search" { tries += 1; } Err("herdr is not running".to_string()) }, &mut |said| told.push(said));
+        assert_eq!(tries, 1, "any other failure is not tried again");
         fs::remove_dir_all(state).unwrap();
     }
 

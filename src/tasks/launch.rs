@@ -421,19 +421,20 @@ pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {
         }
     }
     let place = |slot: &Slot| Launch { repo: &repo, task: &task, mode, profile: &profile, setup_skill: &setup_skill, setup_command: setup_command.as_deref(), rules_skill: &rules_skill, worktree: slot.path.clone(), vault: vault.is_some(), note: None };
-    if let Some(existing) = running {
-        return restart(&place(&existing), &existing, focus, prompt).map(|begun| match &fell_back {
-            Some(why) => Begun { said: Notice::read(&begun.said, false).detail("careful", why).to_string(), ..begun },
-            None => begun,
-        });
-    }
-    let claimed = claim_backlog(vault.as_ref(), backlog, &task, &name_of(&repo), anyway)?;
-    let begun = (|| {
+    let restarting = running.is_some();
+    claimed_while(vault.as_ref(), state_dir().ok().as_deref(), backlog, &task, &name_of(&repo), anyway, restarting, || {
+        if let Some(existing) = &running {
+            return restart(&place(existing), existing, focus, prompt).map(|begun| match &fell_back {
+                Some(why) => Begun { said: Notice::read(&begun.said, false).detail("careful", why).to_string(), ..begun },
+                None => begun,
+            });
+        }
         fetch(&repo)?;
         let upstream = default_branch(&repo)?;
         let tracked = crate::repo::tracking(&upstream);
         let base = from.unwrap_or(&tracked);
         let slot = claim_slot(&repo, &upstream, &task, |slot| {
+            clear_left_space(|| herdr::workspace_for(&slot.path).unwrap_or(None), herdr::close_workspace, || std::thread::sleep(LEFT_SPACE_PAUSE), LEFT_SPACE_LOOKS)?;
             let switch: &[&str] = if branch_exists(&repo, &task) { &["switch", "--quiet", &task] } else { &["switch", "--quiet", "-c", &task, base] };
             git_writing(&slot.path, switch).map(|_| ())
         })?;
@@ -446,17 +447,41 @@ pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {
             crate::phase::record(&state, &address, "start", &crate::phase::Event::Started { prompted: false });
         }
         begun
-    })();
-    if begun.is_err() {
-        give_back(vault.as_ref(), claimed.as_deref(), &task);
+    })
+}
+
+// A restart claims the note as a new start does, since a queued start that lost its pane gave its note back before kebbie started it again; only a new start that fails gives it back.
+fn claimed_while(vault: Option<&crate::vault_cli::Cli>, state: Option<&Path>, backlog: Option<&str>, task: &str, repo: &str, anyway: bool, restarting: bool, go: impl FnOnce() -> Result<Begun>) -> Result<Begun> {
+    let claimed = claim_backlog(vault, backlog, task, repo, anyway)?;
+    let begun = go();
+    if begun.is_err() && !restarting {
+        give_back(vault, state, claimed.as_deref(), task);
     }
     begun
 }
 
+const LEFT_SPACE_PAUSE: Duration = Duration::from_millis(500);
+const LEFT_SPACE_LOOKS: usize = 20;
+
+// A free worktree can still carry the Space of the task that just let it go, whose done closes it last; a new task waits for it, then closes it, so it never takes that Space's panes or title.
+pub(super) fn clear_left_space(mut find: impl FnMut() -> Option<String>, mut close: impl FnMut(&str) -> Result<()>, mut pause: impl FnMut(), looks: usize) -> Result<()> {
+    for _ in 0..looks {
+        let Some(_) = find() else { return Ok(()) };
+        pause();
+    }
+    let Some(left) = find() else { return Ok(()) };
+    close(&left).map_err(|error| format!("the Space a previous task left on this worktree did not close: {error}"))?;
+    for _ in 0..looks {
+        let Some(_) = find() else { return Ok(()) };
+        pause();
+    }
+    Err(format!("the Space {left} a previous task left on this worktree is still open"))
+}
+
 // Any failure after the claim, from the fetch to the Claude launch, gives the note back to whoever starts it next.
-fn give_back(vault: Option<&crate::vault_cli::Cli>, claimed: Option<&str>, task: &str) {
-    if let (Some(cli), Some(note), Ok(state)) = (vault, claimed, state_dir()) {
-        crate::task_note::release(cli, &state, note, task);
+fn give_back(vault: Option<&crate::vault_cli::Cli>, state: Option<&Path>, claimed: Option<&str>, task: &str) {
+    if let (Some(cli), Some(note), Some(state)) = (vault, claimed, state) {
+        crate::task_note::release(cli, state, note, task);
     }
 }
 
@@ -923,6 +948,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_new_task_waits_for_the_space_a_previous_task_left_on_its_worktree_and_closes_one_that_stays() {
+        let run = |open_for: usize, closes: bool| {
+            let (looked, closed) = (std::cell::Cell::new(0), std::cell::RefCell::new(Vec::new()));
+            let find = || {
+                looked.set(looked.get() + 1);
+                (looked.get() <= open_for && closed.borrow().is_empty()).then(|| "w9".to_string())
+            };
+            let result = clear_left_space(find, |id| { if closes { closed.borrow_mut().push(id.to_string()); } Ok(()) }, || {}, 5);
+            (result, closed.into_inner())
+        };
+        assert_eq!(run(0, true), (Ok(()), Vec::new()), "a worktree without a Space is taken at once");
+        assert_eq!(run(3, true), (Ok(()), Vec::new()), "a Space that its done closes is waited for, never closed twice");
+        assert_eq!(run(usize::MAX, true), (Ok(()), vec!["w9".to_string()]), "a Space that outlives the wait is closed");
+        let (refused, _) = run(usize::MAX, false);
+        assert!(refused.unwrap_err().contains("still open"), "a Space that will not close refuses the start");
+    }
+
+    #[test]
     fn a_tasks_temp_folder_leaves_chromiums_singleton_socket_under_100_characters_on_macos_and_linux() {
         let deep = Path::new("/Users/ada-lovelace-of-the-analytical-engine/projects/client-work/billing-platform/.git/worktrees/wt12.billing-platform-refunds");
         for tmp in ["/private/tmp", "/tmp"] {
@@ -989,16 +1032,32 @@ mod tests {
         let source = include_str!("launch.rs");
         let begin = &source[source.find("\npub fn begin(").unwrap()..];
         let begin = &begin[..begin.find("\n}\n").unwrap()];
-        assert!(begin.find("claim_backlog(").unwrap() < begin.find("claim_slot(").unwrap(), "a refused start claims no worktree");
-        let after_claim = &begin[begin.find("claim_backlog(").unwrap()..];
-        let inner = &after_claim[after_claim.find("(|| {").unwrap()..after_claim.find("})();").unwrap()];
-        assert!(["fetch(", "default_branch(", "claim_slot(", "git_writing(", "launch_new("].iter().all(|step| inner.contains(step)), "every step that can fail after the claim runs inside the part whose failure gives it back");
-        assert!(after_claim.contains("if begun.is_err() {\n        give_back("), "a start that fails gives its claim back");
+        assert!(begin.find("claimed_while(").unwrap() < begin.find("claim_slot(").unwrap(), "a refused start claims no worktree");
+        let inner = &begin[begin.find("claimed_while(").unwrap()..];
+        assert!(["restart(", "fetch(", "default_branch(", "claim_slot(", "git_writing(", "launch_new("].iter().all(|step| inner.contains(step)), "a restart and every step that can fail after the claim run inside claimed_while");
+    }
+
+    #[test]
+    fn a_start_that_fails_gives_its_note_back_and_the_restart_after_it_claims_the_note_again() {
         let fake = crate::vault_cli::fake::Fake::new("give-back");
+        let state = std::env::temp_dir();
+        let note = Some("Projects/web-search.md");
+        fake.answer("task-claim", r#"{"path":"Projects/web-search.md","claimed":true,"claim":{"machine":"mac","task":"search","repo":"web","since":"2026-10-23T09:00:00Z"}}"#);
         fake.answer("task-release", r#"{"path":"Projects/web-search.md","released":true,"claim":null}"#);
-        give_back(Some(&fake.claiming()), Some("Projects/web-search.md"), "search");
-        give_back(Some(&fake.claiming()), None, "search");
-        assert_eq!(fake.calls(), ["task release Projects/web-search.md --machine mac"]);
+        let lost = claimed_while(Some(&fake.claiming()), Some(&state), note, "search", "web", false, false, || Err("herdr pane process-info refused: pane not found (pane_not_found)".to_string()));
+        assert!(lost.is_err());
+        let again = claimed_while(Some(&fake.claiming()), Some(&state), note, "search", "web", false, true, || Ok(Begun { said: String::new(), started: Started::Ready }));
+        assert!(again.is_ok());
+        let failed_restart = claimed_while(Some(&fake.claiming()), Some(&state), note, "search", "web", false, true, || Err("no Space".to_string()));
+        assert!(failed_restart.is_err());
+        assert_eq!(fake.calls(), [
+            "task claim Projects/web-search.md --machine mac --task search --repo web",
+            "task release Projects/web-search.md --machine mac",
+            "task claim Projects/web-search.md --machine mac --task search --repo web",
+            "task claim Projects/web-search.md --machine mac --task search --repo web",
+        ], "the new start that failed gives the note back, the restart claims it again, and a failed restart keeps it with the task that holds the worktree");
+        give_back(Some(&fake.claiming()), Some(&state), None, "search");
+        assert_eq!(fake.calls().len(), 4, "nothing claimed, nothing given back");
     }
     use crate::agent::claude::{settings, start_args, transcripts_dir};
     use crate::tasks::test_support::*;
@@ -1156,7 +1215,7 @@ mod tests {
         let source = include_str!("launch.rs");
         let body = |name: &str| { let start = source.find(&format!("\nfn {name}(")).or_else(|| source.find(&format!("\npub fn {name}("))).or_else(|| source.find(&format!("\npub(super) fn {name}("))).unwrap(); &source[start..start + source[start..].find("\n}\n").unwrap()] };
         assert!(body("launch_new").find("store_prompt(").unwrap() < body("launch_new").find("launch(").unwrap(), "the prompt is kept even when the first start fails");
-        assert!(body("begin").contains("restart(&place(&existing), &existing, focus, prompt)"), "start's prompt reaches the resume path");
+        assert!(body("begin").contains("restart(&place(existing), existing, focus, prompt)"), "start's prompt reaches the resume path");
         assert!(body("restart").contains("prompt_for(&session, given, stored, unheard)") && body("restart").contains("send_prompt(agent.name(), started, prompt.as_deref(),"));
         assert!(body("restart").contains("unheard_in(agent, &file)"));
         assert!(body("forget_session").contains("prompt_file("));

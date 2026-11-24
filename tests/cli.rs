@@ -1715,6 +1715,36 @@ fn in_a_lead_without_its_board_the_key_brings_the_board_back_before_it_goes_back
     assert!(!calls.iter().any(|call| call[..2] == ["workspace", "focus"]), "it stays in the lead: {calls:?}");
 }
 
+#[test]
+fn a_start_in_a_free_worktree_waits_for_the_space_the_last_task_left_there_before_it_opens_its_own() {
+    let lab = Lab::new("left-space");
+    let (app, _) = lab.task_fixture();
+    let free = lab.root.join("wt2.app");
+    git(&app, &["worktree", "add", "--quiet", "--detach", free.to_str().unwrap()]);
+    let answers = lab.root.join("answers");
+    let listed = fs::read_to_string(answers.join("workspace-list.json")).unwrap();
+    let left = format!(r#"{{"workspace_id":"w_old","label":"ci-cancelled","focused":false,"worktree":{{"repo_root":"{}","checkout_path":"{}"}}}},"#, app.display(), free.display());
+    fs::write(lab.root.join("list-after.json"), &listed).unwrap();
+    fs::write(answers.join("workspace-list.json"), listed.replacen(r#""workspaces":["#, &format!(r#""workspaces":[{left}"#), 1)).unwrap();
+    fs::write(answers.join("worktree-open.json"), r#"{"result":{"workspace":{"workspace_id":"w_search"},"root_pane":{"pane_id":"p_search"}}}"#).unwrap();
+    fs::write(answers.join("pane-process-info.json"), r#"{"result":{"process_info":{"shell_pid":1,"foreground_processes":[]}}}"#).unwrap();
+    fs::write(answers.join("agent-start.json"), r#"{"result":{}}"#).unwrap();
+    tab_named(&lab, "1");
+    lab.live_claude();
+    let mut live = fs::read_to_string(lab.root.join("live.sh")).unwrap();
+    live.push_str("if [ \"$key\" = workspace-list ] && grep -q w_old \"$d/answers/workspace-list.json\"; then\n  echo x >> \"$d/old-looks\"\n  if [ \"$(wc -l < \"$d/old-looks\")\" -gt 2 ]; then cp \"$d/list-after.json\" \"$d/answers/workspace-list.json\"; else printf 'w_old-listed\\036' >> \"$d/herdr.log\"; fi\nfi\n");
+    fs::write(lab.root.join("live.sh"), live).unwrap();
+
+    let started = lab.run(&["-C", app.to_str().unwrap(), "start", "search", "Add the search page"]);
+    assert!(started.status.success(), "{}{}", stdout(&started), stderr(&started));
+    let calls = lab.herdr_calls();
+    let last_seen = calls.iter().rposition(|call| call == &vec!["w_old-listed".to_string()]).expect("the start found the Space the last task left on its worktree");
+    let opened = calls.iter().position(|call| call.len() > 1 && call[..2] == ["worktree", "open"]).expect("the start opens its own Space");
+    assert!(last_seen < opened, "it opens its Space only once the left one is gone: {calls:?}");
+    assert!(!calls.iter().any(|call| call.contains(&"w_old".to_string())), "a Space that closes by itself is left to close: {calls:?}");
+    assert_eq!(git(&free, &["branch", "--show-current"]), "search", "the start took the free worktree");
+}
+
 fn routine_status(lab: &Lab) -> serde_json::Value {
     let listed = lab.run(&["routines", "--json"]);
     assert!(listed.status.success(), "{}", stderr(&listed));
