@@ -17,7 +17,7 @@ The rules check is about how the work is shaped.
 
 When the reviewer gives no verdict (it fails, or has no answer within 15 minutes), the lead is asked to check the rules instead.
 
-Each code is checked once. A ready report on code the reviewer found breaks in gets those findings back, and one on code it gave no verdict on goes to the lead. Commits that change while the check runs get one more run.
+Each code is checked once. A ready report on the very commits the reviewer found breaks in gets those findings back; after a rebase, an amend or a split the new commits are checked again, since the findings name commits no longer on the branch, and one on code it gave no verdict on goes to the lead. Commits that change while the check runs get one more run.
 
 ## The reviewer gate holds the push until the code is right
 

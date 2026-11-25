@@ -119,7 +119,7 @@ pub fn start(cwd: &Path) -> Result<Started> {
         None => {}
     }
     let head = git(&slot.path, &["rev-parse", "HEAD"])?;
-    let asked = asked_in(&state, &address, checked_as(&slot.path, &upstream, &head))?;
+    let asked = asked_in(&state, &address, &head, checked_as(&slot.path, &upstream, &head))?;
     if asked == Asked::Failed {
         ask_lead(&state, &address, &slot.path, Some("the reviewer gave no rules verdict on this code, so the check is yours"))?;
         return Ok(Started::Lead);
@@ -142,14 +142,14 @@ enum Asked {
     Broken(String),
 }
 
-// What kebbie already knows of this code: breaks the reviewer found, or a run that gave no verdict, both of which a new run would only pay for again.
-fn asked_in(state: &Path, address: &str, current: impl Fn(&str) -> bool) -> Result<Asked> {
+// What kebbie already knows of this code: breaks the reviewer found on these very commits, whose findings name their shas, or a run that gave no verdict, both of which a new run would only pay for again.
+fn asked_in(state: &Path, address: &str, head: &str, current: impl Fn(&str) -> bool) -> Result<Asked> {
     if fs::read_to_string(file(state, address, "failed")).is_ok_and(|sha| current(sha.trim())) {
         return Ok(Asked::Failed);
     }
     let Ok(text) = fs::read_to_string(verdict_file(state, address)) else { return Ok(Asked::Fresh) };
     Ok(match review::parse_verdict(&text) {
-        Some(verdict) if !verdict.ok && current(&verdict.sha) => Asked::Broken(text.lines().skip(2).collect::<Vec<_>>().join("\n").trim().to_string()),
+        Some(verdict) if !verdict.ok && verdict.sha == head => Asked::Broken(text.lines().skip(2).collect::<Vec<_>>().join("\n").trim().to_string()),
         _ => Asked::Fresh,
     })
 }
@@ -221,13 +221,13 @@ pub fn rule_names(findings: &[String]) -> Vec<String> {
     names
 }
 
-// The board's word on the rules check: asked for or running, the breaks it found on the code as it is, or the lead asked about this code.
-pub fn shown_in(state: &Path, address: &str, current: impl Fn(&str) -> bool) -> Option<Shown> {
+// The board's word on the rules check: asked for or running, the breaks it found on the commits at head, or the lead asked about this code.
+pub fn shown_in(state: &Path, address: &str, head: &str, current: impl Fn(&str) -> bool) -> Option<Shown> {
     if running_in(state, address) || file(state, address, "wanted").exists() {
         return Some(Shown::Checking);
     }
     let verdict = fs::read_to_string(verdict_file(state, address)).ok().and_then(|text| review::parse_verdict(&text));
-    if let Some(verdict) = verdict.filter(|verdict| !verdict.ok && current(&verdict.sha)) {
+    if let Some(verdict) = verdict.filter(|verdict| !verdict.ok && verdict.sha == head) {
         let names = fs::read_to_string(verdict_file(state, address)).map(|text| rule_names(&review::findings_of(&text))).unwrap_or_default();
         return Some(Shown::Broken(verdict.findings.max(1), names));
     }
@@ -235,7 +235,7 @@ pub fn shown_in(state: &Path, address: &str, current: impl Fn(&str) -> bool) -> 
 }
 
 pub fn shown(state: &Path, address: &str, path: &Path, tips: &crate::tasks::SubtaskTips) -> Option<Shown> {
-    shown_in(state, address, checked_as(path, &tips.upstream, &tips.head))
+    shown_in(state, address, &tips.head, checked_as(path, &tips.upstream, &tips.head))
 }
 
 // A rules check reads the commits, not only the code they make, so its word holds only while the commits are the ones it read.
@@ -480,7 +480,7 @@ mod tests {
         assert_eq!(tasks::approval_by(&state, "billing@app", "f1\nf2"), Some(tasks::ApprovedBy::Reviewer), "the pass is recorded as the reviewer's");
         assert!(tasks::approval_holds(&state, "billing@app", "f1\nf2"), "the pass is the lead's approval fingerprint");
         assert!(!tasks::approval_holds(&state, "billing@app", "f1\nf2\nf3"), "a new commit takes it back");
-        assert_eq!(shown_in(&state, "billing@app", |_| true), None);
+        assert_eq!(shown_in(&state, "billing@app", "abc", |_| true), None);
         fs::remove_dir_all(state).unwrap();
     }
 
@@ -494,10 +494,10 @@ mod tests {
         assert!(reached[0].1.contains("rule 1, subject") && reached[0].1.contains("rule 2 (One logical change per commit).") && reached[0].1.contains("report ready again"), "the task gets each commit and rule: {}", reached[0].1);
         assert_eq!(reached[1].1.lines().count(), 1, "the lead gets one line: {}", reached[1].1);
         assert!(!tasks::approval_holds(&state, "billing@app", "f1"));
-        assert_eq!(shown_in(&state, "billing@app", |sha| sha == "abc1234def"), Some(Shown::Broken(2, vec!["One logical change per commit".to_string()])), "a rule the finding names in brackets is named on the board");
-        assert_eq!(shown_in(&state, "billing@app", |_| false), None, "breaks on older code say nothing of the code as it is");
-        assert_eq!(asked_in(&state, "billing@app", |sha| sha == "abc1234def").unwrap(), Asked::Broken(reached[0].1.lines().skip(1).collect::<Vec<_>>().join("\n")), "a ready report on the same code hears the stored findings, with no new run");
-        assert_eq!(asked_in(&state, "billing@app", |_| false).unwrap(), Asked::Fresh, "changed code is checked again");
+        assert_eq!(shown_in(&state, "billing@app", "abc1234def", |sha| sha == "abc1234def"), Some(Shown::Broken(2, vec!["One logical change per commit".to_string()])), "a rule the finding names in brackets is named on the board");
+        assert_eq!(shown_in(&state, "billing@app", "f00d", |_| false), None, "breaks on older code say nothing of the code as it is");
+        assert_eq!(asked_in(&state, "billing@app", "abc1234def", |sha| sha == "abc1234def").unwrap(), Asked::Broken(reached[0].1.lines().skip(1).collect::<Vec<_>>().join("\n")), "a ready report on the same code hears the stored findings, with no new run");
+        assert_eq!(asked_in(&state, "billing@app", "f00d", |_| false).unwrap(), Asked::Fresh, "changed code is checked again");
         fs::remove_dir_all(state).unwrap();
     }
 
@@ -520,8 +520,8 @@ mod tests {
             assert_eq!(reached[0].0, To::LeadCheck, "the lead is asked as it was before the reviewer took the check over");
             assert!(reached[0].1.contains(error));
             assert!(!tasks::approval_holds(&state, "billing@app", ""));
-            assert_eq!(asked_in(&state, "billing@app", |sha| sha == "abc1234def").unwrap(), Asked::Failed, "the same code goes to the lead without a new run");
-            assert_eq!(shown_in(&state, "billing@app", |_| true), None, "the board says the lead checks only once it was asked");
+            assert_eq!(asked_in(&state, "billing@app", "f00d", |sha| sha == "abc1234def").unwrap(), Asked::Failed, "the same code goes to the lead without a new run");
+            assert_eq!(shown_in(&state, "billing@app", "abc", |_| true), None, "the board says the lead checks only once it was asked");
             let _ = fs::remove_dir_all(state);
         }
     }
@@ -571,7 +571,7 @@ mod tests {
         let address = peers::address("billing", &name_of(&dir));
         assert_eq!(start(&slot.path).unwrap(), Started::Queued);
         assert!(file(&state, &address, "wanted").exists() && !file(&state, &address, "running").exists(), "the task's own process starts nothing");
-        assert_eq!(shown_in(&state, &address, |_| true), Some(Shown::Checking));
+        assert_eq!(shown_in(&state, &address, "abc", |_| true), Some(Shown::Checking));
         SPAWNED.with(|all| all.borrow_mut().clear());
         tick_with(&state, &[("KEBBIE_CLAUDE_BIN".to_string(), "/opt/claude/bin/claude".to_string()), ("HOME".to_string(), "/home/ada".to_string())]);
         let spawned = SPAWNED.with(|all| all.borrow_mut().drain(..).collect::<Vec<_>>());
@@ -628,7 +628,7 @@ mod tests {
     }
 
     #[test]
-    fn a_break_holds_through_a_clean_rebase_and_goes_once_the_commits_are_split_into_the_same_code() {
+    fn a_break_goes_with_the_commits_it_named_so_a_rebase_or_a_split_is_checked_again() {
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         let ada = ["-c", "user.name=Ada", "-c", "user.email=ada@example.com"];
         for name in ["e", "f"] {
@@ -641,11 +641,12 @@ mod tests {
         fs::create_dir_all(super::dir(&state)).unwrap();
         fs::write(verdict_file(&state, "billing@app"), review::record("verdict: changes\n\n- commit abc1234 makes two changes; rule 2.\n", &head()).unwrap()).unwrap();
         let tips = || crate::tasks::SubtaskTips { upstream: git(&slot.path, &["rev-parse", &upstream]).unwrap(), head: head() };
-        let broken = |state: &Path| (shown(state, "billing@app", &slot.path, &tips()), asked_in(state, "billing@app", checked_as(&slot.path, &upstream, &head())).unwrap());
+        let broken = |state: &Path| (shown(state, "billing@app", &slot.path, &tips()), asked_in(state, "billing@app", &head(), checked_as(&slot.path, &upstream, &head())).unwrap());
         assert!(matches!(broken(&state), (Some(Shown::Broken(1, _)), Asked::Broken(_))), "the break stands on the commits it read");
         land_on_main(&dir, &upstream, |_| ());
         git(&slot.path, &[&ada[..], &["rebase", "--quiet", &upstream]].concat()).unwrap();
-        assert!(matches!(broken(&state), (Some(Shown::Broken(1, _)), Asked::Broken(_))), "a clean rebase keeps the commits it read");
+        assert_eq!(broken(&state), (None, Asked::Fresh), "a rebase gives new commits, which are checked again rather than told breaks on shas no longer on the branch");
+        fs::write(verdict_file(&state, "billing@app"), review::record("verdict: changes\n\n- commit abc1234 makes two changes; rule 2.\n", &head()).unwrap()).unwrap();
         let tree = git(&slot.path, &["rev-parse", "HEAD^{tree}"]).unwrap();
         git(&slot.path, &["reset", "--quiet", "HEAD~1"]).unwrap();
         for name in ["e", "f"] {
