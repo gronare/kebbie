@@ -187,9 +187,9 @@ fn unlisted(repo: &Path) -> bool {
     repo.exists() && slots(repo).is_err()
 }
 
-// Past the ceiling the head gives way to a push waiting behind it; alone, it keeps the line while its Claude still goes on.
+// The ceiling counts from the hand-over or the head's last wait for a build slot, whichever is later; past it the head gives way to a push behind it, and alone it keeps the line while its Claude goes on.
 fn outlasted(head: &Intent, now: u64, behind: bool, goes_on: bool) -> bool {
-    now.saturating_sub(head.at) >= CEILING && (behind || !goes_on)
+    now.saturating_sub(head.at.max(head.waited.unwrap_or(0))) >= CEILING && (behind || !goes_on)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -203,6 +203,14 @@ fn turn(state: &Path, head: &Intent, log: &[Message], now: u64, read: Read, work
         phase::forget(state, &head.address);
         tell_lead(&format!("{why}."));
         return Turn::Out(why);
+    };
+    let stamped;
+    let head = if crate::builds::place(&head.address).is_some() {
+        let Some(fresh) = intent::stamp_waited(state, &head.address, now) else { return Turn::Waits };
+        stamped = fresh;
+        &stamped
+    } else {
+        head
     };
     if crate::repo::rebase_in_progress(&slot.path) {
         if outlasted(head, now, behind, working) {
@@ -575,6 +583,32 @@ mod tests {
         needs.at = handed.at + 1;
         let driven = drive(&state, &dir, None, &[needs], handed.at + 2, &|_, _| None, &|_| false, &mut push);
         assert!(driven.notes[0].contains("reported needs-you") && load(&state, &first).is_none(), "a red test leaves the line at once: {driven:?}");
+        drop_worktree(&dir, &beta);
+        cleanup(dir, origin, &alpha);
+    }
+
+    #[test]
+    fn a_head_waiting_for_a_build_slot_keeps_its_place_and_its_ceiling_counts_from_when_the_wait_ended() {
+        let (dir, origin, alpha, _) = task_with_a_commit("alpha");
+        let beta = another_task(&dir, "beta", "e");
+        let state = crate::lead::state_dir().unwrap();
+        let (first, second) = (crate::peers::address("alpha", &name_of(&dir)), crate::peers::address("beta", &name_of(&dir)));
+        let _line = Line { state: state.clone(), addresses: vec![first.clone(), second.clone()] };
+        upstream_commit(&dir, "d", "theirs", "d on main");
+        super::super::push::join(&state, &Caller::User, &dir, &alpha, Through::All).unwrap();
+        super::super::push::join(&state, &Caller::User, &dir, &beta, Through::All).unwrap();
+        let (_, mut push) = real_push(&state);
+        drive(&state, &dir, None, &[], 1000, &|_, _| None, &|_| false, &mut push);
+        let handed = load(&state, &first).unwrap().at;
+        crate::builds::line_up(&first);
+        let slot_free = handed + 2 * CEILING;
+        let driven = drive(&state, &dir, None, &[], slot_free, &|_, _| None, &|_| false, &mut push);
+        assert!(driven.notes.is_empty() && load(&state, &first).is_some_and(|head| head.waited == Some(slot_free)), "its build waits in kebbie's build queue, so it keeps the head though a push waits behind it: {driven:?}");
+        crate::builds::forget(&first);
+        let driven = drive(&state, &dir, None, &[], slot_free + CEILING - 1, &|_, _| None, &|_| false, &mut push);
+        assert!(driven.notes.is_empty() && load(&state, &first).is_some(), "the ceiling counts from when it last waited for a slot: {driven:?}");
+        let driven = drive(&state, &dir, None, &[], slot_free + CEILING, &|_, _| None, &|_| false, &mut push);
+        assert!(driven.notes[0].contains("its Claude did not report ready within 30 minutes"), "{driven:?}");
         drop_worktree(&dir, &beta);
         cleanup(dir, origin, &alpha);
     }

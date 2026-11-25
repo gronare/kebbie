@@ -27,6 +27,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The rules check no longer reads linear history as lying on the latest default branch, so a branch that is only behind the default branch passes.
 - A rebased task is checked against the rules again, rather than told breaks on commits no longer on its branch.
 - The head of a push line goes before other tasks in the build queue.
+- The head of a push line's 30 minutes start once its build stops waiting for a slot.
 - cargo test runs in a sandboxed task, since the tests no longer write a .gitconfig into their own home.
 - A task stays a task, with its questions and kebbie tell, while its worktree is on another commit or branch.
 - A queued task starts once the task it waits for is done, even when that done takes minutes.

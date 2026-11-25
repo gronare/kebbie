@@ -554,7 +554,7 @@ pub(super) fn join(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, thro
     let now = messages::now();
     let seen = messages::latest_reports(&messages::load()).get(&address).map(|report| report.id.clone());
     let queued = waiting.and_then(|waiting| waiting.queued).unwrap_or(now);
-    intent::save(state, &Intent { by: by.clone(), work: Work::Turn, address: address.clone(), repo: repo.to_path_buf(), task, fingerprint: pushed_fingerprint(&slot.path, &upstream, through)?, through, at: now, seen, hand: None, queued: Some(queued) })?;
+    intent::save(state, &Intent { by: by.clone(), work: Work::Turn, address: address.clone(), repo: repo.to_path_buf(), task, fingerprint: pushed_fingerprint(&slot.path, &upstream, through)?, through, at: now, seen, hand: None, queued: Some(queued), waited: None })?;
     intent::forget_left(state, &address);
     let ahead = intent::line(state, repo).iter().position(|queued| queued.address == address).unwrap_or(0);
     crate::phase::record(state, &address, by.key(), &crate::phase::Event::PushQueued { ahead });
@@ -663,7 +663,7 @@ fn prepare(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Thr
     fetch(repo)?;
     let recorded = pushed_fingerprint(&slot.path, &upstream, through)?;
     let seen = messages::latest_reports(&messages::load()).get(&address).map(|report| report.id.clone());
-    let record = |work: Work, fingerprint: String| intent::save(state, &Intent { by: by.clone(), work, address: address.clone(), repo: repo.to_path_buf(), task: task.clone(), fingerprint, through, at: messages::now(), seen: seen.clone(), hand: None, queued });
+    let record = |work: Work, fingerprint: String| intent::save(state, &Intent { by: by.clone(), work, address: address.clone(), repo: repo.to_path_buf(), task: task.clone(), fingerprint, through, at: messages::now(), seen: seen.clone(), hand: None, queued, waited: None });
     let before = git(&slot.path, &["rev-parse", "HEAD"])?;
     let (updated, out) = match through {
         Through::All => (update(&slot.path, &upstream)?, None),

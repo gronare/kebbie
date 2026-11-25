@@ -659,6 +659,11 @@ pub fn hook() -> String {
 }
 
 #[cfg(test)]
+pub(crate) fn line_up(address: &str) {
+    with_queue(&dir().unwrap(), |queue| queue.line.push(address.to_string())).unwrap();
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

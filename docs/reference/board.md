@@ -264,7 +264,7 @@ How far it is behind the default branch does not matter. A push under way stays 
 - its turn, as `2nd in line after <title>` while other pushes of its repo go first, and `kebbie pushes it now` at the head;
 - the tests for files the default branch changed under it, a conflict, or a fix for CI that failed after the push.
 
-Each repo pushes one task at a time, in the order you pushed them, and rebases a task only when its turn comes. A head whose Claude works keeps its place for as long as it works, and for up to 30 minutes once another push waits behind it. See [Pushing](../explanation/trunk-based.md#one-push-line-per-repo).
+Each repo pushes one task at a time, in the order you pushed them, and rebases a task only when its turn comes. A head whose Claude works keeps its place for as long as it works, and for up to 30 minutes once another push waits behind it; time its build spends waiting for a build slot does not count. See [Pushing](../explanation/trunk-based.md#one-push-line-per-repo).
 
 A task on local main stays here too, marked `on local main · waiting for your push`, until main is pushed and it closes as landed.
 

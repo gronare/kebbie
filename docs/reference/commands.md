@@ -265,6 +265,7 @@ How far the task is behind the default branch does not matter. The rebase at its
 - After a conflict, the resolved commits need a rules check before the next push.
 - While its Claude runs the tests or resolves the conflict, the task keeps the head of the line and the pushes behind it wait.
 - It leaves the line for Needs you, marked `out of the push line: <why>`, when its Claude reports needs-you, or when 30 minutes pass without a ready report (or, after one, without a passed rules check of the changed commits) while another push waits behind it. Alone in the line, it keeps its place past 30 minutes while its Claude works or has reported ready, and leaves only once its Claude stops without a ready report. The next push in line goes on then.
+- While its build waits for a [build slot](configuration.md#builds), it keeps the head, and the 30 minutes count from when that wait ended.
 
 When origin is on GitHub and `gh` is logged in, the task stays open under CI running instead, and closes as `done` once every workflow run for the pushed commit is green and the check the task named with `report --after-push` holds. See `kebbie ci`. Otherwise the push result ends with `CI not watched:` and the reason.
 

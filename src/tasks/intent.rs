@@ -84,7 +84,7 @@ impl Work {
     }
 }
 
-// An authorised push that waits in its repo's line, by `queued`, and for the task's Claude; it goes out for the commits it was recorded for, or for commits the lead approved since. A red CI's push waits outside the line, `queued` None, until its fix is ready.
+// An authorised push that waits in its repo's line, by `queued`, and for the task's Claude, last seen waiting for a build slot at `waited`; it goes out for the commits it was recorded for, or for commits the lead approved since. A red CI's push waits outside the line, `queued` None, until its fix is ready.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Intent {
     pub by: By,
@@ -98,6 +98,7 @@ pub(super) struct Intent {
     pub seen: Option<String>,
     pub hand: Option<String>,
     pub queued: Option<u64>,
+    pub waited: Option<u64>,
 }
 
 impl Intent {
@@ -109,7 +110,7 @@ impl Intent {
         let mut value = json!({
             "by": self.by.key(), "work": self.work.key(),
             "address": self.address, "repo": self.repo, "task": self.task, "fingerprint": self.fingerprint,
-            "through": through, "at": self.at, "seen": self.seen, "hand": self.hand, "queued": self.queued,
+            "through": through, "at": self.at, "seen": self.seen, "hand": self.hand, "queued": self.queued, "waited": self.waited,
         });
         if let By::Hub { account, name } = &self.by {
             value["hub"] = json!({ "account": account, "name": name });
@@ -148,6 +149,7 @@ impl Intent {
             seen: value["seen"].as_str().map(str::to_string),
             hand: value["hand"].as_str().map(str::to_string),
             queued,
+            waited: value["waited"].as_u64(),
         })
     }
 }
@@ -162,6 +164,13 @@ pub(super) fn file(state: &Path, address: &str) -> PathBuf {
 
 pub(super) fn save(state: &Path, intent: &Intent) -> Result<()> {
     crate::state::write(&file(state, &intent.address), intent.to_json().to_string())
+}
+
+// Read again right before the write, so a push forgotten since the round read it is never written back.
+pub(super) fn stamp_waited(state: &Path, address: &str, now: u64) -> Option<Intent> {
+    let stamped = Intent { waited: Some(now), ..load(state, address)? };
+    save(state, &stamped).ok()?;
+    Some(stamped)
 }
 
 pub(super) fn load(state: &Path, address: &str) -> Option<Intent> {
@@ -223,7 +232,7 @@ pub(crate) fn after_red_ci(state: &Path, repo: &Path, address: &str, by: By) -> 
     let task = crate::peers::task_part(address).to_string();
     let log = messages::load();
     let seen = messages::latest_reports(&log).get(address).map(|report| report.id.clone());
-    save(state, &Intent { by, work: Work::Ci, address: address.to_string(), repo: repo.to_path_buf(), task, fingerprint: String::new(), through: Through::All, at: messages::now(), seen, hand: last_hand_over(&log, address), queued: None })
+    save(state, &Intent { by, work: Work::Ci, address: address.to_string(), repo: repo.to_path_buf(), task, fingerprint: String::new(), through: Through::All, at: messages::now(), seen, hand: last_hand_over(&log, address), queued: None, waited: None })
 }
 
 fn last_hand_over(log: &[Message], address: &str) -> Option<String> {
@@ -306,7 +315,21 @@ pub(super) mod tests {
     }
 
     pub(in crate::tasks) fn intent(by: By, repo: &Path, fingerprint: &str) -> Intent {
-        Intent { by, work: Work::Tests, address: format!("billing@{}", crate::repo::name_of(repo)), repo: repo.to_path_buf(), task: "billing".to_string(), fingerprint: fingerprint.to_string(), through: Through::All, at: 100, seen: Some("before".to_string()), hand: None, queued: Some(100) }
+        Intent { by, work: Work::Tests, address: format!("billing@{}", crate::repo::name_of(repo)), repo: repo.to_path_buf(), task: "billing".to_string(), fingerprint: fingerprint.to_string(), through: Through::All, at: 100, seen: Some("before".to_string()), hand: None, queued: Some(100), waited: None }
+    }
+
+    #[test]
+    fn a_build_wait_is_stamped_on_the_push_as_it_stands_and_never_brings_back_a_forgotten_one() {
+        let state = std::env::temp_dir().join(format!("kebbie-intent-stamp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&state);
+        let written = intent(By::User, Path::new("/repos/app"), "abc");
+        save(&state, &written).unwrap();
+        assert_eq!(stamp_waited(&state, "billing@app", 500), Some(Intent { waited: Some(500), ..written.clone() }));
+        assert_eq!(load(&state, "billing@app").and_then(|intent| intent.waited), Some(500));
+        forget(&state, "billing@app");
+        assert_eq!(stamp_waited(&state, "billing@app", 600), None);
+        assert!(load(&state, "billing@app").is_none() && !file(&state, "billing@app").exists(), "a push closed or dropped since the round read it stays gone");
+        let _ = std::fs::remove_dir_all(&state);
     }
 
     #[test]

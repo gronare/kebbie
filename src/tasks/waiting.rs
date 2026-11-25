@@ -732,7 +732,7 @@ mod tests {
         let (dir, origin, slot, _) = task_with_a_commit("billing");
         let state = state_of(&dir);
         let address = peers::address("billing", &name_of(&dir));
-        let pending = |work: Work| Intent { by: By::User, work, address: address.clone(), repo: dir.clone(), task: "billing".to_string(), fingerprint: "abc".to_string(), through: Through::All, at: 90, seen: None, hand: None, queued: (work != Work::Ci).then_some(90) };
+        let pending = |work: Work| Intent { by: By::User, work, address: address.clone(), repo: dir.clone(), task: "billing".to_string(), fingerprint: "abc".to_string(), through: Through::All, at: 90, seen: None, hand: None, queued: (work != Work::Ci).then_some(90), waited: None };
         intent::save(&state, &pending(Work::Turn)).unwrap();
         let known = known(&[address.as_str(), "rounding@api"], Vec::new(), &[]);
         let ask = Asked { address: &address, repo: &dir, on: &["rounding@api"], then: None };

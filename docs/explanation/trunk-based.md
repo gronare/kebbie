@@ -28,6 +28,7 @@ Only the head is fetched and rebased, onto origin's default branch, never the lo
 - When the head rebases cleanly and the overlap rules pass, kebbie pushes it and takes the next.
 - When its rebase goes over the task's own files or conflicts, the head goes to its Claude and keeps its place while the line waits for it. The pushes behind it would otherwise rebase onto a default branch that is about to move again.
 - At once on a needs-you report, or after 30 minutes without a ready report while another push waits behind it, the head leaves the line for Needs you with the reason, and the next push goes on. Alone in the line, it keeps its place while its Claude works, and leaves after 30 minutes only when its Claude stopped without a ready report.
+- While the head's build waits in the machine's [build queue](../reference/configuration.md#builds), it keeps its place, and its 30 minutes count from when that wait ended. It goes before other tasks in the build queue.
 
 ## A long task can follow main
 
