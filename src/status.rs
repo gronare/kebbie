@@ -712,7 +712,7 @@ impl Item {
             let dirty = if git.uncommitted > 0 { format!(" · {}", plural(git.uncommitted, "uncommitted file")) } else { String::new() };
             return format!("{} · ready to push{dirty}{behind}{review}{turn}", plural(git.ahead, "commit"));
         }
-        let mut parts: Vec<String> = self.git_error().map(|_| GIT_UNREAD.to_string()).into_iter().chain(self.build_wait.map(crate::builds::board_note)).chain(self.obstacle.as_ref().map(crate::obstacle::Shown::note)).chain(crate::tasks::rollout::note(&self.subtasks.stages)).chain(self.staged.then(|| STAGED.to_string())).chain(self.phase_note()).chain(self.ci_note()).chain(self.recover_note()).chain(self.push_note()).chain(self.landed.filter(|why| !why.waits_for_you()).and(self.landed_note())).collect();
+        let mut parts: Vec<String> = self.git_error().map(|_| GIT_UNREAD.to_string()).into_iter().chain(self.build_wait.map(crate::builds::board_note)).chain(self.obstacle.as_ref().filter(|_| surface == Surface::Lead).map(crate::obstacle::Shown::note)).chain(crate::tasks::rollout::note(&self.subtasks.stages)).chain(self.staged.then(|| STAGED.to_string())).chain(self.phase_note()).chain(self.ci_note()).chain(self.recover_note()).chain(self.push_note()).chain(self.landed.filter(|why| !why.waits_for_you()).and(self.landed_note())).collect();
         if git.ahead > 0 {
             parts.push(plural(git.ahead, "commit"));
         }
@@ -2259,6 +2259,14 @@ pub(crate) mod tests {
         }
         moved(&mut item, &Event::Reported { state: "blocked", head: None, committed: false, pushing: false });
         assert_eq!(item.group(), Group::Idle, "its next blocked report waits again");
+    }
+
+    #[test]
+    fn the_phones_line_leaves_an_obstacle_to_the_lead_and_the_leads_summary_keeps_it() {
+        let mut item = task(Some("idle"), Some("blocked"), 1);
+        item.obstacle = Some(crate::obstacle::Shown { id: "o1".to_string(), state: crate::obstacle::State::Investigating, text: "the index stores titles only".to_string() });
+        assert!(item.summary().starts_with("obstacle · investigating"), "{}", item.summary());
+        assert!(!item.summary_on(Surface::User).contains("obstacle"), "{}", item.summary_on(Surface::User));
     }
 
     #[test]

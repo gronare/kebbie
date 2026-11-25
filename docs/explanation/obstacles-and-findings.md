@@ -6,7 +6,7 @@ This page explains what happens when a task meets something in its way, or a rev
 
 An obstacle is something on the task's own path: a precondition its work needs is missing, a part of its plan cannot be built as planned, a trap makes it unsafe, or it goes only by a workaround. A red test the task did not cause, and a check it cannot run, count too.
 
-The task stops that piece of work, writes the obstacle down with what it read and every way it sees, and raises it with [`kebbie obstacle`](../reference/commands.md#kebbie-obstacle---on-work-text). kebbie keeps it, and the task's row reads `obstacle · investigating` under Working, where a blocked report alone would sink under Idle. The task goes on with work the obstacle does not touch, or reports blocked.
+The task stops that piece of work, writes the obstacle down with what it read and every way it sees, and raises it with [`kebbie obstacle`](../reference/commands.md#kebbie-obstacle---on-work-text). kebbie keeps it, and the task stays under Working, where a blocked report alone would sink under Idle; the lead's `kebbie status` reads `obstacle · investigating` for it, while the row on the board and the phone leaves the obstacle to the lead and the investigator. The task goes on with work the obstacle does not touch, or reports blocked.
 
 ## kebbie's investigator decides, in line with the task's goal
 

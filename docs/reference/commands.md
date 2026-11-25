@@ -783,7 +783,7 @@ It is yours, or the lead's on your explicit choice. The lead's settings do not a
 
 The task's Claude raises what stops a piece of its work as planned: what the work needs, what is there instead with `file:line`, what it read, and each way it sees.
 
-- kebbie keeps it, and the task's row reads `obstacle · investigating`.
+- kebbie keeps it, the task stays under Working, and `kebbie status` reads `obstacle · investigating` for it; the board's and the phone's rows do not show it.
 - The keeper starts kebbie's investigator ([`investigate.profile`](configuration.md#investigation)), which decides `workaround`, `subtask`, `task` or `ask`. kebbie carries the decision out and sends it to the task. See [Obstacles and findings](../explanation/obstacles-and-findings.md).
 - `--on` names the work it blocks; left out, the subtask in progress.
 - The same text raised again answers with its decision. A second obstacle on the same work, or the task's third, asks you whether the plan holds.
