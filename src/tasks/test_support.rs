@@ -8,7 +8,8 @@ pub(crate) fn repo() -> PathBuf {
 }
 
 fn repo_named(suffix: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("kebbie-test-{}-{:?}{suffix}", std::process::id(), std::thread::current().id()));
+    let thread = format!("{:?}", std::thread::current().id()).replace(['(', ')'], "");
+    let dir = std::env::temp_dir().join(format!("kebbie-test-{}-{thread}{suffix}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     git(&dir, &["init", "--quiet"]).unwrap();
