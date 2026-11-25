@@ -51,7 +51,7 @@ pub(crate) fn rollout_run(order: &[Placed], stages: &[kebbie_hub_protocol::Stage
 pub(crate) use plan::{Placed, Subtask, Subtasks, State as SubtaskState, order_json, pushable_json, subtasks_json, tests_word, Tips as SubtaskTips, read_at as subtasks_read, shown_at as subtasks_shown_at, for_path as subtasks_for, mark as subtask_mark, word as subtask_word};
 pub(crate) use order::{Asked as OrderAsked, command as order};
 pub(crate) use rollout::command as stages;
-pub(crate) use pool::{Slot, find_task, list, move_work, slots, task_of, task_slots};
+pub(crate) use pool::{Slot, clean_build_output, find_task, list, move_work, slots, task_of, task_slots};
 pub(crate) use push_steps::watched as push_watched;
 #[cfg(test)]
 pub(crate) use push_steps::step as push_step;

@@ -39,6 +39,7 @@ pub fn routines() -> Vec<Routine> {
     vec![
         Routine { name: "messages", every: 3, run: |_| crate::messages::flush().map(|_| ()) },
         Routine { name: "builds", every: crate::builds::EVERY, run: |ctx| { ctx.notes.extend(crate::builds::tick_now()?); Ok(()) } },
+        Routine { name: "disk", every: crate::disk_trim::EVERY, run: |ctx| { ctx.notes.extend(crate::disk_trim::tick(&crate::lead::state_dir()?)); Ok(()) } },
         Routine { name: "typed", every: 3, run: |_| { crate::typing::check(); Ok(()) } },
         Routine { name: "restart", every: 60, run: restart },
         Routine { name: "updates", every: 600, run: updates },

@@ -337,6 +337,7 @@ networks = ["wireguard"]
 
 - held messages and delivery checks of typed prompts, stale-session restarts and the update check;
 - handing a freed build slot to the next task in line;
+- trimming build output from worktrees nobody uses when the disk runs low ([Disk space](#disk-space));
 - once an hour, linking kebbie in herdr again when herdr links it from a folder that is gone;
 - the push lines and local-main staging, CI watches, comments on pushed commits, closing landed tasks and rebasing the tasks that follow main;
 - relaying a task's Claude's own prompts to the lead, resuming tasks an API error stopped, and the rules check on a ready report;
@@ -368,6 +369,21 @@ commands = ["cargo", "xcodebuild", "npm run build"]
 #### Disk space
 
 Each worktree builds into its own `target/`, a few GB each, so a machine with many tasks can fill its disk. kebbie watches the free space on the disks that hold the repos' worktrees.
+
+On Linux, every 2 minutes, when the free space is below `disk.trim_below`, the keeper removes the build output that `worktree.clean_on_release` names from worktrees nobody uses, in this order:
+
+1. Free worktrees in a repo's pool.
+2. Tasks waiting for a push: ready, staged, pushing, or with CI running.
+3. Tasks whose Claude has finished: idle, or waiting for you.
+
+It skips a worktree when any of these holds:
+
+- its task's Claude is working, or herdr cannot say;
+- its task holds a build slot, has a turn, or waits in line for one;
+- a process works inside it other than its Claude or Codex, their shells, kebbie, and the tools the agent starts itself such as its MCP servers, so a build or a dev server started through a shell or in the task's pane keeps it; or a program built in it runs;
+- for a free worktree, any process works inside it.
+
+It checks each worktree again just before it trims it, and stops once the disk is above the limit. A task whose output was trimmed builds it again the next time it builds. With the keeper off, an open board runs the same round every minute. On macOS kebbie cannot see which processes use a worktree, so it trims nothing there: the line under Needs you shows the free space and says to free it by hand.
 
 When the free space under a worktree is below `disk.builds_below`, a task's build there takes no build slot and does not run. The guard says how much is free and exits with status 75, and a task in line whose own worktree is on such a disk gets no build turn: it keeps its place while the turn goes to the next task whose disk has room.
 

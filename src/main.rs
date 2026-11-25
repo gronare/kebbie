@@ -7,6 +7,7 @@ mod areas;
 mod behind;
 mod builds;
 mod disk;
+mod disk_trim;
 mod assessment;
 mod backlog;
 mod backlog_file;

@@ -437,7 +437,7 @@ impl Item {
         self.agent.as_ref().is_some_and(|agent| agent.status == "working")
     }
 
-    fn phase(&self) -> Option<&Phase> {
+    pub(crate) fn phase(&self) -> Option<&Phase> {
         self.phase.as_ref().map(|record| &record.phase)
     }
 

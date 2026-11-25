@@ -173,7 +173,7 @@ pub(super) fn run_release(command: &str, worktree: &Path, ceiling: std::time::Du
 }
 
 // Only output git ignores and tracks nothing in is removed, and target only in a Rust worktree; a symlink is never followed.
-pub(super) fn clean_build_output(worktree: &Path, folders: &[String]) -> Vec<(String, u64)> {
+pub(crate) fn clean_build_output(worktree: &Path, folders: &[String]) -> Vec<(String, u64)> {
     let mut removed = Vec::new();
     for folder in folders {
         let path = worktree.join(folder);
