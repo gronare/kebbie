@@ -109,6 +109,11 @@ pub fn lead_may_push(permit: Option<Permit>) -> std::result::Result<(), String> 
     }
 }
 
+// Unlike lead_may_push, a repo's permission needs no review here, since the user made review optional; a review asked for still holds the push at the review gate.
+pub fn keeper_may_push(permit: Option<Permit>) -> std::result::Result<(), String> {
+    permit.map(|_| ()).ok_or_else(|| "the user has given no push permission for it or its repo".to_string())
+}
+
 fn away_file(state: &Path) -> PathBuf {
     state.join("away")
 }
@@ -185,7 +190,7 @@ pub fn return_brief(log: &[Message], since: u64, waiting: &[Message]) -> String 
     )
 }
 
-// Who runs this kebbie, read from its ancestors: a Claude that kebbie started carries its role in its --settings file. Hub is the user acting through the hub with a command their account signed, which the bridge passes explicitly; caller() never returns it.
+// Who runs this kebbie, read from its ancestors: a Claude that kebbie started carries its role in its --settings file. Hub is the user acting through the hub with a command their account signed, which the bridge passes explicitly, and Keeper is the keeper pushing under the user's permission; caller() never returns either.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Caller {
     User,
@@ -195,6 +200,7 @@ pub enum Caller {
     Sandboxed,
     LeadSandboxed,
     Hub { account: String, name: String },
+    Keeper,
 }
 
 #[cfg(test)]
@@ -407,6 +413,7 @@ pub fn describe(caller: &Caller) -> String {
         Caller::User => "the user".to_string(),
         Caller::Hub { name, .. } => format!("the user, from {name}"),
         Caller::Lead => "the lead".to_string(),
+        Caller::Keeper => "kebbie, under the user's push permission,".to_string(),
         Caller::Task(address) => format!("the task {address}"),
         Caller::Agent => "an agent session (Claude or Codex)".to_string(),
         Caller::Sandboxed => "a sandboxed process".to_string(),

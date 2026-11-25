@@ -288,29 +288,29 @@ fn overlap_prompt(by: &By, upstream: &str, touched: &[Touched], through: Through
     let files: Vec<String> = touched.iter().map(|touched| format!("- {}: {}", touched.file, touched.commits.join("; "))).collect();
     if let Through::First { count, .. } = through {
         return format!(
-            "{} asked kebbie to push the first {} of this task. kebbie rebased them onto {upstream} in a worktree of its own without conflicts, but the commits \
+            "{}. kebbie rebased them onto {upstream} in a worktree of its own without conflicts, but the commits \
              they went over changed files they change too:\n{}\nkebbie changed nothing in your worktree. Once your work in progress is committed or stashed, \
              rebase your branch onto {upstream} yourself (git rebase {upstream}, already fetched, no -i), run the tests that cover those files, and fix what \
              broke in those first commits themselves, not in a commit after them (git commit --amend, or git rebase with GIT_SEQUENCE_EDITOR editing the \
-             todo), since kebbie pushes only them. Do not push. When the tests pass, report ready: kebbie pushes them for {} then, once the lead has checked a fix against the \
+             todo), since kebbie pushes only them. Do not push. When the tests pass, report ready: kebbie pushes them{} then, once the lead has checked a fix against the \
              rules. Report needs-you only when a test stays red. {WAITING_BEHIND}",
-            capitalized(by.word()), plural(count, "commit"), files.join("\n"), by.word()
+            asked(by, &format!("the first {} of this task", plural(count, "commit"))), files.join("\n"), for_by(by)
         );
     }
     format!(
-        "{} asked kebbie to push this task. kebbie fetched and rebased it onto {upstream} without conflicts, but the commits it was rebased over \
+        "{}. kebbie fetched and rebased it onto {upstream} without conflicts, but the commits it was rebased over \
          changed files this task changes too:\n{}\nRun the tests that cover those files and fix what broke with a new commit. Do not push. When \
-         the tests pass, report ready: kebbie pushes the task for {} then, once the lead has checked a fix against the rules. Report needs-you \
+         the tests pass, report ready: kebbie pushes the task{} then, once the lead has checked a fix against the rules. Report needs-you \
          only when a test stays red. {WAITING_BEHIND}",
-        capitalized(by.word()), files.join("\n"), by.word()
+        asked(by, "this task"), files.join("\n"), for_by(by)
     )
 }
 
 fn required_prompt(by: &By, upstream: &str, gap: &crate::required_runs::Gap) -> String {
     format!(
-        "{} asked kebbie to push this task. kebbie fetched and rebased it onto {upstream} without conflicts, and {} \
-         When they pass, report ready: kebbie pushes the task for {} then. Report needs-you only when one stays red. {WAITING_BEHIND}",
-        capitalized(by.word()), crate::required_runs::rebased_prompt(gap), by.word()
+        "{}. kebbie fetched and rebased it onto {upstream} without conflicts, and {} \
+         When they pass, report ready: kebbie pushes the task{} then. Report needs-you only when one stays red. {WAITING_BEHIND}",
+        asked(by, "this task"), crate::required_runs::rebased_prompt(gap), for_by(by)
     )
 }
 
@@ -598,6 +598,12 @@ pub(crate) fn ordinal(number: usize) -> String {
 
 // What a caller may push is checked here, once, and again when its turn comes; a push already in line keeps its place.
 pub(super) fn join(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Through) -> Result<()> {
+    let seen = messages::latest_reports(&messages::load()).get(&peers::address(task_of(slot), &name_of(repo))).map(|report| report.id.clone());
+    join_on(state, caller, repo, slot, through, seen)
+}
+
+// `seen` is the task's latest report, which this push uses up whoever asked for it, so kebbie never queues it again for that report.
+pub(super) fn join_on(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Through, seen: Option<String>) -> Result<()> {
     let task = task_of(slot).to_string();
     let upstream = default_branch(repo)?;
     let address = peers::address(&task, &name_of(repo));
@@ -621,12 +627,14 @@ pub(super) fn join(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, thro
         return Notice::new(Tone::NotNow, "Already being pushed").next("It is in the push line; kebbie pushes it when its turn comes.").detail("task", &task).err();
     }
     let now = messages::now();
-    let seen = messages::latest_reports(&messages::load()).get(&address).map(|report| report.id.clone());
     let queued = waiting.and_then(|waiting| waiting.queued).unwrap_or(now);
-    intent::save(state, &Intent { by: by.clone(), work: Work::Turn, address: address.clone(), repo: repo.to_path_buf(), task, fingerprint: pushed_fingerprint(&slot.path, &upstream, through)?, through, at: now, seen, hand: None, queued: Some(queued), waited: None })?;
+    intent::save(state, &Intent { by: by.clone(), work: Work::Turn, address: address.clone(), repo: repo.to_path_buf(), task, fingerprint: pushed_fingerprint(&slot.path, &upstream, through)?, through, at: now, seen: seen.clone(), hand: None, queued: Some(queued), waited: None })?;
     intent::forget_left(state, &address);
     if by.is_user() {
         intent::forget_left_count(state, &address);
+    }
+    if let Some(seen) = &seen {
+        super::permitted::used_up(state, &address, seen);
     }
     let ahead = intent::line(state, repo).iter().position(|queued| queued.address == address).unwrap_or(0);
     crate::phase::record(state, &address, by.key(), &crate::phase::Event::PushQueued { ahead });
@@ -755,7 +763,7 @@ fn prepare(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Thr
         Updated::Clean => {}
         Updated::Conflict(files) => {
             record(Work::Conflict, recorded)?;
-            let why = format!("{} asked kebbie to push this task", capitalized(&pusher));
+            let why = if by == By::Keeper { asked(&by, "this task") } else { format!("{} asked kebbie to push this task", capitalized(&pusher)) };
             let prompt = format!("{}{kept} {WAITING_BEHIND}", conflict_prompt(&why, &upstream));
             if let Err(cannot) = hand_over(slot, &prompt).and_then(|_| intent::note_hand_over(state, &address)) {
                 intent::forget(state, &address);
@@ -763,7 +771,7 @@ fn prepare(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Thr
                     .you("Push again; if this repeats, rebase it yourself in its worktree.").detail("task", &task).detail("files", files.join(" · ")).detail("folder", slot.path.display().to_string()).detail("error", cannot).err();
             }
             crate::phase::record(state, &address, by.key(), &crate::phase::Event::PushHanded);
-            tell_lead(&format!("{}; rebasing onto {upstream} conflicted, so its Claude resolves it as part of the push. When it reports ready, the reviewer checks the resolved commits against the rules and kebbie pushes them for {} then; you hear only of a break, or when the reviewer gives no verdict. The task keeps the head of its repo's push line while its Claude works, and for up to {} minutes once another push waits behind it.", who_pushed(&pusher, &address), by.word(), super::line::CEILING / 60));
+            tell_lead(&format!("{}; rebasing onto {upstream} conflicted, so its Claude resolves it as part of the push. When it reports ready, the reviewer checks the resolved commits against the rules and kebbie pushes them{} then; you hear only of a break, or when the reviewer gives no verdict. The task keeps the head of its repo's push line while its Claude works, and for up to {} minutes once another push waits behind it.", who_pushed(&pusher, &address), for_by(&by), super::line::CEILING / 60));
             return Ok(Prepared::Handed(Notice::new(Tone::Moving, format!("Not pushed yet: it conflicts with {}", main_of(&upstream)))
                 .next(format!("Its Claude resolves the conflict, the reviewer checks the result against the rules, then kebbie pushes it{}.", for_whom(&pusher))).detail("task", &task).detail("files", files.join(" · ")).to_string()));
         }
@@ -935,14 +943,14 @@ fn kept_open(state: &Path, slot: &Slot, upstream: &str, address: &str, sha: &str
     let told = if clean {
         format!(
             "{} pushed {} of this task, through {short}, to {target}; they are on {target} for good. Your branch continues from there with {} on top: reshape only those.",
-            capitalized(pusher), plural(count, "commit"), plural(rest, "commit")
+            pushed_by(pusher), plural(count, "commit"), plural(rest, "commit")
         )
     } else {
         format!(
             "{} pushed {} of this task to {target}, rebased onto it as {short}; they are on {target} for good. kebbie changed nothing in your worktree, so your branch still holds them under their old shas: \
              once your work in progress is committed, at a point of your choosing, run git rebase {upstream} (already fetched, no -i), which drops the pushed ones as already on {target}. \
              Do not push. Reshape only the {} after them.",
-            capitalized(pusher), plural(count, "commit"), plural(rest, "commit")
+            pushed_by(pusher), plural(count, "commit"), plural(rest, "commit")
         )
     };
     if let Err(error) = messages::notify(address, &told) {
@@ -1036,13 +1044,38 @@ fn close_pushed(state: &Path, by: &str, told: Landed, close: impl FnOnce(&str) -
 }
 
 fn for_whom(pusher: &str) -> String {
-    if pusher.starts_with("the user") { String::new() } else { format!(" for {pusher}") }
+    match pusher {
+        KEEPER_PUSHER => " under the user's push permission".to_string(),
+        _ if pusher.starts_with("the user") => String::new(),
+        _ => format!(" for {pusher}"),
+    }
+}
+
+// Who started the push, as the task's Claude reads it: kebbie under the user's permission asked no one.
+pub(crate) fn asked(by: &By, what: &str) -> String {
+    if *by == By::Keeper { format!("kebbie is pushing {what} under the user's push permission") } else { format!("{} asked kebbie to push {what}", capitalized(by.word())) }
+}
+
+pub(crate) fn given(by: &By) -> String {
+    if *by == By::Keeper { "the push under the user's push permission".to_string() } else { format!("the push {} gave", by.word()) }
+}
+
+pub(crate) fn for_by(by: &By) -> String {
+    if *by == By::Keeper { " under the user's push permission".to_string() } else { format!(" for {}", by.word()) }
+}
+
+fn pushed_by(pusher: &str) -> String {
+    if pusher == KEEPER_PUSHER { "kebbie, under the user's push permission,".to_string() } else { capitalized(pusher) }
 }
 
 const HUB_PUSHER: &str = "the user from ";
+const KEEPER_PUSHER: &str = "kebbie";
 
 // The lead's word on who pushed: the user's push through the hub says so after the task, as the lead's copy of a hub answer does.
 fn who_pushed(pusher: &str, address: &str) -> String {
+    if pusher == KEEPER_PUSHER {
+        return format!("kebbie pushed {address} under the user's push permission");
+    }
     match pusher.strip_prefix(HUB_PUSHER) {
         Some(device) => format!("The user pushed {address} from {device}"),
         None => format!("{} pushed {address}", capitalized(pusher)),
@@ -1054,7 +1087,7 @@ fn capitalized(text: &str) -> String {
     characters.next().map(|first| first.to_uppercase().chain(characters).collect()).unwrap_or_default()
 }
 
-// Who may push this task now: the user always, the lead only with the user's permission and a rules approval, a task or any other Claude never.
+// Who may push this task now: the user always, the lead or kebbie itself only with the user's permission and a rules approval, a task or any other Claude never.
 struct Pusher {
     caller: crate::permit::Caller,
     permit: Option<crate::permit::Permit>,
@@ -1073,6 +1106,13 @@ impl Pusher {
                     return Err("its commits have no rules approval that matches them: wait for the reviewer's rules check, or check them and run kebbie approve".to_string());
                 }
                 Ok("the lead".to_string())
+            }
+            Caller::Keeper => {
+                crate::permit::keeper_may_push(self.permit)?;
+                if !self.approved {
+                    return Err("its commits have no rules approval that matches them".to_string());
+                }
+                Ok(KEEPER_PUSHER.to_string())
             }
             Caller::LeadSandboxed => Err(format!("{} cannot push", crate::permit::describe(&Caller::LeadSandboxed))),
             Caller::Task(_) | Caller::Agent | Caller::Sandboxed => Err("no agent pushes; the user pushes from the board, or the lead for a task the user gave push permission".to_string()),
@@ -2361,6 +2401,27 @@ mod tests {
         assert!(authorize(&Caller::Lead, &dir, &slot, &upstream, Through::All).unwrap_err().contains("rules approval"), "a commit without a rules approval does");
         crate::permit::set_repo_in(&state, &name_of(&dir), false).unwrap();
         crate::assessment::forget_in(&state, &address);
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn kebbie_pushes_under_either_permission_what_its_rules_approval_covers_unless_its_review_asks_for_changes() {
+        use crate::permit::Caller;
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = state_dir().unwrap();
+        let address = crate::peers::address("billing", &name_of(&dir));
+        assert!(authorize(&Caller::Keeper, &dir, &slot, &upstream, Through::All).unwrap_err().contains("no push permission"));
+        crate::permit::set_repo_in(&state, &name_of(&dir), true).unwrap();
+        assert!(authorize(&Caller::Keeper, &dir, &slot, &upstream, Through::All).unwrap_err().contains("no rules approval"), "a permission without a rules approval waits");
+        record_approval(&state, &address, &fingerprint(&slot.path, &upstream).unwrap(), crate::tasks::ApprovedBy::Reviewer).unwrap();
+        assert_eq!(authorize(&Caller::Keeper, &dir, &slot, &upstream, Through::All), Ok(KEEPER_PUSHER.to_string()), "the repo's permission and a rules approval: kebbie pushes it, review or not");
+        crate::permit::set_repo_in(&state, &name_of(&dir), false).unwrap();
+        crate::permit::set_task_in(&state, &address, true).unwrap();
+        assert_eq!(authorize(&Caller::Keeper, &dir, &slot, &upstream, Through::All), Ok(KEEPER_PUSHER.to_string()), "the task's permission covers it as the repo's does");
+        commit(&slot.path, "e", "fifth");
+        assert!(authorize(&Caller::Keeper, &dir, &slot, &upstream, Through::All).is_err(), "a commit after the approval waits for the next one");
+        assert_eq!(who_pushed(KEEPER_PUSHER, "billing@app"), "kebbie pushed billing@app under the user's push permission");
+        crate::permit::set_task_in(&state, &address, false).unwrap();
         cleanup(dir, origin, &slot);
     }
 

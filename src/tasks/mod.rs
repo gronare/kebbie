@@ -11,6 +11,7 @@ mod launch;
 mod line;
 mod order;
 mod park;
+mod permitted;
 mod plan;
 mod promise;
 mod pool;
@@ -38,6 +39,7 @@ pub(crate) use follow::{follow, follows, tick as follow_tick, toggle as toggle_f
 pub(crate) use history::{Commit, commits, draft_squash_message, reword, squash};
 pub(crate) use intent::{By as PushBy, Pending as PendingPush, Work as PushWork, after_red_ci, left as push_left, left_count as push_left_count, REPUSHES, pending as pending_push};
 pub(crate) use line::{complete as complete_pushes, heads as push_heads};
+pub(crate) use permitted::tick as push_permitted;
 pub(crate) use park::{all as parked_all, Parked, UNPARKED, load as park_of, morning_in as park_morning_in, park, park_address, unpark, unpark_address, until as park_until};
 pub(crate) use landed::{AfterCancel, EVERY as LANDED_EVERY, after_cancel, branch_runs, passed_later, Unsure as LandedUnsure, mark as landed_mark, tick as landed_tick, tick_cli as landed_tick_cli};
 pub(crate) use red_ci::{dismiss as dismiss_ci, dismissed as ci_dismissed, outside as ci_outside, outside_reason as ci_outside_reason};
@@ -56,7 +58,7 @@ pub(crate) use pool::{Slot, clean_build_output, find_task, list, move_work, slot
 pub(crate) use push_steps::watched as push_watched;
 #[cfg(test)]
 pub(crate) use push_steps::step as push_step;
-pub(crate) use push::{DevicePush, after_ci, cancel as cancel_push, land, ordinal, place_in_line, push, push_as, rebase, tidy};
+pub(crate) use push::{DevicePush, after_ci, for_by as push_for, given as push_given, cancel as cancel_push, land, ordinal, place_in_line, push, push_as, rebase, tidy};
 pub(crate) use stage::{WAIT_CEILING as STAGE_WAIT, stage, staged, tick as stage_tick, unstage};
 pub(crate) use started::{link, started_items, started_links};
 pub(crate) use promise::{EVERY as PROMISES_EVERY, command as promise, first_prompt_line as promises_first_line, list as promises, overdue_line as promises_overdue_line, overdue_now as promises_overdue, tick as promises_tick};

@@ -373,7 +373,7 @@ pub(super) fn refuse_past_stage(caller: &Caller, state: &Path, address: &str, ta
             return notice(format!("{title} waits until {} is met", before.title)).next(format!("{} is met once {}; push only the commits above {title} meanwhile.", before.title, requirement_line(&before.requirement))).err();
         }
     }
-    if matches!(caller, Caller::Lead | Caller::LeadSandboxed) {
+    if matches!(caller, Caller::Lead | Caller::LeadSandboxed | Caller::Keeper) {
         if crate::permit::of(address, address.split_once('@').map_or("", |(_, repo)| repo)) == Some(Permit::Repo) {
             return notice("a repo's push permission covers no stages".to_string()).next("The user pushes each stage, or gives this task its own permission.").err();
         }

@@ -21,6 +21,7 @@ pub(crate) enum By {
     User,
     Lead,
     Hub { account: String, name: String },
+    Keeper,
 }
 
 impl By {
@@ -29,6 +30,7 @@ impl By {
             Caller::User => Some(By::User),
             Caller::Lead => Some(By::Lead),
             Caller::Hub { account, name } => Some(By::Hub { account: account.clone(), name: name.clone() }),
+            Caller::Keeper => Some(By::Keeper),
             Caller::Task(_) | Caller::Agent | Caller::Sandboxed | Caller::LeadSandboxed => None,
         }
     }
@@ -38,6 +40,7 @@ impl By {
             By::User => Caller::User,
             By::Lead => Caller::Lead,
             By::Hub { account, name } => Caller::Hub { account: account.clone(), name: name.clone() },
+            By::Keeper => Caller::Keeper,
         }
     }
 
@@ -49,6 +52,7 @@ impl By {
         match self {
             By::User | By::Hub { .. } => "user",
             By::Lead => "lead",
+            By::Keeper => "keeper",
         }
     }
 
@@ -56,11 +60,12 @@ impl By {
         match self {
             By::User | By::Hub { .. } => "the user",
             By::Lead => "the lead",
+            By::Keeper => "kebbie",
         }
     }
 
     pub(crate) fn of_word(word: &str) -> Option<By> {
-        [By::User, By::Lead].into_iter().find(|by| word == by.word() || word.starts_with(&format!("{} from ", by.word())))
+        [By::User, By::Lead, By::Keeper].into_iter().find(|by| word == by.word() || word.starts_with(&format!("{} from ", by.word())))
     }
 }
 
@@ -123,6 +128,7 @@ impl Intent {
             ("user", Some(account), Some(name)) => By::Hub { account: account.to_string(), name: name.to_string() },
             ("user", _, _) => By::User,
             ("lead", _, _) => By::Lead,
+            ("keeper", _, _) => By::Keeper,
             _ => return None,
         };
         let work = match value["work"].as_str() {
@@ -282,7 +288,7 @@ pub(super) fn forget(state: &Path, address: &str) {
     let _ = std::fs::remove_file(file(state, address));
 }
 
-// A file that does not read as an intent of the user or the lead is removed unread.
+// A file that does not read as an intent of the user, the lead or the keeper is removed unread.
 pub(super) fn all(state: &Path) -> Vec<Intent> {
     let Ok(entries) = std::fs::read_dir(dir(state)) else { return Vec::new() };
     let mut intents = Vec::new();

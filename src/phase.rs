@@ -471,7 +471,7 @@ mod tests {
         };
         for (file, name, event) in [
             ("questions.rs", "answer_as", "Event::Answered"), ("tasks/push.rs", "prepare", "Event::PushHanded"), ("tasks/launch.rs", "restart", "Event::Started"),
-            ("tasks/line.rs", "turn", "Event::PushFailed"), ("tasks/push.rs", "join", "Event::PushQueued"), ("tasks/line.rs", "leave", "Why::LeftLine"), ("recover.rs", "apply", "Event::Stopped"), ("tasks/red_ci.rs", "dismiss_as", "Event::Dismissed"), ("tasks/finish.rs", "forget_address", "phase::forget("), ("tasks/stage.rs", "stage_in", "Event::Staged"), ("tasks/stage.rs", "unstage_in", "Event::Unstaged"), ("questions.rs", "decide", "Event::Answered"), ("obstacle.rs", "record_and_tell", "Event::Resumed"), ("report.rs", "record_turn", "Event::Resumed"),
+            ("tasks/line.rs", "turn", "Event::PushFailed"), ("tasks/push.rs", "join_on", "Event::PushQueued"), ("tasks/line.rs", "leave", "Why::LeftLine"), ("recover.rs", "apply", "Event::Stopped"), ("tasks/red_ci.rs", "dismiss_as", "Event::Dismissed"), ("tasks/finish.rs", "forget_address", "phase::forget("), ("tasks/stage.rs", "stage_in", "Event::Staged"), ("tasks/stage.rs", "unstage_in", "Event::Unstaged"), ("questions.rs", "decide", "Event::Answered"), ("obstacle.rs", "record_and_tell", "Event::Resumed"), ("report.rs", "record_turn", "Event::Resumed"),
         ] {
             assert!(body(file, name).contains(event), "{file} {name} writes {event}");
         }

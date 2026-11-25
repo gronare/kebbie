@@ -45,7 +45,7 @@ pub fn routines() -> Vec<Routine> {
         Routine { name: "updates", every: 600, run: updates },
         Routine { name: "agents", every: crate::agent_check::ROUTINE_EVERY, run: |ctx| { ctx.notes.extend(crate::agent_check::tick(&crate::lead::state_dir()?)); Ok(()) } },
         Routine { name: "herdr", every: crate::herdr_link::EVERY, run: |ctx| { ctx.notes.extend(crate::herdr_link::heal()?); Ok(()) } },
-        Routine { name: "push", every: 15, run: |ctx| { ctx.notes.extend(crate::tasks::complete_pushes(&crate::lead::state_dir()?)); Ok(()) } },
+        Routine { name: "push", every: 15, run: |ctx| { let state = crate::lead::state_dir()?; ctx.notes.extend(crate::tasks::push_permitted(&state)); ctx.notes.extend(crate::tasks::complete_pushes(&state)); Ok(()) } },
         Routine { name: "stage", every: 15, run: |ctx| { ctx.notes.extend(crate::tasks::stage_tick(&crate::lead::state_dir()?)); Ok(()) } },
         Routine { name: "ci", every: 30, run: |_| { crate::ci::tick(&crate::lead::state_dir()?); Ok(()) } },
         Routine { name: "after", every: crate::tasks::AFTER_EVERY, run: |ctx| { ctx.notes.extend(crate::tasks::after_tick(&crate::lead::state_dir()?)); Ok(()) } },

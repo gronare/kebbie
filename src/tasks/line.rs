@@ -7,7 +7,7 @@ use crate::phase::{self, Event, Phase, Why};
 use crate::repo::{default_branch, name_of};
 use crate::sh::Result;
 use super::approval::{approval_holds, covers, fingerprint};
-use super::intent::{self, By, Intent, Next, Work};
+use super::intent::{self, Intent, Next, Work};
 use super::pool::{Slot, find_task, slots};
 use super::push::{Sent, pushed_fingerprint, rejected};
 
@@ -117,6 +117,9 @@ fn fixes(state: &Path, log: &[Message], now: u64, read: Read) -> Vec<String> {
                 notes.push(format!("push: {why}"));
             }
             Next::Push => {
+                if let Some(report) = report {
+                    super::permitted::used_up(state, &waiting.address, &report.id);
+                }
                 let joined = Intent { work: Work::Turn, fingerprint: current.unwrap_or_default(), at: now, queued: Some(now), ..waiting.clone() };
                 if intent::save(state, &joined).is_ok() {
                     notes.push(format!("push: {}: its fix joined the push line", waiting.address));
@@ -127,9 +130,9 @@ fn fixes(state: &Path, log: &[Message], now: u64, read: Read) -> Vec<String> {
     notes
 }
 
-// The push each repo's line works now, the one a free build slot should go to: past a lead push held until a task it names lands, as drive passes it.
+// The push each repo's line works now, the one a free build slot should go to: past a push of the lead's or kebbie's held until a task it names lands, as drive passes it.
 pub(crate) fn heads(state: &Path, log: &[Message]) -> Vec<String> {
-    intent::repos(state).iter().filter_map(|repo| intent::line(state, repo).into_iter().find(|queued| queued.by != By::Lead || open_before(queued, log).is_empty())).map(|head| head.address).collect()
+    intent::repos(state).iter().filter_map(|repo| intent::line(state, repo).into_iter().find(|queued| queued.by.is_user() || open_before(queued, log).is_empty())).map(|head| head.address).collect()
 }
 
 // Works the head of a repo's line until one waits; with `mine`, only while that push is the head, and the outcome of its turn comes back.
@@ -143,7 +146,7 @@ pub(super) fn drive(state: &Path, repo: &Path, mine: Option<&str>, log: &[Messag
         let mut next = None;
         let line: Vec<Intent> = intent::line(state, repo).into_iter().filter(|queued| !held.contains(&queued.address)).collect();
         for queued in line {
-            let first = if queued.by == By::Lead { open_before(&queued, log) } else { Vec::new() };
+            let first = if queued.by.is_user() { Vec::new() } else { open_before(&queued, log) };
             if first.is_empty() {
                 next = Some(queued);
                 break;
@@ -232,6 +235,9 @@ fn turn(state: &Path, head: &Intent, log: &[Message], now: u64, read: Read, work
         let since = |state: &str| report.is_some_and(|report| report.at > head.at && head.seen.as_deref() != Some(report.id.as_str()) && report.report.as_ref().is_some_and(|report| report.state == state));
         if since("needs-you") {
             return leave(state, head, "its Claude reported needs-you instead of ready");
+        }
+        if let Some(report) = report.filter(|_| since("ready")) {
+            super::permitted::used_up(state, &head.address, &report.id);
         }
         match intent::next(head, report, Some(&slot), current.as_deref(), approved) {
             Next::Push => {}
@@ -452,6 +458,9 @@ mod tests {
         let notes = complete_in(&state, &ready, 300, &|_, _| None, &|_| false, &mut |intent, _| { pushed.push(intent.task.clone()); Ok(Sent::Pushed(done.clone())) });
         assert_eq!(pushed, ["copy"], "the held push steps aside and the one behind it goes out: {notes:?}");
         assert!(load(&state, &address).is_some() && notes.iter().any(|note| note.contains(&format!("held in the push line until {first} lands"))), "{notes:?}");
+        forget(&state, &address);
+        queue(By::Keeper);
+        assert_eq!(heads(&state, &ready), [format!("copy@{}", crate::repo::name_of(&dir))], "kebbie's own push under the user's permission keeps the order of the halves too");
         forget(&state, &address);
         queue(By::User);
         let mut said = Vec::new();

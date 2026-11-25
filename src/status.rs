@@ -465,12 +465,13 @@ impl Item {
         let pending = self.push_waits.as_ref()?;
         let stalled = self.report.as_ref().is_some_and(|report| now.saturating_sub(report.at) > PUSH_STALLS_AFTER);
         let who = match pending.by {
-            tasks::PushBy::User | tasks::PushBy::Hub { .. } => "you",
-            tasks::PushBy::Lead => "the lead",
+            tasks::PushBy::User | tasks::PushBy::Hub { .. } => "for you",
+            tasks::PushBy::Lead => "for the lead",
+            tasks::PushBy::Keeper => "under your permission",
         };
         if pending.work == tasks::PushWork::Turn {
             let place = if pending.ahead == 0 { "kebbie pushes it now".to_string() } else { tasks::place_in_line(pending.ahead, pending.after.as_deref()) };
-            return Some(format!("pushing for {who} · {place}"));
+            return Some(format!("pushing {who} · {place}"));
         }
         let agent = self.agent_name();
         let what = match pending.work {
@@ -481,7 +482,7 @@ impl Item {
             tasks::PushWork::Conflict => format!("its {agent} resolves the conflict"),
             tasks::PushWork::Ci => format!("its {agent} fixes the red CI"),
         };
-        Some(format!("pushing for {who} · {what}"))
+        Some(format!("pushing {who} · {what}"))
     }
 
     fn reported_since(&self, at: u64, state: &str) -> bool {
