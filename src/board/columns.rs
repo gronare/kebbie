@@ -171,56 +171,30 @@ fn wrapped_row(icon: Span<'static>, name: &str, facts: &str, width: usize) -> Ve
     }).collect()
 }
 
-// What the task wants of the user, under its row, whole.
-fn wanted_lines(wanted: &str, color: Color, highlighted: bool, width: usize) -> Vec<Line<'static>> {
-    wrap(wanted, width.saturating_sub(4), 8).into_iter().map(|text| {
-        let line = Line::from(vec![Span::raw("   "), Span::styled(text, style(color))]);
-        if highlighted { line.style(Style::new().bg(SURFACE)) } else { line }
-    }).collect()
+// One line under the row, cut with … however wide the text is: the selected row unfolds its detail below instead.
+fn under_row(text: &str, color: Color, highlighted: bool, width: usize) -> Line<'static> {
+    let line = Line::from(vec![Span::raw("   "), Span::styled(cut(text, width.saturating_sub(4)), style(color))]);
+    if highlighted { line.style(Style::new().bg(SURFACE)) } else { line }
 }
 
 pub(super) fn how_lines(item: &Item, highlighted: bool, width: usize) -> Vec<Line<'static>> {
     let recipe = item.recipe.as_ref().map(|recipe| if highlighted { format!("{}, because {}", recipe.shown(), recipe.why) } else { recipe.shown() });
-    let parts: Vec<String> = recipe.into_iter().chain(review_part(item)).chain(super::send_review::second_part(item)).collect();
+    let parts: Vec<String> = recipe.into_iter().chain(super::send_review::second_part(item)).collect();
     if parts.is_empty() {
         return Vec::new();
     }
-    let text = parts.join(" · ");
-    let shown = if highlighted { wrap(&text, width.saturating_sub(4), 4) } else { vec![cut(&text, width.saturating_sub(4))] };
-    shown.into_iter().map(|text| {
-        let line = Line::from(vec![Span::raw("   "), Span::styled(text, style(MUTED))]);
-        if highlighted { line.style(Style::new().bg(SURFACE)) } else { line }
-    }).collect()
+    vec![under_row(&parts.join(" · "), MUTED, highlighted, width)]
 }
 
-// The rules check under the row, each its own line: breaks with the rules the reviewer named, a check under way muted, a push past it by whom; a check that passed says nothing.
+// The rules check under the row, muted and neutral: a check under way, or a push past it by whom; breaks and an unchecked task are the lead's, which hears them as messages.
 pub(super) fn rules_lines(item: &Item, highlighted: bool, width: usize) -> Vec<Line<'static>> {
     use crate::status::RulesShown;
-    let breaks = |count: usize, names: &[String]| if names.is_empty() { crate::status::breaks(count) } else { format!("{}: {}", crate::status::breaks(count), names.join(" · ")) };
-    let shown: Vec<(String, Color)> = match item.rules_shown() {
-        None | Some(RulesShown::Ok) => Vec::new(),
-        Some(RulesShown::Breaks { count, names }) => vec![(breaks(count, &names), YELLOW)],
-        Some(RulesShown::Overridden { by, breaks: found }) => found.map(|(count, names)| (breaks(count, &names), MUTED)).into_iter().chain([(crate::status::past_the_check(by), MUTED)]).collect(),
-        Some(rules) => rules.note().map(|note| (note, MUTED)).into_iter().collect(),
+    let shown = match item.rules_shown() {
+        Some(RulesShown::Overridden { by, .. }) => crate::status::past_the_check(by),
+        Some(rules @ RulesShown::Checking { .. }) => rules.note().unwrap_or_default(),
+        _ => return Vec::new(),
     };
-    shown.into_iter().flat_map(|(text, color)| {
-        let texts = if highlighted { wrap(&text, width.saturating_sub(4), 4) } else { vec![cut(&text, width.saturating_sub(4))] };
-        texts.into_iter().map(move |text| {
-            let line = Line::from(vec![Span::raw("   "), Span::styled(text, style(color))]);
-            if highlighted { line.style(Style::new().bg(SURFACE)) } else { line }
-        })
-    }).collect()
-}
-
-// A suggested review names the key that sends it; once sent, the suggestion is the review.
-fn review_part(item: &Item) -> Option<String> {
-    use crate::assessment::Word;
-    let word = item.assessment.as_ref()?;
-    Some(match word {
-        Word::Suggested { reason } if item.verdict.is_some() => Word::Review { reason: reason.clone() }.text(),
-        word if word.asks_for_review() && item.verdict.is_none() => format!("{} · {}", word.text(), keys::key(Act::SendReview)),
-        word => word.text(),
-    })
+    vec![under_row(&shown, MUTED, highlighted, width)]
 }
 
 // The facts span is drawn muted whole; one fact in it takes its own colour.
@@ -368,10 +342,10 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
         }
         let reads = app.subtask_reads(item);
         lines.extend(step_lines(item, selected && open && unfold, width, cursor, &reads));
-        if let Some(wanted) = item.wanted(&keys::key(Act::Go).to_string()).or_else(|| item.verdict_wanted()).or_else(|| accept_wanted(item)) {
-            lines.extend(wanted_lines(&wanted, PEACH, selected && open && unfold, width));
+        if let Some(wanted) = item.wanted(&keys::key(Act::Go).to_string()).or_else(|| accept_wanted(item)) {
+            lines.push(under_row(&wanted, PEACH, selected && open && unfold, width));
         } else if let Some(waiting) = item.waiting() {
-            lines.extend(wanted_lines(waiting, MUTED, selected && open && unfold, width));
+            lines.push(under_row(waiting, MUTED, selected && open && unfold, width));
         }
         if selected && open && unfold {
             let detail = unfolded_lines(app, item, width.saturating_sub(4));
@@ -545,7 +519,7 @@ pub(super) fn backlog_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usi
             let (facts, tint) = item_card::row_facts(entry);
             lines.push(tinted(row(selected, focused, icon, &entry.title, None, &facts, width), tint));
             if let Some(working) = item_card::lead_line(entry) {
-                lines.extend(wanted_lines(working, MUTED, false, width));
+                lines.push(under_row(working, MUTED, false, width));
             }
         }
         rows.push((start, lines.len(), Hit::Entry(index)));
@@ -600,40 +574,16 @@ mod tests {
     }
 
     #[test]
-    fn the_assessments_word_shows_muted_under_the_task_row_and_a_task_without_one_shows_none() {
+    fn the_assessors_word_is_the_leads_and_never_shows_under_the_task_row() {
         let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 2);
-        item.assessment = Some(crate::assessment::Word::Review { reason: "changes how VAT is rounded".to_string() });
-        let mut app = test_app(vec![item.clone()]);
-        app.work_selected = 9;
-        let (rows, buffer) = render(&mut app, 120, 30);
-        let screen = rows.join("\n");
-        let at = find(&rows, "billing")[0].1;
-        assert_eq!(untied(&rows[at + 1]), "review: changes how VAT is rounded", "{screen}");
-        let (x, y) = find(&rows, "review: changes")[0];
-        assert_eq!(buffer[(x as u16, y as u16)].fg, MUTED);
-        let (narrow, _) = render(&mut app, 40, 30);
-        let line = narrow.iter().find(|row| row.contains("review: ")).unwrap();
-        assert!(line.trim_end().ends_with('…') && line.trim_end().chars().count() <= 40, "a long line is cut to the column: {}", narrow.join("\n"));
-        item.assessment = Some(crate::assessment::Word::NotAssessed);
-        let mut app = test_app(vec![item.clone()]);
-        app.work_selected = 9;
-        let (rows, _) = render(&mut app, 120, 30);
-        assert_eq!(untied(&rows[at + 1]), "review not assessed · v", "no answer is a suggestion too: {}", rows.join("\n"));
-        item.assessment = Some(crate::assessment::Word::Suggested { reason: "changes how VAT is rounded".to_string() });
-        let mut app = test_app(vec![item.clone()]);
-        app.work_selected = 9;
-        let (rows, _) = render(&mut app, 120, 30);
-        assert_eq!(untied(&rows[at + 1]), "review suggested: changes how VAT is rounded · v", "a suggestion names the key that sends the task to review: {}", rows.join("\n"));
-        item.verdict = Some(crate::status::tests::in_review(false, 0, false, true));
-        let mut app = test_app(vec![item.clone()]);
-        app.work_selected = 9;
-        let (rows, _) = render(&mut app, 120, 30);
-        assert_eq!(untied(&rows[at + 1]), "review: changes how VAT is rounded", "once sent, it is the review: {}", rows.join("\n"));
-        item.assessment = None;
-        item.verdict = None;
-        let mut app = test_app(vec![item]);
-        let (rows, _) = render(&mut app, 120, 30);
-        assert!(!rows.join("\n").contains("review: "), "{}", rows.join("\n"));
+        for word in [crate::assessment::Word::Review { reason: "changes how VAT is rounded".to_string() }, crate::assessment::Word::Suggested { reason: "changes how VAT is rounded".to_string() }, crate::assessment::Word::NotAssessed, crate::assessment::Word::Assessing, crate::assessment::Word::NoReview { reason: "wording".to_string() }] {
+            item.assessment = Some(word.clone());
+            let mut app = test_app(vec![item.clone()]);
+            app.work_selected = 9;
+            let (rows, _) = render(&mut app, 120, 30);
+            let screen = rows.join("\n");
+            assert!(!screen.contains(&word.text()) && !screen.contains("review"), "{screen}");
+        }
     }
 
     #[test]
@@ -656,15 +606,17 @@ mod tests {
         assert_eq!((below.as_str(), color), ("checking project rules", Some(MUTED)), "{screen}");
         assert!(!row_facts(&item, None).contains("rules"), "the row's facts leave it to its line: {}", row_facts(&item, None));
         item.rules = Some(crate::rules_check::Shown::Broken(2, vec!["Body says why".to_string(), "One change".to_string()]));
-        let (screen, below, color) = shown(&item);
-        assert_eq!((below.as_str(), color), ("breaks 2 project rules: Body says why · One change", Some(YELLOW)), "{screen}");
+        let (screen, _, _) = shown(&item);
+        assert!(!screen.contains("breaks") && !screen.contains("Body says why"), "breaks are the lead's, which hears them: {screen}");
+        item.rules = None;
+        let (screen, _, _) = shown(&item);
+        assert!(!screen.contains(crate::status::UNCHECKED), "an unchecked task is the lead's: {screen}");
         item.rules = Some(crate::rules_check::Shown::Broken(1, Vec::new()));
-        assert_eq!(shown(&item).1, "breaks 1 project rule", "the reviewer named no rule");
         item.git.as_mut().unwrap().approved = true;
         item.git.as_mut().unwrap().approved_by = Some(crate::tasks::ApprovedBy::Lead);
-        let (screen, below, _) = shown(&item);
-        assert_eq!(below, "breaks 1 project rule", "{screen}");
-        assert!(screen.contains("pushed past the rules check by the lead") && !screen.contains("approved"), "{screen}");
+        let (screen, below, color) = shown(&item);
+        assert_eq!((below.as_str(), color), ("pushed past the rules check by the lead", Some(MUTED)), "{screen}");
+        assert!(!screen.contains("breaks") && !screen.contains("approved"), "{screen}");
         item.rules = None;
         item.git.as_mut().unwrap().approved_by = Some(crate::tasks::ApprovedBy::User);
         let (screen, below, color) = shown(&item);
@@ -675,20 +627,16 @@ mod tests {
     fn a_tasks_recipe_leads_the_line_under_its_row_and_the_open_task_says_why() {
         let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 2);
         item.recipe = Some(crate::recipe::Recipe { name: "small-fix".to_string(), why: "one function and its test".to_string(), by: "the lead".to_string() });
-        item.assessment = Some(crate::assessment::Word::Review { reason: "changes VAT rounding".to_string() });
         let mut app = test_app(vec![item.clone()]);
-        let work = |rows: &[String], at: usize| untied(&rows[at].chars().take(66).collect::<String>()).to_string();
+        let work = |rows: &[String], at: usize| untied(&rows[at].chars().take(66).collect::<String>()).trim_end().to_string();
         let (open, _) = render(&mut app, 120, 30);
         let at = find(&open, "○ billing")[0].1;
-        assert_eq!((work(&open, at + 1).as_str(), work(&open, at + 2).as_str()), ("recipe: small fix, because one function and its test ·", "review: changes VAT rounding"), "the open task shows the why whole: {}", open.join("\n"));
+        assert_eq!(work(&open, at + 1), "recipe: small fix, because one function and its test", "the open task shows the why: {}", open.join("\n"));
+        let (narrow, _) = render(&mut app, 40, 30);
+        assert!(work(&narrow, at + 1).ends_with('…') && !work(&narrow, at + 2).contains("test"), "a why too long for the column is cut, never wrapped: {}", narrow.join("\n"));
         app.work_selected = 9;
         let (rows, _) = render(&mut app, 120, 30);
-        assert_eq!(work(&rows, at + 1), "recipe: small fix · review: changes VAT rounding", "{}", rows.join("\n"));
-        item.assessment = None;
-        let mut app = test_app(vec![item.clone()]);
-        app.work_selected = 9;
-        let (rows, _) = render(&mut app, 120, 30);
-        assert_eq!(work(&rows, find(&rows, "○ billing")[0].1 + 1), "recipe: small fix", "{}", rows.join("\n"));
+        assert_eq!(work(&rows, at + 1), "recipe: small fix", "{}", rows.join("\n"));
         item.recipe = None;
         let mut app = test_app(vec![item]);
         let (rows, _) = render(&mut app, 120, 30);

@@ -109,6 +109,8 @@ WORKING  2
  ╰ recipe: small fix
 ```
 
+Each line under a row is one line, cut with `…` when it is longer; the open task's detail holds the rest. The line in peach under a row is only what you do next: a question to answer, a push to make, something to check. What is the lead's or the task's work, such as a review's findings, rule breaks or an obstacle under investigation, reaches the lead as a message and never shows on the board.
+
 A task row shows its commits, uncommitted and untracked files, and how far it is behind the default branch. Behind is information only: push rebases it when its turn in the push line comes, `e` rebases now, and a task you keep rebased on main catches up by itself.
 
 | Line or mark | Means |
@@ -116,15 +118,11 @@ A task row shows its commits, uncommitted and untracked files, and how far it is
 | `follows main` | On the open task, while it is kept rebased on main. |
 | `bypass` | Its Claude runs in bypass permissions mode. The open task says `bypass permissions: Claude asks for no permission`. |
 | `you:` | Your next step, from the task's last report. |
-| `obstacle · investigating` | The task raised an [obstacle](../explanation/obstacles-and-findings.md) and kebbie's investigator is on it; the task shows under Working. `obstacle · asked you` while its question waits, `obstacle · with the lead` when the lead decides it. |
 | `waiting for a build slot, 2nd` | Its build waits in the machine's [build queue](configuration.md#builds): it is second in line, and kebbie tells its Claude when its turn comes. |
 | `web` | While its dev server runs: the server's address as a link. |
 | `push waits for tests · you` | A push waits for the task's Claude to test the files the default branch changed under it. `· lead` when the lead pushed. kebbie pushes once the task reports ready with the same commits. |
-| `recipe: small fix`, muted | Under the row: how the task is done, by the [recipe](commands.md#kebbie-recipe-task-recipe-why) the lead named; the open task adds its why. The assessor's word follows it on the same line. |
-| `review suggested: changes how VAT is rounded · v`, muted | Under the row, from the [assessor](../explanation/review-gate.md#an-assessor-judges-whether-the-work-needs-a-review) on its last ready report: the work needs a review, and `v` sends it. Under `review.auto = "run"` or `"require"` it reads `review: …`, and the reviewer is already on it. |
-| `no review: wording in two templates`, muted | Under the row: the assessor judged the work needs no review. |
-| `second opinion: 2 points · v i reads them`, muted | Under the row: the [second opinion](../how-to/send-a-task-to-review.md#ask-for-a-second-opinion) gave its points, which the lead passes to the task; the push never waits on them. `second opinion: codex-review reading…` while it reads, `(stale)` once the code changed. |
-| `review being assessed`, `review not assessed · v`, muted | The assessor is at work, or gave no answer, which counts as a suggestion. |
+| `recipe: small fix`, muted | Under the row: how the task is done, by the [recipe](commands.md#kebbie-recipe-task-recipe-why) the lead named; the open task adds its why. |
+| `second opinion: codex-review reading…`, muted | Under the row, while the [second opinion](../how-to/send-a-task-to-review.md#ask-for-a-second-opinion) reads; its points go to the lead, which passes them to the task. |
 
 #### A task in subtasks
 
@@ -147,9 +145,9 @@ With [`task.steps`](configuration.md) on and subtasks listed, the task's subtask
 | `○`, muted | Planned. |
 | `◐ … in progress`, blue | Its Claude is at work on it. Only the last subtask with commits is in progress, and only until the task reports ready. |
 | `N/M read` | N of the subtask's M files are marked read in the review; it stands in place of the state word once the subtask has commits, and the mark's colour keeps the state. |
-| `● … ready`, yellow | Its agent ran `kebbie subtasks done` on it, or a later subtask holds commits, or it is the last and the task reported ready: finished, waiting for you to accept it, followed by the task's rules check in short while it is not passed: `· project rules not checked`, `· checking project rules` while the reviewer or the lead checks, `· breaks N project rules` when it found some, `· pushed past the rules check by you` (or `by the lead`) after `kebbie approve`. A passed check adds nothing. |
+| `● … ready`, yellow | Its agent ran `kebbie subtasks done` on it, or a later subtask holds commits, or it is the last and the task reported ready: finished, waiting for you to accept it, followed by `· checking project rules` while the reviewer or the lead checks the rules, or `· pushed past the rules check by you` (or `by the lead`) after `kebbie approve`. |
 | `✓ … accepted`, green | You accepted every commit in it. `waits for N · …` when a commit of subtask N, which you have not accepted, lies above one of its own in the push order. |
-| `accept “<title>” · r review` | Under the subtasks: the first ready subtask whose accepting matters, because `task.require_accept` is on or a later subtask is still being built. `r` opens the review, and [`kebbie accept`](commands.md#kebbie-accept-name-sha) accepts it. |
+| `accept “<title>” · r review` | Under the subtasks: the first ready subtask whose accepting matters, because `task.require_accept` is on or a later subtask is still being built, and no review's findings hold the task. `r` opens the review, and [`kebbie accept`](commands.md#kebbie-accept-name-sha) accepts it. |
 | `accept “<title>” · r review`, under Needs you | With [`task.require_accept`](configuration.md) on, a ready task with a subtask to accept waits under Needs you with this line: it cannot be pushed until that subtask is accepted. |
 
 `↑` `↓` move from task to task and never stop on a subtask row; the keys line reads `→ card · ↑ ↓ task · space subtasks · s card · ⏎ options`, `→ card` while the card column is drawn, `s card` only while the task has a card or a question. `space` steps into the task's own rows on the board; on a task without subtasks it does nothing: the cursor goes onto the first subtask that waits for you, marked with the selection's background, and the card beside the tasks becomes that subtask's card. The keys line then reads `↑ ↓ subtask · ⏎ options · s card · r review · a accept · → card · esc task`, `→ card` while the card column is drawn, `a accept` only on a ready subtask whose accepting matters. On the collapsed parked line `space` steps into nothing. Inside the task:
@@ -170,7 +168,7 @@ With [`task.steps`](configuration.md) on and subtasks listed, the task's subtask
 A refresh that takes the highlighted subtask away puts the cursor back on the task.
 
 
-A subtask to accept leaves the task in the group its phase gives it, under Working while it builds on. The state word always shows: a long title is shortened at a word with `…` to make room, and only when the title would drop below 12 columns does the rules part shorten (`· 2 breaks`, `· checking`, `· not checked`, `· past the rules`) and then go. Without subtasks, the row is as above. See [Work in subtasks](../how-to/work-in-steps.md).
+A subtask to accept leaves the task in the group its phase gives it, under Working while it builds on. The state word always shows: a long title is shortened at a word with `…` to make room, and only when the title would drop below 12 columns does the rules part shorten (`· checking`, `· past the rules`) and then go. Without subtasks, the row is as above. See [Work in subtasks](../how-to/work-in-steps.md).
 
 #### A task in stages
 
@@ -203,7 +201,7 @@ A listed test command inside a loop, a condition or `xargs` is not recorded eith
 | --- | --- |
 | Needs you | Tasks waiting on your answer or action, open questions first. |
 | Working | Tasks at work since their prompt, their last report or your answer. |
-| In review | Reported ready and sent to the reviewer, waiting for a pass on its current code. The row says who acts next: `review running · waits on the reviewer`, or, with findings and its Claude idle, `withdraw with v to push without a pass`. With no reviewer running, the line under it shows the verdict's first finding, as `review asks for changes: <finding> (+N more)`. |
+| In review | Reported ready and sent to the reviewer, waiting for a pass on its current code. The row says `review running · waits on the reviewer` while the reviewer reads. Its findings go to the lead and the task, never onto the row; `v` withdraws it to push without a pass. |
 | Ready to push | Reported ready with its commits, and pushes under way. |
 | CI running | Pushed, with its worktree kept until every workflow run for the pushed commit is green and the task's check after the push holds; then it closes as done. A run cancelled for a newer run on the default branch follows that run, and one cancelled while the repo's [`ci.deploy_window`](configuration.md#ci-updates-and-the-keeper) was shut is re-run once it opens. |
 | Waiting for work | Started without work, blocked on something outside you, or kept open with nothing left on top. |
@@ -249,13 +247,11 @@ kebbie keeps one phase per task, and only what changes it writes it: its start, 
 
 ### Ready to push
 
-A ready task's rules check has its own line under the row:
+A ready task's rules check has its own muted line under the row:
 
-- `checking project rules`, muted, while the reviewer checks its commits against the rules skill; `lead checking project rules` when the reviewer gave no verdict and the lead checks them;
-- `breaks N project rules: <rule> · <rule>`, yellow, when the check found some, naming the rules the reviewer named;
-- `pushed past the rules check by you` or `by the lead`, muted, after [`kebbie approve`](commands.md#kebbie-approve-name), under the breaks line when the check found some;
-- `project rules not checked`, muted, when no check was asked for;
-- nothing once the check passed.
+- `checking project rules` while the reviewer checks its commits against the rules skill; `lead checking project rules` when the reviewer gave no verdict and the lead checks them;
+- `pushed past the rules check by you` or `by the lead` after [`kebbie approve`](commands.md#kebbie-approve-name);
+- nothing otherwise. Breaks the check finds go to the lead and the task as messages, never onto the board.
 
 The row itself counts uncommitted files when you edited after the report.
 

@@ -51,7 +51,11 @@ pub(super) fn to_accept_note(item: &Item) -> Option<String> {
     (count > 0).then(|| format!("{} to accept", plural(count, "subtask")))
 }
 
+// A changes verdict holds the task in review, so no subtask is offered to accept over it.
 pub(super) fn accept_wanted(item: &Item) -> Option<String> {
+    if item.held_by_changes() {
+        return None;
+    }
     let subtask = to_accept(item).next()?;
     Some(format!("accept “{}” · {} review", subtask.title, keys::key(Act::Review)))
 }
@@ -67,16 +71,15 @@ pub(super) fn mark_color(state: &SubtaskState) -> Color {
 
 const TITLE_FLOOR: usize = 12;
 
-// The rules part of a ready subtask's label, longest first; the lines under the task's row say it in full, and a check that passed or never ran says nothing here, the task's line says not checked once.
+// The rules part of a ready subtask's label, longest first: a check under way or a push past it; breaks and an unchecked task are the lead's and say nothing here.
 fn rules_forms(item: &Item, state: &SubtaskState) -> Vec<String> {
     use crate::status::RulesShown;
     if *state != SubtaskState::Ready {
         return Vec::new();
     }
     match item.rules_shown() {
-        None | Some(RulesShown::Ok | RulesShown::Unchecked) => Vec::new(),
+        None | Some(RulesShown::Ok | RulesShown::Unchecked | RulesShown::Breaks { .. }) => Vec::new(),
         Some(RulesShown::Checking { .. }) => vec!["checking project rules".to_string(), "checking".to_string()],
-        Some(RulesShown::Breaks { count, .. }) => vec![crate::status::breaks(count), plural(count, "break")],
         Some(RulesShown::Overridden { by, .. }) => vec![crate::status::past_the_check(by), "past the rules".to_string()],
     }
 }
@@ -450,10 +453,8 @@ pub(crate) mod tests {
         assert!(rules_forms(&item, &state).is_empty(), "a check that passed says nothing");
         item.git.as_mut().unwrap().approved = false;
         assert!(rules_forms(&item, &state).is_empty(), "not checked is the task's, said once on its line");
-        item.rules = Some(crate::rules_check::Shown::Broken(1, Vec::new()));
-        assert_eq!(rules_forms(&item, &state), vec!["breaks 1 project rule", "1 break"]);
         item.rules = Some(crate::rules_check::Shown::Broken(3, Vec::new()));
-        assert_eq!(rules_forms(&item, &state), vec!["breaks 3 project rules", "3 breaks"]);
+        assert!(rules_forms(&item, &state).is_empty(), "breaks are the lead's, which hears them");
         item.rules = Some(crate::rules_check::Shown::Checking);
         assert_eq!(rules_forms(&item, &state), vec!["checking project rules", "checking"]);
         item.rules = Some(crate::rules_check::Shown::Lead);
@@ -468,7 +469,35 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_task_with_many_ready_unchecked_subtasks_says_not_checked_once() {
+    fn a_task_held_by_its_reviews_findings_shows_neither_them_nor_a_subtask_to_accept_under_its_row() {
+        let mut steps = stripe();
+        holds(&mut steps.items[1], &["3333333cccc"], false);
+        let mut item = stepped(steps);
+        crate::status::tests::in_phase(&mut item, Phase::Ready { head: Some("abc".to_string()) });
+        let mut verdict = crate::status::tests::in_review(false, 4, false, false);
+        verdict.verdict.as_mut().unwrap().first = Some("src/tasks/landed.rs:313 — later_runs returns the runs after the push in the wrong order, so the newest run is read as the oldest and a green CI shows red".to_string());
+        item.verdict = Some(verdict);
+        let mut app = test_app(vec![item]);
+        app.work_selected = 9;
+        let (rows, _) = render(&mut app, 80, 30);
+        let screen = rows.join("\n");
+        assert!(!screen.contains("landed.rs") && !screen.contains("review asks") && !screen.contains("more)"), "the findings are the lead's: {screen}");
+        assert!(!screen.contains("accept “"), "the verdict holds it, not a subtask to accept: {screen}");
+    }
+
+    #[test]
+    fn a_long_line_for_the_user_under_a_row_is_cut_to_one_line() {
+        let mut item = stepped(stripe());
+        crate::status::tests::in_phase(&mut item, Phase::NeedsYou(crate::phase::Why::Report));
+        item.report.as_mut().unwrap().report.as_mut().unwrap().next = "read the long explanation of why the deploy window was moved, then decide whether the stage should wait for tomorrow morning or go tonight".to_string();
+        let mut app = test_app(vec![item]);
+        let (rows, _) = render(&mut app, 60, 30);
+        let at = rows.iter().position(|row| row.contains("read the long")).unwrap_or_else(|| panic!("{}", rows.join("\n")));
+        assert!(rows[at].trim_end().ends_with('…') && !rows[at + 1].contains("tomorrow"), "{}", rows.join("\n"));
+    }
+
+    #[test]
+    fn a_task_with_many_ready_unchecked_subtasks_says_nothing_of_the_check() {
         let steps = Subtasks { items: (0..16).map(|index| held(index, &format!("Subtask {index}"), &[&format!("{index:07}aaaa")], false)).collect(), ..Subtasks::default() };
         let mut item = stepped(steps);
         crate::status::tests::in_phase(&mut item, Phase::Ready { head: None });
@@ -478,8 +507,7 @@ pub(crate) mod tests {
         app.work_selected = 9;
         let (rows, _) = render(&mut app, 120, 40);
         let screen = rows.join("\n");
-        assert_eq!(screen.matches("not checked").count(), 1, "{screen}");
-        assert!(screen.contains(crate::status::UNCHECKED), "{screen}");
+        assert!(!screen.contains("not checked"), "{screen}");
         assert!(step_rows(&rows).iter().all(|row| row.ends_with("ready")), "{screen}");
     }
 

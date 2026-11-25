@@ -101,6 +101,7 @@ fn question_summary(message: &messages::Message, width: usize) -> String {
     format!("{}{suffix}", cut(&one_line, width.saturating_sub(suffix.chars().count()).max(8)))
 }
 
+// The verdict stays in the detail the user opens before a push; only the line under the row leaves findings to the lead.
 fn verdict_chip(shown: &crate::review::Shown) -> Option<(String, Color)> {
     if shown.running {
         return Some(("review running".to_string(), BLUE));
@@ -564,7 +565,7 @@ mod tests {
     }
 
     #[test]
-    fn a_needs_you_row_shows_its_title_and_what_it_wants_whole_with_no_you_prefix() {
+    fn a_needs_you_row_shows_its_title_and_what_it_wants_on_one_line_with_no_you_prefix() {
         let mut item = served("rows-say-what");
         item.title = Some("Board task rows".to_string());
         let report = item.report.as_mut().unwrap().report.as_mut().unwrap();
@@ -578,9 +579,10 @@ mod tests {
         let rows = render(&mut app, 84, 40).0;
         let screen = rows.join("\n");
         assert!(screen.contains("○ Board task rows") && !screen.contains("○ rows-say-what"), "the title, not the branch: {screen}");
-        assert!(!screen.contains("you:") && !screen.contains('…'), "{screen}");
-        let wanted: String = rows.iter().skip_while(|row| !row.contains("Board task rows")).skip(1).take_while(|row| !row.contains("READY TO PUSH")).map(|row| untied(row)).filter(|row| !row.is_empty()).collect::<Vec<_>>().join(" ");
-        assert_eq!(wanted.trim(), "approve the mock of the task rows for Needs you, Working and Ready to push before anything is built");
+        assert!(!screen.contains("you:"), "{screen}");
+        let wanted: Vec<String> = rows.iter().skip_while(|row| !row.contains("Board task rows")).skip(1).take_while(|row| !row.contains("READY TO PUSH")).map(|row| untied(row).trim().to_string()).filter(|row| !row.is_empty()).collect();
+        assert_eq!(wanted.len(), 1, "what it wants is one line: {screen}");
+        assert!(wanted[0].starts_with("approve the mock of the task rows") && wanted[0].ends_with('…'), "{screen}");
         assert!(!screen.contains("review the 2 commits"), "the lead approved it, so Ready to push asks nothing: {screen}");
     }
 

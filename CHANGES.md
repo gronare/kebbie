@@ -9,6 +9,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - n asks only what you want done: Claude picks the repo, writes the card and asks its questions, then starts it or files it.
 
 ### Fixed
+- The line under a task's row on the board says only what you do next, on one line; review findings, rule breaks and review suggestions go to the lead.
 - The lead never compacts its conversation, so it keeps its rules: near restart.lead_context it writes a handover and starts fresh on it.
 - kebbie setup run outside herdr ends with how to start herdr instead of opening the board on its error page.
 - An Also noticed line that says nothing, such as nothing or none, files no found item.

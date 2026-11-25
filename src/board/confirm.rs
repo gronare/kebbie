@@ -209,7 +209,9 @@ mod tests {
         let (rows, _) = render(&mut app, 200, 30);
         let screen = rows.join("\n");
         assert!(screen.contains("QUEUED") && screen.contains("⧗ Bill in cents") && !screen.contains("billing@api"), "the row has its title and names the other task by its own: {screen}");
-        assert!(screen.contains("   Waits for Billing totals (ready to push). Starts by itself") && screen.contains("   once it is pushed and CI is green.") && !screen.contains('…'), "the wait is said whole under the row, wrapped, never cut: {screen}");
+        let (narrow, _) = render(&mut app, 80, 30);
+        let at = narrow.iter().position(|row| untied(row).starts_with("Waits for Billing totals")).unwrap_or_else(|| panic!("{}", narrow.join("\n")));
+        assert!(untied(&narrow[at]).trim_end().ends_with('…') && !narrow[at + 1].contains("CI is green"), "the wait under the row is one line, cut: {}", narrow.join("\n"));
         let menu: Vec<_> = crate::board::options::task_choices(app.selected_task().as_ref(), None, None).into_iter().map(|choice| (choice.act, choice.about)).collect();
         assert_eq!(menu, [
             (Some(crate::keys::Act::Go), "from main, without the changes from Billing totals; its Claude is told what is missing (asks first)".to_string()),

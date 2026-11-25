@@ -190,7 +190,8 @@ fn stopped(item: &Item) -> (char, String, String, Option<u64>) {
         };
         return ('✗', format!("CI red after push · {why} · needs your call"), "CI red, needs your call".to_string(), failed.or(since));
     }
-    let what = item.wanted(&go).or_else(|| item.recover_note()).unwrap_or_else(|| item.summary());
+    // summary() is the lead's and names review findings and rule breaks; a row the user reads never does.
+    let what = item.wanted(&go).or_else(|| item.recover_note()).unwrap_or_else(|| item.summary_on(crate::status::Surface::User));
     let asks = item.agent.as_ref().is_some_and(|agent| agent.status == "blocked") || item.held_by_draft.is_some() || matches!(phase(item), Some(Phase::NeedsYou(Why::Report | Why::Question)));
     let icon = if item.queued.is_some() { '⧗' } else if asks { '?' } else { '!' };
     let since = if matches!(phase(item), Some(Phase::NeedsYou(Why::Report))) { item.report.as_ref().map(|report| report.at).or(since) } else { since };
@@ -492,6 +493,19 @@ pub(crate) mod tests {
         assert_eq!(next.rows.iter().map(|row| (row.name.as_str(), row.part)).collect::<Vec<_>>(), [("billing", Part::Stopped), ("card-component", Part::Push)]);
         assert_eq!((next.rows[0].said.as_str(), next.rows[0].icon), ("accept “Step 2”", '!'));
         assert_eq!(next.pushes().len(), 1, "push in order leaves it out");
+    }
+
+    #[test]
+    fn a_task_held_by_its_reviews_findings_under_needs_you_leaves_them_to_the_lead() {
+        let mut held = named(task(Some("idle"), Some("ready"), 2), "billing", "web");
+        let git = held.git.as_mut().unwrap();
+        (git.changed, git.uncommitted, git.uncommitted_files) = (1, 1, vec!["drafts/a.md".to_string()]);
+        crate::status::tests::rederive(&mut held);
+        held.verdict = Some(crate::status::tests::in_review(false, 2, false, false));
+        assert!(held.summary().contains("2 findings"), "the lead's summary keeps them: {}", held.summary());
+        let next = of(&[held]);
+        let row = next.rows.iter().find(|row| row.name == "billing").expect("billing has a row");
+        assert!(!row.what.contains("finding") && !row.what.contains("withdraw"), "{}", row.what);
     }
 
     #[test]

@@ -388,7 +388,7 @@ pub fn item(item: &status::Item, seen: &Seen) -> Option<Item> {
     Some(Item {
         group,
         urgency: item.urgency(),
-        summary: item.summary_on(Surface::Phone),
+        summary: item.summary_on(Surface::User),
         next_for_you: item.next_for_you().map(str::to_string),
         agent: agent(item, seen),
         report: report(item),
@@ -457,7 +457,7 @@ fn later(item: &status::Item) -> Option<Later> {
     };
     let line = match state {
         LaterState::Queued => item.queued_note().unwrap_or_default(),
-        LaterState::Parked => item.summary_on(Surface::Phone),
+        LaterState::Parked => item.summary_on(Surface::User),
     };
     let asks = item.question.is_some() || item.agent.as_ref().is_some_and(|agent| agent.status == "blocked");
     Some(Later { address: crate::peers::address(&item.name, &item.place), title: item.title.clone(), state, line, until: item.parked.and_then(|parked| parked.until), question: asks })
@@ -965,10 +965,10 @@ pub(crate) mod tests {
         held.agent.as_mut().unwrap().kind = crate::agent::Agent::Codex;
         held.recipe = Some(crate::recipe::Recipe { name: "small-fix".to_string(), why: "one file".to_string(), by: "lead".to_string() });
         held.assessment = Some(crate::assessment::Word::Suggested { reason: "touches money".to_string() });
-        assert!(held.summary().ends_with("withdraw with v to push without a pass"), "the board keeps its key: {}", held.summary());
+        assert!(held.summary().ends_with("withdraw with v to push without a pass"), "the lead's summary keeps its key: {}", held.summary());
         let assessed = Seen { assessed: BTreeMap::from([(crate::peers::address(&held.name, &held.place), 1_761_069_300)]), ..Seen::default() };
         let shown = &build(std::slice::from_ref(&held), &[], Vec::new(), None, &assessed).items[0];
-        assert!(shown.summary.ends_with("review: 2 findings · the push waits for a pass"), "{}", shown.summary);
+        assert_eq!(shown.summary, "2 commits", "its findings are the lead's; the phone reads them from the verdict");
         assert_eq!(shown.verdict.as_ref().unwrap().held, Some(true));
         assert_eq!(shown.second_opinion, None);
         let mut seconded = held.clone();

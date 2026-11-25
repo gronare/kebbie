@@ -2,7 +2,7 @@
 
 Hold a task's push until an independent, read-only reviewer has passed its code, and ask a second reviewer for its opinion when you want one.
 
-On a ready report, an assessor judges whether the work needs a review, and the row says `review suggested: <why> · v` when it does. See [An assessor judges whether the work needs a review](../explanation/review-gate.md#an-assessor-judges-whether-the-work-needs-a-review).
+On a ready report, an assessor judges whether the work needs a review, and the lead hears `review suggested: <why>` when it does; the task's row stays as it is. See [An assessor judges whether the work needs a review](../explanation/review-gate.md#an-assessor-judges-whether-the-work-needs-a-review).
 
 1. Select the task on the board and press `v`. A menu opens:
 
@@ -75,7 +75,7 @@ A second opinion is another review profile reading the same commits, for example
 
    Or run `kebbie review --second billing`, or `kebbie review --second-only billing`.
 
-3. Read the points. The row shows `second opinion: codex-review reading…`, then `second opinion: 2 points · v i reads them`. Press `v`, then `i`, to page through them. The lead passes the ones that matter to the task.
+3. Read the points. The row shows `second opinion: codex-review reading…` while it reads; the points then go to the lead, which passes the ones that matter to the task. Press `v`, then `i`, to page through them yourself.
 
 The points are `second-opinions/<task>@<repo>.md` in the state directory, in the same shape as a verdict.
 

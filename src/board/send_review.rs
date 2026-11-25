@@ -169,16 +169,11 @@ impl App {
     }
 }
 
-// The second line of a task's row names a second opinion once one is asked for; it never says the push waits on it.
+// The second line of a task's row names a second opinion while it reads; its points reach the lead as messages.
 pub(super) fn second_part(item: &Item) -> Option<String> {
     let shown = item.second.as_ref()?;
     let by = if shown.by.is_empty() { "second opinion".to_string() } else { shown.by.clone() };
-    Some(match shown.points {
-        _ if shown.running => format!("second opinion: {by} reading…"),
-        Some(0) => "second opinion: no points".to_string(),
-        Some(points) => format!("second opinion: {}{} · {} i reads them", review::points_text(points), if shown.stale { " (stale)" } else { "" }, crate::keys::key(Act::SendReview)),
-        None => return None,
-    })
+    shown.running.then(|| format!("second opinion: {by} reading…"))
 }
 
 #[cfg(test)]
@@ -248,18 +243,17 @@ mod tests {
     }
 
     #[test]
-    fn a_second_opinion_shows_its_points_on_the_tasks_row_and_never_says_the_push_waits_on_it() {
+    fn a_second_opinion_shows_on_the_tasks_row_while_it_reads_and_its_points_are_the_leads() {
         let mut item = billing();
         item.assessment = None;
         item.recipe = Some(crate::recipe::Recipe { name: "small-fix".to_string(), why: "one function".to_string(), by: "lead".to_string() });
         item.verdict = Some(crate::status::tests::in_review(true, 0, false, false));
         item.second = Some(SecondShown { by: "codex-review".to_string(), points: Some(2), running: false, stale: false, file: PathBuf::from("/state/second-opinions/billing@web.md") });
         assert!(!item.awaiting_review(), "its reviewer passed it; the second opinion holds nothing");
-        assert_eq!(second_part(&item).as_deref(), Some("second opinion: 2 points · v i reads them"));
+        assert_eq!(second_part(&item), None, "its points reach the lead");
         let mut app = test_app(vec![item.clone()]);
         let (rows, _) = render(&mut app, 240, 20);
-        let row = rows.iter().find(|row| row.contains("second opinion")).unwrap_or_else(|| panic!("{}", rows.join("\n")));
-        assert!(row.contains("second opinion: 2 points · v i reads them"), "{row}");
+        assert!(!rows.join("\n").contains("second opinion"), "{}", rows.join("\n"));
         let menu = review_menu(&item, &reviewer(), Some((&codex_review(), false)));
         assert_eq!((keys(&menu), menu.choices[3].about.as_str()), ("vsoi".to_string(), "codex-review's 2 points, in the pager"));
         item.second = Some(SecondShown { points: None, running: true, ..item.second.clone().unwrap() });

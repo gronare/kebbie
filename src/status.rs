@@ -138,11 +138,11 @@ pub fn answer_in_space(agent: crate::agent::Agent) -> String {
 
 const IN_SPACE: &str = " in its Space or through the lead";
 
-// The board's own texts name its keys; what goes to the phone, which has none, says what waits instead.
+// The lead's summary names findings, rule breaks and obstacles; the user's rows, on the board and the phone, leave them to the lead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Surface {
-    Board,
-    Phone,
+    Lead,
+    User,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -314,16 +314,9 @@ impl Item {
         Some(format!("{} {verb} it: {} · {} then p pushes the commits and keeps them", plural(git.uncommitted, "uncommitted file"), tasks::and_list(&git.uncommitted_files), crate::keys::key(crate::keys::Act::Push)))
     }
 
-    // A changes verdict on the current code with no reviewer running: what it asks, first finding first, for the row's second line.
-    pub fn verdict_wanted(&self) -> Option<String> {
-        let shown = self.verdict.as_ref().filter(|shown| shown.held && !shown.running && !shown.stale)?;
-        let verdict = shown.verdict.as_ref().filter(|verdict| !verdict.ok)?;
-        let first = verdict.first.as_deref().map(|first| crate::review::unsettled(first).map_or_else(|| first.to_string(), |(mark, asks)| format!("{mark} {asks}")));
-        let more = if verdict.findings > 1 { format!(" (+{} more)", verdict.findings - 1) } else { String::new() };
-        Some(match first {
-            Some(first) => format!("review asks for changes: {first}{more}"),
-            None => format!("review asks for changes ({})", verdict.summary()),
-        })
+    // A changes verdict on the current code with no reviewer running holds the task; what it asks reaches the lead and the task, never the board.
+    pub fn held_by_changes(&self) -> bool {
+        self.verdict.as_ref().filter(|shown| shown.held && !shown.running && !shown.stale).and_then(|shown| shown.verdict.as_ref()).is_some_and(|verdict| !verdict.ok)
     }
 
     pub fn review_stopped(&self) -> bool {
@@ -335,31 +328,39 @@ impl Item {
         self.git.as_ref().is_some_and(|git| git.ahead > 0) && self.verdict.as_ref().is_some_and(|shown| shown.held && shown.pending())
     }
 
+    // Neutral words only: findings and a review that gave no verdict reach the lead as messages; a pushed task's review is of code already out, so CI running shows none.
     pub fn review_note(&self) -> Option<String> {
-        self.review_note_on(Surface::Board)
-    }
-
-    // A pushed task's review is of code already out, so CI running shows none; nothing is left on the branch for it to match.
-    pub fn review_note_on(&self, surface: Surface) -> Option<String> {
-        let withdraw = match surface {
-            Surface::Board => "withdraw with v to push without a pass",
-            Surface::Phone => "the push waits for a pass",
-        };
         if matches!(self.phase(), Some(Phase::CiRunning { .. })) {
             return None;
         }
         let shown = self.verdict.as_ref()?;
-        let verdict = shown.verdict.as_ref();
-        Some(match verdict {
+        Some(match shown.verdict.as_ref() {
             _ if shown.running && !shown.held => "review running · push not held".to_string(),
             _ if shown.running => "review running · waits on the reviewer".to_string(),
             Some(_) if shown.stale => "review stale".to_string(),
             Some(verdict) if verdict.ok => "reviewed".to_string(),
-            Some(verdict) if self.turn_under_way() || !shown.held => format!("review: {}", verdict.summary()),
-            Some(verdict) => format!("review: {} · {withdraw}", verdict.summary()),
-            None if shown.held => format!("review gave no verdict · {withdraw}"),
-            None => return None,
+            _ => return None,
         })
+    }
+
+    // The lead's summary also names the findings and a review that gave no verdict; the board's and the phone's rows never do.
+    fn review_note_for_lead(&self) -> Option<String> {
+        if matches!(self.phase(), Some(Phase::CiRunning { .. })) {
+            return None;
+        }
+        let shown = self.verdict.as_ref().filter(|shown| !shown.running && !shown.stale)?;
+        let withdraw = "withdraw with v to push without a pass";
+        match shown.verdict.as_ref() {
+            Some(verdict) if verdict.ok => None,
+            Some(verdict) if self.turn_under_way() || !shown.held => Some(format!("review: {}", verdict.summary())),
+            Some(verdict) => Some(format!("review: {} · {withdraw}", verdict.summary())),
+            None if shown.held => Some(format!("review gave no verdict · {withdraw}")),
+            None => None,
+        }
+    }
+
+    fn review_note_on(&self, surface: Surface) -> Option<String> {
+        self.review_note().or_else(|| self.review_note_for_lead().filter(|_| surface == Surface::Lead))
     }
 
     pub fn report_state(&self) -> Option<&str> {
@@ -559,11 +560,12 @@ impl Item {
         if let Some(held) = &self.held_by_draft {
             return Some(held);
         }
-        if let Some(waits) = self.accept_waits() {
-            return Some(&waits.next);
-        }
+        // A looped review holds the push even with a stale verdict, so it goes before a step to accept, as on the board's row.
         if self.review_stopped() {
             return Some(crate::review::LOOPED);
+        }
+        if let Some(waits) = self.accept_waits().filter(|_| !self.held_by_changes()) {
+            return Some(&waits.next);
         }
         self.report.as_ref()?.next_for_you()
     }
@@ -607,13 +609,10 @@ impl Item {
         if self.review_stopped() {
             return Some(crate::review::LOOPED.to_string());
         }
-        if let Some(verdict) = self.verdict_wanted() {
-            return Some(verdict);
-        }
-        if let Some(held) = self.held_by_uncommitted() {
+        if let Some(held) = self.held_by_uncommitted().filter(|_| !self.held_by_changes()) {
             return Some(held);
         }
-        if let Some(waits) = self.accept_waits() {
+        if let Some(waits) = self.accept_waits().filter(|_| !self.held_by_changes()) {
             return Some(format!("{} · {} review", waits.next, crate::keys::key(crate::keys::Act::Review)));
         }
         self.report.as_ref()?.next_for_you().map(str::to_string)
@@ -678,7 +677,7 @@ impl Item {
     }
 
     pub fn summary(&self) -> String {
-        self.summary_on(Surface::Board)
+        self.summary_on(Surface::Lead)
     }
 
     pub fn summary_on(&self, surface: Surface) -> String {
@@ -707,7 +706,7 @@ impl Item {
             return format!("{} · {STAGED}", plural(git.ahead, "commit"));
         }
         if self.group() == Group::ReadyToPush {
-            let review: String = self.rules_note().filter(|_| surface == Surface::Board).into_iter().chain(self.review_note_on(surface)).chain(self.unrecorded.clone()).map(|note| format!(" · {note}")).collect();
+            let review: String = self.rules_note().filter(|_| surface == Surface::Lead).into_iter().chain(self.review_note_on(surface)).chain(self.unrecorded.clone()).map(|note| format!(" · {note}")).collect();
             let behind = if git.behind > 0 { format!(" · {} behind {}", git.behind, git.upstream.trim_start_matches("origin/")) } else { String::new() };
             let turn = if self.turn_under_way() { format!(" · its {} is taking a turn", self.agent_name()) } else { String::new() };
             let dirty = if git.uncommitted > 0 { format!(" · {}", plural(git.uncommitted, "uncommitted file")) } else { String::new() };
@@ -729,7 +728,7 @@ impl Item {
         if git.behind > 0 {
             parts.push(format!("{} behind {}", git.behind, git.upstream.trim_start_matches("origin/")));
         }
-        parts.extend(self.rules_note().filter(|_| surface == Surface::Board));
+        parts.extend(self.rules_note().filter(|_| surface == Surface::Lead));
         parts.extend(self.review_note_on(surface));
         parts.extend(self.unrecorded.clone());
         if parts.is_empty() { "nothing yet".to_string() } else { parts.join(" · ") }
@@ -1517,6 +1516,23 @@ pub(crate) mod tests {
         assert_eq!(nothing.held_by_uncommitted(), None, "no commits, nothing to push anyway");
     }
 
+    #[test]
+    fn a_task_under_needs_you_held_by_its_reviews_findings_offers_no_push_and_no_step_to_accept() {
+        let mut item = task(Some("idle"), Some("ready"), 2);
+        let git = item.git.as_mut().unwrap();
+        (git.changed, git.uncommitted, git.uncommitted_files) = (1, 1, vec!["drafts/a.md".to_string()]);
+        rederive(&mut item);
+        item.verdict = Some(in_review(false, 2, false, false));
+        assert_eq!((item.group(), item.phase()), (Group::NeedsYou, Some(&Phase::NeedsYou(Why::NothingToPush))));
+        assert!(item.held_by_changes() && item.held_by_uncommitted().is_some());
+        assert_eq!((item.wanted("enter"), item.next_for_you()), (None, None), "the review's gate refuses the push, so the row offers none");
+        item.report.as_mut().unwrap().report.as_mut().unwrap().next = "check the invoice on staging".to_string();
+        assert_eq!((item.wanted("enter").as_deref(), item.next_for_you()), (Some("check the invoice on staging"), Some("check the invoice on staging")), "what the task asks of the user still shows");
+        item.report.as_mut().unwrap().report.as_mut().unwrap().next = "nothing".to_string();
+        item.verdict = Some(in_review(true, 0, false, false));
+        assert!(item.wanted("enter").is_some_and(|wanted| wanted.ends_with("pushes the commits and keeps them")), "a passed review leaves the offer");
+    }
+
     pub(crate) fn in_review(ok: bool, findings: usize, stale: bool, running: bool) -> crate::review::Shown {
         crate::review::Shown { verdict: Some(crate::review::Verdict { ok, sha: "abc".to_string(), findings, ..Default::default() }), stale, running, held: true, file: PathBuf::from("/state/verdicts/billing@web.md"), looped: false }
     }
@@ -1539,7 +1555,8 @@ pub(crate) mod tests {
         assert_eq!(Group::InReview.title(), "IN REVIEW");
         let findings = reviewed(in_review(false, 2, false, false));
         assert!(findings.group() == Group::InReview);
-        assert!(findings.summary().ends_with("review: 2 findings · withdraw with v to push without a pass"), "{}", findings.summary());
+        assert!(findings.summary().ends_with("review: 2 findings · withdraw with v to push without a pass"), "the lead's summary names the findings: {}", findings.summary());
+        assert_eq!(findings.summary_on(Surface::User), "2 commits", "the phone's row leaves them to the lead");
         let stale = reviewed(in_review(true, 0, true, false));
         assert!(stale.group() == Group::InReview, "a pass on older code is not a pass");
         assert!(stale.summary().ends_with("review stale"));
@@ -1584,7 +1601,7 @@ pub(crate) mod tests {
         assert_eq!(item.summary(), "2 commits · ready to push · checking project rules");
         item.rules = Some(crate::rules_check::Shown::Broken(2, Vec::new()));
         assert_eq!(item.summary(), "2 commits · ready to push · breaks 2 project rules");
-        assert_eq!(item.summary_on(Surface::Phone), "2 commits · ready to push", "the phone has the rules check as its own field");
+        assert_eq!(item.summary_on(Surface::User), "2 commits · ready to push", "the phone has the rules check as its own field");
         item.rules = Some(crate::rules_check::Shown::Broken(1, Vec::new()));
         assert!(item.summary().ends_with("breaks 1 project rule"));
         item.rules = Some(crate::rules_check::Shown::Lead);
@@ -1746,7 +1763,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_changes_verdict_with_no_reviewer_running_shows_its_finding_and_a_confirmation_waits_under_needs_you() {
+    fn a_changes_verdict_holds_the_task_without_a_line_for_the_user_and_a_confirmation_waits_under_needs_you() {
         let mut item = task(Some("idle"), Some("ready"), 1);
         in_phase(&mut item, Phase::Ready { head: Some("abc".to_string()) });
         item.to_accept = Some(waiting_to_accept(1, 1));
@@ -1754,7 +1771,8 @@ pub(crate) mod tests {
         shown.verdict.as_mut().unwrap().first = Some("confirm: src/links.rs:12 — dropping the link is now the intent".to_string());
         item.verdict = Some(shown.clone());
         assert_eq!(item.group(), Group::InReview);
-        assert_eq!(item.verdict_wanted().as_deref(), Some("review asks for changes: confirm: src/links.rs:12 — dropping the link is now the intent"), "the verdict, not the step to accept, says why it waits");
+        assert!(item.held_by_changes(), "the verdict, not the step to accept, holds it");
+        assert_eq!((item.wanted("enter"), item.next_for_you()), (None, None), "its findings are the lead's and the task's");
         item.verdict.as_mut().unwrap().verdict.as_mut().unwrap().confirm = 1;
         item.question = Some(messages::fold(r#"{"id":"r1","at":10,"from":"kebbie","to":"you","text":"billing@web's review asks you to confirm: src/links.rs:12 — dropping the link is now the intent","state":"asked","kind":"review","about":"review:billing@web","question":{"options":[{"label":"Confirm","meaning":"one"},{"label":"Change it","meaning":"two","comment":true}],"recommend":1}}"#).remove(0));
         item.drop_settled_confirmation();
@@ -1763,7 +1781,7 @@ pub(crate) mod tests {
         item.verdict.as_mut().unwrap().running = true;
         item.drop_settled_confirmation();
         assert!(item.question.is_none(), "a reviewer reading it again settles the question");
-        assert_eq!(item.verdict_wanted(), None, "a running reviewer has no verdict yet");
+        assert!(!item.held_by_changes(), "a running reviewer has no verdict yet");
     }
 
     #[test]
