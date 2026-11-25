@@ -2,10 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-#[path = "../src/executable.rs"]
-mod executable;
-#[path = "../src/test_seal.rs"]
-mod test_seal;
+use crate::executable;
 
 const SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/install.sh");
 

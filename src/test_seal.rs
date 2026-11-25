@@ -192,12 +192,17 @@ mod tests {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
         let main = fs::read_to_string(manifest.join("src/main.rs")).unwrap();
         assert!(main.contains("#[cfg(test)]\nmod test_seal;") && main.contains("\nmod executable;\n"), "the unit tests are sealed");
-        for entry in fs::read_dir(manifest.join("tests")).unwrap() {
-            let file = entry.unwrap().path();
-            if file.extension().is_some_and(|extension| extension == "rs") {
-                let source = fs::read_to_string(&file).unwrap();
-                assert!(source.contains("#[path = \"../src/test_seal.rs\"]\nmod test_seal;") && source.contains("#[path = \"../src/executable.rs\"]\nmod executable;"), "{} is not sealed", file.display());
+        let targets: Vec<(PathBuf, &str)> = fs::read_dir(manifest.join("tests")).unwrap().map(|entry| entry.unwrap().path()).filter_map(|path| {
+            if path.extension().is_some_and(|extension| extension == "rs") {
+                Some((path, ".."))
+            } else {
+                path.join("main.rs").is_file().then(|| (path.join("main.rs"), "../.."))
             }
+        }).collect();
+        assert!(!targets.is_empty(), "cargo's test targets under tests/ are found");
+        for (file, up) in targets {
+            let source = fs::read_to_string(&file).unwrap();
+            assert!(source.contains(&format!("#[path = \"{up}/src/test_seal.rs\"]\nmod test_seal;")) && source.contains(&format!("#[path = \"{up}/src/executable.rs\"]\nmod executable;")), "{} is not sealed", file.display());
         }
     }
 }

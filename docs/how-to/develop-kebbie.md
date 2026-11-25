@@ -52,7 +52,7 @@ CI and the release builds read the same file, so `cargo clippy --locked --all-ta
 
    It runs the same checks CI runs: the tests as above, clippy, `cargo audit`, `cargo deny`, and a check on the oldest Rust that `rust-version` allows. It ends on `check: all green`.
 
-   The scenario suite, which walks each feature end to end through the `kebbie` binary with a fake herdr and fake agents, is part of the tests; run it alone with `cargo test --test scenarios`.
+   The scenario suite, which walks each feature end to end through the `kebbie` binary with a fake herdr and fake agents, is part of the tests; run it alone with `cargo test --test it scenarios::`.
 
 The gate tests your working tree, and says so when that differs from the last commit.
 

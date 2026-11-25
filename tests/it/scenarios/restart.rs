@@ -3,7 +3,7 @@ use std::path::Path;
 
 use serde_json::json;
 
-use crate::lab::{Lab, stdout};
+use crate::scenarios::lab::{Lab, stdout};
 
 fn with_session(lab: &Lab, task: &str, worktree: &Path, codex: bool) {
     let session = format!("s-{task}");
@@ -73,7 +73,7 @@ fn after_a_kebbie_update_restart_leaves_a_busy_task_a_drafted_one_and_a_codex_ta
         with_session(&lab, task, &worktree, codex);
     }
     lab.agent("busy", |agent| agent["agent_status"] = json!("working"));
-    lab.screen("p_drafted", &crate::lab::CLAUDE_SCREEN.replace("❯ ", "❯ half a thought of my own"));
+    lab.screen("p_drafted", &crate::scenarios::lab::CLAUDE_SCREEN.replace("❯ ", "❯ half a thought of my own"));
     fs::remove_file(lab.home.join(".config/kebbie/profiles/coder.toml")).unwrap();
     kebbie_updated(&lab);
     let said = lab.ok(&["restart"]);

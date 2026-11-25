@@ -1,6 +1,6 @@
 use std::fs;
 
-use crate::lab::{Lab, stdout};
+use crate::scenarios::lab::{Lab, stdout};
 
 fn row<'a>(said: &'a str, step: &str) -> &'a str {
     said.lines().find(|line| line.split_whitespace().nth(1) == Some(step)).unwrap_or_else(|| panic!("no {step} row: {said}"))

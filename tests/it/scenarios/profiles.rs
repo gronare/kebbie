@@ -1,6 +1,6 @@
 use std::fs;
 
-use crate::lab::{Lab, stderr};
+use crate::scenarios::lab::{Lab, stderr};
 
 const DESIGNER: &str = "# UI work, mockup first\nabout = \"UI work\" # shown on the board\nmodel = \"opus\"\neffort = \"high\"\nrole = \"designer.md\"\n";
 
@@ -35,7 +35,7 @@ fn a_codex_profile_on_a_machine_that_did_not_set_codex_up_is_refused_and_marked_
     assert!(!refused.status.success() && stderr(&refused).contains("Codex is not set up: kebbie setup codex"), "{}", stderr(&refused));
     assert!(!lab.worktree(1).exists() && !lab.on_board("search"), "nothing is claimed for it");
     assert!(lab.ok(&["profiles"]).contains("  ⚠ Codex is not set up: kebbie setup codex"));
-    let doctor = crate::lab::stdout(&lab.run(&["doctor"]));
+    let doctor = crate::scenarios::lab::stdout(&lab.run(&["doctor"]));
     assert!(doctor.contains("profile coder: Codex is not set up: kebbie setup codex"), "{doctor}");
     lab.ok(&["setup", "codex", "--yes"]);
     assert!(!lab.ok(&["profiles"]).contains("Codex is not set up"));

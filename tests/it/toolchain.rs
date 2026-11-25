@@ -1,10 +1,5 @@
-#[path = "../src/executable.rs"]
-mod executable;
-#[path = "../src/test_seal.rs"]
-mod test_seal;
-
-const TOOLCHAIN: &str = include_str!("../rust-toolchain.toml");
-const WORKFLOWS: [(&str, &str); 2] = [("ci.yml", include_str!("../.github/workflows/ci.yml")), ("release.yml", include_str!("../.github/workflows/release.yml"))];
+const TOOLCHAIN: &str = include_str!("../../rust-toolchain.toml");
+const WORKFLOWS: [(&str, &str); 2] = [("ci.yml", include_str!("../../.github/workflows/ci.yml")), ("release.yml", include_str!("../../.github/workflows/release.yml"))];
 
 #[test]
 fn the_toolchain_is_pinned_to_an_exact_release_with_clippy_and_rustfmt() {

@@ -2,10 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-#[path = "../src/executable.rs"]
-mod executable;
-#[path = "../src/test_seal.rs"]
-mod test_seal;
+use crate::test_seal;
 
 const KEBBIE: &str = env!("CARGO_BIN_EXE_kebbie");
 

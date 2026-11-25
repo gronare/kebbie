@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::Stdio;
 
-use crate::lab::{Lab, git, stderr, stdout};
+use crate::scenarios::lab::{Lab, git, stderr, stdout};
 
 // What a task's Bash hook hands kebbie once a command ended, as Claude Code sends it.
 fn ran(lab: &Lab, worktree: &Path, command: &str, exit: Option<i64>) {

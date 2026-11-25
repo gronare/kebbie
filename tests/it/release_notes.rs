@@ -2,14 +2,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-#[path = "../src/executable.rs"]
-mod executable;
-#[path = "../src/test_seal.rs"]
-mod test_seal;
-
 const SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/release-notes.sh");
-const RELEASE: &str = include_str!("../scripts/release.sh");
-const WORKFLOW: &str = include_str!("../.github/workflows/release.yml");
+const RELEASE: &str = include_str!("../../scripts/release.sh");
+const WORKFLOW: &str = include_str!("../../.github/workflows/release.yml");
 
 const NOTES: &str = "# Changes\n\nIntro.\n\n## Unreleased\n\n### What's new\n- The hub window names your devices, and r removes\n  one\n\n### Fixed\n- Update no longer stops on a newer config key\n\n## 0.27.0\n\n### What's new\n- Connect a hub from the board\n\n### Fixed\n";
 

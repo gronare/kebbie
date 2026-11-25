@@ -1,6 +1,6 @@
 use std::fs;
 
-use crate::lab::Lab;
+use crate::scenarios::lab::Lab;
 
 const MODELS: &str = r#"{"fetched_at":"2026-10-30T08:00:00Z","client_version":"0.163.0","models":[
 {"slug":"gpt-6.1-sol","display_name":"GPT-6.1-Sol","default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low","description":""}],"visibility":"list","priority":1},

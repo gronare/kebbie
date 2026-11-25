@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use crate::lab::{CODEX_SCREEN, Lab, eventually, stderr, stdout};
+use crate::scenarios::lab::{CODEX_SCREEN, Lab, eventually, stderr, stdout};
 
 const WELCOME: &str = "  Welcome to Codex, OpenAI's command-line coding agent\n\n  Choose how you want to use Codex.\n\n› 1. Sign in with ChatGPT\n     Usage included with Plus, Pro, Business, and Enterprise plans\n\n  2. Sign in with Device Code\n\n  Press enter to continue\n";
 const TRUST: &str = "  Trust this folder? Codex can read and edit files in it.\n\n› 1. Trust and continue\n  2. Quit\n";

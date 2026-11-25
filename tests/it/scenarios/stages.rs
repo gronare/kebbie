@@ -1,6 +1,6 @@
 use std::fs;
 
-use crate::lab::{Lab, git, stderr, stdout};
+use crate::scenarios::lab::{Lab, git, stderr, stdout};
 
 #[test]
 fn a_task_in_stages_pushes_its_first_stage_alone_and_asks_you_for_the_deploy_kebbie_cannot_see() {

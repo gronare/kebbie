@@ -1,4 +1,4 @@
-use crate::lab::{Lab, eventually, git, stderr, stdout};
+use crate::scenarios::lab::{Lab, eventually, git, stderr, stdout};
 
 #[test]
 fn a_task_queued_after_another_waits_on_the_board_and_starts_once_the_first_is_pushed() {

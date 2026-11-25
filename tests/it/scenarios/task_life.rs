@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::lab::{Lab, eventually, git, stderr, stdout};
+use crate::scenarios::lab::{Lab, eventually, git, stderr, stdout};
 
 fn lives(lab: &Lab, profile: &str) -> Option<String> {
     let unnamed = lab.run_as("lead", &["-C", lab.app(), "start", "search", "Add the search page", "--profile", profile]);

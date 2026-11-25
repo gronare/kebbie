@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use crate::lab::{Lab, git, stderr, stdout};
+use crate::scenarios::lab::{Lab, git, stderr, stdout};
 
 fn ready(lab: &Lab, task: &str, subject: &str) -> PathBuf {
     let worktree = lab.start(task, subject, &[]);

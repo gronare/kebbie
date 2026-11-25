@@ -2,10 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-#[path = "../src/executable.rs"]
-mod executable;
-#[path = "../src/test_seal.rs"]
-mod test_seal;
+use crate::executable;
 
 const SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/review.sh");
 
@@ -198,7 +195,7 @@ fn the_script_lists_no_files_itself_and_fzf_is_gone() {
 
 // Drives review.lua in a headless nvim: the diff loads from shown.json, a comment on a visual selection reaches Claude's pane, and tab hands the focus to the view.
 #[test]
-#[ignore = "needs nvim 0.10 or newer on PATH, which CI does not install: cargo test --test review_split -- --ignored"]
+#[ignore = "needs nvim 0.10 or newer on PATH, which CI does not install: cargo test --test it review_split:: -- --ignored"]
 fn nvim_types_a_comment_on_a_selection_into_claudes_pane_and_hands_tab_to_the_view() {
     let split = Split::new("nvim");
     let sha = git(&split.slot, &["rev-parse", "HEAD"]);
@@ -237,7 +234,7 @@ end, 500)
 
 // A slow diff of the file shown before must not land over the newer one, or a comment would name one file and quote another.
 #[test]
-#[ignore = "needs nvim 0.10 or newer on PATH, which CI does not install: cargo test --test review_split -- --ignored"]
+#[ignore = "needs nvim 0.10 or newer on PATH, which CI does not install: cargo test --test it review_split:: -- --ignored"]
 fn a_diff_that_finishes_after_a_newer_file_was_shown_is_dropped() {
     let split = Split::new("stale");
     let dir = split.dir();

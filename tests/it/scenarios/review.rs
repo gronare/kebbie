@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::lab::{Lab, eventually, git, stderr, stdout};
+use crate::scenarios::lab::{Lab, eventually, git, stderr, stdout};
 
 const NEEDED: &str = "needed: yes\nreason: changes how refunds round";
 

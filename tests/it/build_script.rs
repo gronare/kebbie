@@ -2,12 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-#[path = "../src/executable.rs"]
-mod executable;
-#[path = "../src/test_seal.rs"]
-mod test_seal;
-
-const SCRIPT: &str = include_str!("../scripts/build.sh");
+const SCRIPT: &str = include_str!("../../scripts/build.sh");
 const PREBUILT: &str = "#!/bin/sh\necho prebuilt\n";
 
 fn triple() -> String {
@@ -408,9 +403,9 @@ fn a_source_build_without_rustup_refuses_a_rustc_older_than_the_workspace_needs(
 
 #[test]
 fn the_workspace_declares_the_rust_version_it_needs() {
-    let manifest: toml::Table = toml::from_str(include_str!("../Cargo.toml")).unwrap();
+    let manifest: toml::Table = toml::from_str(include_str!("../../Cargo.toml")).unwrap();
     let needed = manifest["package"]["rust-version"].as_str().expect("Cargo.toml names rust-version, which scripts/build.sh checks without rustup");
-    let pinned: toml::Table = toml::from_str(include_str!("../rust-toolchain.toml")).unwrap();
+    let pinned: toml::Table = toml::from_str(include_str!("../../rust-toolchain.toml")).unwrap();
     let number = |version: &str| version.split('.').map(|part| part.parse::<u64>().unwrap()).collect::<Vec<_>>();
     assert!(number(needed) <= number(pinned["toolchain"]["channel"].as_str().unwrap()), "the pinned toolchain builds what rust-version promises");
 }

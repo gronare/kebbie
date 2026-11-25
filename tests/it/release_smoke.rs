@@ -3,10 +3,7 @@ use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-#[path = "../src/executable.rs"]
-mod executable;
-#[path = "../src/test_seal.rs"]
-mod test_seal;
+use crate::executable;
 
 const SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/release-smoke.sh");
 
