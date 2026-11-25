@@ -65,10 +65,6 @@ pub fn missing(runs: &[Run], required: &Required, on_head: impl Fn(&Run) -> bool
     })
 }
 
-fn tree(worktree: &Path, rev: &str) -> Option<String> {
-    git(worktree, &["rev-parse", &format!("{rev}^{{tree}}")]).ok()
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Owed {
     pub required: Required,
@@ -130,8 +126,8 @@ pub fn owed_at(worktree: &Path, address: &str, end: Option<&str>) -> Option<Gap>
     let state = crate::lead::state_dir().ok()?;
     crate::evidence::settle(&state, address, &crate::evidence::listed_for(&settings), crate::messages::now());
     let head = git(worktree, &["rev-parse", end.unwrap_or("HEAD")]).ok()?;
-    let head_tree = tree(worktree, &head);
-    let on_head = |run: &Run| run.code == head || (head_tree.is_some() && tree(worktree, &run.code) == head_tree);
+    let head_tree = crate::evidence::tree_of(worktree, &head);
+    let on_head = |run: &Run| run.code == head || (head_tree.is_some() && crate::evidence::tree_of(worktree, &run.code) == head_tree);
     let (tests, lints) = (crate::evidence::runs_in(&state, address), crate::evidence::lint_runs_in(&state, address));
     let owed: Vec<Owed> = required.into_iter().filter_map(|required| {
         let runs = match required.kind { Kind::Full => &tests, Kind::Lint => &lints };

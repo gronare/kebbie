@@ -662,7 +662,7 @@ fn review(repo: &Path, slot: &Slot, address: &str, state: &Path, which: Which, s
     let rules = &settings.rules_skill.value;
     let rules_file = self::rules_file(rules, &slot.path, &kebbie);
     let quoted = quoted_rules(rules);
-    let tests = with_test_commands(&crate::evidence::brief_for(state, address, &slot.path, &upstream, &sha), &settings.test_commands.value, settings.tests_lint_command.value.as_deref());
+    let tests = with_test_commands(&crate::evidence::brief_for(state, address, &slot.path, &sha), &settings.test_commands.value, settings.tests_lint_command.value.as_deref());
     let docs = if settings.docs_required.value { Some(docs_brief(&slot.path, &upstream, &sha, &kebbie.join(KEEP_DOCS))?) } else { None };
     let card = crate::report::card_in(state, address).map(|card| card.text);
     let focus = subtask.and_then(|id| subtask_focus(&slot.path, id));

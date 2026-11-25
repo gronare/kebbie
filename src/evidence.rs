@@ -1173,14 +1173,29 @@ fn hook_in(state: &Path, address: &str, seen: &Seen) -> Hook {
     }
 }
 
-// The reviewer reads the commits, not the tree, so uncommitted work does not make a run stale here.
-pub fn brief_for(state: &Path, address: &str, worktree: &Path, upstream: &str, sha: &str) -> String {
+// A run counts for the review when it ran on the reviewed commit's tree, so a reworded commit keeps it; uncommitted work since does not make it stale, as the reviewer reads commits.
+pub fn brief_for(state: &Path, address: &str, worktree: &Path, sha: &str) -> String {
     let seen = seen_in(state, address);
     let listed = listed_in(worktree);
     settle(state, address, &listed, crate::messages::now());
     let unrecorded: Vec<String> = seen.unrecorded.iter().filter(|command| recognise(command, &listed).is_none()).cloned().collect();
-    let current = |code: &str| tasks::same_code(worktree, upstream, code, sha);
-    brief(&runs_in(state, address), |run| current(&run.code), |run| shown(run, current, true), hook_in(state, address, &seen), &unrecorded)
+    let reviewed = tree_of(worktree, sha);
+    let current = |code: &str| code == sha || (reviewed.is_some() && tree_of(worktree, code) == reviewed);
+    brief(&runs_in(state, address), |run| current(&run.code), |run| on_reviewed(shown(run, current, true), run), hook_in(state, address, &seen), &unrecorded)
+}
+
+// In the brief a run on the reviewed code says so, since its own sha may be an older commit that holds the same tree.
+fn on_reviewed(shown: Shown, run: &Run) -> Shown {
+    if shown.mark != Mark::Covered {
+        return shown;
+    }
+    let counts = if run.summary.is_empty() { String::new() } else { format!(" · {}", run.summary) };
+    let unverified = if run.sandboxed { "" } else { UNVERIFIED };
+    Shown { text: format!("{}{counts} · covers the reviewed code{unverified}", run.runner), ..shown }
+}
+
+pub fn tree_of(worktree: &Path, rev: &str) -> Option<String> {
+    git(worktree, &["rev-parse", &format!("{rev}^{{tree}}")]).ok()
 }
 
 fn duration(ms: u64) -> String {
@@ -1873,6 +1888,26 @@ mod tests {
         let older = json!({ "command": "cargo test", "runner": "cargo test", "result": "passed", "sha": "a", "code": "a" });
         assert!(Run::from_json(&older).unwrap().sandboxed, "a run recorded before the flag is not labelled");
         assert!(!Run::from_json(&open.to_json()).unwrap().sandboxed);
+        fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn the_reviewers_brief_says_a_run_on_the_reviewed_tree_covers_it_whatever_commit_it_ran_on() {
+        let dir = repo();
+        let state = crate::sh::test_dir("evidence-reviewed-tree");
+        fs::write(dir.join("a"), "two\n").unwrap();
+        commit_all(&dir, "the change");
+        let run = record_in(&state, "billing@app", &dir, &listed(&[]), &passed("cargo test"), 1).remove(0);
+        git(&dir, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend", "-m", "the change, reworded"]).unwrap();
+        let reworded = git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        assert_ne!(reworded, run.sha);
+        let text = brief_for(&state, "billing@app", &dir, &reworded);
+        assert!(text.contains("✓ cargo test · 2 passed · covers the reviewed code") && !text.contains(&run.sha[..7]), "a reworded commit holds the same code, so the run covers it: {text}");
+        fs::write(dir.join("a"), "three\n").unwrap();
+        commit_all(&dir, "more");
+        let text = brief_for(&state, "billing@app", &dir, &git(&dir, &["rev-parse", "HEAD"]).unwrap());
+        assert!(text.contains("No test run kebbie recorded ran on the code under review"), "other code is not covered: {text}");
         fs::remove_dir_all(dir).unwrap();
         fs::remove_dir_all(state).unwrap();
     }
