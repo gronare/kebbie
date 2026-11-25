@@ -258,10 +258,11 @@ How far the task is behind the default branch does not matter. The rebase at its
 | Rebase | What happens |
 | --- | --- |
 | Clean, and the new upstream commits changed none of the task's files | kebbie pushes. |
-| Clean, but the new upstream commits changed files the task changes too | Nothing is pushed yet. kebbie hands the task to its Claude with the files and the commits that touched them, to run their tests and report ready. |
+| Clean, but the new upstream commits changed files the task changes too | Nothing is pushed yet. kebbie hands the task to its Claude with the files and the commits that touched them, to run their tests and report ready. `CHANGES.md` and files under `docs/` do not count: they run no test. |
 | Conflict | kebbie aborts the rebase and hands it to the task's Claude, which resolves it, asks you when the conflict is a choice between two behaviours, and reports ready. |
 
 - A rebase that stops only on `CHANGES.md` is no conflict: kebbie keeps both sides' lines under their heading and goes on. It stays a conflict when a side changed or removed a line already there, when the merge would repeat a heading, or when another file conflicts too. `land`, `rebase` and `follow` rebase the same way.
+- With `tests.before_push = "full"` or a `tests.lint_command`, a push whose rebase moved its HEAD hands those runs to the task's Claude first, also when the only shared files were `CHANGES.md` and docs.
 - After the tests, when the task reports ready with the same commits, kebbie pushes for whoever asked: you, or the lead under its permission, with the same checks. When its commits changed, their rules are checked again and the push is asked for again.
 - After a conflict, the resolved commits need a rules check before the next push.
 - While its Claude runs the tests or resolves the conflict, the task keeps the head of the line and the pushes behind it wait.

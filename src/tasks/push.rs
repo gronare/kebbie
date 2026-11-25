@@ -235,7 +235,7 @@ fn refused(path: &Path, upstream: &str, error: &str) -> String {
 fn overlap(path: &Path, upstream: &str, since: Option<&str>) -> Result<Vec<Touched>> {
     let upstream = &crate::repo::tracking(upstream);
     let base = git(path, &["merge-base", "HEAD", upstream])?;
-    let mine: BTreeSet<String> = git(path, &["log", "--format=", "--name-only", "--no-renames", &format!("{}..HEAD", since.unwrap_or(&base))])?.lines().filter(|line| !line.is_empty()).map(str::to_string).collect();
+    let mine: BTreeSet<String> = git(path, &["log", "--format=", "--name-only", "--no-renames", &format!("{}..HEAD", since.unwrap_or(&base))])?.lines().filter(|line| !line.is_empty() && !text_only(line)).map(str::to_string).collect();
     let own: BTreeSet<String> = super::accept::commit_codes(path, &[&format!("{base}..HEAD")])?.into_iter().map(|(_, code)| code).collect();
     let landed_own: BTreeSet<String> = super::accept::commit_codes(path, &[&format!("{base}..{upstream}")])?.into_iter().filter(|(_, code)| own.contains(code)).map(|(sha, _)| sha).collect();
     let theirs = git(path, &["log", "--reverse", "--format=%x00%H %s", "--name-only", "--no-renames", &format!("{base}..{upstream}")])?;
@@ -253,6 +253,11 @@ fn overlap(path: &Path, upstream: &str, since: Option<&str>) -> Result<Vec<Touch
         }
     }
     Ok(touched.into_iter().map(|(file, commits)| Touched { file, commits }).collect())
+}
+
+// Release notes and docs pages run no test, so a change both sides made there asks for no test run; a repo's full suite or lint still runs on the rebased HEAD.
+fn text_only(file: &str) -> bool {
+    file == RELEASE_NOTES || file.starts_with("docs/")
 }
 
 // Ok(false) when the rebase conflicted and the task's Claude took it over.
@@ -1723,7 +1728,7 @@ mod tests {
     #[test]
     fn a_rebase_stopped_only_on_changes_md_keeps_both_sides_lines_under_their_heading_and_goes_on() {
         let (dir, origin, slot, upstream) = notes_on_both_sides("- the task's fix\n", "- main's fix\n");
-        assert!(!matches!(update(&slot.path, &upstream).unwrap(), Updated::Conflict(_)), "CHANGES.md alone never conflicts");
+        assert_eq!(update(&slot.path, &upstream).unwrap(), Updated::Clean, "CHANGES.md alone never conflicts, and asks for no test run");
         assert!(!rebase_in_progress(&slot.path) && ahead_behind(&slot.path, &upstream).unwrap().1 == 0, "the rebase finished on top of main");
         let notes = unreleased(&slot);
         assert_eq!(notes.fixed, ["main's fix", "the task's fix", "old fix"], "each line once, under Fixed of Unreleased");
@@ -1743,6 +1748,78 @@ mod tests {
         let Updated::Conflict(files) = update(&slot.path, &upstream).unwrap() else { panic!("d conflicts") };
         assert!(files.contains(&"d".to_string()), "{files:?}");
         assert!(!rebase_in_progress(&slot.path) && git(&slot.path, &["rev-parse", "HEAD"]).unwrap() == head, "the whole rebase is aborted, its union with it");
+        cleanup(dir, origin, &slot);
+    }
+
+    // The task and main both change CHANGES.md apart, a docs page and, with code, the file m.
+    fn text_on_both_sides(dir: &std::path::Path, slot: &crate::tasks::Slot, upstream: &str, code: bool) {
+        upstream_commit(dir, "CHANGES.md", NOTES, "add notes");
+        std::fs::create_dir_all(dir.join("docs")).unwrap();
+        upstream_commit(dir, "docs/push.md", "1\n2\n3\n4\n5\n6\n7\n8\n", "add a page");
+        if code {
+            shared_file(dir, slot, upstream);
+        }
+        git(&slot.path, &["rebase", "--quiet", upstream]).unwrap();
+        std::fs::write(slot.path.join("CHANGES.md"), NOTES.replacen("- old fix\n", "- old fix\n- the task's fix\n", 1)).unwrap();
+        std::fs::write(slot.path.join("docs/push.md"), "one\n2\n3\n4\n5\n6\n7\n8\n").unwrap();
+        git(&slot.path, &["commit", "--quiet", "-am", "task text"]).unwrap();
+        upstream_commit(dir, "CHANGES.md", &NOTES.replacen("- old feature\n", "- old feature\n- main's feature\n", 1), "main's note");
+        upstream_commit(dir, "docs/push.md", "1\n2\n3\n4\n5\n6\n7\neight\n", "main's page");
+        if code {
+            upstream_commit(dir, "m", "1\n2\n3\n4\n5\n6\n7\n8\n9\nten\n", "last line of m");
+        }
+    }
+
+    #[test]
+    fn changes_md_and_docs_changed_on_both_sides_are_no_overlap_and_code_beside_them_is() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        text_on_both_sides(&dir, &slot, &upstream, false);
+        assert_eq!(update(&slot.path, &upstream).unwrap(), Updated::Clean);
+        cleanup(dir, origin, &slot);
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        text_on_both_sides(&dir, &slot, &upstream, true);
+        let Updated::Overlap(touched) = update(&slot.path, &upstream).unwrap() else { panic!("main changed m too") };
+        assert_eq!(touched.iter().map(|touched| touched.file.as_str()).collect::<Vec<_>>(), ["m"], "only the code file asks for its tests");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_push_over_text_only_goes_out_and_in_a_full_suite_or_linted_repo_still_runs_them_first() {
+        use crate::evidence::{Outcome, Run};
+        use crate::permit::Caller;
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let pushing = Pushing::new(&dir);
+        text_on_both_sides(&dir, &slot, &upstream, false);
+        let (texts, hand) = handed();
+        assert!(matches!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap(), Prepared::Push(..)), "a related repo pushes at once");
+        assert!(texts.borrow().is_empty(), "nothing for its Claude to do");
+        cleanup(dir, origin, &slot);
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let pushing = Pushing::new(&dir);
+        let file = crate::config::repo_file(&dir);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "[tests]\nbefore_push = \"full\"\nfull_command = \"scripts/check.sh\"\n").unwrap();
+        text_on_both_sides(&dir, &slot, &upstream, false);
+        crate::evidence::save(&pushing.state, &pushing.address, &Run { command: "scripts/check.sh".to_string(), runner: "scripts/check.sh".to_string(), result: Outcome::Passed, sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), code: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), ..Run::default() }).unwrap();
+        let (texts, hand) = handed();
+        let outcome = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap();
+        assert!(matches!(&outcome, Prepared::Handed(said) if said.contains("so its full suite runs first")), "{outcome:?}");
+        assert!(texts.borrow()[0].contains("Run `scripts/check.sh` in this worktree") && !texts.borrow()[0].contains("changed files this task changes too"), "{}", texts.borrow()[0]);
+        let _ = std::fs::remove_file(crate::evidence::file(&pushing.state, &pushing.address));
+        cleanup(dir, origin, &slot);
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let pushing = Pushing::new(&dir);
+        let lint = "cargo clippy --locked --all-targets -- -D warnings";
+        let file = crate::config::repo_file(&dir);
+        std::fs::write(&file, format!("[tests]\nlint_command = \"{lint}\"\n")).unwrap();
+        text_on_both_sides(&dir, &slot, &upstream, false);
+        crate::evidence::save(&pushing.state, &pushing.address, &Run { command: lint.to_string(), runner: lint.to_string(), result: Outcome::Passed, sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), code: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), lint: true, ..Run::default() }).unwrap();
+        let (texts, hand) = handed();
+        let outcome = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap();
+        assert!(matches!(&outcome, Prepared::Handed(said) if said.contains("so its lint runs first")), "{outcome:?}");
+        assert!(texts.borrow()[0].contains(&format!("Run `{lint}` in this worktree")), "{}", texts.borrow()[0]);
+        let _ = std::fs::remove_file(file);
+        let _ = std::fs::remove_file(crate::evidence::file(&pushing.state, &pushing.address));
         cleanup(dir, origin, &slot);
     }
 
