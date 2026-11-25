@@ -105,3 +105,31 @@ pub(crate) fn queued(state: &Path, task: &str, repo: &Path, prompt: &str) -> Str
     super::after::save(state, &wait).unwrap();
     wait.address()
 }
+
+// A worktree where Claude Code puts an isolated agent's, branched from upstream.
+pub(crate) fn agent_worktree(dir: &Path, upstream: &str, name: &str) -> PathBuf {
+    let path = dir.join(".claude/worktrees").join(name);
+    git(dir, &["worktree", "add", "--quiet", "-b", &format!("worktree-{name}"), &path.to_string_lossy(), &crate::repo::tracking(upstream)]).unwrap();
+    path
+}
+
+// Every file in the worktree, and its index, HEAD and reflog, last changed two days ago.
+pub(crate) fn untouched_for_two_days(worktree: &Path) {
+    let then = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 24 * 60 * 60);
+    fn age(path: &Path, then: std::time::SystemTime) {
+        let Ok(meta) = std::fs::symlink_metadata(path) else { return };
+        if meta.is_dir() {
+            for entry in std::fs::read_dir(path).unwrap().flatten() {
+                age(&entry.path(), then);
+            }
+        }
+        if !meta.is_symlink() {
+            std::fs::File::open(path).unwrap().set_modified(then).unwrap();
+        }
+    }
+    age(worktree, then);
+    let own = PathBuf::from(git(worktree, &["rev-parse", "--absolute-git-dir"]).unwrap());
+    for file in ["index", "HEAD", "logs/HEAD"] {
+        age(&own.join(file), then);
+    }
+}

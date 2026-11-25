@@ -763,7 +763,8 @@ pub(super) fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through
     super::push_steps::step(&task, &format!("pushing to {}", main_of(upstream)));
     let (count, watch, staged) = send(state, repo, slot, upstream, &address, &task, pusher, &went, watch)?;
     let (vault, log) = after_push(state, repo, slot, &address, &task, &went, &crate::vault_cli::detect);
-    let freed = (!went.keep_open).then(|| super::pool::tidy(&slot.path, &super::pool::build_folders(repo))).flatten().unwrap_or_default();
+    let full = !went.keep_open;
+    let tidy = || full.then(|| super::pool::tidy(repo, &slot.path, upstream, &super::pool::build_folders(repo))).flatten().unwrap_or_default();
     let Went { sha, keep_open, rest, pushed, note, target, .. } = went;
     let main = main_of(upstream);
     let logged = log.as_ref().map(crate::task_note::logged_text).unwrap_or_default();
@@ -778,7 +779,7 @@ pub(super) fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through
         crate::ci::Begin::Off => String::new(),
     };
     let headline = |through: bool| if through { format!("Pushed {} through {short} to {main}", plural(count, "commit")) } else { format!("Pushed {} to {main}", plural(count, "commit")) };
-    let said = |notice: Notice| notice.detail("task", &task).detail("commit", short).detail("ci", &ci).detail("log", &logged).detail("freed", &freed);
+    let said = |notice: Notice| notice.detail("task", &task).detail("commit", short).detail("ci", &ci).detail("log", &logged);
     if !staged.stages.is_empty() {
         let rolled = (!matches!(watch, crate::ci::Begin::Watching)).then(|| unwatched_stages(state, repo, &address, &sha, &target, &staged, &watch, keep_open));
         let stages = rolled.as_ref().map(|rolled| rolled.text()).filter(|text| !text.is_empty()).unwrap_or_else(|| "kebbie follows CI for them, then asks for each stage's requirement".to_string());
@@ -786,7 +787,7 @@ pub(super) fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through
             if let Err(error) = messages::to_lead(messages::ToLead::Pushed, &format!("{}: {} to {target}, the last of its stages: {stages}; the task closes once every stage is met.", who_pushed(pusher, &address), plural(count, "commit"))) {
                 eprintln!("Could not tell the lead about the push: {error}");
             }
-            let notice = said(Notice::new(Tone::Done, headline(false)).next(format!("Stages: {stages}; kebbie closes the task once every stage is met.")));
+            let notice = said(Notice::new(Tone::Done, headline(false)).next(format!("Stages: {stages}; kebbie closes the task once every stage is met."))).detail("freed", tidy());
             return Ok(notice.detail("checkout", follow_upstream(repo, upstream, &super::stage::load(state, repo))?).to_string());
         }
     }
@@ -801,7 +802,7 @@ pub(super) fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through
                 Some(check) => format!("CI runs now; once it is green the task checks {check}, and kebbie closes it when that holds."),
                 None => "CI runs now; kebbie closes the task when it is green.".to_string(),
             };
-            let notice = Notice::new(Tone::Done, headline(false)).next(next).detail("task", &task).detail("commit", short).detail("log", &logged).detail("freed", &freed);
+            let notice = Notice::new(Tone::Done, headline(false)).next(next).detail("task", &task).detail("commit", short).detail("log", &logged).detail("freed", tidy());
             return Ok(notice.detail("checkout", follow_upstream(repo, upstream, &super::stage::load(state, repo))?).to_string());
         }
         if let Some(check) = check {
@@ -810,7 +811,7 @@ pub(super) fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through
             match crate::ci::ask_check(state, &watch, &format!("{short} is on {target}"), messages::now()) {
                 Ok(_) => {
                     crate::phase::record(state, &address, "push", &crate::phase::Event::PushOut { sha: &sha });
-                    let notice = said(Notice::new(Tone::Done, headline(false)).next(format!("The task checks {check} now; kebbie closes it when that holds.")));
+                    let notice = said(Notice::new(Tone::Done, headline(false)).next(format!("The task checks {check} now; kebbie closes it when that holds."))).detail("freed", tidy());
                     return Ok(notice.detail("checkout", follow_upstream(repo, upstream, &super::stage::load(state, repo))?).to_string());
                 }
                 Err(error) => eprintln!("kebbie could not ask {address} to run its check after the push, so it closes the task without it: {error}"),
@@ -822,7 +823,7 @@ pub(super) fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through
                 notice.details.extend(closed.details);
                 notice.to_string()
             }
-            Err(error) => said(Notice::new(Tone::You, format!("{}, but the task did not close", headline(false)))).you("Close it once the reason below is settled.").detail("error", error).to_string(),
+            Err(error) => said(Notice::new(Tone::You, format!("{}, but the task did not close", headline(false)))).you("Close it once the reason below is settled.").detail("error", error).detail("freed", tidy()).to_string(),
         });
     }
     let named = crate::status::with_titles_in(state, &address);
@@ -1206,10 +1207,14 @@ mod tests {
         };
         let (dir, origin, slot, upstream) = rust_task("billing");
         let state = state_of(&dir);
+        let done = agent_worktree(&dir, &upstream, "agent-done");
+        untouched_for_two_days(&done);
+        let dirty = agent_worktree(&dir, &upstream, "agent-dirty");
+        std::fs::write(dirty.join("draft"), "draft").unwrap();
         let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
         let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head, rebased: false }, "the user", &state, &watching).unwrap();
-        assert!(said.contains("removed target/ (1.5 MB)"), "CI still runs, but the build is not needed past the push: {said}");
-        assert!(!slot.path.join("target").exists());
+        assert!(said.contains("removed target/ (1.5 MB), .claude/worktrees/agent-done (") && said.contains("; kept .claude/worktrees/agent-dirty (uncommitted changes)"), "CI still runs, but the build is not needed past the push: {said}");
+        assert!(!slot.path.join("target").exists() && !done.exists());
         crate::ci::forget(&state, &crate::peers::address("billing", &name_of(&dir)));
         cleanup(dir, origin, &slot);
 
@@ -1223,6 +1228,20 @@ mod tests {
         assert!(!said.contains("removed"), "{said}");
         assert!(slot.path.join("target/debug/app").exists(), "the task builds on, so its build stays");
         crate::ci::forget(&state, &crate::peers::address("rates", &name_of(&dir)));
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_push_whose_close_fails_still_tidies_once_and_names_each_kept_agent_worktree_once() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let dirty = agent_worktree(&dir, &upstream, "agent-dirty");
+        std::fs::write(dirty.join("draft"), "draft").unwrap();
+        let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        let unwatched = |_: &Path, _: &Path, _: &str, _: &str, _: bool, _: crate::ci::Pushed| crate::ci::Begin::Off;
+        let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head, rebased: false }, "the user", &state, &unwatched).unwrap();
+        assert!(said.contains("but the task did not close"), "closing needs herdr, which tests have not: {said}");
+        assert_eq!(said.matches("agent-dirty").count(), 1, "{said}");
         cleanup(dir, origin, &slot);
     }
 

@@ -1,4 +1,5 @@
 mod accept;
+mod agent_worktrees;
 mod after;
 mod approval;
 mod finish;

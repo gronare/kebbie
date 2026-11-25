@@ -119,9 +119,15 @@ pub(super) fn build_folders(repo: &Path) -> Vec<String> {
     config::resolve(Some(repo)).map(|loaded| loaded.settings.clean_on_release.value).unwrap_or_else(|_| vec!["target".to_string()])
 }
 
-pub(super) fn tidy(worktree: &Path, folders: &[String]) -> Option<String> {
-    let removed = clean_build_output(worktree, folders);
-    (!removed.is_empty()).then(|| format!("removed {}", removed.iter().map(|(folder, bytes)| format!("{folder}/ ({})", size(*bytes))).collect::<Vec<_>>().join(", ")))
+// The build output and the landed agent worktrees go once the task's work is on upstream; the line says what went and which agent worktrees stayed.
+pub(super) fn tidy(repo: &Path, worktree: &Path, upstream: &str, folders: &[String]) -> Option<String> {
+    let mut removed: Vec<(String, u64)> = clean_build_output(worktree, folders).into_iter().map(|(folder, bytes)| (format!("{folder}/"), bytes)).collect();
+    let (agents, kept) = super::agent_worktrees::clean(repo, upstream);
+    removed.extend(agents);
+    let went = (!removed.is_empty()).then(|| format!("removed {}", removed.iter().map(|(what, bytes)| format!("{what} ({})", size(*bytes))).collect::<Vec<_>>().join(", ")));
+    let stayed = (!kept.is_empty()).then(|| format!("kept {}", kept.join(", ")));
+    let said: Vec<String> = went.into_iter().chain(stayed).collect();
+    (!said.is_empty()).then(|| said.join("; "))
 }
 
 // The worktree is back on upstream before the release command runs, so the repo's own version of it runs and never one the task changed; in a sandboxed worktree a program path git does not track as upstream has it is not run at all.
@@ -136,7 +142,7 @@ pub(super) fn release_with(repo: &Path, slot: &Slot, upstream: &str, folders: &[
         let _ = std::fs::remove_file(record);
     }
     git(repo, &["branch", "-D", task_of(slot)])?;
-    let freed = tidy(&slot.path, folders);
+    let freed = tidy(repo, &slot.path, upstream, folders);
     let said: Vec<String> = ran.into_iter().chain(freed).collect();
     Ok((!said.is_empty()).then(|| said.join("; ")))
 }
@@ -187,7 +193,7 @@ pub(super) fn clean_build_output(worktree: &Path, folders: &[String]) -> Vec<(St
     removed
 }
 
-fn bytes_in(path: &Path) -> u64 {
+pub(super) fn bytes_in(path: &Path) -> u64 {
     let Ok(entries) = std::fs::read_dir(path) else { return 0 };
     entries.flatten().map(|entry| match entry.metadata() {
         Ok(meta) if meta.is_dir() => bytes_in(&entry.path()),
@@ -361,6 +367,19 @@ mod tests {
         assert_eq!(freed.as_deref(), Some("removed target/ (2.5 MB)"));
         assert!(!slot.path.join("target").exists() && slot.path.join("Cargo.toml").exists());
         assert_eq!(release(&dir, &find_free(&dir, &slot), &upstream).ok().flatten(), None, "nothing left to free");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_release_removes_the_landed_agent_worktrees_and_names_each_it_keeps_and_why() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let done = agent_worktree(&dir, &upstream, "agent-done");
+        untouched_for_two_days(&done);
+        let dirty = agent_worktree(&dir, &upstream, "agent-dirty");
+        std::fs::write(dirty.join("draft"), "draft").unwrap();
+        let freed = release(&dir, &slot, &upstream).unwrap().unwrap_or_default();
+        assert!(freed.starts_with("removed .claude/worktrees/agent-done (") && freed.ends_with("; kept .claude/worktrees/agent-dirty (uncommitted changes)"), "{freed}");
+        assert!(!done.exists() && dirty.join("draft").exists());
         cleanup(dir, origin, &slot);
     }
 
