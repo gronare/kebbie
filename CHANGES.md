@@ -16,7 +16,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A test run with flag values, such as xcodebuild test -project App -scheme App, counts as the whole suite.
 - A queued task starts cleanly in a worktree another task just left, with its own title and no stray Needs you.
 - A repo's push permission lets the lead push a task the assessor said needs no review, once its rules check passed.
-- The shared sccache server runs from kebbie's own folder under ~/.cache, so builds keep compiling when the task that started it ends; a server running under a task's temp folder, or one whose folder is gone, is restarted there.
+- The shared sccache server runs from kebbie's own folder under ~/.cache, so builds keep compiling when the task that started it ends, also when your own cargo wrapper is sccache; a server running under a task's temp folder, or one whose folder is gone, is restarted there.
 - Done closes a task's vault note even when its claim carries the machine's former name.
 - A stage that was pushed and rolled out shows as out with its check open, not failed, when only the task's check after the push did not hold; the next stage still waits for the check.
 - Setup calls its vault step and plugin mindin, and kebbie setup mindin opens that step.

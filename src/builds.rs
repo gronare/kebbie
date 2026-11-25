@@ -424,24 +424,34 @@ fn real_program(program: &str, path: &[PathBuf]) -> Option<PathBuf> {
 }
 
 // cargo reads a wrapper from RUSTC_WRAPPER, CARGO_BUILD_RUSTC_WRAPPER and build.rustc-wrapper in its config files, nearest folder first, then CARGO_HOME's.
-fn wrapper_set(env: impl Fn(&str) -> Option<String>, cwd: &Path, cargo_home: &Path) -> bool {
-    if env("RUSTC_WRAPPER").is_some() || env("CARGO_BUILD_RUSTC_WRAPPER").is_some() {
-        return true;
+fn configured_wrapper(env: impl Fn(&str) -> Option<String>, cwd: &Path, cargo_home: &Path) -> Option<String> {
+    if let Some(wrapper) = env("RUSTC_WRAPPER").or_else(|| env("CARGO_BUILD_RUSTC_WRAPPER")) {
+        return Some(wrapper);
     }
     let configs = cwd.ancestors().map(|dir| dir.join(".cargo")).chain([cargo_home.to_path_buf()]);
-    configs.flat_map(|dir| [dir.join("config.toml"), dir.join("config")]).any(|file| {
-        fs::read_to_string(file).ok().and_then(|text| text.parse::<toml::Table>().ok()).is_some_and(|config| config.get("build").and_then(|build| build.get("rustc-wrapper")).is_some())
+    configs.flat_map(|dir| [dir.join("config.toml"), dir.join("config")]).find_map(|file| {
+        let config = fs::read_to_string(file).ok()?.parse::<toml::Table>().ok()?;
+        let wrapper = config.get("build")?.get("rustc-wrapper")?;
+        Some(wrapper.as_str().unwrap_or_default().to_string())
     })
 }
 
-fn cache_wrapper(path: &[PathBuf]) -> Option<PathBuf> {
+// The sccache whose server the build will use, and whether the guard sets it as the wrapper: when no wrapper is set, or when the one set is sccache itself.
+fn sccache_for(wrapper: Option<&str>, path: &[PathBuf]) -> Option<(PathBuf, bool)> {
+    let Some(wrapper) = wrapper else { return real_program("sccache", path).map(|sccache| (sccache, true)) };
+    let named = Path::new(wrapper);
+    if named.file_name().is_none_or(|name| name != "sccache") {
+        return None;
+    }
+    let sccache = if named.is_absolute() { named.to_path_buf() } else if named.components().count() == 1 { real_program("sccache", path)? } else { return None };
+    Some((sccache, false))
+}
+
+fn cache_wrapper(path: &[PathBuf]) -> Option<(PathBuf, bool)> {
     let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
     let cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".cargo"));
     let cwd = std::env::current_dir().ok()?;
-    if wrapper_set(|name| std::env::var(name).ok(), &cwd, &cargo_home) {
-        return None;
-    }
-    real_program("sccache", path)
+    sccache_for(configured_wrapper(|name| std::env::var(name).ok(), &cwd, &cargo_home).as_deref(), path)
 }
 
 // The sccache server makes its temp files under the TMPDIR it started with, so it starts under one no task owns and that a sandboxed task may write.
@@ -555,11 +565,11 @@ pub fn guard(argv: &[String]) -> ExitCode {
     let mut command = Command::new(&real);
     command.args(args);
     let sccache = if program == "cargo" { cache_wrapper(&path) } else { None };
-    if let Some(sccache) = &sccache {
+    if let Some((sccache, true)) = &sccache {
         command.env("RUSTC_WRAPPER", sccache);
     }
     let run = |command: &mut Command| {
-        if let Some(sccache) = &sccache {
+        if let Some((sccache, _)) = &sccache {
             prepare_server(sccache, || running_servers(&server_address(|name| std::env::var(name).ok())), &server_tmpdir(), &crate::tasks::task_tmp_root());
         }
         command.status()
@@ -796,14 +806,30 @@ mod tests {
         fs::create_dir_all(&work).unwrap();
         fs::create_dir_all(&home).unwrap();
         let none = |_: &str| None;
-        assert!(!wrapper_set(none, &work, &home));
-        assert!(wrapper_set(|name| (name == "RUSTC_WRAPPER").then(String::new), &work, &home), "an empty RUSTC_WRAPPER is the user's choice too");
+        assert_eq!(configured_wrapper(none, &work, &home), None);
+        assert_eq!(configured_wrapper(|name| (name == "RUSTC_WRAPPER").then(String::new), &work, &home).as_deref(), Some(""), "an empty RUSTC_WRAPPER is the user's choice too");
         fs::write(home.join("config.toml"), "[build]\nrustc-wrapper = \"/usr/bin/sccache\"\n").unwrap();
-        assert!(wrapper_set(none, &work, &home));
+        assert_eq!(configured_wrapper(none, &work, &home).as_deref(), Some("/usr/bin/sccache"));
         fs::remove_file(home.join("config.toml")).unwrap();
         fs::create_dir_all(root.join("app/.cargo")).unwrap();
         fs::write(root.join("app/.cargo/config.toml"), "[build]\nrustc-wrapper = \"\"\n").unwrap();
-        assert!(wrapper_set(none, &work, &home));
+        assert_eq!(configured_wrapper(none, &work, &home).as_deref(), Some(""), "the nearest config wins");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_wrapper_the_user_set_to_sccache_gets_its_server_kept_and_the_wrapper_left_as_it_is() {
+        let root = std::env::temp_dir().join(format!("kebbie-builds-users-sccache-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let on_path = root.join("sccache");
+        crate::executable::write(&on_path, "#!/bin/sh\n").unwrap();
+        let path = [root.clone()];
+        assert_eq!(sccache_for(None, &path), Some((on_path.clone(), true)), "no wrapper set: the guard sets sccache");
+        assert_eq!(sccache_for(Some("/home/u/.cargo/bin/sccache"), &path), Some((PathBuf::from("/home/u/.cargo/bin/sccache"), false)), "the user's own sccache: its server is kept, the wrapper is the user's");
+        assert_eq!(sccache_for(Some("sccache"), &path), Some((on_path, false)), "a bare name is found on PATH as cargo finds it");
+        assert_eq!(sccache_for(Some("/usr/bin/ccache"), &path), None);
+        assert_eq!(sccache_for(Some(""), &path), None, "an empty wrapper turns wrapping off");
         let _ = fs::remove_dir_all(root);
     }
 
