@@ -23,6 +23,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Backlog items whose questions wait on you show under Needs you on the Work and Backlog pages and in the Next window.
 - Red CI on main goes only to the task whose push made it red; tasks that pushed on top wait under CI running and close once the fix is green.
 - The lead's promises ("once that lands I set the lint command") are kept by kebbie: it reminds the lead when one is due, a fresh lead hears of them, and the board shows one only when it is overdue.
+- After review findings, a task reports ready only once a test run passed on its latest code; a reworded commit keeps that run.
 
 ### Fixed
 - A build that waits for a build slot or a fuller disk says so on a line starting with error:, which an error filter keeps.

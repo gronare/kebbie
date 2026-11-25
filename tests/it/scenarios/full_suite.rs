@@ -6,7 +6,7 @@ use std::process::Stdio;
 use crate::scenarios::lab::{Lab, git, stderr, stdout};
 
 // What a task's Bash hook hands kebbie once a command ended, as Claude Code sends it.
-fn ran(lab: &Lab, worktree: &Path, command: &str, exit: Option<i64>) {
+pub(crate) fn ran(lab: &Lab, worktree: &Path, command: &str, exit: Option<i64>) {
     let input = match exit {
         None => serde_json::json!({ "hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": { "command": command }, "tool_response": { "stdout": "ok", "stderr": "" }, "cwd": worktree, "duration_ms": 1200 }),
         Some(code) => serde_json::json!({ "hook_event_name": "PostToolUseFailure", "tool_name": "Bash", "tool_input": { "command": command }, "error": format!("Exit code {code}\nFAILED"), "cwd": worktree }),

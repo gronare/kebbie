@@ -8,6 +8,13 @@ use crate::repo::git;
 pub enum Kind {
     Full,
     Lint,
+    Tests(After),
+}
+
+// Why any green test run on HEAD is owed: the review had findings.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum After {
+    Findings,
 }
 
 impl Kind {
@@ -15,6 +22,7 @@ impl Kind {
         match self {
             Kind::Full => "its full suite",
             Kind::Lint => "its lint",
+            Kind::Tests(_) => "its tests",
         }
     }
 
@@ -22,6 +30,7 @@ impl Kind {
         match self {
             Kind::Full => "tests.before_push = \"full\"",
             Kind::Lint => "tests.lint_command",
+            Kind::Tests(After::Findings) => "its review had findings",
         }
     }
 }
@@ -46,9 +55,10 @@ pub fn required(settings: &Settings) -> Vec<Required> {
 
 fn counts(run: &Run, required: &Required) -> bool {
     let same_runner = run.runner.trim_start_matches("./") == required.command.trim_start_matches("./");
-    same_runner && match required.kind {
-        Kind::Full => crate::evidence::whole_run(&run.command, &required.command),
-        Kind::Lint => crate::evidence::exact_run(&run.command, &required.command),
+    match required.kind {
+        Kind::Full => same_runner && crate::evidence::whole_run(&run.command, &required.command),
+        Kind::Lint => same_runner && crate::evidence::exact_run(&run.command, &required.command),
+        Kind::Tests(_) => true,
     }
 }
 
@@ -84,15 +94,19 @@ impl Gap {
     }
 
     pub fn commands(&self) -> String {
-        self.joined(|owed| format!("`{}`", owed.required.command))
+        self.joined(|owed| if owed.required.command.is_empty() { "the tests that cover your change".to_string() } else { format!("`{}`", owed.required.command) })
     }
 
     pub fn has(&self) -> &'static str {
-        if self.owed.len() > 1 { "have" } else { "has" }
+        if self.plural() { "have" } else { "has" }
     }
 
     pub fn runs(&self) -> &'static str {
-        if self.owed.len() > 1 { "run" } else { "runs" }
+        if self.plural() { "run" } else { "runs" }
+    }
+
+    fn plural(&self) -> bool {
+        self.owed.len() > 1 || self.owed.iter().any(|owed| matches!(owed.required.kind, Kind::Tests(_)))
     }
 
     fn settings(&self) -> String {
@@ -111,26 +125,53 @@ impl Gap {
     }
 }
 
-// The required runs the task still owes on HEAD; a run counts on the code it ran on, so one run before committing counts for the commit that holds the same tree.
-pub fn owed(worktree: &Path, address: &str) -> Option<Gap> {
-    owed_at(worktree, address, None)
+// The required runs a ready report still owes on HEAD; a run counts on the code it ran on, so one run before committing counts for the commit that holds the same tree.
+pub fn owed(worktree: &Path, address: &str, excused: Option<&str>) -> Option<Gap> {
+    let state = crate::lead::state_dir().ok()?;
+    owed_in(&state, worktree, address, None, had_findings(&state, address), excused.map(str::to_string))
 }
 
-// The same for a push that ends at an earlier commit than HEAD, which goes out only on green runs of that commit's own code.
+// The same for a push, which may end at an earlier commit than HEAD and goes out only on green runs of that commit's own code; findings never hold the user's push.
 pub fn owed_at(worktree: &Path, address: &str, end: Option<&str>) -> Option<Gap> {
-    let settings = crate::config::resolve(Some(worktree)).ok()?.settings;
-    let required = required(&settings);
-    if required.is_empty() {
-        return None;
-    }
     let state = crate::lead::state_dir().ok()?;
-    crate::evidence::settle(&state, address, &crate::evidence::listed_for(&settings), crate::messages::now());
+    let excused = std::fs::read_to_string(crate::evidence::excuse_file(&state, address)).ok().map(|code| code.trim().to_string());
+    owed_in(&state, worktree, address, end, false, excused)
+}
+
+// Kept once a ready report with --red-cause is taken, so the push answers to the same red run the report did.
+pub fn excuse(state: &Path, address: &str, code: &str) -> crate::sh::Result<()> {
+    crate::state::write(&crate::evidence::excuse_file(state, address), code)
+}
+
+// The review's latest verdict asked for changes the task makes in code, not only for the user's confirmation.
+fn had_findings(state: &Path, address: &str) -> bool {
+    std::fs::read_to_string(crate::review::verdict_file(state, address)).ok().and_then(|text| crate::review::parse_verdict(&text)).is_some_and(|verdict| !verdict.ok && !verdict.asks_only_confirmation())
+}
+
+// The test command a task is pointed to when any green test run will do: the one it ran last, else the repo's first named one.
+fn suggested(settings: &Settings, tests: &[Run]) -> String {
+    tests.last().map(|run| run.runner.clone()).or_else(|| settings.test_commands.value.first().cloned()).unwrap_or_default()
+}
+
+fn owed_in(state: &Path, worktree: &Path, address: &str, end: Option<&str>, findings: bool, excused: Option<String>) -> Option<Gap> {
+    let settings = crate::config::resolve(Some(worktree)).ok()?.settings;
+    crate::evidence::settle(state, address, &crate::evidence::listed_for(&settings), crate::messages::now());
     let head = git(worktree, &["rev-parse", end.unwrap_or("HEAD")]).ok()?;
     let head_tree = crate::evidence::tree_of(worktree, &head);
     let on_head = |run: &Run| run.code == head || (head_tree.is_some() && crate::evidence::tree_of(worktree, &run.code) == head_tree);
-    let (tests, lints) = (crate::evidence::runs_in(&state, address), crate::evidence::lint_runs_in(&state, address));
-    let owed: Vec<Owed> = required.into_iter().filter_map(|required| {
-        let runs = match required.kind { Kind::Full => &tests, Kind::Lint => &lints };
+    let (tests, lints) = (crate::evidence::runs_in(state, address), crate::evidence::lint_runs_in(state, address));
+    let mut required = required(&settings);
+    let after = findings.then_some(After::Findings);
+    if let Some(after) = after.filter(|_| !required.iter().any(|required| required.kind == Kind::Full)) {
+        required.push(Required { kind: Kind::Tests(after), command: suggested(&settings, &tests) });
+    }
+    if required.is_empty() {
+        return None;
+    }
+    // A red test run whose cause the task found and leaves red answers the test run owed on HEAD while it is the latest and ran on HEAD's code; the lint and the full suite still need theirs.
+    let excused_on_head = excused.is_some_and(|code| crate::evidence::latest(&tests).is_some_and(|run| run.result == Outcome::Failed && run.code == code && on_head(run)));
+    let owed: Vec<Owed> = required.into_iter().filter(|required| !(excused_on_head && matches!(required.kind, Kind::Tests(_)))).filter_map(|required| {
+        let runs = match required.kind { Kind::Full | Kind::Tests(_) => &tests, Kind::Lint => &lints };
         missing(runs, &required, on_head).map(|why| Owed { required, why })
     }).collect();
     (!owed.is_empty()).then(|| Gap { owed, end: end.map(|end| end[..7.min(end.len())].to_string()) })
@@ -217,6 +258,41 @@ mod tests {
         assert_eq!(required(&settings), [full("uv run pytest -q"), lint("ruff check")]);
         settings.tests_full_command.value = None;
         assert_eq!(required(&settings), [lint("ruff check")], "full without a command stays on related, and doctor says so");
+    }
+
+    #[test]
+    fn after_findings_a_ready_report_owes_a_green_test_run_on_heads_tree_and_a_reworded_commit_keeps_it() {
+        let (dir, origin, slot, _) = crate::tasks::test_support::task_with_a_commit("billing");
+        let state = crate::lead::state_dir().unwrap();
+        let address = crate::peers::address("billing", &crate::repo::name_of(&dir));
+        let head = || git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        let verdict = crate::review::verdict_file(&state, &address);
+        std::fs::create_dir_all(verdict.parent().unwrap()).unwrap();
+        let owed_kinds = || owed(&slot.path, &address, None).map(|gap| gap.owed.iter().map(|owed| owed.required.kind).collect::<Vec<_>>());
+        assert_eq!(owed_kinds(), None, "no review, nothing owed in a repo on related");
+        std::fs::write(&verdict, format!("verdict: changes\nreviewed: {}\n\n- confirm: is the new wording what you want\n", head())).unwrap();
+        assert_eq!(owed_kinds(), None, "a finding only the user can settle asks for no test run");
+        std::fs::write(&verdict, format!("verdict: changes\nreviewed: {}\n\n- src/billing.rs:3 the total drops the tax\n", head())).unwrap();
+        assert_eq!(owed_kinds(), Some(vec![Kind::Tests(After::Findings)]));
+        let run = |code: &str, result: Outcome| crate::evidence::save(&state, &address, &Run { command: "cargo test --lib billing".to_string(), runner: "cargo test".to_string(), result, sha: code.to_string(), code: code.to_string(), ..Run::default() }).unwrap();
+        run(&head(), Outcome::Failed);
+        assert!(owed(&slot.path, &address, None).is_some_and(|gap| report_refusal(&gap).contains("green run of its tests on HEAD (its review had findings)")));
+        assert!(owed(&slot.path, &address, Some(&head())).is_none(), "a red run on HEAD whose cause the task found and leaves red, with --red-cause, answers the findings");
+        let tested = head();
+        run(&tested, Outcome::Passed);
+        assert_eq!(owed_kinds(), None, "any green test run on HEAD answers the findings");
+        git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend", "-m", "reworded"]).unwrap();
+        assert_ne!(head(), tested);
+        assert_eq!(owed_kinds(), None, "a reworded commit holds the same tree, so the run still counts");
+        crate::tasks::test_support::commit(&slot.path, "fix", "the fix after the run");
+        assert_eq!(owed_kinds(), Some(vec![Kind::Tests(After::Findings)]), "code committed after the run is untested");
+        let older = head();
+        crate::tasks::test_support::commit(&slot.path, "more", "more after the red run");
+        run(&older, Outcome::Failed);
+        assert!(owed(&slot.path, &address, Some(&older)).is_some(), "a red run on older code excuses nothing on HEAD");
+        let _ = std::fs::remove_file(verdict);
+        let _ = std::fs::remove_file(crate::evidence::file(&state, &address));
+        crate::tasks::test_support::cleanup(dir, origin, &slot);
     }
 
     #[test]

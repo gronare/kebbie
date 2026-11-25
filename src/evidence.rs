@@ -716,7 +716,13 @@ pub fn forget(task: &str, repo: &Path) {
         let _ = fs::remove_file(file(&state, &address));
         let _ = fs::remove_file(hook_file(&state, &address));
         let _ = fs::remove_file(lock_file(&state, &address));
+        let _ = fs::remove_file(excuse_file(&state, &address));
     }
+}
+
+// The red test run a ready report left red once its cause was found (--red-cause), by the code it ran on.
+pub fn excuse_file(state: &Path, address: &str) -> PathBuf {
+    state.join("evidence").join(format!("{address}.red-cause"))
 }
 
 fn git_with(cwd: &Path, index: &Path, args: &[&str]) -> Result<String> {

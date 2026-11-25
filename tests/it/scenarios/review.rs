@@ -174,6 +174,7 @@ fn a_review_that_finds_a_new_point_each_round_goes_back_twice_by_itself_and_then
     for n in 2..=4 {
         head = lab.work(&worktree, &format!("case{n}.rb"), &format!("Round case {n} half up"));
         lab.answer("review", &round(n));
+        crate::scenarios::full_suite::ran(&lab, &worktree, "cargo test", None);
         lab.ok(&["-C", worktree.to_str().unwrap(), "report", "--state", "ready", "--next", "push", &format!("case {} fixed", n - 1)]);
         lab.keeper_round();
         if n < 4 {

@@ -50,15 +50,17 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
             return Ok(said);
         }
     }
-    let red = if report.state == "ready" {
+    let (red, excused) = if report.state == "ready" {
         crate::rules_check::refuse_unformed(cwd)?;
-        let red = red_gate(&crate::evidence::runs_in(&state_dir()?, &me), red_cause)?;
-        if to_push(cwd) && let Some(gap) = crate::required_runs::owed(cwd, &me) {
+        let runs = crate::evidence::runs_in(&state_dir()?, &me);
+        let red = red_gate(&runs, red_cause)?;
+        let excused = red.as_ref().and_then(|_| crate::evidence::latest(&runs)).map(|run| run.code.clone());
+        if to_push(cwd) && let Some(gap) = crate::required_runs::owed(cwd, &me, excused.as_deref()) {
             return Err(crate::required_runs::report_refusal(&gap));
         }
-        red
+        (red, excused)
     } else {
-        None
+        (None, None)
     };
     let card = card.map(|file| cwd.join(file));
     let text = card.as_deref().map(read_card).transpose()?;
@@ -79,6 +81,9 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
         let line = format!("the latest test run stays red: {cause} (task)");
         let note = crate::decisions::write(&state, &me, &line, messages::now())?;
         kept.push_str(&crate::decisions::for_the_task(&note, &line).map(|write| format!(" {write}")).unwrap_or_default());
+    }
+    if let Some(code) = &excused {
+        crate::required_runs::excuse(&state, &me, code)?;
     }
     if let Some(check) = &check {
         save_check(&state, &me, check)?;

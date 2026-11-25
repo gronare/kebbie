@@ -2221,7 +2221,8 @@ fn a_ready_report_keeps_the_card_as_data_refuses_a_part_to_confirm_and_a_red_run
         lab.command().env("PATH", format!("{}:{}", task_bin.display(), lab.path())).args(&args).output().unwrap()
     };
     fs::create_dir_all(lab.state.join("evidence")).unwrap();
-    fs::write(lab.state.join("evidence/billing@app.jsonl"), "{\"command\":\"cargo test\",\"runner\":\"cargo test\",\"result\":\"failed\",\"sha\":\"abc\",\"code\":\"abc\",\"at\":1}\n").unwrap();
+    let head = git(&slot, &["rev-parse", "HEAD"]);
+    fs::write(lab.state.join("evidence/billing@app.jsonl"), format!("{{\"command\":\"cargo test\",\"runner\":\"cargo test\",\"result\":\"failed\",\"sha\":\"{head}\",\"code\":\"{head}\",\"at\":1}}\n")).unwrap();
     let card = "**Refunds show under each invoice.**\n\nBuilt:\n- Each invoice lists its refunds at /billing.\n\nDecisions:\n- Refunds round per invoice, because the accountant books it so (you)\n\nAlso noticed:\n- The README's install step names an old flag.\n";
     let red = report(card, &[]);
     assert!(!red.status.success() && stderr(&red).contains("Your latest test run is red: `cargo test` failed") && stderr(&red).contains("--red-cause"), "{}", stderr(&red));
