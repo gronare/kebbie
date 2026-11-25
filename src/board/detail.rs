@@ -115,6 +115,15 @@ fn verdict_chip(shown: &crate::review::Shown) -> Option<(String, Color)> {
     })
 }
 
+// A check under way or a push past it; breaks and an unchecked task are the lead's, which hears them as messages.
+fn rules_fact(item: &Item) -> Option<String> {
+    use crate::status::RulesShown;
+    match item.rules_shown()? {
+        rules @ (RulesShown::Checking { .. } | RulesShown::Overridden { .. }) => rules.note(),
+        _ => None,
+    }
+}
+
 pub(super) fn permit_chip(permit: Option<Permit>) -> Option<(String, Color)> {
     match permit? {
         Permit::Task => Some(("lead may push".to_string(), GREEN)),
@@ -280,6 +289,8 @@ fn state_spans(app: &App, item: &Item) -> Vec<Span<'static>> {
     if !halves.is_empty() {
         facts.push((format!("same task in {}", halves.join(", ")), TEAL));
     }
+    facts.extend(rules_fact(item).map(|note| (note, MUTED)));
+    facts.extend(super::send_review::second_part(item).map(|second| (second, MUTED)));
     facts.extend(permit_chip(item.permit));
     facts.extend(follow_chip(item));
     facts.extend(bypass_chip(item));
@@ -562,6 +573,28 @@ mod tests {
         assert!(!rows.join("\n").contains(" s "), "no card, nothing for s: {}", rows.join("\n"));
         bare.handle_normal(key(KeyCode::Char('s')));
         assert!(bare.toast.as_ref().is_some_and(|toast| toast.notice.headline == "No sign-off card yet"));
+    }
+
+    #[test]
+    fn the_panel_names_the_rules_check_and_a_second_opinion_reading() {
+        let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 2);
+        item.git.as_mut().unwrap().approved = false;
+        item.rules = Some(crate::rules_check::Shown::Checking);
+        item.second = Some(crate::review::SecondShown { by: "codex-review".to_string(), points: None, running: true, stale: false, file: PathBuf::new() });
+        let app = test_app(vec![item.clone()]);
+        let shown: String = state_spans(&app, &item).iter().map(|span| span.content.to_string()).collect();
+        assert!(shown.contains("checking project rules") && shown.contains("second opinion: codex-review reading…"), "{shown}");
+        item.rules = Some(crate::rules_check::Shown::Broken(2, Vec::new()));
+        let shown: String = state_spans(&app, &item).iter().map(|span| span.content.to_string()).collect();
+        assert!(!shown.contains("breaks") && !shown.contains("rules"), "breaks are the lead's, which hears them: {shown}");
+        item.rules = None;
+        let shown: String = state_spans(&app, &item).iter().map(|span| span.content.to_string()).collect();
+        assert!(!shown.contains(crate::status::UNCHECKED), "an unchecked task is the lead's: {shown}");
+        item.rules = Some(crate::rules_check::Shown::Broken(1, Vec::new()));
+        item.git.as_mut().unwrap().approved = true;
+        item.git.as_mut().unwrap().approved_by = Some(crate::tasks::ApprovedBy::Lead);
+        let shown: String = state_spans(&app, &item).iter().map(|span| span.content.to_string()).collect();
+        assert!(shown.contains("pushed past the rules check by the lead"), "{shown}");
     }
 
     #[test]

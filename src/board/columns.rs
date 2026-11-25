@@ -177,26 +177,6 @@ fn under_row(text: &str, color: Color, highlighted: bool, width: usize) -> Line<
     if highlighted { line.style(Style::new().bg(SURFACE)) } else { line }
 }
 
-pub(super) fn how_lines(item: &Item, highlighted: bool, width: usize) -> Vec<Line<'static>> {
-    let recipe = item.recipe.as_ref().map(|recipe| if highlighted { format!("{}, because {}", recipe.shown(), recipe.why) } else { recipe.shown() });
-    let parts: Vec<String> = recipe.into_iter().chain(super::send_review::second_part(item)).collect();
-    if parts.is_empty() {
-        return Vec::new();
-    }
-    vec![under_row(&parts.join(" · "), MUTED, highlighted, width)]
-}
-
-// The rules check under the row, muted and neutral: a check under way, or a push past it by whom; breaks and an unchecked task are the lead's, which hears them as messages.
-pub(super) fn rules_lines(item: &Item, highlighted: bool, width: usize) -> Vec<Line<'static>> {
-    use crate::status::RulesShown;
-    let shown = match item.rules_shown() {
-        Some(RulesShown::Overridden { by, .. }) => crate::status::past_the_check(by),
-        Some(rules @ RulesShown::Checking { .. }) => rules.note().unwrap_or_default(),
-        _ => return Vec::new(),
-    };
-    vec![under_row(&shown, MUTED, highlighted, width)]
-}
-
 // The facts span is drawn muted whole; one fact in it takes its own colour.
 fn tint(line: &mut Line<'static>, fact: &str, color: Color) {
     let Some(at) = line.spans.iter().rposition(|span| span.content.contains(fact)) else { return };
@@ -357,8 +337,6 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
             line.spans.extend([Span::raw(" "), Span::styled("●", style(GREEN))]);
         }
         lines.push(line);
-        lines.extend(how_lines(item, selected && open && unfold, width));
-        lines.extend(rules_lines(item, selected && open && unfold, width));
         if let Some(at) = cursor {
             selected_line = lines.len() + cursor_line(item, at);
         }
@@ -636,60 +614,24 @@ mod tests {
     }
 
     #[test]
-    fn the_rules_check_shows_on_its_own_line_under_the_row_and_a_pass_shows_nothing() {
-        let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 2);
-        let shown = |item: &Item| {
-            let mut app = test_app(vec![item.clone()]);
-            app.work_selected = 9;
-            let (rows, buffer) = render(&mut app, 120, 30);
-            let at = find(&rows, "billing")[0].1;
-            let below = untied(&rows[at + 1]).to_string();
-            let color = find(&rows, &below).first().map(|(x, y)| buffer[(*x as u16, *y as u16)].fg);
-            (rows.join("\n"), below, color)
-        };
-        let (screen, _, _) = shown(&item);
-        assert!(!screen.contains("rules") && !screen.contains("approved"), "the reviewer's pass says nothing: {screen}");
-        item.git.as_mut().unwrap().approved = false;
-        item.rules = Some(crate::rules_check::Shown::Checking);
-        let (screen, below, color) = shown(&item);
-        assert_eq!((below.as_str(), color), ("checking project rules", Some(MUTED)), "{screen}");
-        assert!(!row_facts(&item, None).contains("rules"), "the row's facts leave it to its line: {}", row_facts(&item, None));
-        item.rules = Some(crate::rules_check::Shown::Broken(2, vec!["Body says why".to_string(), "One change".to_string()]));
-        let (screen, _, _) = shown(&item);
-        assert!(!screen.contains("breaks") && !screen.contains("Body says why"), "breaks are the lead's, which hears them: {screen}");
-        item.rules = None;
-        let (screen, _, _) = shown(&item);
-        assert!(!screen.contains(crate::status::UNCHECKED), "an unchecked task is the lead's: {screen}");
-        item.rules = Some(crate::rules_check::Shown::Broken(1, Vec::new()));
-        item.git.as_mut().unwrap().approved = true;
-        item.git.as_mut().unwrap().approved_by = Some(crate::tasks::ApprovedBy::Lead);
-        let (screen, below, color) = shown(&item);
-        assert_eq!((below.as_str(), color), ("pushed past the rules check by the lead", Some(MUTED)), "{screen}");
-        assert!(!screen.contains("breaks") && !screen.contains("approved"), "{screen}");
-        item.rules = None;
-        item.git.as_mut().unwrap().approved_by = Some(crate::tasks::ApprovedBy::User);
-        let (screen, below, color) = shown(&item);
-        assert_eq!((below.as_str(), color), ("pushed past the rules check by you", Some(MUTED)), "{screen}");
-    }
-
-    #[test]
-    fn a_tasks_recipe_leads_the_line_under_its_row_and_the_open_task_says_why() {
+    fn under_a_task_row_neither_its_recipe_nor_a_second_opinion_nor_the_rules_check_shows() {
         let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 2);
         item.recipe = Some(crate::recipe::Recipe { name: "small-fix".to_string(), why: "one function and its test".to_string(), by: "the lead".to_string() });
-        let mut app = test_app(vec![item.clone()]);
-        let work = |rows: &[String], at: usize| untied(&rows[at].chars().take(66).collect::<String>()).trim_end().to_string();
-        let (open, _) = render(&mut app, 120, 30);
-        let at = find(&open, "○ billing")[0].1;
-        assert_eq!(work(&open, at + 1), "recipe: small fix, because one function and its test", "the open task shows the why: {}", open.join("\n"));
-        let (narrow, _) = render(&mut app, 40, 30);
-        assert!(work(&narrow, at + 1).ends_with('…') && !work(&narrow, at + 2).contains("test"), "a why too long for the column is cut, never wrapped: {}", narrow.join("\n"));
-        app.work_selected = 9;
-        let (rows, _) = render(&mut app, 120, 30);
-        assert_eq!(work(&rows, at + 1), "recipe: small fix", "{}", rows.join("\n"));
-        item.recipe = None;
-        let mut app = test_app(vec![item]);
-        let (rows, _) = render(&mut app, 120, 30);
-        assert!(!render(&mut app, 84, 30).0.join("\n").contains("recipe:"), "a task started by hand without a recipe shows none: {}", rows.join("\n"));
+        item.second = Some(crate::review::SecondShown { by: "codex".to_string(), points: None, running: true, stale: false, file: std::path::PathBuf::new() });
+        for (rules, by) in [(Some(crate::rules_check::Shown::Checking), None), (Some(crate::rules_check::Shown::Broken(1, Vec::new())), Some(crate::tasks::ApprovedBy::Lead)), (None, Some(crate::tasks::ApprovedBy::User))] {
+            item.rules = rules;
+            item.git.as_mut().unwrap().approved = by.is_some();
+            item.git.as_mut().unwrap().approved_by = by;
+            for selected in [0, 9] {
+                let mut app = test_app(vec![item.clone()]);
+                app.work_selected = selected;
+                let (rows, _) = render(&mut app, 120, 30);
+                let work: String = rows.iter().map(|row| row.chars().take(66).collect::<String>()).collect::<Vec<_>>().join("\n");
+                for lead in ["recipe", "small fix", "second opinion", "rules", "checking"] {
+                    assert!(!work.contains(lead), "{lead} is the lead's: {work}");
+                }
+            }
+        }
     }
 
     #[test]
@@ -980,7 +922,6 @@ mod tests {
             let mut item = crate::status::tests::task(Some("working"), None, 1);
             item.name = name.to_string();
             crate::status::tests::in_phase(&mut item, crate::phase::Phase::Working);
-            item.recipe = Some(crate::recipe::Recipe { name: "small-fix".to_string(), why: format!("{name} needs it"), by: "the lead".to_string() });
             item
         }).collect()
     }
@@ -1002,13 +943,18 @@ mod tests {
             assert!(work_side(&rows[at - 1]).trim().is_empty(), "an empty line before {name}: {screen}");
             let glyph = rows[at].chars().position(|character| character == '◐').unwrap();
             let rule = |row: usize| rows[row].chars().nth(glyph);
+            if name != "push-notice" {
+                assert!(!matches!(rule(at + 1), Some('│' | '╰')), "nothing under {name} is the user's, so nothing hangs under it: {screen}");
+                ends.push((at, at));
+                continue;
+            }
             let mut end = at + 1;
             while rule(end) == Some('│') {
                 end += 1;
             }
-            assert!(end > at + 1 || name != "push-notice", "the open task's recipe wraps over lines on the rule: {screen}");
+            assert!(end > at + 1, "the open task's detail hangs over lines on the rule: {screen}");
             assert_eq!(rule(end), Some('╰'), "{name}'s block ends on ╰ under its glyph: {screen}");
-            assert!(work_side(&rows[end]).contains("recipe") || work_side(&rows[end]).contains("options"), "{screen}");
+            assert!(work_side(&rows[end]).contains("options"), "{screen}");
             ends.push((at, end));
         }
         let (first, last) = ends[0];
@@ -1054,13 +1000,13 @@ mod tests {
     #[test]
     fn a_short_column_drops_the_empty_lines_between_tasks_first_and_keeps_the_rule_and_the_bar() {
         let mut app = test_app(four_tasks());
-        let (rows, _) = render(&mut app, 120, 18);
+        let (rows, _) = render(&mut app, 120, 16);
         let screen = rows.join("\n");
         let group = find(&rows, "WORKING")[0].1;
         assert!(rows[group + 1].contains("▌◐ push-notice"), "no empty line under the group's title: {screen}");
         let second = find(&rows, "◐ ci-cancelled")[0].1;
         assert!(rows[second - 1].contains('╰') && rows[second - 1].chars().nth(2) == Some('▌'), "the task above ends right over it, its bar kept: {screen}");
         let third = find(&rows, "◐ subtask-steps")[0].1;
-        assert!(rows[third - 1].contains('╰'), "{screen}");
+        assert!(rows[third - 1].contains("◐ ci-cancelled"), "{screen}");
     }
 }

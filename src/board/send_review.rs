@@ -169,7 +169,7 @@ impl App {
     }
 }
 
-// The second line of a task's row names a second opinion while it reads; its points reach the lead as messages.
+// The task's panel names a second opinion while it reads; its points reach the lead as messages.
 pub(super) fn second_part(item: &Item) -> Option<String> {
     let shown = item.second.as_ref()?;
     let by = if shown.by.is_empty() { "second opinion".to_string() } else { shown.by.clone() };

@@ -69,21 +69,6 @@ pub(super) fn mark_color(state: &SubtaskState) -> Color {
     }
 }
 
-const TITLE_FLOOR: usize = 12;
-
-// The rules part of a ready subtask's label, longest first: a check under way or a push past it; breaks and an unchecked task are the lead's and say nothing here.
-fn rules_forms(item: &Item, state: &SubtaskState) -> Vec<String> {
-    use crate::status::RulesShown;
-    if *state != SubtaskState::Ready {
-        return Vec::new();
-    }
-    match item.rules_shown() {
-        None | Some(RulesShown::Ok | RulesShown::Unchecked | RulesShown::Breaks { .. }) => Vec::new(),
-        Some(RulesShown::Checking { .. }) => vec!["checking project rules".to_string(), "checking".to_string()],
-        Some(RulesShown::Overridden { by, .. }) => vec![crate::status::past_the_check(by), "past the rules".to_string()],
-    }
-}
-
 // The state word, or in its place the read count once one is read for the subtask, and for an accepted subtask behind one that is not, which number it waits for.
 fn state_word(item: &Item, subtask: &Subtask, read: Option<(usize, usize)>) -> String {
     let waits = subtask.waits_for.as_ref().and_then(|title| item.subtasks.items.iter().find(|other| other.title == *title));
@@ -93,11 +78,6 @@ fn state_word(item: &Item, subtask: &Subtask, read: Option<(usize, usize)>) -> S
         (SubtaskState::Accepted, Some(other)) => format!("waits for {} · {shown}", other.number),
         _ => shown,
     }
-}
-
-// What follows the state word, longest first: the rules part; it gives way before the state word does.
-fn label_forms(item: &Item, step: &Subtask) -> Vec<String> {
-    rules_forms(item, &step.state)
 }
 
 // The title whole, or as many whole words as fit with an ellipsis; None when not even one word does.
@@ -120,22 +100,18 @@ fn shortened(title: &str, room: usize) -> String {
     whole_words(title, room).unwrap_or_else(|| cut(title, room.max(1)))
 }
 
-// The state word always stands; the rules part shortens, then goes, before the title is cut below TITLE_FLOOR.
-fn fitted(title: &str, state: &str, rules: &[String], room: usize) -> (String, String) {
+// The state word always stands; the title is cut to the room beside it.
+fn fitted(title: &str, state: &str, room: usize) -> (String, String) {
     if state.is_empty() || room < text_width(state) + 3 {
         return (shortened(title, room), String::new());
     }
-    let labels: Vec<String> = rules.iter().map(|rules| format!("{state} · {rules}")).chain([state.to_string()]).collect();
-    let title_room = |label: &String| room.saturating_sub(text_width(label) + 2);
-    let floor = text_width(title).min(TITLE_FLOOR);
-    let label = labels.iter().find(|label| title_room(label) >= floor).unwrap_or(&labels[labels.len() - 1]);
-    (shortened(title, title_room(label)), label.clone())
+    (shortened(title, room.saturating_sub(text_width(state) + 2)), state.to_string())
 }
 
 fn step_line(item: &Item, step: &Subtask, width: usize, on: bool, read: Option<(usize, usize)>) -> Line<'static> {
     let number = format!("{} ", step.number);
     let room = width.saturating_sub(INDENT.len() + 2 + number.len());
-    let (title, label) = fitted(&step.title, &state_word(item, step, read), &label_forms(item, step), room);
+    let (title, label) = fitted(&step.title, &state_word(item, step, read), room);
     let color = mark_color(&step.state);
     let planned = step.state == SubtaskState::Planned;
     let gap = room.saturating_sub(text_width(&title) + text_width(&label));
@@ -169,7 +145,7 @@ fn stage_lines(stages: &[kebbie_hub_protocol::Stage], width: usize) -> Vec<Line<
         let word = tasks::rollout::stage_word(stage, stages);
         let head = format!("stage {} ", at + 1);
         let room = width.saturating_sub(INDENT.len() + 2 + head.len());
-        let (title, label) = fitted(&stage.title, &word, &[], room);
+        let (title, label) = fitted(&stage.title, &word, room);
         let gap = room.saturating_sub(text_width(&title) + text_width(&label));
         Line::from(vec![
             Span::raw(INDENT), Span::styled(tasks::rollout::mark(stage.state), style(color)), Span::raw(" "), Span::styled(head, style(MUTED)),
@@ -431,41 +407,24 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn the_title_is_cut_before_the_state_and_the_rules_part_shortens_first() {
-        let breaks = vec!["breaks 2 project rules".to_string(), "2 breaks".to_string()];
-        let fit = |room| fitted("Charge through a PaymentGateway", "committed", &breaks, room);
-        assert_eq!(fit(70), ("Charge through a PaymentGateway".to_string(), "committed · breaks 2 project rules".to_string()), "room for both, nothing cut");
-        assert_eq!(fit(60), ("Charge through a…".to_string(), "committed · breaks 2 project rules".to_string()), "the title is cut before the label changes");
-        assert_eq!(fit(45), ("Charge through a…".to_string(), "committed · 2 breaks".to_string()), "the rules part shortens before the title goes below its floor");
-        assert_eq!(fit(30), ("Charge through a…".to_string(), "committed".to_string()), "then it goes, the state word stays");
-        assert_eq!(fit(20), ("Charge…".to_string(), "committed".to_string()));
+    fn the_title_is_cut_before_the_state_word_and_a_ready_step_never_names_the_rules_check() {
+        let fit = |room| fitted("Charge through a PaymentGateway", "committed", room);
+        assert_eq!(fit(70), ("Charge through a PaymentGateway".to_string(), "committed".to_string()), "room for both, nothing cut");
+        assert_eq!(fit(30), ("Charge through a…".to_string(), "committed".to_string()), "the title is cut, the state word stays");
         assert_eq!(fit(13), ("C…".to_string(), "committed".to_string()), "a word too long for the room is cut inside it");
         assert_eq!(fit(11), ("Charge…".to_string(), String::new()), "only a row too narrow for the state word drops it");
-        assert_eq!(fitted("Charge through a PaymentGateway", "", &[], 20), ("Charge through a…".to_string(), String::new()), "a planned step has no label");
+        assert_eq!(fitted("Charge through a PaymentGateway", "", 20), ("Charge through a…".to_string(), String::new()), "a planned step has no label");
         assert_eq!(whole_words("Charge through a PaymentGateway", 4), None);
         assert_eq!(whole_words("Charge through a PaymentGateway", 9), Some("Charge…".to_string()));
-    }
-
-    #[test]
-    fn a_committed_step_says_its_rules_in_the_task_rows_words_shortened() {
         let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 2);
-        let state = SubtaskState::Ready;
-        assert!(rules_forms(&item, &state).is_empty(), "a check that passed says nothing");
-        item.git.as_mut().unwrap().approved = false;
-        assert!(rules_forms(&item, &state).is_empty(), "not checked is the task's, said once on its line");
-        item.rules = Some(crate::rules_check::Shown::Broken(3, Vec::new()));
-        assert!(rules_forms(&item, &state).is_empty(), "breaks are the lead's, which hears them");
-        item.rules = Some(crate::rules_check::Shown::Checking);
-        assert_eq!(rules_forms(&item, &state), vec!["checking project rules", "checking"]);
-        item.rules = Some(crate::rules_check::Shown::Lead);
-        assert_eq!(rules_forms(&item, &state), vec!["checking project rules", "checking"]);
-        item.git.as_mut().unwrap().approved = true;
-        item.git.as_mut().unwrap().approved_by = Some(crate::tasks::ApprovedBy::User);
-        assert_eq!(rules_forms(&item, &state), vec!["pushed past the rules check by you", "past the rules"]);
-        assert!(rules_forms(&item, &SubtaskState::Accepted).is_empty() && rules_forms(&item, &SubtaskState::InProgress).is_empty());
-        let mut working = stepped(stripe());
-        working.git.as_mut().unwrap().approved = false;
-        assert!(rules_forms(&working, &state).is_empty(), "under Working nothing was checked yet, the step says only committed");
+        item.subtasks = stripe();
+        item.subtasks.items[0].state = SubtaskState::Ready;
+        for rules in [Some(crate::rules_check::Shown::Checking), Some(crate::rules_check::Shown::Broken(1, Vec::new()))] {
+            item.rules = rules;
+            item.git.as_mut().unwrap().approved_by = Some(crate::tasks::ApprovedBy::Lead);
+            let line: String = step_line(&item, &item.subtasks.items[0], 120, false, None).spans.iter().map(|span| span.content.to_string()).collect();
+            assert!(!line.contains("rules") && !line.contains("checking"), "the rules check is the lead's and stays off the step: {line}");
+        }
     }
 
     #[test]
