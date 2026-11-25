@@ -227,6 +227,11 @@ pub fn disk_refusal(space: Option<crate::disk::Space>, limit: Option<crate::disk
     space.below(limit).then(|| format!("kebbie: the disk under this worktree has {} free, below the {} a build needs (disk.builds_below), so this build takes no build slot and does not run. The keeper trims build output from worktrees nobody uses when the disk runs low; free space and build again.", crate::disk::gb(space.free), limit.shown()))
 }
 
+// Whether a command's output holds a line a build queued for a slot prints before it exits without building, whatever held it back.
+pub fn queued_in(output: &str) -> bool {
+    output.lines().any(|line| line.trim_start().starts_with("kebbie: ") && line.trim_end().ends_with(" in line, and kebbie tells it when its turn comes."))
+}
+
 pub fn board_note(place: usize) -> String {
     format!("waiting for a build slot, {}", crate::tasks::ordinal(place))
 }

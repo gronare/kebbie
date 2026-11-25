@@ -672,6 +672,7 @@ pub struct Ended {
     pub says: Exit,
     pub background: Option<String>,
     pub in_line: usize,
+    pub queued: bool,
 }
 
 // From a PostToolUse or PostToolUseFailure payload: each test command of the line and how it ended, none when it is no test run or did not run to its end.
@@ -688,7 +689,7 @@ pub fn outcome(input: &Value, listed: &[String]) -> Vec<Ended> {
     let found_count = found.len();
     let parts = if found_count > 1 { parts(&output, found_count).or_else(|| summary(&output).filter(|summary| summary.failed).map(|_| vec![output.clone(); found_count])) } else { Some(vec![output]) };
     found.iter().enumerate().map(|(at, found)| Ended {
-        command: command.to_string(), runner: found.runner.to_string(), exit, finished, says: found.exit, background: background.clone(), in_line: found_count,
+        command: command.to_string(), runner: found.runner.to_string(), exit, finished, says: found.exit, background: background.clone(), in_line: found_count, queued: parts.as_ref().is_some_and(|parts| crate::builds::queued_in(&parts[at])),
         output: parts.as_ref().map(|parts| parts[at].clone()).unwrap_or_default(),
     }).collect()
 }
@@ -722,6 +723,7 @@ fn ending(input: &Value) -> Option<(Option<i64>, bool, String, Option<String>)> 
 
 const IN_BACKGROUND: &str = "still running in the background";
 const RAN_NONE: &str = "it ran no tests";
+const QUEUED: &str = "it waited for a build slot and never ran";
 const NEVER_ENDED: &str = "kebbie never saw it end";
 const BACKGROUND_GIVE_UP: u64 = 24 * 60 * 60;
 const UNVERIFIED: &str = " · unverified: recorded without a sandbox";
@@ -765,9 +767,11 @@ fn tail_of(path: &Path) -> String {
 
 // The run's result once its background command ended, from the exit and the output the notification names.
 pub fn settled(run: &Run, end: &End, listed: &[String]) -> Run {
-    let summary = end.output.as_deref().filter(|_| run.in_line <= 1).map(tail_of).and_then(|output| summary(&output));
+    let output = end.output.as_deref().map(tail_of).unwrap_or_default();
+    let summary = (run.in_line <= 1).then(|| summary(&output)).flatten();
     let says = run.says.or_else(|| find(&run.command, listed).map(|found| found.exit)).unwrap_or(Exit::Silent(OTHER));
     let (result, why) = match (end.ended, end.exit) {
+        (true, _) if summary.as_ref().is_none_or(|summary| summary.ran_none) && run.in_line <= 1 && crate::builds::queued_in(&output) => (Outcome::Unknown, QUEUED),
         (false, _) => match summary.as_ref() { Some(summary) if summary.failed => (Outcome::Failed, ""), _ => (Outcome::Unknown, "stopped before it ended") },
         (true, None) => judged(false, Exit::Silent("ended without an exit code"), summary.as_ref()),
         (true, Some(exit)) => judged(exit == 0, says, summary.as_ref()),
@@ -834,9 +838,9 @@ pub fn record_in(state: &Path, address: &str, worktree: &Path, listed: &[String]
 }
 
 fn record_one(state: &Path, address: &str, worktree: &Path, input: &Value, ended: Ended, at: u64) -> Option<Run> {
-    let Ended { command, runner, exit, finished, output, says, background, in_line } = ended;
+    let Ended { command, runner, exit, finished, output, says, background, in_line, queued } = ended;
     let summary = if background.is_some() { None } else { summary(&output) };
-    let (result, why) = if background.is_some() { (Outcome::Unknown, IN_BACKGROUND) } else { judged(finished, says, summary.as_ref()) };
+    let (result, why) = if background.is_some() { (Outcome::Unknown, IN_BACKGROUND) } else if queued && summary.as_ref().is_none_or(|summary| summary.ran_none) { (Outcome::Unknown, QUEUED) } else { judged(finished, says, summary.as_ref()) };
     let (sha, dirty, code) = snapshot(worktree).ok()?;
     let command = if command.chars().count() > COMMAND_LIMIT { format!("{}…", command.chars().take(COMMAND_LIMIT).collect::<String>()) } else { command };
     let transcript = if background.as_deref().is_some_and(|id| !id.is_empty()) { input["transcript_path"].as_str().unwrap_or_default().to_string() } else { String::new() };
@@ -896,6 +900,9 @@ fn unknown_context(run: &Run) -> String {
     if run.why == IN_BACKGROUND {
         let settles = if run.background.is_empty() { "kebbie cannot see how it ends" } else { "kebbie reads its result from the notice of its end at your next shell command" };
         return format!("kebbie recorded `{}` without a result: it is {IN_BACKGROUND}, and {settles}. Until then it counts as no test run: before you report, run it in the foreground, or say in your report how it ended.", run.runner);
+    }
+    if run.why == QUEUED {
+        return format!("kebbie recorded `{}` without a result: {QUEUED}. Run it again once kebbie tells you a build slot is free.", run.runner);
     }
     format!("kebbie recorded `{}` without a result: {}. Run it again so its own exit ends the command (no pipe after it, or set -o pipefail first, and nothing after it), or say in your report how it ended.", run.runner, run.why)
 }
@@ -1416,6 +1423,45 @@ mod tests {
         broke["error"] = json!("Exit code 101");
         assert_eq!(record_in(&state, "billing@app", &dir, &list, &broke, 5).remove(0).result, Outcome::Failed, "nothing after it, so its exit is its own");
         assert_eq!(record_in(&state, "billing@app", &dir, &list, &failed("cargo build && cargo test"), 6).remove(0).result, Outcome::Unknown, "the build may have failed before the tests ran");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_test_run_the_build_queue_held_back_is_unknown_and_never_failed() {
+        let dir = repo();
+        let state = dir.join("state");
+        let list = listed(&[]);
+        let line = crate::builds::queued_line(7, &crate::builds::Blocked::Full("alpha@app building".to_string()));
+        let mut queued = failed("cargo test --locked --test cli");
+        queued["error"] = json!(format!("Exit code 75\n{line}"));
+        let run = record_in(&state, "billing@app", &dir, &list, &queued, 1).remove(0);
+        assert_eq!((run.result, run.why.as_str(), run.exit), (Outcome::Unknown, QUEUED, Some(75)), "exit 75 from the queue is no red test");
+        assert!(unknown_context(&run).ends_with("Run it again once kebbie tells you a build slot is free."), "the task is told to wait for its turn, not to drop a pipe");
+        let mut grepped = passed("cargo test 2>&1 | grep -E 'test result|no build slot'");
+        grepped["tool_response"]["stdout"] = json!(line);
+        assert_eq!(record_in(&state, "billing@app", &dir, &list, &grepped, 2).remove(0).why, QUEUED);
+        grepped["tool_response"]["stdout"] = json!("kebbie: a build slot is free, but it goes first to the tasks ahead of this one (alpha@app); it is 2nd in line, and kebbie tells it when its turn comes.");
+        assert_eq!(record_in(&state, "billing@app", &dir, &list, &grepped, 2).remove(0).why, QUEUED, "a run behind tasks ahead in line never ran either");
+        let mut red = passed("cargo test 2>&1 | grep -E 'test result|no build slot'");
+        red["tool_response"]["stdout"] = json!(format!("{line}\ntest result: FAILED. 1 passed; 1 failed"));
+        assert_eq!(record_in(&state, "billing@app", &dir, &list, &red, 4).remove(0).result, Outcome::Failed, "a result line that counts failures outranks a queue line");
+        let mut two = passed("cargo test a 2>&1 | tail -3; cargo test b 2>&1 | tail -3");
+        two["tool_response"]["stdout"] = json!(format!("test result: ok. 3 passed; 0 failed\n{line}"));
+        assert!(record_in(&state, "billing@app", &dir, &list, &two, 5).iter().all(|run| run.why != QUEUED), "a queue line kebbie cannot tie to one run of the line marks none of them");
+        let mut later = passed("cargo test 2>&1 | tail -3; cargo clippy");
+        later["tool_response"]["stdout"] = json!(format!("test result: ok. 3 passed; 0 failed\n{line}"));
+        assert_eq!(record_in(&state, "billing@app", &dir, &list, &later, 6).remove(0).result, Outcome::Passed, "a green result line outranks the queue line of a later build");
+        let mut ran = passed("cargo test");
+        ran["tool_response"]["stdout"] = json!("kebbie: no build slot is free for this task and no keeper runs to hand out turns; building without waiting.\ntest result: ok. 3 passed; 0 failed");
+        assert_eq!(record_in(&state, "billing@app", &dir, &list, &ran, 3).remove(0).result, Outcome::Passed, "a build that went on without the queue ran");
+        let output = dir.join("bg.out");
+        fs::write(&output, format!("{line}\n")).unwrap();
+        let background = Run { background: "b1".to_string(), says: Some(Exit::Speaks), ..run };
+        let end = End { ended: true, exit: Some(75), output: Some(output) };
+        assert_eq!(settled(&background, &end, &list).why, QUEUED, "a background run the queue held back settles as unknown too");
+        let ran_first = dir.join("bg2.out");
+        fs::write(&ran_first, format!("test result: ok. 3 passed; 0 failed\n{line}\n")).unwrap();
+        assert_eq!(settled(&Run { command: "cargo test 2>&1 | tail -3; cargo clippy".to_string(), says: Some(Exit::Silent(OTHER)), ..background.clone() }, &End { ended: true, exit: Some(75), output: Some(ran_first) }, &list).result, Outcome::Passed, "in the background too a result line that counts tests outranks a queue line");
         fs::remove_dir_all(dir).unwrap();
     }
 
