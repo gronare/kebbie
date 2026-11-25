@@ -11,6 +11,8 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     // A source tree unpacked inside another repo must not take that repo's commit.
     let own = git(&root, &["rev-parse", "--show-toplevel"]).is_some_and(|top| Path::new(&top).canonicalize().ok() == root.canonicalize().ok());
+    // Watching HEAD in a debug or test build would recompile all of kebbie on every commit.
+    let own = own && std::env::var("PROFILE").is_ok_and(|profile| profile == "release");
     let built = own.then(|| Some(format!("{} {}", git(&root, &["rev-parse", "--short=7", "HEAD"])?, git(&root, &["log", "-1", "--format=%cs", "HEAD"])?))).flatten();
     println!("cargo:rustc-env=KEBBIE_BUILT_FROM={}", built.unwrap_or_default());
     if own {

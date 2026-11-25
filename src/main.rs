@@ -1145,7 +1145,9 @@ mod tests {
         assert_eq!(version("db8963f 2026-10-21"), format!("kebbie {number} (db8963f 2026-10-21)"));
         assert_eq!(version(""), format!("kebbie {number}"), "a build outside git still says its version");
         let built = env!("KEBBIE_BUILT_FROM");
-        if Path::new(env!("CARGO_MANIFEST_DIR")).join(".git").exists() {
+        if cfg!(debug_assertions) {
+            assert_eq!(built, "", "a debug build names no commit, so a commit does not rebuild it");
+        } else if Path::new(env!("CARGO_MANIFEST_DIR")).join(".git").exists() {
             let (sha, date) = built.split_once(' ').unwrap_or_else(|| panic!("a build from git names its commit: {built:?}"));
             assert!(sha.len() >= 7 && sha.chars().all(|character| character.is_ascii_hexdigit()), "{built}");
             let parts: Vec<&str> = date.split('-').collect();
