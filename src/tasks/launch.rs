@@ -33,9 +33,14 @@ fn uid() -> u32 {
     unsafe { libc::getuid() }
 }
 
+// The private per-user folder that holds every task's temp folder.
+pub(crate) fn task_tmp_root() -> PathBuf {
+    slash_tmp().join(format!("kebbie-{}", uid()))
+}
+
 // A folder of kebbie's own for scratch work, in the same private per-user folder as the tasks' temp folders, emptied of anything left there before.
 pub(crate) fn scratch_dir(name: &str) -> Result<PathBuf> {
-    let dir = slash_tmp().join(format!("kebbie-{}", uid())).join(name);
+    let dir = task_tmp_root().join(name);
     make_tmp(&dir)?;
     std::fs::remove_dir_all(&dir).map_err(|error| format!("{}: {error}", dir.display()))?;
     Ok(dir)

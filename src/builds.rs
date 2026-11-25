@@ -449,15 +449,28 @@ fn server_tmpdir() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".cache/kebbie/sccache-tmp")
 }
 
-fn environ_tmpdir(environ: &[u8]) -> PathBuf {
-    environ.split(|byte| *byte == 0).find_map(|var| var.strip_prefix(b"TMPDIR=")).filter(|dir| !dir.is_empty()).map(|dir| PathBuf::from(String::from_utf8_lossy(dir).into_owned())).unwrap_or_else(|| PathBuf::from("/tmp"))
+fn environ_var(environ: &[u8], name: &str) -> Option<String> {
+    environ.split(|byte| *byte == 0).find_map(|var| var.strip_prefix(name.as_bytes())?.strip_prefix(b"=")).map(|value| String::from_utf8_lossy(value).into_owned())
 }
 
-// The TMPDIR of each sccache server this user runs, or None where the processes' environments cannot be read.
-fn running_servers() -> Option<Vec<PathBuf>> {
+fn environ_tmpdir(environ: &[u8]) -> PathBuf {
+    environ_var(environ, "TMPDIR").filter(|dir| !dir.is_empty()).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/tmp"))
+}
+
+// Where an sccache client or server reaches the server, read as sccache reads it: a socket when SCCACHE_SERVER_UDS is set, else SCCACHE_SERVER_PORT, else 4226.
+fn server_address(var: impl Fn(&str) -> Option<String>) -> String {
+    match var("SCCACHE_SERVER_UDS") {
+        Some(socket) => format!("uds:{socket}"),
+        None => format!("port:{}", var("SCCACHE_SERVER_PORT").map(|port| port.trim().to_string()).unwrap_or_else(|| "4226".to_string())),
+    }
+}
+
+// The TMPDIR of each sccache server this user runs at the address, the one --stop-server reaches, or None where the processes' environments cannot be read.
+fn running_servers(address: &str) -> Option<Vec<PathBuf>> {
     let procs = fs::read_dir("/proc").ok()?;
     let servers = procs.flatten().map(|entry| entry.path()).filter(|proc| fs::read_to_string(proc.join("comm")).is_ok_and(|comm| comm.trim() == "sccache"));
-    Some(servers.filter_map(|proc| fs::read(proc.join("environ")).ok()).filter(|environ| environ.split(|byte| *byte == 0).any(|var| var == b"SCCACHE_START_SERVER=1")).map(|environ| environ_tmpdir(&environ)).collect())
+    let environs = servers.filter_map(|proc| fs::read(proc.join("environ")).ok()).filter(|environ| environ_var(environ, "SCCACHE_START_SERVER").as_deref() == Some("1"));
+    Some(environs.filter(|environ| server_address(|name| environ_var(environ, name)) == address).map(|environ| environ_tmpdir(&environ)).collect())
 }
 
 #[derive(Debug, PartialEq)]
@@ -466,15 +479,16 @@ enum ServerStep {
     Start,
 }
 
-// A server whose TMPDIR is gone fails every compile, so it is stopped; a start where no server is known to run, which fails harmlessly when one does.
-fn server_steps(running: Option<&[PathBuf]>) -> Vec<ServerStep> {
+// A server whose TMPDIR is gone fails every compile, and one under a task's temp folder will once that task ends, so either is stopped; a server under a folder no task owns is left running, and a start is tried where no server is known to run, which fails harmlessly when one does.
+fn server_steps(running: Option<&[PathBuf]>, task_tmp_root: &Path) -> Vec<ServerStep> {
     let Some(running) = running else { return vec![ServerStep::Start] };
-    let stale = running.iter().any(|dir| !dir.is_dir());
-    let healthy = running.iter().any(|dir| dir.is_dir());
-    match (stale, healthy) {
-        (true, _) => vec![ServerStep::Stop, ServerStep::Start],
-        (false, true) => vec![],
-        (false, false) => vec![ServerStep::Start],
+    let breaks = |dir: &PathBuf| fs::canonicalize(dir).map_or(true, |dir| dir.starts_with(task_tmp_root));
+    if running.iter().any(breaks) {
+        vec![ServerStep::Stop, ServerStep::Start]
+    } else if running.is_empty() {
+        vec![ServerStep::Start]
+    } else {
+        vec![]
     }
 }
 
@@ -485,7 +499,7 @@ fn server_command(sccache: &Path, step: &ServerStep, tmpdir: &Path) -> Command {
 }
 
 // Builds starting at once check and restart under one lock, so none stops the server another has just started.
-fn prepare_server(sccache: &Path, running: impl Fn() -> Option<Vec<PathBuf>>, tmpdir: &Path) {
+fn prepare_server(sccache: &Path, running: impl Fn() -> Option<Vec<PathBuf>>, tmpdir: &Path, task_tmp_root: &Path) {
     if fs::create_dir_all(tmpdir).is_err() {
         return;
     }
@@ -495,7 +509,7 @@ fn prepare_server(sccache: &Path, running: impl Fn() -> Option<Vec<PathBuf>>, tm
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
         return;
     }
-    for step in server_steps(running().as_deref()) {
+    for step in server_steps(running().as_deref(), task_tmp_root) {
         let _ = server_command(sccache, &step, tmpdir).status();
     }
 }
@@ -546,7 +560,7 @@ pub fn guard(argv: &[String]) -> ExitCode {
     }
     let run = |command: &mut Command| {
         if let Some(sccache) = &sccache {
-            prepare_server(sccache, running_servers, &server_tmpdir());
+            prepare_server(sccache, || running_servers(&server_address(|name| std::env::var(name).ok())), &server_tmpdir(), &crate::tasks::task_tmp_root());
         }
         command.status()
     };
@@ -794,7 +808,7 @@ mod tests {
     }
 
     #[test]
-    fn the_sccache_server_starts_under_the_stable_tmpdir_and_one_under_a_vanished_tmpdir_is_restarted() {
+    fn the_sccache_server_starts_under_the_stable_tmpdir_and_one_under_a_tasks_temp_folder_is_restarted() {
         let root = std::env::temp_dir().join(format!("kebbie-builds-sccache-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
@@ -802,22 +816,34 @@ mod tests {
         let sccache = root.join("sccache");
         crate::executable::write(&sccache, format!("#!/bin/sh\necho \"$1 $TMPDIR\" >> {}\n", crate::sh::quote(&log.to_string_lossy()))).unwrap();
         let stable = root.join("cache/kebbie/sccache-tmp");
+        let task_root = fs::canonicalize(&root).unwrap().join("kebbie-1001");
         let calls = || fs::read_to_string(&log).unwrap_or_default();
 
-        prepare_server(&sccache, || Some(vec![]), &stable);
+        prepare_server(&sccache, || Some(vec![]), &stable, &task_root);
         assert_eq!(calls(), format!("--start-server {}\n", stable.display()), "no server runs: kebbie starts one under the stable folder");
         assert!(stable.is_dir());
 
         fs::remove_file(&log).unwrap();
-        prepare_server(&sccache, || Some(vec![stable.clone()]), &stable);
-        assert_eq!(calls(), "", "a server whose TMPDIR exists is left running");
+        prepare_server(&sccache, || Some(vec![stable.clone()]), &stable, &task_root);
+        assert_eq!(calls(), "", "a server under kebbie's own folder is left running");
 
+        let unowned = root.join("tmp");
+        fs::create_dir_all(&unowned).unwrap();
+        prepare_server(&sccache, || Some(vec![unowned.clone()]), &stable, &task_root);
+        assert_eq!(calls(), "", "a server under /tmp or another folder no task owns is left running");
+
+        let live_task_tmp = task_root.join("wt1.kebbie-abc123");
+        fs::create_dir_all(&live_task_tmp).unwrap();
+        prepare_server(&sccache, || Some(vec![live_task_tmp.clone()]), &stable, &task_root);
+        assert_eq!(calls(), format!("--stop-server {0}\n--start-server {0}\n", stable.display()), "a server under a task's temp folder that still exists is restarted before that task ends and takes it along");
+
+        fs::remove_file(&log).unwrap();
         let gone = root.join("task-tmp-that-was-cleaned");
-        prepare_server(&sccache, || Some(vec![gone.clone()]), &stable);
+        prepare_server(&sccache, || Some(vec![gone.clone()]), &stable, &task_root);
         assert_eq!(calls(), format!("--stop-server {0}\n--start-server {0}\n", stable.display()), "a server whose TMPDIR is gone is stopped and started again");
 
         fs::remove_file(&log).unwrap();
-        prepare_server(&sccache, || None, &stable);
+        prepare_server(&sccache, || None, &stable, &task_root);
         assert_eq!(calls(), format!("--start-server {}\n", stable.display()), "where no process can be read, a start is tried");
         let _ = fs::remove_dir_all(root);
     }
@@ -837,7 +863,7 @@ mod tests {
         let running = || Some(vec![if started.exists() { stable.clone() } else { gone.clone() }]);
         std::thread::scope(|scope| {
             for _ in 0..3 {
-                scope.spawn(|| prepare_server(&sccache, running, &stable));
+                scope.spawn(|| prepare_server(&sccache, running, &stable, &root.join("kebbie-1001")));
             }
         });
         assert_eq!(fs::read_to_string(&log).unwrap(), "--stop-server\n--start-server\n", "the builds after the first find the server it started and leave it running");
@@ -846,26 +872,43 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn a_running_sccache_server_is_found_with_the_tmpdir_it_started_with() {
+    fn a_running_sccache_server_is_found_at_its_own_address_with_the_tmpdir_it_started_with() {
         let root = std::env::temp_dir().join(format!("kebbie-builds-server-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
-        let sccache = root.join("sccache");
-        crate::executable::write(&sccache, "#!/bin/sh\nread line\n").unwrap();
-        let gone = root.join("cleaned-task-tmp");
-        let mut server = Command::new(&sccache).stdin(std::process::Stdio::piped()).env("SCCACHE_START_SERVER", "1").env("TMPDIR", &gone).spawn().unwrap();
-        let found = (0..50).find_map(|_| {
-            let running = running_servers().unwrap();
-            running.contains(&gone).then_some(running).or_else(|| {
-                std::thread::sleep(Duration::from_millis(20));
-                None
-            })
-        });
-        let _ = server.kill();
-        let _ = server.wait();
-        assert!(found.is_some(), "the server's TMPDIR is read from its environment");
-        assert_eq!(server_steps(found.as_deref()).first(), Some(&ServerStep::Stop), "a server whose TMPDIR is gone is stopped");
+        let server = root.join("sccache");
+        crate::executable::write(&server, "#!/bin/sh\nread line\n").unwrap();
+        let (stable, gone) = (root.join("cache/kebbie/sccache-tmp"), root.join("cleaned-task-tmp"));
+        let spawn = |port: &str, tmpdir: &Path| Command::new(&server).stdin(std::process::Stdio::piped()).env("SCCACHE_START_SERVER", "1").env("SCCACHE_SERVER_PORT", port).env("TMPDIR", tmpdir).spawn().unwrap();
+        let mut servers = [spawn("4998", &gone), spawn("4999", &gone)];
+        let ours = server_address(|name| (name == "SCCACHE_SERVER_PORT").then(|| "4998".to_string()));
+        let seen = |want: &Path| (0..50).any(|_| running_servers(&ours).unwrap().iter().any(|dir| dir == want) || { std::thread::sleep(Duration::from_millis(20)); false });
+        assert!(seen(&gone), "the server's TMPDIR is read from its environment");
+        assert_eq!(running_servers(&ours).unwrap(), vec![gone.clone()], "the server on another port is not this address's");
+        let _ = servers[0].kill();
+        let _ = servers[0].wait();
+        servers[0] = spawn("4998", &stable);
+        assert!(seen(&stable));
+
+        let log = root.join("calls");
+        let sccache = root.join("recording-sccache");
+        crate::executable::write(&sccache, format!("#!/bin/sh\necho \"$1\" >> {}\n", crate::sh::quote(&log.to_string_lossy()))).unwrap();
+        prepare_server(&sccache, || running_servers(&ours), &stable, &root.join("kebbie-1001"));
+        prepare_server(&sccache, || running_servers(&ours), &stable, &root.join("kebbie-1001"));
+        for mut server in servers {
+            let _ = server.kill();
+            let _ = server.wait();
+        }
+        assert!(!log.exists(), "a server under a gone TMPDIR on another port, which --stop-server cannot reach, leaves this address's healthy server running build after build");
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_server_address_is_its_socket_else_its_port_else_sccaches_default() {
+        let vars = |pairs: &'static [(&'static str, &'static str)]| move |name: &str| pairs.iter().find(|(key, _)| *key == name).map(|(_, value)| value.to_string());
+        assert_eq!(server_address(vars(&[])), "port:4226");
+        assert_eq!(server_address(vars(&[("SCCACHE_SERVER_PORT", "4300")])), "port:4300");
+        assert_eq!(server_address(vars(&[("SCCACHE_SERVER_PORT", "4300"), ("SCCACHE_SERVER_UDS", "/run/s.sock")])), "uds:/run/s.sock");
     }
 
     #[test]
