@@ -329,14 +329,24 @@ impl App {
         self.tasks.get(self.work_selected).filter(|_| self.shown(Column::Work, self.work_selected)).cloned()
     }
 
+    // The backlog items whose questions block their start and wait on the user, newest first, as the hub lists them under Needs you.
+    pub(super) fn backlog_asks(&self) -> Vec<usize> {
+        let days = |entry: &Entry| entry.age.split_whitespace().next().and_then(|days| days.parse::<u64>().ok()).unwrap_or(u64::MAX);
+        let mut asks: Vec<usize> = (0..self.backlog.entries.len()).filter(|index| self.backlog.entries[*index].shape.waiting > 0).collect();
+        asks.sort_by_key(|index| days(&self.backlog.entries[*index]));
+        asks
+    }
+
     // The Backlog column's rows top to bottom; backlog_selected and Hit::Entry index into this.
     fn backlog_rows(&self) -> Vec<BacklogRow> {
+        let asks = self.backlog_asks();
+        let needs = asks.iter().copied().map(BacklogRow::Entry);
         let ongoing = (0..self.ongoing.len()).map(BacklogRow::Ongoing);
-        let entries = (0..self.found.len()).map(BacklogRow::Found).chain((0..self.backlog.entries.len()).map(BacklogRow::Entry));
+        let entries = (0..self.found.len()).map(BacklogRow::Found).chain((0..self.backlog.entries.len()).filter(|index| !asks.contains(index)).map(BacklogRow::Entry));
         match self.ongoing_at {
-            OngoingAt::Top => ongoing.chain(entries).collect(),
-            OngoingAt::Bottom => entries.chain(ongoing).collect(),
-            OngoingAt::Hidden => entries.collect(),
+            OngoingAt::Top => needs.chain(ongoing).chain(entries).collect(),
+            OngoingAt::Bottom => needs.chain(entries).chain(ongoing).collect(),
+            OngoingAt::Hidden => needs.chain(entries).collect(),
         }
     }
 

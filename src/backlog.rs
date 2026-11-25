@@ -596,7 +596,7 @@ fn intake_role(sources: &[Source], vault: bool) -> String {
          3. Tell the user in one line, by its title, that it is filed or started.\n\n\
          The idea is taken in when the item exists, filed or started.\n\n\
          A short item the user adds outside this chat (`n` on the board, `kebbie backlog add`, an idea from their phone, Write it out) goes to kebbie's writer (`writer.profile`), which researches and writes it apart from your chat; its draft reaches you as a message from kebbie. Review it before the user sees it: add what you know from your conversation, keep only the open questions the user must answer, then save it where it is; the user reads it on the board. One that reaches you without a draft (the writer is off or failed), or a file of their own that `kebbie backlog` marks `to write`, you write out by the skill at once. \
-         An item's questions belong to the item: they stay under its Open questions, never in `kebbie ask` and never under Needs you. The user answers them on the item's card on the board, and kebbie brings you each answer with its question: fold the answer into the item and take the question out; the item is ready once no question blocks it.",
+         An item's questions belong to the item: they stay under its Open questions, never in `kebbie ask`: the board lists the item under Needs you, and the user answers them on the item's card there, and kebbie brings you each answer with its question: fold the answer into the item and take the question out; the item is ready once no question blocks it.",
     );
     let steps = if source == Source::Vault { format!("{steps}\n\n{OLD_NOTES}") } else { steps };
     if vault {
@@ -883,7 +883,7 @@ mod tests {
         }
         assert!(!backlog.contains("kebbie backlog save") && !backlog.contains("vault") && !backlog.contains("Linear"), "{backlog}");
         assert!(intake.contains("kebbie backlog add --priority <priority> --repo <repo> \"<Title>\" -") && intake.contains("--backlog <the ref kebbie backlog add printed>") && intake.contains("kebbie -C <repo> link <task> <the ref kebbie backlog add printed>") && !intake.contains("vault"), "{intake}");
-        for needed in ["Write it out with the skill `kebbie:write-backlog-item`", "A short item the user adds outside this chat", "never in `kebbie ask` and never under Needs you", "fold the answer into the item"] {
+        for needed in ["Write it out with the skill `kebbie:write-backlog-item`", "A short item the user adds outside this chat", "never in `kebbie ask`: the board lists the item under Needs you", "fold the answer into the item"] {
             assert!(intake.contains(needed), "{needed}: {intake}");
         }
         let local_and_linear = role_texts(&[Source::Local, Source::Linear], false).backlog;

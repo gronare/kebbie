@@ -461,43 +461,30 @@ fn row_index(order: &[BacklogRow], wanted: BacklogRow) -> usize {
     order.iter().position(|row| *row == wanted).unwrap_or(usize::MAX)
 }
 
-pub(super) fn backlog_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usize, Rows) {
-    let focused = app.column == Column::Backlog && !app.in_messages;
-    let right = match app.filter_of(Column::Backlog) {
-        Some(filter) => format!("{} / {filter}", plural((0..app.backlog_len()).filter(|index| app.shown(Column::Backlog, *index)).count(), "item")),
-        None => format!("{} items", app.backlog.entries.len() + app.found.len()),
-    };
-    let mut lines = column_title("BACKLOG", right, focused, width);
-    let mut rows = Vec::new();
-    let order = app.backlog_rows();
-    let mut selected_line = 0;
-    if app.ongoing_at == OngoingAt::Top && !app.ongoing.is_empty() {
-        selected_line = ongoing_rows(app, &order, focused, width, &mut lines, &mut rows).unwrap_or(0);
-        lines.push(Line::default());
-    }
-    if !app.found.is_empty() {
-        if let Some(line) = found_rows(app, &order, focused, width, &mut lines, &mut rows) {
-            selected_line = line;
-        }
-        lines.push(Line::default());
-    }
+// The items of the Backlog column in the order given: under one NEEDS YOU header, or under their priority's; the selected one's line when it is among them.
+#[allow(clippy::too_many_arguments)]
+fn entry_rows(app: &App, order: &[BacklogRow], entries: &[usize], needs_you: bool, focused: bool, width: usize, lines: &mut Vec<Line<'static>>, rows: &mut Rows) -> Option<usize> {
+    let mut selected_line = None;
     let mut current: Option<&str> = None;
-    for (entry_index, entry) in app.backlog.entries.iter().enumerate() {
-        let index = row_index(&order, BacklogRow::Entry(entry_index));
-        if !app.shown(Column::Backlog, index) {
-            continue;
+    let shown: Vec<usize> = entries.iter().copied().filter(|entry| app.shown(Column::Backlog, row_index(order, BacklogRow::Entry(*entry)))).collect();
+    for &entry_index in &shown {
+        let entry = &app.backlog.entries[entry_index];
+        let index = row_index(order, BacklogRow::Entry(entry_index));
+        if needs_you && current.is_none() {
+            lines.push(group_line(Group::NeedsYou.title(), shown.len(), group_color(Group::NeedsYou)));
+            current = Some("");
         }
-        if current != Some(entry.priority.as_str()) {
+        if !needs_you && current != Some(entry.priority.as_str()) {
             if current.is_some() {
                 lines.push(Line::default());
             }
-            let count = app.backlog.entries.iter().filter(|other| other.priority == entry.priority).count();
+            let count = entries.iter().filter(|other| app.backlog.entries[**other].priority == entry.priority).count();
             lines.push(group_line(&entry.priority.to_uppercase(), count, priority_color(&entry.priority)));
             current = Some(&entry.priority);
         }
         let selected = index == app.backlog_selected;
         if selected {
-            selected_line = lines.len();
+            selected_line = Some(lines.len());
         }
         let icon = Span::styled(priority_icon(&entry.priority), style(priority_color(&entry.priority)));
         let start = lines.len();
@@ -525,6 +512,42 @@ pub(super) fn backlog_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usi
             }
         }
         rows.push((start, lines.len(), Hit::Entry(index)));
+    }
+    selected_line
+}
+
+pub(super) fn backlog_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usize, Rows) {
+    let focused = app.column == Column::Backlog && !app.in_messages;
+    let right = match app.filter_of(Column::Backlog) {
+        Some(filter) => format!("{} / {filter}", plural((0..app.backlog_len()).filter(|index| app.shown(Column::Backlog, *index)).count(), "item")),
+        None => format!("{} items", app.backlog.entries.len() + app.found.len()),
+    };
+    let mut lines = column_title("BACKLOG", right, focused, width);
+    let mut rows = Vec::new();
+    let order = app.backlog_rows();
+    let mut selected_line = 0;
+    let asks = app.backlog_asks();
+    if let Some(line) = entry_rows(app, &order, &asks, true, focused, width, &mut lines, &mut rows) {
+        selected_line = line;
+    }
+    if asks.iter().any(|ask| app.shown(Column::Backlog, row_index(&order, BacklogRow::Entry(*ask)))) {
+        lines.push(Line::default());
+    }
+    if app.ongoing_at == OngoingAt::Top && !app.ongoing.is_empty() {
+        if let Some(line) = ongoing_rows(app, &order, focused, width, &mut lines, &mut rows) {
+            selected_line = line;
+        }
+        lines.push(Line::default());
+    }
+    if !app.found.is_empty() {
+        if let Some(line) = found_rows(app, &order, focused, width, &mut lines, &mut rows) {
+            selected_line = line;
+        }
+        lines.push(Line::default());
+    }
+    let rest: Vec<usize> = (0..app.backlog.entries.len()).filter(|index| !asks.contains(index)).collect();
+    if let Some(line) = entry_rows(app, &order, &rest, false, focused, width, &mut lines, &mut rows) {
+        selected_line = line;
     }
     if app.backlog.entries.is_empty() {
         let empty = backlog::empty_text(&app.sources);
@@ -751,6 +774,33 @@ mod tests {
         assert!(matches!(app.mode, Mode::Normal) && app.notice.as_ref().is_some_and(|(text, _)| text.contains("has yet to write it out")), "a kept row has nothing to start yet");
         press(&mut app, key(KeyCode::Enter));
         assert!(matches!(app.mode, Mode::Options(_)), "a kept row has no card: ⏎ is its options");
+    }
+
+    fn waiting_item(title: &str, priority: &str, age: &str, waiting: usize) -> crate::backlog::Entry {
+        use crate::backlog_file::{Shape, State};
+        let shape = Shape { state: Some(if waiting > 0 { State::Drafting } else { State::Ready }), waiting, ..Shape::default() };
+        crate::backlog::Entry { source: "vault".to_string(), title: title.to_string(), priority: priority.to_string(), area: "web".to_string(), reference: format!("Projects/{}.md", title.to_lowercase().replace(' ', "-")), age: age.to_string(), shape, ..crate::backlog::Entry::default() }
+    }
+
+    #[test]
+    fn the_backlog_page_heads_with_needs_you_newest_first_and_the_tab_counts_them() {
+        let mut app = test_app(Vec::new());
+        app.backlog.entries = vec![waiting_item("Rounding per invoice", "high", "5 d", 2), waiting_item("Session drops on reload", "low", "9 d", 0), waiting_item("Links show used pages", "medium", "1 d", 1)];
+        app.column = Column::Backlog;
+        app.backlog_selected = 2;
+        let (rows, _) = render(&mut app, 124, 30);
+        let screen = rows.join("\n");
+        let at = |text: &str| find(&rows, text).first().map_or(usize::MAX, |found| found.1);
+        assert!(at("NEEDS YOU  2") < at("Links show used pages") && at("Links show used pages") < at("Rounding per invoice") && at("Rounding per invoice") < at("LOW  1"), "{screen}");
+        assert!(!screen.contains("HIGH") && !screen.contains("MEDIUM"), "an item under Needs you leaves its priority's group: {screen}");
+        assert!(screen.contains("you: answer on its card"), "{screen}");
+        assert!(screen.contains("2 Backlog ?2"), "the tab counts the items waiting on you: {screen}");
+        assert_eq!(app.selected_entry().map(|entry| entry.title), Some("Session drops on reload".to_string()), "the cursor's rows run in the order drawn");
+        app.backlog_selected = 0;
+        assert_eq!(app.selected_entry().map(|entry| entry.title), Some("Links show used pages".to_string()));
+        app.backlog.entries.iter_mut().for_each(|entry| entry.shape.waiting = 0);
+        let screen = render(&mut app, 124, 30).0.join("\n");
+        assert!(!screen.contains("NEEDS YOU") && !screen.contains("?2"), "{screen}");
     }
 
     #[test]

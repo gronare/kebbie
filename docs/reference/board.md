@@ -77,6 +77,8 @@ The backlog has its own [page](#backlog-page).
 
 Press `2` to open it and `1` to go back. It shows the backlog across the whole width, so every title shows whole, with the status line's `backlog:` saying how fresh it is.
 
+NEEDS YOU heads the page with each item whose questions block its start and wait on you, newest first, as on the phone. An item leaves it for its priority's group once you have answered its blocking questions on its card. The tab reads `2 Backlog ?2` while two items wait on you.
+
 FOUND BY TASKS lists what tasks noticed outside their work. A `◆` and `2×` mark one found more than once; the selected item shows whole, with its repo and who found it (`found 2× · by billing, search`). See [`kebbie found`](commands.md#kebbie-found---json).
 
 ONGOING lists vault project notes in progress (status active, or draft without a priority) when the vault is on. It sits above the items, below them or nowhere, by [`board.backlog.ongoing`](configuration.md).

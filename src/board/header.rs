@@ -76,9 +76,11 @@ pub(super) fn header(app: &App, width: u16) -> (Line<'static>, Vec<(u16, u16, Pa
     let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
     let waiting = app.routines.waiting();
     let warning = if waiting > 0 { format!("⚠{waiting} ") } else { String::new() };
+    let asks = app.backlog_asks().len();
+    let asking = if asks > 0 { format!("?{asks} ") } else { String::new() };
     let full = [(" 1 Work ", Page::Work), (" 2 Backlog ", Page::Backlog), (" 3 Areas ", Page::Areas), (" 4 Routines ", Page::Routines), (" , Settings ", Page::Settings)];
     let short = full.map(|(label, page)| if page == shown { (label, page) } else { (&label[..3], page) });
-    let width_of = |tabs: &[(&str, Page)]| tabs.iter().map(|(label, _)| label.chars().count()).sum::<usize>() + warning.chars().count();
+    let width_of = |tabs: &[(&str, Page)]| tabs.iter().map(|(label, _)| label.chars().count()).sum::<usize>() + warning.chars().count() + asking.chars().count();
     let tabs = if used + width_of(&full) <= width as usize { full } else { short };
     if used + width_of(&tabs) > width as usize {
         spans = pills(app, true);
@@ -95,6 +97,10 @@ pub(super) fn header(app: &App, width: u16) -> (Line<'static>, Vec<(u16, u16, Pa
             let lit = shown == page;
             spans.push(Span::styled(label, if lit { bold(MAUVE).bg(SURFACE) } else { style(MUTED) }));
             let mut taken = label.chars().count();
+            if page == Page::Backlog && !asking.is_empty() {
+                spans.push(Span::styled(asking.clone(), style(YELLOW)));
+                taken += asking.chars().count();
+            }
             if page == Page::Routines && !warning.is_empty() {
                 spans.push(Span::styled(warning.clone(), style(PEACH)));
                 taken += warning.chars().count();

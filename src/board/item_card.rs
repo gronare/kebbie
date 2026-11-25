@@ -462,6 +462,7 @@ impl App {
                     return self.show(Err(error));
                 }
                 self.card_read = None;
+                self.answered_on(&card);
                 if let Some(text) = told {
                     let tell = self.lead_teller.clone();
                     self.in_background("Telling the lead your answer".to_string(), move || tell(&text).map(|_| String::new()));
@@ -480,6 +481,22 @@ impl App {
             _ => card.typing = Some(typed),
         }
         self.mode = Mode::ItemCard(card);
+    }
+
+    // An answer leaves the item's questions waiting on the user at once, so it leaves Needs you without waiting for the next read of the backlog; the Backlog page's cursor stays on it.
+    fn answered_on(&mut self, card: &ItemCard) {
+        let answered: Vec<String> = card.answers.iter().map(|answer| answer.question.clone()).collect();
+        let shape = shape_of(card.state(), &card.body, &answered, &card.filed, &card.template);
+        let selected = self.selected_entry().map(|entry| entry.reference);
+        if let Some(shown) = self.backlog.entries.iter_mut().find(|shown| shown.source == card.entry.source && shown.reference == card.entry.reference) {
+            (shown.shape.waiting, shown.shape.with_lead) = (shape.waiting, shape.with_lead);
+        }
+        if let Some(reference) = selected {
+            let rows = self.backlog_rows();
+            if let Some(at) = rows.iter().position(|row| matches!(row, super::BacklogRow::Entry(index) if self.backlog.entries[*index].reference == reference)) {
+                self.backlog_selected = at;
+            }
+        }
     }
 
     // Write it out, in the item's options: the lead hears it, and the row shows writing… from now, without waiting for the next read of the backlog.
@@ -653,6 +670,25 @@ mod tests {
         settle_jobs(&mut app);
         assert!(told.lock().unwrap()[0].contains("Answer: \"Only the e2e job.\""), "{:?}", told.lock().unwrap());
         assert!(matches!(app.mode, Mode::Normal) && app.toast.is_none(), "a told answer says nothing more");
+    }
+
+    #[test]
+    fn an_answer_on_the_card_takes_its_question_off_the_items_count_at_once() {
+        let mut app = test_app(Vec::new());
+        app.lead_teller = std::sync::Arc::new(|_| Ok(()));
+        app.backlog.entries = vec![entry("Projects/answer-count.md", drafting(2))];
+        assert_eq!(app.backlog_asks(), [0]);
+        let mut shown = card("Projects/answer-count.md");
+        shown.typing = Some("Only the e2e job.".to_string());
+        app.mode = Mode::ItemCard(Box::new(shown));
+        press(&mut app, key(KeyCode::Enter));
+        assert_eq!((app.backlog.entries[0].shape.waiting, app.backlog.entries[0].shape.with_lead), (1, 1), "one question still waits, the other is with the lead");
+        let Mode::ItemCard(mut open) = std::mem::replace(&mut app.mode, Mode::Normal) else { panic!("the card stays open") };
+        open.typing = Some("Yes, muted.".to_string());
+        app.mode = Mode::ItemCard(open);
+        press(&mut app, key(KeyCode::Enter));
+        assert!(app.backlog_asks().is_empty(), "the item leaves Needs you once no question waits");
+        settle_jobs(&mut app);
     }
 
     #[test]
