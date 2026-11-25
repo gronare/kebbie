@@ -290,7 +290,7 @@ pub(super) fn draw_device(frame: &mut Frame, request: Option<&Request>, now: u64
 
 impl App {
     pub(super) fn next(&self) -> Next {
-        next::of(&self.tasks).with_devices(&self.devices, crate::messages::now())
+        next::of(&self.tasks).with_asks(self.backlog_asks().into_iter().map(|index| &self.backlog.entries[index])).with_devices(&self.devices, crate::messages::now())
     }
 
     pub(super) fn handle_device(&mut self, id: String, back: Window, key: KeyEvent, act: Option<Act>) {
@@ -350,6 +350,12 @@ impl App {
     fn open_row(&mut self, row: Option<&Row>) {
         self.mode = Mode::Normal;
         let Some(row) = row else { return };
+        if row.part == Part::Ask {
+            if let Some(index) = self.backlog.entries.iter().position(|entry| entry.reference == row.address) {
+                self.open_entry_card(index);
+            }
+            return;
+        }
         let Some(index) = self.tasks.iter().position(|item| peers::address(&item.name, &item.place) == row.address) else { return };
         (self.page, self.column, self.work_selected, self.filter, self.in_messages, self.offer_panel.focused, self.comment_panel.focused, self.ask_focus) = (Page::Work, Column::Work, index, None, false, false, false, None);
         let item = self.tasks[index].clone();
@@ -363,7 +369,7 @@ impl App {
             },
             Part::Push => self.act(Act::Push),
             Part::Read if self.card_of(&item).is_some() => self.act(Act::Card),
-            Part::Read | Part::Device => self.mode = Mode::Options(0),
+            Part::Read | Part::Device | Part::Ask => self.mode = Mode::Options(0),
         }
     }
 
@@ -494,6 +500,29 @@ mod tests {
         assert!(screen.contains("30  ↑ task-29") && !screen.contains("task-00") && !screen.contains("↓ more"), "{screen}");
         let numbers: Vec<usize> = rows.iter().filter_map(|row| row.split("↑ task-").nth(1)).map(|rest| rest[..2].parse().unwrap()).collect();
         assert!(numbers.windows(2).all(|pair| pair[1] == pair[0] + 1), "{numbers:?}");
+    }
+
+    #[test]
+    fn backlog_items_whose_questions_wait_follow_the_tasks_stopped_on_you_and_enter_opens_their_card() {
+        let asked = |title: &str, age: &str, waiting: usize| {
+            let shape = crate::backlog_file::Shape { state: Some(crate::backlog_file::State::Drafting), waiting, ..Default::default() };
+            crate::backlog::Entry { source: "vault".to_string(), title: title.to_string(), priority: "low".to_string(), area: "web".to_string(), reference: format!("Projects/{}.md", title.to_lowercase().replace(' ', "-")), age: age.to_string(), shape, ..Default::default() }
+        };
+        let mut app = app_with(vec![asking("billing", "web", 600), ready("card-component", "web", 300)]);
+        app.backlog.entries = vec![asked("Rounding", "5 d", 2), asked("Links used", "1 d", 1)];
+        app.card_reader = true;
+        let rows = window(&mut app, 100, 30);
+        let screen = rows.join("\n");
+        println!("{screen}");
+        assert!(screen.contains("Next · 4 need you"), "the title counts the items with the tasks: {screen}");
+        let at = |text: &str| find(&rows, text).first().map_or(usize::MAX, |found| found.1);
+        assert!(at("STOPPED ON YOU") < at("QUESTIONS ON BACKLOG ITEMS") && at("QUESTIONS ON BACKLOG ITEMS") < at("Links used") && at("Links used") < at("Rounding") && at("Rounding") < at("PUSH, IN THIS ORDER"), "{screen}");
+        assert!(screen.contains("2 questions · answer on its card") && screen.contains("1 question · answer on its card"), "{screen}");
+        app.handle_key(key(KeyCode::Down), None);
+        app.handle_key(key(KeyCode::Down), None);
+        app.handle_key(key(KeyCode::Enter), None);
+        let Mode::ItemCard(card) = &app.mode else { panic!("⏎ on an item's row opens its card") };
+        assert_eq!(card.entry.reference, "Projects/rounding.md");
     }
 
     #[test]

@@ -238,7 +238,7 @@ kebbie keeps one phase per task, and only what changes it writes it: its start, 
 
 After the tasks under Needs you, one row per backlog item whose questions block its start and wait on you, newest first, such as `? Links show used pages   1 question · answer on its card`. NEEDS YOU shows for them even when no task is there, and its count and the status line's `need you` count them. `↑` `↓` step onto them from the tasks, `⏎` opens the item's card, where you answer its questions, and `g` starts the item as on the Backlog page. A row leaves once its blocking questions are answered. A filter keeps the rows whose title or repo it matches.
 
-`N` puts what needs you in one numbered list, in the order to do it. See [The Next window](#the-next-window).
+`N` puts what needs you in one numbered list, in the order to do it, these backlog items among them. See [The Next window](#the-next-window).
 
 ### Working
 
@@ -526,6 +526,7 @@ The item's card shows its title, priority, repo, state, the day it was filed and
 | --- | --- | --- |
 | Approve or deny | A device on your account that sent this machine a command under [`hub.trust = "device"`](configuration.md#machine), waiting for you to let it make changes here. Its row says when `hub.auto_approve` lets it in. | The one that has waited longest first. |
 | Stopped on you | A task that stands still until you act: a question or a plan to approve, Claude's own prompt, a report that asks you something, a crash, a red CI only you can settle, a subtask to accept with `task.require_accept` on. | The one most tasks wait behind first, then the one that has waited longest. |
+| Questions on backlog items | A backlog item whose questions block its start and wait on you, `N questions · answer on its card`, the same items as the rows under Needs you. | The newest first. |
 | Push, in this order | What is ready to push and not in the push line yet. A task whose ready report names another to push first (`kebbie report --after`) says `after <task>` while that task is open. | What other tasks wait on first, in any repo, queued or ready to push after it, then two tasks that change the same files in the order they were built, then the one that was ready first. |
 | To read | A task that reported ready with nothing to push, such as a research result. | The one a decision waits on first, then the oldest. |
 
@@ -534,11 +535,12 @@ The item's card shows its title, priority, repo, state, the day it was filed and
 - When nothing needs you, it says `✓ Nothing needs you.` and what is on its way in: how many are working and which is next to come, what is queued and when a parked task comes back.
 - A list taller than the window scrolls with the selection, and `↓ more` on the keys line says there is more.
 - Next shows the same tasks as Needs you and Ready to push, in the same words; the board keeps those groups.
+- The backlog items show in the board's Next window only; `kebbie next` and the phone list the tasks.
 
 | Key | Action |
 | --- | --- |
 | `↑` `↓`, `j` `k` | Move. `PgUp` `PgDn`, `Home` `End` move further. |
-| `⏎` | Open or do it: a report that sends you to the task's vault note opens the note, a question opens in the inbox, a push opens its push window, a result opens its card, anything else opens the task's options. Its row is selected on the board. |
+| `⏎` | Open or do it: a report that sends you to the task's vault note opens the note, a question opens in the inbox, a push opens its push window, a result opens its card, a backlog item opens its card, where you answer its questions, anything else opens the task's options. Its row is selected on the board. |
 | `P` | Push the push group in its order, after a window that shows the order. |
 | `a`, `x` | On a device's row: approve it, so what it sent goes in now, or deny it, so it stays view only here. `⏎` opens a window with what it sent, its key and when it is let in by itself, with the same keys and `esc` to leave it waiting. |
 | `esc`, `q`, `N` | Back to the board. |

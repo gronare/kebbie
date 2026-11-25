@@ -426,7 +426,7 @@ fn line(row: &next::Row) -> String {
     let said = match row.part {
         Part::Push => return row.what.clone(),
         Part::Stopped => row.short.clone(),
-        Part::Read | Part::Device => row.what.clone(),
+        Part::Read | Part::Device | Part::Ask => row.what.clone(),
     };
     [Some(said), next::waits_wide(&row.waits)].into_iter().flatten().collect::<Vec<_>>().join(" · ")
 }
@@ -434,7 +434,7 @@ fn line(row: &next::Row) -> String {
 // The rows N and kebbie next show, in their order, worked out by the same function.
 pub fn next_rows(items: &[status::Item]) -> (Vec<NextRow>, Counts) {
     let next = next::of(items);
-    let rows = next.rows.iter().filter_map(|row| Some((row, match row.part { Part::Stopped => NextPart::Stopped, Part::Push => NextPart::Push, Part::Read => NextPart::Read, Part::Device => return None }))).enumerate().map(|(at, (row, part))| NextRow {
+    let rows = next.rows.iter().filter_map(|row| Some((row, match row.part { Part::Stopped => NextPart::Stopped, Part::Push => NextPart::Push, Part::Read => NextPart::Read, Part::Device | Part::Ask => return None }))).enumerate().map(|(at, (row, part))| NextRow {
         part,
         address: row.address.clone(),
         rank: count(at + 1),

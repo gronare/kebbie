@@ -12,17 +12,19 @@ use crate::status::{Group, Item};
 pub enum Part {
     Device,
     Stopped,
+    Ask,
     Push,
     Read,
 }
 
 impl Part {
-    pub const ALL: [Part; 4] = [Part::Device, Part::Stopped, Part::Push, Part::Read];
+    pub const ALL: [Part; 5] = [Part::Device, Part::Stopped, Part::Ask, Part::Push, Part::Read];
 
     pub fn title(self) -> &'static str {
         match self {
             Part::Device => "APPROVE OR DENY",
             Part::Stopped => "STOPPED ON YOU",
+            Part::Ask => "QUESTIONS ON BACKLOG ITEMS",
             Part::Push => "PUSH, IN THIS ORDER",
             Part::Read => "TO READ",
         }
@@ -32,7 +34,7 @@ impl Part {
     pub fn board_group(self) -> Group {
         match self {
             Part::Push => Group::ReadyToPush,
-            Part::Device | Part::Stopped | Part::Read => Group::NeedsYou,
+            Part::Device | Part::Stopped | Part::Ask | Part::Read => Group::NeedsYou,
         }
     }
 }
@@ -63,7 +65,7 @@ impl Row {
             _ if age.is_empty() => age,
             Part::Device | Part::Stopped => format!("waiting {age}"),
             Part::Push => format!("ready {age}"),
-            Part::Read => age,
+            Part::Ask | Part::Read => age,
         }
     }
 }
@@ -203,7 +205,7 @@ fn row(items: &[Item], item: &Item, part: Part) -> Row {
     let after = open_before(items, item);
     let since = item.phase.as_ref().map(|record| record.since);
     let (icon, what, short, said, since) = match part {
-        Part::Stopped | Part::Device => {
+        Part::Stopped | Part::Device | Part::Ask => {
             let (icon, what, short, since) = stopped(item);
             (icon, what, short.clone(), short, since)
         }
@@ -315,7 +317,31 @@ fn device_row(request: &crate::hub::devices::Request, now: u64) -> Row {
     }
 }
 
+fn ask_row(entry: &crate::backlog::Entry) -> Row {
+    let questions = plural(entry.shape.waiting, "question");
+    Row {
+        part: Part::Ask,
+        address: entry.reference.clone(),
+        name: entry.title.clone(),
+        icon: '?',
+        what: format!("{questions} · answer on its card"),
+        short: questions,
+        said: "answer on its card".to_string(),
+        since: None,
+        waits: Vec::new(),
+        after: Vec::new(),
+        path: None,
+    }
+}
+
 impl Next {
+    // The backlog items whose questions wait on the user, in the order given, after the tasks stopped on them.
+    pub fn with_asks<'a>(mut self, entries: impl IntoIterator<Item = &'a crate::backlog::Entry>) -> Next {
+        let at = self.rows.iter().position(|row| !matches!(row.part, Part::Device | Part::Stopped)).unwrap_or(self.rows.len());
+        self.rows.splice(at..at, entries.into_iter().map(ask_row));
+        self
+    }
+
     pub fn with_devices(mut self, requests: &[crate::hub::devices::Request], now: u64) -> Next {
         let mut rows: Vec<Row> = requests.iter().map(|request| device_row(request, now)).collect();
         rows.sort_by_key(|row| row.since);

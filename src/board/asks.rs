@@ -160,6 +160,11 @@ impl App {
     pub(super) fn open_ask(&mut self) {
         let Some(at) = self.asks_focused() else { return };
         let Some(index) = self.asks_shown().get(at).copied() else { return };
+        self.open_entry_card(index);
+    }
+
+    // The item's card, or the item selected on the Backlog page when it has none.
+    pub(super) fn open_entry_card(&mut self, index: usize) {
         let Some(entry) = self.backlog.entries.get(index).cloned() else { return };
         if !self.open_item_card(entry) {
             self.ask_focus = None;
