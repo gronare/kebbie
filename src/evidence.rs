@@ -667,9 +667,10 @@ pub fn lint_runs_in(state: &Path, address: &str) -> Vec<Run> {
     all_runs_in(state, address).into_iter().filter(|run| run.lint).collect()
 }
 
+// A run that waited for a build slot never ran, so it is no run, whatever an older kebbie saved of it.
 fn all_runs_in(state: &Path, address: &str) -> Vec<Run> {
     fs::read_to_string(file(state, address)).unwrap_or_default().lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok()).filter_map(|value| Run::from_json(&value)).collect()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok()).filter_map(|value| Run::from_json(&value)).filter(|run| run.why != QUEUED).collect()
 }
 
 fn lock_file(state: &Path, address: &str) -> PathBuf {
@@ -773,7 +774,7 @@ pub fn outcome(input: &Value, listed: &[String]) -> Vec<Ended> {
     found.iter().enumerate().map(|(at, one)| {
         let part = parts.as_ref().map(|parts| parts[at].clone()).unwrap_or_default();
         let own = own_exit(&found, at, &output);
-        let queued = own.map_or_else(|| crate::builds::queued_in(&part), |(code, _)| code == i64::from(crate::builds::QUEUED_EXIT));
+        let queued = own.map_or_else(|| crate::builds::queued_in(&part) || (exit == Some(i64::from(crate::builds::QUEUED_EXIT)) && one.exit == Exit::Speaks), |(code, _)| code == i64::from(crate::builds::QUEUED_EXIT));
         let (exit, finished, says) = match own {
             Some((code, says)) => (Some(code), code == 0, says),
             None => (exit, finished, one.exit),
@@ -957,7 +958,9 @@ fn record_one(state: &Path, address: &str, worktree: &Path, input: &Value, ended
     let command = if command.chars().count() > COMMAND_LIMIT { format!("{}…", command.chars().take(COMMAND_LIMIT).collect::<String>()) } else { command };
     let transcript = if background.as_deref().is_some_and(|id| !id.is_empty()) { input["transcript_path"].as_str().unwrap_or_default().to_string() } else { String::new() };
     let run = Run { command, runner, result, why: why.to_string(), exit, duration_ms: input["duration_ms"].as_u64(), summary: summary.map(|summary| summary.text).unwrap_or_default(), sha, dirty, code, at, background: background.unwrap_or_default(), transcript, says: Some(says), worktree: worktree.to_string_lossy().into_owned(), read_to: 0, sandboxed: crate::sandbox::marked(state, worktree), in_line, lint };
-    save(state, address, &run).ok()?;
+    if run.why != QUEUED {
+        save(state, address, &run).ok()?;
+    }
     Some(run)
 }
 
@@ -1659,6 +1662,22 @@ mod tests {
         let run = record_in(&state, "billing@app", &dir, &list, &queued, 1).remove(0);
         assert_eq!((run.result, run.why.as_str(), run.exit), (Outcome::Unknown, QUEUED, Some(75)), "exit 75 from the queue is no red test");
         assert!(unknown_context(&run).ends_with("Run it again once kebbie tells you a build slot is free."), "the task is told to wait for its turn, not to drop a pipe");
+        assert!(runs_in(&state, "billing@app").is_empty(), "a run the queue held back is never recorded as a run");
+        let mut to_a_file = failed("cargo test --locked > $TMPDIR/t.log 2>&1");
+        to_a_file["error"] = json!("Exit code 75");
+        let run = record_in(&state, "billing@app", &dir, &list, &to_a_file, 1).remove(0);
+        assert_eq!((run.result, run.why.as_str()), (Outcome::Unknown, QUEUED), "the queue's exit with its line in a log kebbie cannot read is still no red test");
+        assert!(runs_in(&state, "billing@app").is_empty());
+        save(&state, "billing@app", &Run { why: QUEUED.to_string(), ..run.clone() }).unwrap();
+        assert!(runs_in(&state, "billing@app").is_empty(), "a queued run an older kebbie saved reads as none");
+        let full = crate::builds::disk_refusal(Some(crate::disk::Space { free: 1, total: 100 }), Some(crate::disk::Limit::Percent(5))).unwrap();
+        let mut no_room = failed("cargo test --locked");
+        no_room["error"] = json!(format!("Exit code 75\n{full}"));
+        assert_eq!(record_in(&state, "billing@app", &dir, &list, &no_room, 1).remove(0).why, QUEUED, "a build the disk refused never ran either");
+        let mut piped = passed("cargo test 2>&1 | tail -3");
+        piped["tool_response"]["stdout"] = json!(full);
+        assert_eq!(record_in(&state, "billing@app", &dir, &list, &piped, 1).remove(0).why, QUEUED, "its line says so behind a pipe too");
+        assert!(runs_in(&state, "billing@app").is_empty());
         let mut grepped = passed("cargo test 2>&1 | grep -E 'test result|no build slot'");
         grepped["tool_response"]["stdout"] = json!(line);
         assert_eq!(record_in(&state, "billing@app", &dir, &list, &grepped, 2).remove(0).why, QUEUED);

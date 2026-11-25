@@ -41,7 +41,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The lead never compacts its conversation, so it keeps its rules: near restart.lead_context it writes a handover and starts fresh on it.
 - kebbie setup run outside herdr ends with how to start herdr instead of opening the board on its error page.
 - A test run followed by echo exit $? is passed or failed by the exit it prints.
-- A test run that waited for a build slot counts as not run instead of failed.
+- A test run that waited for a build slot counts as not run instead of failed, and is no longer recorded at all, also when its output went to a file.
 - An Also noticed line that says nothing, such as nothing or none, files no found item.
 - The investigator's task decision points at a task already queued under that name instead of queueing it again.
 - A test run with flag values, such as xcodebuild test -project App -scheme App, counts as the whole suite.

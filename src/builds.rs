@@ -233,14 +233,16 @@ pub fn holding(holders: &[Holder], turns: &[Turn]) -> String {
 // The keeper publishes the limit in the queue, as a sandboxed task reads no config, and the guard measures the disk under the build itself.
 pub fn disk_refusal(space: Option<crate::disk::Space>, limit: Option<crate::disk::Limit>) -> Option<String> {
     let (space, limit) = (space?, limit?);
-    space.below(limit).then(|| format!("{REFUSED}the disk under this worktree has {} free, below the {} a build needs (disk.builds_below), so this build takes no build slot and does not run. The keeper trims build output from worktrees nobody uses when the disk runs low; free space and build again.", crate::disk::gb(space.free), limit.shown()))
+    space.below(limit).then(|| format!("{REFUSED}the disk under this worktree has {} free, below the {} a build needs (disk.builds_below), {NO_DISK} The keeper trims build output from worktrees nobody uses when the disk runs low; free space and build again.", crate::disk::gb(space.free), limit.shown()))
 }
 
-// Whether a command's output holds a line a build queued for a slot prints before it exits without building, whatever held it back; a run recorded before the error prefix has it bare.
+const NO_DISK: &str = "so this build takes no build slot and does not run.";
+
+// Whether a command's output holds a line a build held back prints before it exits without building, whatever held it back: its place in line or a disk too full; a run recorded before the error prefix has it bare.
 pub fn queued_in(output: &str) -> bool {
     output.lines().any(|line| {
-        let line = line.trim_start();
-        line.strip_prefix("error: ").unwrap_or(line).starts_with("kebbie: ") && line.trim_end().ends_with(" in line, and kebbie tells it when its turn comes.")
+        let line = line.trim();
+        line.strip_prefix("error: ").unwrap_or(line).starts_with("kebbie: ") && (line.ends_with(" in line, and kebbie tells it when its turn comes.") || line.contains(NO_DISK))
     })
 }
 
