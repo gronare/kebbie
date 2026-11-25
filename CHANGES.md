@@ -8,7 +8,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Tasks build and test in sweeps: one run lists every error, all get fixed, one run verifies.
 - Tasks and the lead consult an advisor, the best one your account can use, or the profile's advisor.
 - n asks only what you want done: Claude picks the repo, writes the card and asks its questions, then starts it or files it.
-- The keeper trims build output from idle worktrees when the disk runs low.
+- The keeper trims build output from idle worktrees when the disk runs low, and says so under Needs you when that is not enough.
 - A task's build refuses to start when the disk is nearly full, and says how much is free.
 
 ### Fixed

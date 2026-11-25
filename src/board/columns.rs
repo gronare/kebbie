@@ -270,7 +270,29 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
     let tasks = app.tasks.clone();
     let mut rows = Vec::new();
     let mut spacers = Vec::new();
+    let groups = app.groups.clone();
+    let rank = |group: Group| groups.iter().position(|shown| *shown == group).unwrap_or(usize::MAX);
+    let mut disk = app.disk_line.clone();
+    let needs_count = tasks.iter().enumerate().filter(|(index, other)| other.parked.is_none() && other.group() == Group::NeedsYou && app.shown(Column::Work, *index)).count();
+    let put_disk = |lines: &mut Vec<Line<'static>>, disk: &mut Option<String>, header: bool| {
+        let Some(text) = disk.take() else { return };
+        if header {
+            if !lines.is_empty() && lines.last() != Some(&Line::default()) {
+                lines.push(Line::default());
+            }
+            lines.push(group_line(Group::NeedsYou.title(), 1, group_color(Group::NeedsYou)));
+        }
+        lines.push(Line::default());
+        lines.extend(wrap(&format!("! {text}"), width.saturating_sub(4), 8).into_iter().map(|text| Line::from(vec![Span::raw("   "), Span::styled(text, style(PEACH))])));
+    };
     for (index, item) in tasks.iter().enumerate() {
+        if disk.is_some() && needs_count == 0 && (item.parked.is_some() || rank(item.group()) > rank(Group::NeedsYou)) && app.shown(Column::Work, index) {
+            put_disk(&mut lines, &mut disk, true);
+            current = Some(Group::NeedsYou);
+        }
+        if current == Some(Group::NeedsYou) && (item.parked.is_some() || item.group() != Group::NeedsYou) && app.shown(Column::Work, index) {
+            put_disk(&mut lines, &mut disk, false);
+        }
         if index == boundary {
             put_comments(app, &mut lines, &mut rows, &mut selected_line, current.is_some());
             if app.comments_shown() && current.is_none() {
@@ -301,7 +323,7 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
             if current.is_some() {
                 lines.push(Line::default());
             }
-            let count = tasks.iter().enumerate().filter(|(other_index, other)| other.group() == item.group() && app.shown(Column::Work, *other_index)).count();
+            let count = tasks.iter().enumerate().filter(|(other_index, other)| other.group() == item.group() && app.shown(Column::Work, *other_index)).count() + usize::from(item.group() == Group::NeedsYou && disk.is_some());
             lines.push(group_line(item.group().title(), count, group_color(item.group())));
             current = Some(item.group());
         }
@@ -372,6 +394,7 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
         hang(&mut lines[start + 1..], bar, selected && focused);
         rows.push((start, lines.len(), Hit::Task(index)));
     }
+    put_disk(&mut lines, &mut disk, current != Some(Group::NeedsYou));
     if tasks.is_empty() {
         lines.push(Line::from(Span::styled(format!("No tasks. {} starts one, or pick one from the backlog.", keys::key(Act::New)), style(MUTED))));
     }
@@ -566,6 +589,32 @@ mod tests {
     use crate::board::input::Purpose;
     use crate::board::{Column, Mode, Ongoing};
     use ratatui::crossterm::event::KeyCode;
+
+    #[test]
+    fn the_disk_line_closes_needs_you_and_stands_as_its_own_group_when_no_task_needs_you() {
+        let line = "Disk: 12.3 GB free of 242.0 GB, below 30 GB (disk.trim_below)";
+        let mut asking = crate::status::tests::task(Some("blocked"), None, 0);
+        asking.name = "asking".to_string();
+        let mut working = crate::status::tests::task(Some("working"), None, 0);
+        working.name = "working".to_string();
+        let mut app = test_app(vec![asking.clone(), working.clone()]);
+        app.disk_line = Some(line.to_string());
+        let (rows, _) = render(&mut app, 140, 30);
+        let screen = rows.join("\n");
+        let at = |text: &str| find(&rows, text).first().map(|found| found.1).unwrap_or_else(|| panic!("no {text}: {screen}"));
+        assert!(at("asking") < at("! Disk: 12.3 GB free") && at("! Disk: 12.3 GB free") < at("WORKING"), "the line ends Needs you: {screen}");
+        assert!(screen.contains("NEEDS YOU") && screen.contains("2"), "{screen}");
+        let mut quiet = test_app(vec![working]);
+        quiet.disk_line = Some(line.to_string());
+        let (rows, _) = render(&mut quiet, 140, 30);
+        let screen = rows.join("\n");
+        let at = |text: &str| find(&rows, text).first().map(|found| found.1).unwrap_or_else(|| panic!("no {text}: {screen}"));
+        assert!(at("NEEDS YOU") < at("! Disk: 12.3 GB free") && at("! Disk: 12.3 GB free") < at("WORKING"), "Needs you holds the line alone: {screen}");
+        let mut none = test_app(vec![asking]);
+        none.disk_line = None;
+        let (rows, _) = render(&mut none, 140, 30);
+        assert!(!rows.join("\n").contains("Disk:"));
+    }
 
     #[test]
     fn a_suggested_name_keeps_letters_with_diacritics() {

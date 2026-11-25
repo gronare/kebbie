@@ -383,7 +383,7 @@ It skips a worktree when any of these holds:
 - a process works inside it other than its Claude or Codex, their shells, kebbie, and the tools the agent starts itself such as its MCP servers, so a build or a dev server started through a shell or in the task's pane keeps it; or a program built in it runs;
 - for a free worktree, any process works inside it.
 
-It checks each worktree again just before it trims it, and stops once the disk is above the limit. A task whose output was trimmed builds it again the next time it builds. With the keeper off, an open board runs the same round every minute. On macOS kebbie cannot see which processes use a worktree, so it trims nothing there: the line under Needs you shows the free space and says to free it by hand.
+It checks each worktree again just before it trims it, and stops once the disk is above the limit. A task whose output was trimmed builds it again the next time it builds. When the free space is still below the limit after a round, the board shows a line under Needs you with the free space. The line goes after the next round that finds enough room, or 10 minutes after the keeper stops. With the keeper off, an open board runs the same round every minute. On macOS kebbie cannot see which processes use a worktree, so it trims nothing there: the line under Needs you shows the free space and says to free it by hand.
 
 When the free space under a worktree is below `disk.builds_below`, a task's build there takes no build slot and does not run. The guard says how much is free and exits with status 75, and a task in line whose own worktree is on such a disk gets no build turn: it keeps its place while the turn goes to the next task whose disk has room.
 

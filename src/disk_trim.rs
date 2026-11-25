@@ -7,6 +7,7 @@ use crate::phase::Phase;
 
 pub const EVERY: u64 = 120;
 const RECORD: &str = "disk.json";
+const SHOWN_FOR: u64 = 10 * 60;
 const AGENTS: [&str; 2] = ["claude", "codex"];
 const SHELLS: [&str; 5] = ["bash", "zsh", "sh", "fish", "dash"];
 const SANDBOXES: [&str; 2] = ["bwrap", "sandbox-exec"];
@@ -106,6 +107,16 @@ pub struct Record {
 pub fn short_line(space: Space, limit: Limit, trims: bool) -> String {
     let done = if trims { "after trimming the build output of every worktree nobody uses" } else { "and kebbie trims build output only on Linux" };
     format!("Disk: {} free of {}, below {} (disk.trim_below), {done}; free space by hand", crate::disk::gb(space.free), crate::disk::gb(space.total), limit.shown())
+}
+
+// The line the board shows under Needs you, while a recent round left the disk short; an old record is a keeper that stopped, so it says nothing.
+pub fn board_line_in(state: &Path, now: u64) -> Option<String> {
+    let record: Record = serde_json::from_str(&std::fs::read_to_string(state.join(RECORD)).ok()?).ok()?;
+    (now.saturating_sub(record.at) <= SHOWN_FOR).then_some(record.line).flatten()
+}
+
+pub fn board_line() -> Option<String> {
+    board_line_in(&crate::lead::state_dir().ok()?, crate::messages::now())
 }
 
 fn seen_now(repos: &[PathBuf]) -> Vec<Seen> {
@@ -291,6 +302,18 @@ mod tests {
     fn the_line_names_the_free_space_the_disk_and_the_limit() {
         let line = short_line(Space { free: 12_300_000_000, total: 242_000_000_000 }, Limit::Gb(30), true);
         assert_eq!(line, "Disk: 12.3 GB free of 242.0 GB, below 30 GB (disk.trim_below), after trimming the build output of every worktree nobody uses; free space by hand");
+    }
+
+    #[test]
+    fn the_board_shows_the_line_only_while_the_round_that_wrote_it_is_recent() {
+        let state = crate::sh::test_dir("disk-trim-record");
+        let line = short_line(Space { free: 12_300_000_000, total: 242_000_000_000 }, Limit::Gb(30), true);
+        record_in(&state, Some(line.clone()), 1000);
+        assert_eq!(board_line_in(&state, 1000 + SHOWN_FOR), Some(line));
+        assert_eq!(board_line_in(&state, 1001 + SHOWN_FOR), None, "a stopped keeper's warning goes");
+        record_in(&state, None, 1000);
+        assert_eq!(board_line_in(&state, 1000), None, "a round that freed enough clears the line");
+        let _ = std::fs::remove_dir_all(state);
     }
 
     const GB: u64 = 1_000_000_000;
