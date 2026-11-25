@@ -1,6 +1,6 @@
 # See your board on your phone
 
-Follow your tasks from your phone through a [kebbie hub](https://github.com/gronare/kebbie-hub): every task grouped as on the board, a task's steps under its row, and the questions waiting for you with their options.
+Follow your tasks from your phone through a [kebbie hub](https://github.com/gronare/kebbie-hub): every task grouped as on the board (what the board shows under Going out stands under Working, with its place in the push line), a task's steps under its row, and the questions waiting for you with their options.
 
 It works on any phone or browser you sign in on with your passkey. Every device reads, the backlog included; one where you allow changes also answers questions, chooses on an agent's prompt, pushes, adds ideas and starts backlog items.
 
@@ -78,11 +78,11 @@ Change `[machine] name`, or press `n` in the board's `H` window. The keeper rena
 
 The phone shows the board of every machine your account connected. Nothing is added on the machine: any phone or browser you sign in on reads the boards.
 
-Above the groups, Next lists what needs you in the order `N` on the board and `kebbie next` give it, one list per machine, with how long each has waited and a line counting what is working, queued and parked; with nothing waiting it says Nothing needs you. Each task shows its title, its agent with the model its profile names, its recipe and the review assessment, and a line says when a machine is in away mode. Below the groups, Queued and Parked list the tasks set aside, a parked one with whether a question waits on it, and Routines list each routine's next run and last outcome.
+Above the groups, Next lists what needs you in the order `N` on the board and `kebbie next` give it, one list per machine, with how long each has waited and a line counting what is working, queued and parked; with nothing waiting it says Nothing needs you. Each task shows its title, a dim line with its repo, agent and where it stands, and how far its subtasks got; only what you do next stands out, and a task the lead pushes asks nothing of you unless `task.require_accept` leaves accepting to you. A line says when a machine is in away mode. Below the groups, Queued and Parked list the tasks set aside, a parked one with whether a question waits on it, and Routines list each routine's next run and last outcome.
 
 A prompt on a task's agent's screen, such as Codex asking to run a command, shows under Questions and counts in its badge: the question, the command apart from it, and each option with the key it takes. With changes allowed on the device, you choose a plain option there; an option that takes your own words is answered at the machine.
 
-The open task shows its agent, profile and recipe, its subtasks, its latest obstacle with the decision on it, its rules check as on the board, and a review section: the assessment, the reviewer's verdict, whether the push waits for it, and a second opinion's points, which never hold the push.
+The open task shows its agent with the model its profile names, its recipe and the review assessment, its subtasks, its latest obstacle with the decision on it, its rules check as on the board, and a review section: the assessment, the reviewer's verdict, whether the push waits for it, and a second opinion's points, which never hold the push.
 
 A task that works in [subtasks](work-in-steps.md) lists them under its row as on the board: the pushed ones as a count, then each subtask with its number, title, state (planned, in progress, ready, accepted or pushed), the reason one was added and its commits. The task also shows its push order and how far the pushable run reaches. With [`task.require_accept`](work-in-steps.md#require-every-subtask-accepted) on, the row says how many subtasks wait for your accept and which one is next, and the top of the board counts them across tasks as `◆ N to accept`; without it, the phone says accepting each subtask is optional and push takes what is committed. You accept a subtask on the machine, with `kebbie accept` or in the review split, or in its review on the phone.
 

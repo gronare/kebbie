@@ -26,7 +26,7 @@ The lead may now push any task in that repo once its reviewer has passed its cur
 ## What still holds
 
 - The reviewer's passed rules check, or the lead's `kebbie approve`, must match the commits it pushes, and the lead reads the diff itself before its push.
-- A ready task without a permission waits for you under Ready to push.
+- A ready task without a permission waits for you under Ready to push. One the lead may push stands under Going out, marked `the lead pushes it`, with no read count, subtask to accept or yellow under its row: accepting and pushing are the lead's there, unless [`task.require_accept`](../reference/configuration.md) is on, which leaves accepting to you.
 - After every push the lead is told which commits landed.
 - The same permission lets the lead [stage](try-a-task-before-pushing.md) a task on local main in a repo that turns on `worktree.stage_on_main`.
 - Tasks never push, whatever the permission.

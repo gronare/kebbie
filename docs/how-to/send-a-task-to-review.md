@@ -75,7 +75,7 @@ A second opinion is another review profile reading the same commits, for example
 
    Or run `kebbie review --second billing`, or `kebbie review --second-only billing`.
 
-3. Read the points. The row shows `second opinion: codex-review reading…` while it reads; the points then go to the lead, which passes the ones that matter to the task. Press `v`, then `i`, to page through them yourself.
+3. Read the points. The task's panel shows `second opinion: codex-review reading…` while it reads; the points then go to the lead, which passes the ones that matter to the task. Press `v`, then `i`, to page through them yourself.
 
 The points are `second-opinions/<task>@<repo>.md` in the state directory, in the same shape as a verdict.
 

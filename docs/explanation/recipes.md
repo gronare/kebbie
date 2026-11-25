@@ -28,7 +28,7 @@ You start a task by hand without one, and it shows no recipe.
 
 ## The board shows the shape, the note keeps the why
 
-The board shows `recipe: small fix` under the task's row, beside the [assessor's](review-gate.md#an-assessor-judges-whether-the-work-needs-a-review) word on its review, and the open task adds the lead's why. The board shows only how things stand now.
+The recipe is the lead's, so the line under the task's row leaves it out: the task's panel shows `small fix` with the lead's why, and `kebbie status` names it for the lead. The board shows only how things stand now.
 
 The why is history, and history lives once, in the task's note: the vault note when the task has one, else kebbie's own `notes/<task>@<repo>.md` in its state. kebbie writes the recipe and the assessor's word in its own note; a task with a vault note is told to write them there, and writes its own decisions beside them as it goes: the mockup you approved, its plan's subtasks and why they changed. A Codex session has no vault tools, so for a Codex task the lead writes them.
 

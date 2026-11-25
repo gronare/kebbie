@@ -5,6 +5,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- The board's Going out group holds what is in the push line or the lead pushes, with its place in line.
 - Tasks build and test in sweeps: one run lists every error, all get fixed, one run verifies.
 - Tasks and the lead consult an advisor, the best one your account can use, or the profile's advisor.
 - n asks only what you want done: Claude picks the repo, writes the card and asks its questions, then starts it or files it.
@@ -16,6 +17,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task asks you whether its change works only once its push is out and green, and Verified closes it.
 
 ### Fixed
+- A task the lead pushes shows no yellow read count or subtask to accept, and no task row shows its recipe or rules check.
 - The head of a push line is told its real place when it joins the build queue.
 - A task keeps its own name until it is released.
 - A task is never restarted onto an older kebbie.
