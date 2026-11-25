@@ -470,6 +470,93 @@ pub fn load(state: &Path, address: &str) -> Option<Watch> {
 pub fn forget(state: &Path, address: &str) {
     let _ = fs::remove_file(file(state, address));
     let _ = fs::remove_file(pushing_file(state, address));
+    orphaned(state, address);
+}
+
+fn orphan_file(state: &Path, address: &str) -> PathBuf {
+    dir(state).join(format!(".{address}.orphan"))
+}
+
+// A red run whose watch ends while main is still red keeps holding the repo, so the lead hears once that it needs a fix task.
+fn orphaned(state: &Path, address: &str) {
+    let Some(red) = held_red(state, address) else { return };
+    if fixer_of(state, address).is_some() || orphan_file(state, address).exists() || crate::state::write(&orphan_file(state, address), "").is_err() {
+        return;
+    }
+    let text = format!("CI is still red on main for {address} ({}), but kebbie no longer watches it for a fix: start a task to fix it, then run kebbie ci fixer {address} <that task>. Every other push of {} waits until main is green again; only the fix goes out.", red.short(), crate::repo::name_of(&red.repo));
+    if let Err(error) = messages::to_lead(messages::ToLead::RedCi, &text) {
+        eprintln!("Could not tell the lead that red CI has no task: {error}");
+    }
+}
+
+fn hold_file(state: &Path, address: &str) -> PathBuf {
+    dir(state).join(format!(".{address}.red"))
+}
+
+// The red run's own record, apart from its watch, since the fix's push and a re-run write a running watch over the failed one at the same address.
+pub(crate) fn hold_red(state: &Path, red: &Watch) {
+    let _ = fs::remove_file(orphan_file(state, &red.address));
+    let _ = crate::state::write(&hold_file(state, &red.address), serde_json::to_string_pretty(&red.to_json()).unwrap_or_default());
+}
+
+fn held_red(state: &Path, address: &str) -> Option<Watch> {
+    Watch::from_json(&serde_json::from_str(&fs::read_to_string(hold_file(state, address)).ok()?).ok()?)
+}
+
+fn holds(state: &Path) -> Vec<Watch> {
+    let Ok(entries) = fs::read_dir(dir(state)) else { return Vec::new() };
+    let mut holds: Vec<Watch> = entries.flatten().filter_map(|entry| entry.file_name().to_str().and_then(|name| name.strip_prefix('.')?.strip_suffix(".red").map(str::to_string))).filter_map(|address| held_red(state, &address)).collect();
+    holds.sort_by(|a, b| a.address.cmp(&b.address));
+    holds
+}
+
+// Main is green over the red run, or the user dismissed it: only these end its hold.
+pub fn end_red(state: &Path, address: &str) {
+    let _ = fs::remove_file(hold_file(state, address));
+    let _ = fs::remove_file(fixer_file(state, address));
+    let _ = fs::remove_file(orphan_file(state, address));
+}
+
+fn fixer_file(state: &Path, address: &str) -> PathBuf {
+    dir(state).join(format!(".{address}.fixer"))
+}
+
+fn fixer_of(state: &Path, address: &str) -> Option<String> {
+    fs::read_to_string(fixer_file(state, address)).ok().map(|text| text.trim().to_string()).filter(|text| !text.is_empty())
+}
+
+// The task that fixes a red CI whose own task has ended, as the lead names it: its push goes out while the repo's other pushes wait.
+pub fn name_fixer(red: &str, fix: &str) -> Result<String> {
+    let state = crate::lead::state_dir()?;
+    let watch = held_red(&state, red).ok_or_else(|| format!("kebbie ci fixer: {red} has no red CI; kebbie ci lists the watches"))?;
+    let task = crate::peers::task_part(fix);
+    crate::tasks::find_task(&watch.repo, Some(task), &watch.repo).map_err(|_| format!("kebbie ci fixer: no task {task} in {}; start it first", crate::repo::name_of(&watch.repo)))?;
+    let address = crate::peers::address(task, &crate::repo::name_of(&watch.repo));
+    crate::state::write(&fixer_file(&state, red), &address)?;
+    Ok(format!("{address} fixes the red CI of {red} ({}): its push goes out while the other pushes of {} wait until main is green again.", watch.short(), crate::repo::name_of(&watch.repo)))
+}
+
+// The red CI that holds a push of this repo: none while main is green, or when this push fixes one of the red runs, by its own task or as the fixer the lead named.
+pub fn holding(state: &Path, repo: &Path, address: &str) -> Option<Watch> {
+    let red: Vec<Watch> = holds(state).into_iter().filter(|watch| watch.repo == repo).collect();
+    if red.iter().any(|watch| watch.address == address || fixer_of(state, &watch.address).as_deref() == Some(address)) {
+        return None;
+    }
+    red.into_iter().next()
+}
+
+// Main is green again once a push on top of a red run passes: the red runs it went over end, except one whose own task still has the log to fix and another task pushed.
+pub(crate) fn release_red(state: &Path, green: &Watch) {
+    let log = messages::load();
+    for red in holds(state).into_iter().filter(|red| red.repo == green.repo) {
+        let over = crate::sh::succeeds("git", &["merge-base", "--is-ancestor", &red.sha, &green.sha], Some(&green.repo));
+        if over && (red.address == green.address || fixer_of(state, &red.address).as_deref() == Some(green.address.as_str()) || !task_open(&red, &log)) {
+            end_red(state, &red.address);
+            if red.address != green.address && load(state, &red.address).is_some_and(|watch| watch.sha == red.sha && matches!(watch.state, State::Failed { .. })) {
+                forget(state, &red.address);
+            }
+        }
+    }
 }
 
 fn pushing_file(state: &Path, address: &str) -> PathBuf {
@@ -481,9 +568,10 @@ pub(crate) fn pushing(state: &Path, address: &str, now: u64) -> bool {
     fs::read_to_string(pushing_file(state, address)).ok().and_then(|text| text.trim().parse::<u64>().ok()).is_some_and(|at| now.saturating_sub(at) < PUSHING_SECONDS)
 }
 
-// A push that failed leaves the watch as it was before it.
+// A push that failed leaves the watch as it was before it, and a red run's hold with it.
 pub fn put_back(state: &Path, address: &str, before: Option<Watch>) {
-    forget(state, address);
+    let _ = fs::remove_file(file(state, address));
+    let _ = fs::remove_file(pushing_file(state, address));
     if let Some(watch) = before {
         let _ = save(state, &watch);
     }
@@ -811,6 +899,7 @@ fn unknown(state: &Path, watch: &mut Watch, now: u64, refused: bool) -> Event {
 
 // A task that named a check for after its push runs it now, and closes once it reports that the check held.
 fn green(state: &Path, watch: &Watch, what: String, now: u64) -> Event {
+    release_red(state, watch);
     if !watch.pushed.stages.is_empty() {
         return staged(state, watch, what, None, now);
     }
@@ -852,6 +941,7 @@ fn rolled_on(state: &Path, watch: &Watch, text: String) -> Event {
 
 // The rest went green and no run of the deploy workflow showed up: the stages that wait on it fail, so nothing after them goes out on a deploy nobody saw.
 fn undeployed(state: &Path, watch: &Watch) -> Event {
+    release_red(state, watch);
     let deploy = watch.pushed.deploy.clone().unwrap_or_default();
     let note = format!("no run of {deploy} on {} in {} min", watch.short(), UNSEEN_AFTER / 60);
     crate::tasks::rollout::failed(state, &watch.address, &watch.pushed.stages, &note, true);
@@ -970,6 +1060,10 @@ fn failed_run(state: &Path, gh: &str, watch: &mut Watch, run: &Run, now: u64) ->
     }
     watch.state = State::Failed { at: now, what: what.clone(), url: run.url.clone() };
     let _ = save(state, watch);
+    hold_red(state, watch);
+    if !open {
+        let _ = crate::state::write(&orphan_file(state, &watch.address), "");
+    }
     remember_red(state, &watch.sha, &watch.address);
     crate::tasks::rollout::failed(state, &watch.address, &watch.pushed.stages, &format!("CI failed: {what}"), false);
     let handed = open && match messages::hand_to(&watch.address, &task_message(watch, run, &format!("{job}{step}"), &log_tail(&log, LOG_LINES), who)) {
@@ -984,7 +1078,7 @@ fn failed_run(state: &Path, gh: &str, watch: &mut Watch, run: &Run, now: u64) ->
         crate::phase::record(state, &watch.address, "ci", &crate::phase::Event::CiRed { sha: &watch.sha, pushing: false });
     }
     let text = match pushing {
-        _ if !open => format!("CI failed for {} ({}): {what}. Its task has ended, so nobody was handed the log; fix it in a new task. {}", watch.address, watch.short(), run.url),
+        _ if !open => format!("CI failed for {} ({}): {what}. Its task has ended, so nobody was handed the log: start a task to fix it, then run kebbie ci fixer {} <that task>. Every other push of {} waits until main is green again; only the fix goes out. {}", watch.address, watch.short(), watch.address, crate::repo::name_of(&watch.repo), run.url),
         Some(who) => format!(
             "CI failed for {} ({}): {what}. kebbie sent its Claude the failing log, and it fixes it as part of {}: when it reports ready, the reviewer checks the fix against the rules and kebbie pushes it{}; you hear only of a break, or when the reviewer gives no verdict. It stays under Ready to push meanwhile. {}",
             watch.address, watch.short(), pushed_as(who).0, pushed_as(who).1, run.url
@@ -1567,10 +1661,14 @@ mod tests {
         assert!(following.running());
         assert_eq!(following.note(), format!("CI running: ci cancelled for a newer run on {branch}, follows it on {}", &later[..7]));
         assert_eq!(crate::phase::load(&state, "billing@app").map(|record| record.phase), Some(crate::phase::Phase::CiRunning { sha: watched.clone() }));
+        let red = |address: &str| Watch { address: address.to_string(), state: State::Failed { at: 1, what: "ci · test".to_string(), url: String::new() }, ..cancel_watch(&dir, &watched, &branch) };
+        hold_red(&state, &red("billing@app"));
+        hold_red(&state, &red("gone@app"));
         let passed = cancel_gh(&state, "newer-passed", CANCELLED_ON_COMMIT, &branch_run(&later, "completed", "success"));
         assert!(tick_with(&state, &passed, 100 + CANCELLED_POLL - 1).is_empty(), "a watch following a newer run asks gh less often");
         let events = tick_with(&state, &passed, 100 + CANCELLED_POLL);
         assert!(events.len() == 1 && events[0].kind == Kind::Green, "{events:?}");
+        assert!(holding(&state, &dir, "copy@app").is_none(), "a fix whose CI passed on a later run after a cancel is CI green over the red runs it carries");
         assert!(events[0].text.starts_with(&format!("CI is green for {}: ci was cancelled and a later run on {branch} that holds it passed", &watched[..7])), "{}", events[0].text);
         assert!(load(&state, "billing@app").is_none());
         save(&state, &cancel_watch(&dir, &watched, &branch)).unwrap();
@@ -1720,6 +1818,52 @@ mod tests {
     }
 
     #[test]
+    fn red_ci_holds_every_push_of_its_repo_but_its_fix_until_a_push_over_it_goes_green() {
+        let (dir, origin, slot, _) = crate::tasks::test_support::task_with_a_commit("billing");
+        let state = crate::tasks::test_support::state_of(&dir);
+        let at = |task: &str| crate::peers::address(task, &crate::repo::name_of(&dir));
+        let main = crate::repo::git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        let watch = |task: &str, sha: &str, state: State| Watch { address: at(task), repo: dir.clone(), slug: "acme/app".to_string(), sha: sha.to_string(), started_at: 1, checked_at: None, close: true, runs: Vec::new(), state, error: None, erring_since: None, following: None, pushed: Pushed::default() };
+        let failed = State::Failed { at: 2, what: "ci · clippy".to_string(), url: String::new() };
+        assert!(holding(&state, &dir, &at("billing")).is_none(), "green main holds nothing");
+        save(&state, &watch("gone", &main, failed.clone())).unwrap();
+        hold_red(&state, &watch("gone", &main, failed.clone()));
+        assert_eq!(holding(&state, &dir, &at("billing")).map(|red| red.address), Some(at("gone")), "a red run whose task ended holds every push");
+        assert!(holding(&state, &dir.with_file_name("elsewhere"), &at("billing")).is_none(), "only in its own repo");
+        crate::state::write(&fixer_file(&state, &at("gone")), at("billing")).unwrap();
+        assert!(holding(&state, &dir, &at("billing")).is_none(), "the fixer the lead named goes out");
+        assert!(holding(&state, &dir, &at("copy")).is_some(), "the others still wait");
+        let fixed = crate::repo::git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        let unrelated = crate::repo::git(&dir, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit-tree", &format!("{main}^{{tree}}"), "-m", "not on top of the red run"]).unwrap();
+        release_red(&state, &watch("copy", &unrelated, State::Running));
+        assert!(load(&state, &at("gone")).is_some() && held_red(&state, &at("gone")).is_some(), "a green run under the red commit says nothing of main now");
+        release_red(&state, &watch("billing", &fixed, State::Running));
+        assert!(load(&state, &at("gone")).is_none() && !fixer_file(&state, &at("gone")).exists() && holding(&state, &dir, &at("copy")).is_none(), "main is green again once the fix on top of the red run passes");
+        save(&state, &watch("billing", &main, failed.clone())).unwrap();
+        hold_red(&state, &watch("billing", &main, failed.clone()));
+        assert!(holding(&state, &dir, &at("billing")).is_none() && holding(&state, &dir, &at("copy")).is_some(), "an open task fixes its own red run, and the rest wait for it");
+        release_red(&state, &watch("copy", &fixed, State::Running));
+        assert!(load(&state, &at("billing")).is_some() && holding(&state, &dir, &at("copy")).is_some(), "a red run its own open task still fixes is never ended by another push");
+        save(&state, &watch("billing", &fixed, State::Running)).unwrap();
+        assert!(holding(&state, &dir, &at("copy")).is_some(), "the fix's own push writes a running watch over the red one, and the rest still wait for its CI");
+        release_red(&state, &watch("billing", &fixed, State::Running));
+        assert!(holding(&state, &dir, &at("copy")).is_none() && held_red(&state, &at("billing")).is_none(), "the fix going green ends its own red run");
+        save(&state, &watch("gone", &main, failed.clone())).unwrap();
+        hold_red(&state, &watch("gone", &main, failed.clone()));
+        put_back(&state, &at("gone"), Some(watch("gone", &main, failed.clone())));
+        assert!(holding(&state, &dir, &at("copy")).is_some(), "a push that failed puts the red run back as it was, hold and all");
+        let told = || messages::load().into_iter().filter(|message| message.to == crate::status::LEAD_LABEL && message.text.contains(&format!("kebbie ci fixer {}", at("gone")))).count();
+        forget(&state, &at("gone"));
+        forget(&state, &at("gone"));
+        assert!(holding(&state, &dir, &at("copy")).is_some(), "a red watch forgotten while main is still red, as when its task is done, dropped or relaunched, holds the repo still");
+        assert_eq!(told(), 1, "and the lead hears once that it needs a fix task");
+        end_red(&state, &at("gone"));
+        assert!(holding(&state, &dir, &at("copy")).is_none() && held_red(&state, &at("gone")).is_none(), "green over it or the user's dismissal ends it");
+        forget(&state, &at("billing"));
+        crate::tasks::test_support::cleanup(dir, origin, &slot);
+    }
+
+    #[test]
     fn a_red_run_puts_a_pushed_task_under_its_push_for_the_fix_or_under_needs_you() {
         use crate::phase::Phase;
         let (dir, origin, slot, _) = crate::tasks::test_support::task_with_a_commit("billing");
@@ -1749,6 +1893,7 @@ mod tests {
         let run = |id: u64, conclusion: &str| Run { id, name: format!("job{id}"), workflow: format!("wf{id}"), status: "completed".to_string(), conclusion: conclusion.to_string(), url: String::new() };
         let watch = Watch { address: "billing@app".to_string(), repo: dir.clone(), slug: "acme/app".to_string(), sha: "abcdef0".to_string(), started_at: 0, checked_at: Some(5), close: true, runs: vec![run(1, "success"), run(2, "failure"), run(3, "cancelled")], state: State::Failed { at: 5, what: "wf2 · job2".to_string(), url: String::new() }, error: None, erring_since: None, following: None, pushed: Pushed::default() };
         save(&dir, &watch).unwrap();
+        hold_red(&dir, &watch);
         crate::phase::record(&dir, "billing@app", "ci", &crate::phase::Event::CiRed { sha: "abcdef0", pushing: false });
         let gh = dir.join("gh");
         crate::executable::write(&gh, format!("#!/bin/sh\necho \"$@\" >> {}\n", dir.join("gh.log").display())).unwrap();
@@ -1757,6 +1902,7 @@ mod tests {
         assert_eq!(fs::read_to_string(dir.join("gh.log")).unwrap(), "run rerun 2 -R acme/app\nrun rerun 3 -R acme/app\n", "the green run is not run again");
         let read = load(&dir, "billing@app").unwrap();
         assert!(read.running() && read.runs.is_empty() && read.started_at == 100, "{read:?}");
+        assert!(held_red(&dir, "billing@app").is_some_and(|red| red.sha == "abcdef0"), "the re-run holds the repo's other pushes until it is green");
         assert_eq!(crate::phase::load(&dir, "billing@app").map(|record| record.phase), Some(crate::phase::Phase::CiRunning { sha: "abcdef0".to_string() }));
         assert!(rerun_with(&dir, "billing@app", &gh.to_string_lossy(), 200).unwrap_err().contains("no failed or cancelled run"));
         std::fs::remove_dir_all(dir).unwrap();
@@ -1884,6 +2030,23 @@ mod tests {
         assert_eq!((round.pushed.stages, round.pushed.deploy), (vec!["fill".to_string()], Some("Deploy".to_string())), "kept across rounds");
     }
 
+    #[test]
+    fn a_fix_green_but_for_a_deploy_that_never_ran_still_ends_the_red_hold() {
+        let dir = crate::tasks::test_support::repo();
+        let state = crate::sh::test_dir("ci-undeployed-red");
+        let sha = crate::repo::git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        let fix = Watch { address: "billing@app".to_string(), repo: dir.clone(), slug: "acme/app".to_string(), sha: sha.clone(), started_at: 0, checked_at: None, close: false, runs: Vec::new(), state: State::Running, error: None, erring_since: None, following: None, pushed: Pushed { stages: vec!["fill".to_string()], deploy: Some("Deploy".to_string()), ..Pushed::default() } };
+        save(&state, &fix).unwrap();
+        hold_red(&state, &Watch { state: State::Failed { at: 1, what: "ci · test".to_string(), url: String::new() }, pushed: Pushed::default(), ..fix.clone() });
+        let gh = state.join("gh");
+        crate::executable::write(&gh, "#!/bin/sh\necho '[{\"databaseId\":1,\"name\":\"ci\",\"workflowName\":\"ci\",\"status\":\"completed\",\"conclusion\":\"success\",\"url\":\"u\"}]'\n").unwrap();
+        let events = tick_with(&state, &gh.to_string_lossy(), UNSEEN_AFTER);
+        assert!(events.len() == 1 && events[0].text.contains("no run of Deploy"), "{events:?}");
+        assert!(holding(&state, &dir, "copy@app").is_none(), "its CI went green over the red commit, so the rest go though its deploy never showed");
+        fs::remove_dir_all(state).unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     // Each push's head with its runs, as gh lists the branch; each run's failed jobs are the given ones, clippy otherwise.
     fn chain_gh(state: &Path, name: &str, heads: &[(&str, &str, &str, &str)], jobs: &[(usize, &str)]) -> String {
         let path = state.join(name);
@@ -1924,6 +2087,7 @@ mod tests {
         let events = tick_with(&state, &gh, 1000);
         assert_eq!(events.len(), 3, "{events:?}");
         assert!(matches!(load(&state, "billing@app").unwrap().state, State::Failed { ref what, .. } if what.starts_with("ci · clippy")), "the push whose parent was green owns the red");
+        assert!(holding(&state, &dir, "copy@app").is_some(), "its red holds the repo's other pushes");
         for (task, from) in [("cart", &made), ("auth", &landed)] {
             let waiting = load(&state, &format!("{task}@app")).unwrap();
             let inherited = waiting.pushed.inherited.clone().unwrap_or_else(|| panic!("{task} inherits the red"));
@@ -1937,6 +2101,7 @@ mod tests {
         let events = tick_with(&state, &fixed, 1000 + CANCELLED_POLL);
         assert_eq!(events.iter().filter(|event| event.kind == Kind::Green).count(), 2, "{events:?}");
         assert!(load(&state, "auth@app").is_none() && load(&state, "cart@app").is_none(), "the fix that holds them closes the ones that waited");
+        assert!(holding(&state, &dir, "copy@app").is_none(), "the pushes that inherited the red went green over it, so main is green again");
         fs::remove_dir_all(state).unwrap();
         fs::remove_dir_all(dir).unwrap();
     }

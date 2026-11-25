@@ -956,6 +956,25 @@ mod tests {
         Facts { ends: latest_ends(ends), open: open.iter().map(|address| address.to_string()).collect(), ..Facts::default() }
     }
 
+    #[test]
+    fn a_red_runs_task_done_relaunched_or_its_wait_dropped_keeps_the_repo_held_while_main_is_red() {
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let address = crate::peers::address("gone", &crate::repo::name_of(&dir));
+        let red = crate::ci::Watch { address: address.clone(), repo: dir.clone(), slug: "acme/app".to_string(), sha: git(&dir, &["rev-parse", "HEAD"]).unwrap(), started_at: 1, checked_at: None, close: false, runs: Vec::new(), state: crate::ci::State::Failed { at: 2, what: "ci · clippy".to_string(), url: String::new() }, error: None, erring_since: None, following: None, pushed: crate::ci::Pushed::default() };
+        let held = || crate::ci::holding(&state, &dir, "copy@app").map(|watch| watch.address);
+        for (how, end) in [("done", &(|| settle_ci(&state, &address)) as &dyn Fn()), ("relaunched under its name", &|| forget_unwaited_watch(&state, &address)), ("its wait dropped", &|| release_deps(&state, std::iter::once(&Dep { address: address.clone(), repo: dir.clone() })))] {
+            crate::ci::save(&state, &red).unwrap();
+            crate::ci::hold_red(&state, &red);
+            end();
+            assert!(crate::ci::load(&state, &address).is_none(), "{how}: the watch goes");
+            assert_eq!(held(), Some(address.clone()), "{how}: main is still red, so the repo's other pushes wait");
+            crate::ci::end_red(&state, &address);
+            crate::ci::forget(&state, &address);
+        }
+        cleanup(dir, origin, &slot);
+    }
+
     fn begun(said: &str) -> Result<Begun> {
         Ok(Begun { said: said.to_string(), started: Started::Ready })
     }

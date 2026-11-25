@@ -716,7 +716,7 @@ pub(crate) mod tests {
         let shown = &build(&[item.clone()], &[], Vec::new(), None, &Seen::default()).items[0];
         assert_eq!((shown.group, shown.summary.as_str()), (Group::Working, "2 commits · kebbie pushes it under your permission"));
         item.permit = None;
-        item.push_waits = Some(crate::tasks::PendingPush { by: crate::tasks::PushBy::Lead, work: crate::tasks::PushWork::Turn, at: 5, ahead: 1, after: None });
+        item.push_waits = Some(crate::tasks::PendingPush { by: crate::tasks::PushBy::Lead, work: crate::tasks::PushWork::Turn, at: 5, ahead: 1, after: None, red: None });
         crate::status::tests::in_phase(&mut item, crate::phase::Phase::Pushing { ahead: 1 });
         let shown = &build(&[item], &[], Vec::new(), None, &Seen::default()).items[0];
         assert_eq!((shown.group, shown.summary.as_str()), (Group::Working, "2 commits · pushing for the lead · 2nd in line"));
@@ -1007,7 +1007,7 @@ pub(crate) mod tests {
         assert_eq!(assessment(&crate::assessment::Word::NoReview { reason: "docs only".to_string() }, Some(5)), Some(Assessment::Judged(Judgement { word: AssessmentWord::NotNeeded, reason: Some("docs only".to_string()), at: Some(5) })));
         let mut fixing = task(Some("idle"), Some("ready"), 1);
         fixing.agent.as_mut().unwrap().kind = crate::agent::Agent::Codex;
-        fixing.push_waits = Some(crate::tasks::PendingPush { by: crate::tasks::PushBy::User, work: crate::tasks::PushWork::Ci, at: 5, ahead: 0, after: None });
+        fixing.push_waits = Some(crate::tasks::PendingPush { by: crate::tasks::PushBy::User, work: crate::tasks::PushWork::Ci, at: 5, ahead: 0, after: None, red: None });
         let board = build(std::slice::from_ref(&fixing), &[], Vec::new(), None, &Seen::default());
         assert_eq!(board.items[0].push_waits.as_deref(), Some("pushing for you · its Codex fixes the red CI"));
         let mut stepped = task(Some("working"), Some("working"), 1);

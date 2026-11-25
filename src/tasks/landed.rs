@@ -411,6 +411,7 @@ pub(super) fn pass(state: &Path, world: &World, close: Close, tell: &mut dyn FnM
                         Ok(_) => {
                             drop_mark(state, &address);
                             if crate::ci::load(state, &address).is_some_and(|watch| !watch.running()) {
+                                crate::ci::end_red(state, &address);
                                 crate::ci::forget(state, &address);
                                 super::after::red_ci_superseded(state, &address);
                             }
@@ -442,6 +443,7 @@ pub(super) fn pass(state: &Path, world: &World, close: Close, tell: &mut dyn FnM
             }
         }
         if superseded(&watch, world.gh) {
+            crate::ci::end_red(state, &watch.address);
             crate::ci::forget(state, &watch.address);
             let waiting = super::after::red_ci_superseded(state, &watch.address);
             notes.push(format!("landed: CI is green after {} on a later commit; {} waiting again", watch.address, if waiting.is_empty() { "nothing".to_string() } else { waiting.join(", ") }));
@@ -960,6 +962,7 @@ mod tests {
         assert!(!asks(&[run(&landing, "deploy", "success", "push")]), "the watched commit is the watch's own business");
 
         crate::ci::save(&state, &watch).unwrap();
+        crate::ci::hold_red(&state, &watch);
         intent::after_red_ci(&state, &dir, &address, intent::By::User).unwrap();
         assert_eq!(verdict(&state, &slot, &address, &upstream, &idle(), &mut |_| false).unwrap(), Verdict::Later, "red and not superseded: it stays under CI failed");
         let green = fake_gh(&dir, &format!("[{}]", run(&later, "deploy", "success", "push")));
@@ -968,6 +971,7 @@ mod tests {
         pass(&state, &world(&repos, &seen, &[], &green), &mut closing_by_finish(&state, &upstream), &mut |_| {});
         assert!(!branch_exists(&dir, "billing"), "landed and its deploy green later: it closes");
         assert!(crate::ci::load(&state, &address).is_none() && intent::pending(&state, &address).is_none(), "the red watch and the push waiting for its fix go");
+        assert!(crate::ci::holding(&state, &dir, "copy@app").is_none(), "a red task closed as done holds no other push");
         cleanup(dir, origin, &slot);
     }
 
@@ -1032,6 +1036,7 @@ mod tests {
         old.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3600)).unwrap();
         let address = peers::address("billing", &name_of(&dir));
         crate::ci::save(&state, &red_watch(&dir, &address, &landing, false)).unwrap();
+        crate::ci::hold_red(&state, &red_watch(&dir, &address, &landing, false));
         let wait = super::super::after::Wait {
             task: "invoices".to_string(), repo: dir.clone(), after: vec![super::super::after::Dep { address: address.clone(), repo: dir.clone() }], prompt: "go".to_string(), mode: None, profile: None, backlog: None,
             by: intent::By::User, at: 1, blocked: Some(format!("{address} landed with red CI, so invoices did not start")), gone_since: None, why: None, starts_at: None,
@@ -1042,6 +1047,7 @@ mod tests {
         let seen = Seen2 { workspaces: Vec::new(), agents: Vec::new() };
         pass(&state, &world(&repos, &seen, &[], &green), &mut closing_by_finish(&state, &upstream), &mut |_| {});
         assert!(crate::ci::load(&state, &address).is_none(), "the red watch goes, so the wait reads the task as done");
+        assert!(crate::ci::holding(&state, &dir, "copy@app").is_none(), "a later commit green over the red run holds no other push");
         assert_eq!(super::super::after::load(&state, &wait.address()).unwrap().blocked, None, "and the wait blocked only by that red waits again");
         cleanup(dir, origin, &slot);
     }

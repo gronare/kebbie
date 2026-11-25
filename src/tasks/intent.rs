@@ -183,7 +183,7 @@ pub(super) fn load(state: &Path, address: &str) -> Option<Intent> {
     Intent::from_json(&serde_json::from_str(&std::fs::read_to_string(file(state, address)).ok()?).ok()?).filter(|intent| intent.address == address)
 }
 
-// A push under way, as the board shows it: who asked, what it waits for, since when, how many pushes of its repo go first and the task right in front.
+// A push under way, as the board shows it: who asked, what it waits for, since when, how many pushes of its repo go first, the task right in front, and the task whose red CI holds it.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Pending {
     pub by: By,
@@ -191,6 +191,7 @@ pub(crate) struct Pending {
     pub at: u64,
     pub ahead: usize,
     pub after: Option<String>,
+    pub red: Option<String>,
 }
 
 // Reads only: the board and kebbie status never claim or drop an intent.
@@ -199,7 +200,8 @@ pub(crate) fn pending(state: &Path, address: &str) -> Option<Pending> {
     let line = line(state, &intent.repo);
     let ahead = line.iter().position(|queued| queued.address == address).unwrap_or(0);
     let after = ahead.checked_sub(1).and_then(|front| line.get(front)).map(|front| front.task.clone());
-    Some(Pending { by: intent.by, work: intent.work, at: intent.at, ahead, after })
+    let red = crate::ci::holding(state, &intent.repo, address).map(|watch| watch.task().to_string());
+    Some(Pending { by: intent.by, work: intent.work, at: intent.at, ahead, after, red })
 }
 
 // A repo's pushes in the order they go out: the fix of a red default branch first, then first queued first; a red CI's push waiting for its fix is not in it.
@@ -406,7 +408,7 @@ pub(super) mod tests {
         assert_eq!(By::of(&Caller::Task("billing@app".to_string())), None);
         assert_eq!(By::of(&Caller::Lead).map(|by| by.caller()), Some(Caller::Lead));
         save(&state, &written).unwrap();
-        assert_eq!((pending(&state, "billing@app"), pending(&state, "other@app")), (Some(Pending { by: By::Lead, work: Work::Conflict, at: 100, ahead: 0, after: None }), None));
+        assert_eq!((pending(&state, "billing@app"), pending(&state, "other@app")), (Some(Pending { by: By::Lead, work: Work::Conflict, at: 100, ahead: 0, after: None, red: None }), None));
         assert_eq!(load(&state, "billing@app"), Some(written.clone()), "reading what waits leaves the intent in place");
         let mut older = written.to_json();
         older.as_object_mut().unwrap().remove("queued");

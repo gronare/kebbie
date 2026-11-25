@@ -359,6 +359,10 @@ One round of checks for every running watch, as the keeper runs it, and what cam
 
 Run by a task's Claude once it has read the failing log and found the failure outside the code. The row and `kebbie status --json` (`ci_outside`) carry the reason, and the lead hears it. It waives nothing: the red stands until a later push is green or you dismiss it.
 
+### `kebbie ci fixer <task@repo> <fix task>`
+
+Run by the lead when a red CI's own task has ended, once it started a task to fix it. While CI is red on the default branch, the repo's push line holds every push but the fix; this names the fix, so its push goes out. The other pushes go on once a push on top of the red commit passes CI.
+
 ### `kebbie ci dismiss <task> [--why <reason>]`
 
 Yours alone, also `C` on the board: no Claude, the lead included, can run it.

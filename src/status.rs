@@ -469,6 +469,9 @@ impl Item {
             tasks::PushBy::Lead => "for the lead",
             tasks::PushBy::Keeper => "under your permission",
         };
+        if let Some(red) = pending.red.as_deref().filter(|_| pending.work == tasks::PushWork::Turn) {
+            return Some(format!("pushing for {who} · held while CI is red on main from {red}, until main is green again"));
+        }
         if pending.work == tasks::PushWork::Turn {
             let place = if pending.ahead == 0 { "kebbie pushes it now".to_string() } else { tasks::place_in_line(pending.ahead, pending.after.as_deref()) };
             return Some(format!("pushing {who} · {place}"));
@@ -1133,9 +1136,10 @@ fn name_push_fronts(items: &mut [Item]) {
     let titles: Vec<(Option<PathBuf>, String, String)> = items.iter().map(|item| (item.repo.clone(), item.name.clone(), item.titled())).collect();
     for item in items.iter_mut() {
         let repo = item.repo.clone();
-        if let Some(after) = item.push_waits.as_mut().and_then(|pending| pending.after.as_mut())
-            && let Some((_, _, title)) = titles.iter().find(|(other, name, _)| *other == repo && name == after) {
-            *after = title.clone();
+        for named in item.push_waits.as_mut().into_iter().flat_map(|pending| [pending.after.as_mut(), pending.red.as_mut()]).flatten() {
+            if let Some((_, _, title)) = titles.iter().find(|(other, name, _)| *other == repo && name == named) {
+                *named = title.clone();
+            }
         }
     }
 }
@@ -1516,7 +1520,7 @@ pub(crate) mod tests {
         assert_eq!(derived(Some("idle"), None, 1), Phase::Ready { head: None });
         assert_eq!(derived(Some("idle"), None, 0), Phase::Idle);
         let mut pushing = task(Some("idle"), Some("ready"), 1);
-        pushing.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work: tasks::PushWork::Tests, at: 5, ahead: 0, after: None });
+        pushing.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work: tasks::PushWork::Tests, at: 5, ahead: 0, after: None, red: None });
         rederive(&mut pushing);
         assert_eq!(pushing.phase(), Some(&Phase::Pushing { ahead: 0 }));
         let mut pushed = task(Some("idle"), Some("ready"), 0);
@@ -1696,13 +1700,13 @@ pub(crate) mod tests {
         item.verdict = None;
         item.phase = Some(crate::phase::Record { phase: Phase::Pushing { ahead: 0 }, since: 100, by: "push".to_string(), from: None });
         for (work, why) in [(tasks::PushWork::Conflict, "back in Working: its rebase onto main conflicted"), (tasks::PushWork::Tests, "back in Working: main changed its files, so it runs the tests again")] {
-            item.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work, at: 300, ahead: 0, after: None });
+            item.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work, at: 300, ahead: 0, after: None, red: None });
             assert_eq!(item.back_to_work_at(310).as_deref(), Some(why), "{work:?}");
         }
         item.question = Some(item.report.clone().unwrap());
         assert_eq!((item.group(), item.back_to_work_at(310)), (Group::NeedsYou, None), "a task that waits on you is not back at work");
         item.question = None;
-        item.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work: tasks::PushWork::Turn, at: 300, ahead: 0, after: None });
+        item.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work: tasks::PushWork::Turn, at: 300, ahead: 0, after: None, red: None });
         assert_eq!(item.back_to_work_at(310), None, "its turn in the line is no move back");
         assert_eq!(task(Some("working"), Some("working"), 2).back_to_work_at(0), None, "a task at work on its own says nothing");
     }
@@ -1722,10 +1726,10 @@ pub(crate) mod tests {
         item.report.as_mut().unwrap().at = 100;
         item.phase = Some(crate::phase::Record { phase: Phase::Pushing { ahead: 0 }, since: 100, by: "push".to_string(), from: None });
         for (work, group) in [(tasks::PushWork::Tests, Group::Working), (tasks::PushWork::Conflict, Group::Working), (tasks::PushWork::Turn, Group::GoingOut)] {
-            item.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work, at: 200, ahead: 0, after: None });
+            item.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work, at: 200, ahead: 0, after: None, red: None });
             assert_eq!(item.group(), group, "{work:?}");
         }
-        item.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work: tasks::PushWork::Tests, at: 50, ahead: 0, after: None });
+        item.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work: tasks::PushWork::Tests, at: 50, ahead: 0, after: None, red: None });
         assert!(item.group() == Group::GoingOut, "it reported ready after the push asked for the tests");
     }
 
@@ -1852,7 +1856,7 @@ pub(crate) mod tests {
         item.git.as_mut().unwrap().approved = true;
         step(&mut item, "approved", None, &[Some("idle")], Group::ReadyToPush);
         step(&mut item, "an update notice it reads", Some(Event::TurnBegan { by_user: false }), &[Some("working"), Some("idle"), Some("done")], Group::ReadyToPush);
-        item.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work: tasks::PushWork::Tests, at: 40, ahead: 0, after: None });
+        item.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work: tasks::PushWork::Tests, at: 40, ahead: 0, after: None, red: None });
         step(&mut item, "push: main changed its files, so its Claude runs the tests", Some(Event::PushHanded), &[Some("idle")], Group::Working);
         step(&mut item, "the hand-over it takes up", Some(Event::TurnBegan { by_user: false }), &[Some("working")], Group::Working);
         reported(&mut item, "ready", 50);
@@ -1987,7 +1991,7 @@ pub(crate) mod tests {
         item.to_accept = None;
         item.permit = None;
         for (by, who) in [(tasks::PushBy::Lead, "the lead"), (tasks::PushBy::User, "you")] {
-            item.push_waits = Some(tasks::PendingPush { by, work: tasks::PushWork::Turn, at: 5, ahead: 2, after: None });
+            item.push_waits = Some(tasks::PendingPush { by, work: tasks::PushWork::Turn, at: 5, ahead: 2, after: None, red: None });
             in_phase(&mut item, Phase::Pushing { ahead: 2 });
             let summary = item.summary_on(Surface::User);
             assert_eq!(item.group(), Group::GoingOut, "in the push queue it is on its way out: {summary}");
@@ -2126,7 +2130,7 @@ pub(crate) mod tests {
         assert_eq!(item.phase(), Some(&Phase::NeedsYou(Why::NothingToPush)), "a report after the failure decides again");
         let mut red = task(Some("working"), Some("ready"), 0);
         red.ci = Some(watched(crate::ci::State::Failed { at: 20, what: "CI · test".to_string(), url: String::new() }, true));
-        red.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work: tasks::PushWork::Ci, at: 20, ahead: 0, after: None });
+        red.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work: tasks::PushWork::Ci, at: 20, ahead: 0, after: None, red: None });
         moved(&mut red, &Event::CiRed { sha: "abcdef0", pushing: true });
         assert_eq!((red.group(), red.summary(), red.next_for_you(), red.wanted("enter")), (Group::GoingOut, "pushing for you · its Claude fixes the red CI".to_string(), None, None), "the fix is the push still under way, not the user's to do");
         red.report.as_mut().unwrap().at = 30;
@@ -2233,7 +2237,7 @@ pub(crate) mod tests {
         let mut item = task(Some("idle"), Some("ready"), 1);
         item.git.as_mut().unwrap().head = Some("abc".to_string());
         moved(&mut item, &Event::PushQueued { ahead: 0 });
-        item.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work: tasks::PushWork::Turn, at: 1, ahead: 0, after: None });
+        item.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work: tasks::PushWork::Turn, at: 1, ahead: 0, after: None, red: None });
         item.settle_orphaned_push();
         assert_eq!(item.phase(), Some(&Phase::Pushing { ahead: 0 }), "a push in the line stays pushing");
         item.push_waits = None;
@@ -2248,14 +2252,14 @@ pub(crate) mod tests {
         front.title = Some("Refunds on invoices".to_string());
         let mut item = task(Some("idle"), Some("ready"), 2);
         item.name = "search".to_string();
-        item.push_waits = Some(PendingPush { by: PushBy::User, work: PushWork::Turn, at: 10, ahead: 1, after: Some("billing".to_string()) });
+        item.push_waits = Some(PendingPush { by: PushBy::User, work: PushWork::Turn, at: 10, ahead: 1, after: Some("billing".to_string()), red: None });
         moved(&mut item, &Event::PushQueued { ahead: 1 });
         let mut items = [front, item];
         name_push_fronts(&mut items);
         let item = &mut items[1];
         assert_eq!((item.group(), item.summary()), (Group::GoingOut, "2 commits · pushing for you · 2nd in line after Refunds on invoices".to_string()));
         assert_eq!((item.next_for_you(), item.to_json()["push_ahead"].clone()), (None, json!(1)), "nothing for the user while it waits its turn");
-        item.push_waits = Some(PendingPush { by: PushBy::Lead, work: PushWork::Turn, at: 10, ahead: 0, after: None });
+        item.push_waits = Some(PendingPush { by: PushBy::Lead, work: PushWork::Turn, at: 10, ahead: 0, after: None, red: None });
         assert_eq!(item.push_note().unwrap(), "pushing for the lead · kebbie pushes it now");
         item.push_waits = None;
         item.push_left = Some("its Claude did not report ready within 30 minutes, so the pushes behind it went on".to_string());
@@ -2271,12 +2275,12 @@ pub(crate) mod tests {
         let mut item = task(Some("working"), Some("ready"), 1);
         item.git.as_mut().unwrap().approved = false;
         assert_eq!((item.to_json()["push_waits"].clone(), item.push_note(), item.group()), (Value::Null, None, Group::ReadyToPush));
-        item.push_waits = Some(PendingPush { by: PushBy::Lead, work: PushWork::Tests, at: 10, ahead: 0, after: None });
+        item.push_waits = Some(PendingPush { by: PushBy::Lead, work: PushWork::Tests, at: 10, ahead: 0, after: None, red: None });
         moved(&mut item, &Event::PushHanded);
         assert_eq!((item.to_json()["push_waits"].clone(), item.group()), (json!("lead"), Group::Working), "its Claude runs the tests the push needs");
         assert_eq!(item.summary(), "pushing for the lead · its Claude runs the tests · 1 commit");
         assert_eq!(item.next_for_you(), None, "nothing for the user to do while it runs");
-        item.push_waits = Some(PendingPush { by: PushBy::User, work: PushWork::Conflict, at: 10, ahead: 0, after: None });
+        item.push_waits = Some(PendingPush { by: PushBy::User, work: PushWork::Conflict, at: 10, ahead: 0, after: None, red: None });
         assert_eq!((item.to_json()["push_waits"].clone(), item.push_note().unwrap()), (json!("user"), "pushing for you · its Claude resolves the conflict".to_string()));
         let report = |item: &mut Item, state: &str| {
             let message = item.report.as_mut().unwrap();

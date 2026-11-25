@@ -503,9 +503,9 @@ mod tests {
         item.git.as_mut().unwrap().behind = 2;
         let labels = |item: &Item| task_choices(Some(item), None, None).into_iter().map(|choice| choice.label).collect::<Vec<_>>();
         assert!(labels(&item).contains(&"Rebase onto main".to_string()) && labels(&item).contains(&"Push".to_string()));
-        item.push_waits = Some(PendingPush { by: PushBy::User, work: PushWork::Turn, at: 1, ahead: 1, after: None });
+        item.push_waits = Some(PendingPush { by: PushBy::User, work: PushWork::Turn, at: 1, ahead: 1, after: None, red: None });
         assert!(labels(&item).contains(&"Take out of the push line".to_string()) && !labels(&item).iter().any(|label| label.starts_with("Rebase")), "{:?}", labels(&item));
-        item.push_waits = Some(PendingPush { by: PushBy::User, work: PushWork::Ci, at: 1, ahead: 0, after: None });
+        item.push_waits = Some(PendingPush { by: PushBy::User, work: PushWork::Ci, at: 1, ahead: 0, after: None, red: None });
         assert!(!labels(&item).contains(&"Take out of the push line".to_string()), "a red CI's fix is not in a line: {:?}", labels(&item));
     }
 

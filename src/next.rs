@@ -608,7 +608,7 @@ pub(crate) mod tests {
         let mut parked = asking("parked", "web", 30);
         parked.parked = Some(crate::tasks::Parked { until: Some(now() + 3600) });
         let mut pushing = ready("in-line", "web", 30);
-        pushing.push_waits = Some(crate::tasks::PendingPush { by: crate::tasks::PushBy::User, work: crate::tasks::PushWork::Turn, at: 5, ahead: 1, after: None });
+        pushing.push_waits = Some(crate::tasks::PendingPush { by: crate::tasks::PushBy::User, work: crate::tasks::PushWork::Turn, at: 5, ahead: 1, after: None, red: None });
         let items = [working("one"), working("two"), queued_after("waits", "web", &["one@web"]), parked, pushing];
         let next = of(&items);
         assert!(next.rows.is_empty(), "{:?}", next.rows);

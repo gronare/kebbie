@@ -388,6 +388,9 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
   kebbie ci tick                  one round of checks for every running watch, as the board does
   kebbie ci outside \"<reason>\"    run by a task's Claude: its red CI is outside the code (deploy window, infra,
                                   secrets, a flake); the row says so, nothing is waived
+  kebbie ci fixer <task@repo> <fix task>
+                                  run by the lead: the task it started to fix a red CI whose own task ended; while CI is
+                                  red on main the push line holds every push of the repo but the fix
   kebbie ci dismiss <task> [--why <reason>]
                                   yours alone (C on the board): keep the failed run on record with the reason, drop the
                                   watch and the push waiting for a fix; the task closes once its commits are on main
@@ -896,7 +899,11 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("ci") if name == Some("tick") => ci::tick_cli(),
         Some("ci") if name == Some("dismiss") => tasks::dismiss_ci(&cwd, arguments.positional(2), arguments.value("--why")),
         Some("ci") if name == Some("outside") => tasks::ci_outside(&arguments.rest(2).join(" ")),
-        Some("ci") if name.is_some() => Err("kebbie ci knows tick, outside and dismiss: kebbie ci [--json], kebbie ci tick, kebbie ci outside \"<reason>\" or kebbie ci dismiss <task> [--why <reason>]".to_string()),
+        Some("ci") if name == Some("fixer") => match (arguments.positional(2), arguments.positional(3)) {
+            (Some(red), Some(fix)) => ci::name_fixer(red, fix),
+            _ => Err("kebbie ci fixer <task@repo whose CI is red> <task that fixes it>".to_string()),
+        },
+        Some("ci") if name.is_some() => Err("kebbie ci knows tick, outside, dismiss and fixer: kebbie ci [--json], kebbie ci tick, kebbie ci outside \"<reason>\", kebbie ci dismiss <task> [--why <reason>] or kebbie ci fixer <task@repo whose CI is red> <task that fixes it>".to_string()),
         Some("ci") => Ok(ci::list(&lead::state_dir()?, arguments.flag("--json"))),
         Some("comments") => Ok(comments::list(&lead::state_dir()?, arguments.flag("--json"))),
         Some("comment") => comment(arguments, name),

@@ -132,7 +132,7 @@ fn fixes(state: &Path, log: &[Message], now: u64, read: Read) -> Vec<String> {
 
 // The push each repo's line works now, the one a free build slot should go to: past a push of the lead's or kebbie's held until a task it names lands, as drive passes it.
 pub(crate) fn heads(state: &Path, log: &[Message]) -> Vec<String> {
-    intent::repos(state).iter().filter_map(|repo| intent::line(state, repo).into_iter().find(|queued| queued.by.is_user() || open_before(queued, log).is_empty())).map(|head| head.address).collect()
+    intent::repos(state).iter().filter_map(|repo| intent::line(state, repo).into_iter().find(|queued| crate::ci::holding(state, repo, &queued.address).is_none() && (queued.by.is_user() || open_before(queued, log).is_empty()))).map(|head| head.address).collect()
 }
 
 // Works the head of a repo's line until one waits; with `mine`, only while that push is the head, and the outcome of its turn comes back.
@@ -146,6 +146,14 @@ pub(super) fn drive(state: &Path, repo: &Path, mine: Option<&str>, log: &[Messag
         let mut next = None;
         let line: Vec<Intent> = intent::line(state, repo).into_iter().filter(|queued| !held.contains(&queued.address)).collect();
         for queued in line {
+            if let Some(red) = crate::ci::holding(state, repo, &queued.address) {
+                driven.notes.push(format!("push: {}: held in the push line while CI is red on main ({}, {}), until main is green again", queued.address, red.address, red.short()));
+                if mine == Some(queued.address.as_str()) {
+                    driven.mine = Some(Ok(Notice::new(Tone::Moving, "In the push line, held while CI is red on main").next(format!("It goes out once {} fixes it and main is green again; only that fix goes out meanwhile.", red.task())).detail("task", &queued.task).to_string()));
+                }
+                held.push(queued.address);
+                continue;
+            }
             let first = if queued.by.is_user() { Vec::new() } else { open_before(&queued, log) };
             if first.is_empty() {
                 next = Some(queued);
@@ -944,6 +952,36 @@ mod tests {
         drop(push);
         drop_worktree(&dir, &beta);
         cleanup(dir, origin, &alpha);
+    }
+
+    #[test]
+    fn while_ci_is_red_on_main_the_line_holds_every_push_but_the_fix() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let copy = another_task(&dir, "copy", "x");
+        let state = state_of(&dir);
+        let at = |task: &str| crate::peers::address(task, &name_of(&dir));
+        let main = crate::repo::git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        let red = crate::ci::Watch { address: at("billing"), repo: dir.clone(), slug: "acme/app".to_string(), sha: main, started_at: 1, checked_at: None, close: true, runs: Vec::new(), state: crate::ci::State::Failed { at: 2, what: "ci · clippy".to_string(), url: String::new() }, error: None, erring_since: None, following: None, pushed: crate::ci::Pushed::default() };
+        crate::ci::save(&state, &red).unwrap();
+        crate::ci::hold_red(&state, &red);
+        save(&state, &Intent { work: Work::Turn, address: at("copy"), task: "copy".to_string(), queued: Some(100), ..intent(By::User, &dir, &fingerprint(&copy.path, &upstream).unwrap()) }).unwrap();
+        let mut pushed = Vec::new();
+        let notes = complete_in(&state, &[], 300, &|_, _| None, &|_| false, &mut |intent, _| { pushed.push(intent.task.clone()); Ok(Sent::Pushed(String::new())) });
+        assert!(pushed.is_empty() && load(&state, &at("copy")).is_some() && notes.iter().any(|note| note.contains("held in the push line while CI is red on main")), "{notes:?}");
+        assert!(heads(&state, &[]).is_empty(), "a held push gets no build slot");
+        assert_eq!(intent::pending(&state, &at("copy")).and_then(|pending| pending.red), Some("billing".to_string()), "the board names the red run that holds it");
+        save(&state, &Intent { work: Work::Turn, queued: Some(150), ..intent(By::User, &dir, &fingerprint(&slot.path, &upstream).unwrap()) }).unwrap();
+        complete_in(&state, &[], 300, &|_, _| None, &|_| false, &mut |intent, _| { pushed.push(intent.task.clone()); Ok(Sent::Pushed(String::new())) });
+        assert_eq!(pushed, ["billing"], "the task that got the failure pushes its fix past the held push");
+        let fix = crate::ci::Watch { sha: crate::repo::git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), started_at: 310, state: crate::ci::State::Running, ..red.clone() };
+        crate::ci::save(&state, &fix).unwrap();
+        complete_in(&state, &[], 320, &|_, _| None, &|_| false, &mut |intent, _| { pushed.push(intent.task.clone()); Ok(Sent::Pushed(String::new())) });
+        assert!(pushed == ["billing"] && load(&state, &at("copy")).is_some(), "the fix's CI still runs, as ci::begin wrote it over the red watch, so the rest still wait: {pushed:?}");
+        crate::ci::release_red(&state, &fix);
+        crate::ci::forget(&state, &at("billing"));
+        complete_in(&state, &[], 300, &|_, _| None, &|_| false, &mut |intent, _| { pushed.push(intent.task.clone()); Ok(Sent::Pushed(String::new())) });
+        assert_eq!(pushed, ["billing", "copy"], "green main lets the rest go");
+        cleanup(dir, origin, &slot);
     }
 
     #[test]

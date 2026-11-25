@@ -91,6 +91,7 @@ pub(crate) fn dismiss_as(state: &Path, caller: &Caller, cwd: &Path, name: Option
     archived.push(entry);
     record["dismissed"] = json!(archived);
     crate::state::write(&file(state, &address), record.to_string())?;
+    crate::ci::end_red(state, &address);
     crate::ci::forget(state, &address);
     if intent::pending(state, &address).is_some_and(|pending| pending.work == Work::Ci) {
         intent::forget(state, &address);
