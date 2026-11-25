@@ -69,6 +69,8 @@ So you can tidy history in the push window without paying for a second review.
 
 Findings belong to the commits instead, since a reworded message can be what they asked for. Any change to the commits, a reword included, makes them stale, and the reviewer reads the branch again when the task next reports ready, also while its CI runs.
 
+A review read again is a re-review, not a fresh read. Its brief quotes the reviewer's earlier verdict and the delta from the sha it read to the sha now: the git range-diff, which pairs the commits across an amend or a rebase, then the code diff between the two when the branch was not rebased, since after a rebase that diff would carry what landed on the default branch. A review read again on the same code, after the tests it asked for, gets its earlier verdict too, with no delta. The reviewer first checks each earlier finding at its line, then reads the delta and the callers of every function it changes in full. Code the delta leaves alone keeps the reading it had, so the same code does not come back with new findings each round. A first review tries every changed function against its edge cases before its verdict, so nothing is left for a later round.
+
 kebbie sends a review back by itself twice in a row. When the third verdict is stale too, it stops: the task waits under Needs you with "the review keeps finding new points; read it yourself or push", and the push no longer waits on that review. Sending it to review again, with `v` or `kebbie review`, or a pass starts the count over.
 
 ## Test runs are recorded, not repeated

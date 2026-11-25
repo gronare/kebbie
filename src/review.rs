@@ -624,7 +624,8 @@ fn review(repo: &Path, slot: &Slot, address: &str, state: &Path, which: Which, s
     let focus = subtask.and_then(|id| subtask_focus(&slot.path, id));
     let filed = crate::found::filed_by(state, address);
     let settled = settled_brief(&crate::obstacle::decided_points(state, address), &filed);
-    let input = brief(&Brief { address, worktree: &slot.path, upstream: &upstream, sha: &sha, commits: &commits, rules, rules_file: rules_file.as_deref(), quoted: quoted.as_deref(), said: &said, tests: &tests, also_noticed: settings.also_noticed.value, docs: docs.as_deref(), card: card.as_deref(), focus: focus.as_deref(), settled: settled.as_deref() });
+    let previous = if which == Which::Default { previous_brief(&slot.path, &upstream, &sha, fs::read_to_string(&file).ok().as_deref()) } else { None };
+    let input = brief(&Brief { address, worktree: &slot.path, upstream: &upstream, sha: &sha, commits: &commits, rules, rules_file: rules_file.as_deref(), quoted: quoted.as_deref(), said: &said, tests: &tests, also_noticed: settings.also_noticed.value, docs: docs.as_deref(), card: card.as_deref(), focus: focus.as_deref(), settled: settled.as_deref(), previous: previous.as_deref() });
     let reviewer = match which { Which::Default => default_reviewer(&crate::profiles::dir(), &settings)?, Which::Second => second_reviewer(&crate::profiles::dir(), &settings)? };
     let role = match which { Which::Default => "review", Which::Second => "second" };
     let answer = ask_reviewer(&Ask { address, worktree: &slot.path, settings: &settings, rules_file: rules_file.as_deref().filter(|_| quoted.is_none()), docs: docs.is_some(), input: &input, timeout: None, role, program: Some(&crate::trusted_spawn::claude_from_keeper()?), group_file: None, prompt: None, profile: Some(&reviewer) })?;
@@ -1115,6 +1116,7 @@ struct Brief<'a> {
     card: Option<&'a str>,
     focus: Option<&'a str>,
     settled: Option<&'a str>,
+    previous: Option<&'a str>,
 }
 
 pub(crate) fn linear_history(upstream: &str) -> String {
@@ -1122,7 +1124,8 @@ pub(crate) fn linear_history(upstream: &str) -> String {
 }
 
 fn brief(brief: &Brief) -> String {
-    let Brief { address, worktree, upstream, sha, commits, rules, rules_file, quoted, said, tests, also_noticed, docs, card, focus, settled } = *brief;
+    let Brief { address, worktree, upstream, sha, commits, rules, rules_file, quoted, said, tests, also_noticed, docs, card, focus, settled, previous } = *brief;
+    let previous = previous.map_or(String::new(), |previous| format!("{previous}\n\n"));
     let docs = docs.map_or(String::new(), |docs| format!("{docs}\n\n"));
     let settled = settled.map_or(String::new(), |settled| format!("{settled}\n\n"));
     let focus = focus.map_or(String::new(), |focus| format!("{focus}\n\n"));
@@ -1135,6 +1138,7 @@ fn brief(brief: &Brief) -> String {
     format!(
         "Review the branch of the task {address} in {}, at {sha}, by the kebbie:review instructions in your system prompt.\n\n\
          Its commits, oldest first, are {upstream}..{sha}, after any subtasks it pushed already, which you read the same way:\n{commits}\n\n\
+         {previous}\
          {focus}\
          {rules}\n\n\
          {}\n\n\
@@ -1146,6 +1150,37 @@ fn brief(brief: &Brief) -> String {
          {}\n\
          Your last message is the verdict, starting with its verdict line; kebbie saves it and tells the lead.",
         worktree.display(), linear_history(upstream), scope(also_noticed), conversation(said)
+    )
+}
+
+const RANGE_DIFF_BUDGET: usize = 20_000;
+
+// The verdict kebbie saved and the delta since its sha, so the reviewer checks its old findings and reads only what changed; on the same sha, read again for the tests it asked for, the delta is none; None for a first review or a sha git no longer has. The range-diff pairs even a commit amended past recognition at --creation-factor=100; the code diff is the delta only on an unchanged base, since after a rebase it would carry the default branch's commits.
+fn previous_brief(worktree: &Path, upstream: &str, sha: &str, saved: Option<&str>) -> Option<String> {
+    let saved = saved?;
+    let before = parse_verdict(saved)?.sha;
+    if before == sha {
+        return Some(rereview_brief(saved, &before, sha, "none: no commit changed since, so what is new is the test runs in your brief."));
+    }
+    let base = crate::repo::tracking(upstream);
+    let commits = git(worktree, &["range-diff", "--creation-factor=100", &base, &before, sha]).ok()?;
+    let bases = [&before, sha].map(|tip| git(worktree, &["merge-base", &base, tip]).ok());
+    let code = if bases[0].is_some() && bases[0] == bases[1] {
+        format!("The code from {} to {}, as git diff shows it:\n{}", &before[..7.min(before.len())], &sha[..7.min(sha.len())], git(worktree, &["diff", &before, sha]).ok()?)
+    } else {
+        format!("The branch was rebased onto a newer {upstream} since, so there is no code diff here: a plain one would carry what landed on {upstream}; the range-diff above holds the task's own delta.")
+    };
+    Some(rereview_brief(saved, &before, sha, &format!("{commits}\n\n{code}")))
+}
+
+fn rereview_brief(saved: &str, before: &str, sha: &str, delta: &str) -> String {
+    let short = |sha: &str| sha.chars().take(7).collect::<String>();
+    let clipped = if delta.chars().count() > RANGE_DIFF_BUDGET { "\nThe delta is clipped here: read the rest with git show on the commits the range-diff names." } else { "" };
+    format!(
+        "This is a re-review: you reviewed this branch at {} before, and the verdict you gave then is quoted below. Run it as the kebbie:review instructions' Re-review says: step 0 checks each earlier finding at {}, then you review the delta and the callers of every function it changes in full.\n\
+         Your earlier verdict:\n---\n{}\n---\n\
+         The delta: the git range-diff from the commits you reviewed at {} to the commits at {} (`-` is what you read, `+` what replaced it, `=` a commit unchanged, `!` a commit changed), then the code diff between the two when the branch was not rebased:\n---\n{}{clipped}\n---",
+        short(before), short(sha), saved.trim(), short(before), short(sha), clip(delta.trim(), RANGE_DIFF_BUDGET)
     )
 }
 
@@ -1762,7 +1797,7 @@ mod tests {
         let transcript = lines.iter().map(Value::to_string).collect::<Vec<_>>().join("\n") + "\nnot json\n";
         let said = user_messages(&transcript);
         assert_eq!(said, ["Add refunds to the billing page.", "Refunds only within 30 days."]);
-        let mut shape = Brief { address: "billing@app", worktree: Path::new("/src/wt1.app"), upstream: "origin/main", sha: "abc123", commits: "abc123 Add refunds", rules: "kebbie:work-rules", rules_file: Some(Path::new("/kebbie/skills/work-rules/SKILL.md")), quoted: None, said: &said, tests: "- ✓ cargo test · 3 passed · at abc123 · `cargo test`", also_noticed: config::AlsoNoticed::Backlog, docs: None, card: None, focus: None, settled: None };
+        let mut shape = Brief { address: "billing@app", worktree: Path::new("/src/wt1.app"), upstream: "origin/main", sha: "abc123", commits: "abc123 Add refunds", rules: "kebbie:work-rules", rules_file: Some(Path::new("/kebbie/skills/work-rules/SKILL.md")), quoted: None, said: &said, tests: "- ✓ cargo test · 3 passed · at abc123 · `cargo test`", also_noticed: config::AlsoNoticed::Backlog, docs: None, card: None, focus: None, settled: None, previous: None };
         let text = brief(&shape);
         assert!(text.contains("origin/main..abc123, after any subtasks it pushed already, which you read the same way:\nabc123 Add refunds"), "{text}");
         assert!(text.contains("`kebbie:work-rules`, at /kebbie/skills/work-rules/SKILL.md: read it"), "{text}");
@@ -1791,7 +1826,7 @@ mod tests {
         let runs = "- ✓ script/test · 3 passed · at abc123 · `script/test spec/refunds_spec.rb`";
         let commands = ["script/test".to_string(), "bin/rspec".to_string()];
         let tests = with_test_commands(runs, &commands);
-        let text = brief(&Brief { address: "billing@app", worktree: Path::new("/src/wt1.app"), upstream: "origin/main", sha: "abc123", commits: "abc123 Add refunds", rules: "kebbie:work-rules", rules_file: None, quoted: None, said: &said, tests: &tests, also_noticed: config::AlsoNoticed::Backlog, docs: None, card: None, focus: None, settled: None });
+        let text = brief(&Brief { address: "billing@app", worktree: Path::new("/src/wt1.app"), upstream: "origin/main", sha: "abc123", commits: "abc123 Add refunds", rules: "kebbie:work-rules", rules_file: None, quoted: None, said: &said, tests: &tests, also_noticed: config::AlsoNoticed::Backlog, docs: None, card: None, focus: None, settled: None, previous: None });
         assert!(text.contains(&format!("{runs}\n\nThis repo runs its tests with `script/test` or `bin/rspec` (`task.test_commands`): a finding that asks for a test run names one of these")), "{text}");
         assert_eq!(with_test_commands("", &commands), "This repo runs its tests with `script/test` or `bin/rspec` (`task.test_commands`): a finding that asks for a test run names one of these, never another test setup.", "without a recorded run the commands stand alone");
         assert_eq!(with_test_commands(runs, &[]), runs, "a repo without task.test_commands adds nothing");
@@ -1800,14 +1835,14 @@ mod tests {
     #[test]
     fn the_brief_never_reads_linear_history_as_lying_on_the_latest_default_branch_whatever_the_rules_skill() {
         let said = ["Add a --json flag to kebbie peers.".to_string()];
-        let shape = Brief { address: "peers@kebbie", worktree: Path::new("/src/wt1.kebbie"), upstream: "origin/main", sha: "abc123", commits: "abc123 Add --json", rules: "~/RULES.md", rules_file: None, quoted: None, said: &said, tests: "", also_noticed: config::AlsoNoticed::Backlog, docs: None, card: None, focus: None, settled: None };
+        let shape = Brief { address: "peers@kebbie", worktree: Path::new("/src/wt1.kebbie"), upstream: "origin/main", sha: "abc123", commits: "abc123 Add --json", rules: "~/RULES.md", rules_file: None, quoted: None, said: &said, tests: "", also_noticed: config::AlsoNoticed::Backlog, docs: None, card: None, focus: None, settled: None, previous: None };
         assert!(brief(&shape).contains("as a rule on the branch's own commits, never as asking the branch to lie on the latest origin/main: a branch that is only behind origin/main breaks no rule"), "{}", brief(&shape));
     }
 
     #[test]
     fn the_brief_carries_the_docs_check_only_when_kebbie_passes_one() {
         let said = ["Add a --json flag to kebbie peers.".to_string()];
-        let mut shape = Brief { address: "peers@kebbie", worktree: Path::new("/src/wt1.kebbie"), upstream: "origin/main", sha: "abc123", commits: "abc123 Add --json", rules: "kebbie:work-rules", rules_file: None, quoted: None, said: &said, tests: "", also_noticed: config::AlsoNoticed::Backlog, docs: None, card: None, focus: None, settled: None };
+        let mut shape = Brief { address: "peers@kebbie", worktree: Path::new("/src/wt1.kebbie"), upstream: "origin/main", sha: "abc123", commits: "abc123 Add --json", rules: "kebbie:work-rules", rules_file: None, quoted: None, said: &said, tests: "", also_noticed: config::AlsoNoticed::Backlog, docs: None, card: None, focus: None, settled: None, previous: None };
         assert!(!brief(&shape).contains("docs.required"), "a repo without docs.required gets no docs check");
         let skill = Path::new("/kebbie/skills/keep-docs/SKILL.md");
         let check = docs_check(&[], Some("docs/README.md"), skill);
@@ -2095,7 +2130,7 @@ mod tests {
     fn the_brief_carries_the_sign_off_card_for_the_scope_step_and_the_subtask_the_user_sent() {
         let said = Vec::new();
         let card = "**Refunds.**\n\nBuilt:\n- Refunds list.\n\nAlso noticed:\n- The VAT test is flaky (found:f1 · open under Found by tasks)";
-        let shape = Brief { address: "billing@app", worktree: Path::new("/src/wt1.app"), upstream: "origin/main", sha: "abc123", commits: "abc123 Add refunds", rules: "kebbie:work-rules", rules_file: None, quoted: None, said: &said, tests: "", also_noticed: config::AlsoNoticed::Backlog, docs: None, card: Some(card), focus: Some("The user sent the subtask gateway, \"Add the gateway\", to this review: review its commits (abc123)"), settled: None };
+        let shape = Brief { address: "billing@app", worktree: Path::new("/src/wt1.app"), upstream: "origin/main", sha: "abc123", commits: "abc123 Add refunds", rules: "kebbie:work-rules", rules_file: None, quoted: None, said: &said, tests: "", also_noticed: config::AlsoNoticed::Backlog, docs: None, card: Some(card), focus: Some("The user sent the subtask gateway, \"Add the gateway\", to this review: review its commits (abc123)"), settled: None, previous: None };
         let text = brief(&shape);
         assert!(text.contains("check each Also noticed line against the intent: one on the task's own path, or one the task's intent needs, is a `scope:` finding") && text.contains(card), "{text}");
         assert!(text.contains("abc123 Add refunds\n\nThe user sent the subtask gateway"), "{text}");
@@ -2107,7 +2142,7 @@ mod tests {
         let said = Vec::new();
         let item = crate::found::Item { id: "f1".to_string(), line: "A schema problem swaps the layout".to_string(), repo: "mindin".to_string(), sources: vec!["refactor@mindin".to_string()], count: 1, first_at: 0, last_at: 0, state: crate::found::State::Open, outcome: None, raised: false };
         let settled = settled_brief(&["- o9: scope: mindin/schema.py:64 — Also noticed f1 → workaround (investigator)".to_string()], &[item]).unwrap();
-        let shape = Brief { address: "refactor@mindin", worktree: Path::new("/src/wt1.mindin"), upstream: "origin/main", sha: "abc123", commits: "abc123 Split notes", rules: "kebbie:work-rules", rules_file: None, quoted: None, said: &said, tests: "", also_noticed: config::AlsoNoticed::Backlog, docs: None, card: None, focus: None, settled: Some(&settled) };
+        let shape = Brief { address: "refactor@mindin", worktree: Path::new("/src/wt1.mindin"), upstream: "origin/main", sha: "abc123", commits: "abc123 Split notes", rules: "kebbie:work-rules", rules_file: None, quoted: None, said: &said, tests: "", also_noticed: config::AlsoNoticed::Backlog, docs: None, card: None, focus: None, settled: Some(&settled), previous: None };
         let text = brief(&shape);
         assert!(text.contains("Points already decided in this task, each with its decision. A decided point is settled: leave it out of your verdict under every mark") && text.contains("- o9: scope: mindin/schema.py:64 — Also noticed f1 → workaround (investigator)"), "{text}");
         assert!(text.contains("Items the task filed in the backlog from its Also noticed lines, by found id:\n- f1: A schema problem swaps the layout"), "{text}");
@@ -2154,5 +2189,48 @@ mod tests {
         assert_eq!(unsettled("src/pay.rs:41 — booked twice"), None);
         let only = parse_verdict(&record("verdict: changes\n\n- scope: src/view.rs:88 — renames the export.\n- gap: src/push.rs:40 — needs an iPhone.\n", "abc").unwrap()).unwrap();
         assert!(only.asks_only_confirmation(), "settled by the investigator, the review passes");
+    }
+
+    #[test]
+    fn a_re_review_gets_its_earlier_verdict_and_the_range_diff_since_its_sha() {
+        let dir = crate::sh::test_dir("review-previous");
+        let run = |args: &[&str]| git(&dir, &[&["-c", "user.name=t", "-c", "user.email=t@t"][..], args].concat()).unwrap();
+        run(&["init", "--quiet", "--initial-branch=main"]);
+        fs::write(dir.join("refund.rs"), "fn refund() {}\n").unwrap();
+        run(&["add", "refund.rs"]);
+        run(&["commit", "--quiet", "-m", "base"]);
+        run(&["checkout", "--quiet", "-b", "task"]);
+        fs::write(dir.join("refund.rs"), "fn refund() { book(); }\n").unwrap();
+        run(&["commit", "--quiet", "-am", "Book refunds"]);
+        let before = run(&["rev-parse", "HEAD"]);
+        fs::write(dir.join("refund.rs"), "fn refund() { if !booked() { book(); } }\n").unwrap();
+        run(&["commit", "--quiet", "--amend", "-am", "Book refunds once"]);
+        let now = run(&["rev-parse", "HEAD"]);
+        let saved = format!("verdict: changes\nreviewed: {before}\n\n- refund.rs:1 — books the refund again on retry.\n");
+        let previous = previous_brief(&dir, "main", &now, Some(&saved)).expect("an earlier verdict on another sha is a re-review");
+        assert!(previous.contains(&format!("you reviewed this branch at {} before", &before[..7])) && previous.contains("step 0 checks each earlier finding"), "{previous}");
+        assert!(previous.contains("- refund.rs:1 — books the refund again on retry."), "the earlier findings travel: {previous}");
+        assert!(previous.contains("Book refunds once") && previous.contains("booked()"), "the amended commit's delta is in the range-diff: {previous}");
+        let again = previous_brief(&dir, "main", &now, Some(&saved.replace(&before, &now))).expect("read again on the same sha, after the tests it asked for, it is a re-review too");
+        assert!(again.contains("- refund.rs:1 — books the refund again on retry.") && again.contains("none: no commit changed since"), "{again}");
+        assert_eq!(previous_brief(&dir, "main", &now, None), None, "a first review has nothing before it");
+        assert_eq!(previous_brief(&dir, "main", &now, Some(&saved.replace(&before, &"f".repeat(40)))), None, "a sha git no longer has falls back to a full review");
+        run(&["checkout", "--quiet", "main"]);
+        fs::write(dir.join("other.rs"), "fn landed_on_main() {}\n").unwrap();
+        run(&["add", "other.rs"]);
+        run(&["commit", "--quiet", "-m", "Land other work"]);
+        run(&["checkout", "--quiet", "task"]);
+        run(&["rebase", "--quiet", "main"]);
+        fs::write(dir.join("refund.rs"), "fn refund() { if !booked() { book_once(); } }\n").unwrap();
+        run(&["commit", "--quiet", "--amend", "-am", "Book refunds once"]);
+        let rebased = run(&["rev-parse", "HEAD"]);
+        let over = previous_brief(&dir, "main", &rebased, Some(&saved.replace(&before, &now))).unwrap();
+        assert!(over.contains("book_once") && !over.contains("landed_on_main") && over.contains("rebased onto a newer main since"), "across a rebase the delta is the task's own: {over}");
+        let said = vec!["Add refunds.".to_string()];
+        let shape = Brief { address: "billing@app", worktree: &dir, upstream: "main", sha: &now, commits: "abc123 Book refunds once", rules: "kebbie:work-rules", rules_file: None, quoted: None, said: &said, tests: "", also_noticed: config::AlsoNoticed::Backlog, docs: None, card: None, focus: None, settled: None, previous: Some(&previous) };
+        assert!(brief(&shape).contains(&format!("abc123 Book refunds once\n\n{previous}\n\n")), "the re-review part follows the commits");
+        assert!(!brief(&Brief { previous: None, ..shape }).contains("re-review"), "a first review is told nothing of one");
+        assert!(rereview_brief(&saved, &before, &now, &"x".repeat(RANGE_DIFF_BUDGET + 1)).contains("The delta is clipped here"));
+        fs::remove_dir_all(dir).unwrap();
     }
 }
