@@ -205,6 +205,15 @@ fn the_push_summary_and_the_decision_lines_are_written_for_a_reader_without_cont
 }
 
 #[test]
+fn a_task_builds_and_tests_in_sweeps_with_one_verifying_run_per_part() {
+    let situation = "a task built once per fixed error and held the build slot while the other tasks waited";
+    says(&file("skills/work-rules/SKILL.md"), &["Build and test in **sweeps**", "fix them all, then run once more to verify", "Each part's last commit gets that verifying run"], situation);
+    says(&file("skills/playbook/PLAN.md"), &["in sweeps by [work-rules](../work-rules/SKILL.md) rule 5", "that verifying run on its last commit is green"], situation);
+    says(&task_role(), &["Build each part in sweeps", "fix every error one run lists, then run once more to verify"], situation);
+    says(section(&file("skills/work-rules/CUT.md"), "## Check the branch"), &["the sha of each part's last commit", "judged by its diff"], "the branch check asked for a green run at every commit's sha");
+}
+
+#[test]
 fn a_task_cuts_its_work_into_increments_that_each_go_out_alone_and_checks_its_branch_before_ready() {
     let rules = file("skills/work-rules/SKILL.md");
     says(&rules, &["5. **Green alone.**", "6. **Safe to deploy alone.**", "7. **Easy first, risky last.**", "8. **Written for its own commit.**", "[CUT.md](CUT.md)", "by the task itself before it reports ready", "rules 1, 2 and 5 to 8"], "a task finished as commits that only worked together");

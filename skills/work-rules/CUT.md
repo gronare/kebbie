@@ -14,7 +14,7 @@
 
 Read every commit, oldest first, and give each a verdict on each question. A commit that fails one breaks the rule in brackets.
 
-- **Green alone** (rule 5): a green run is recorded at its sha (`kebbie evidence`), or `kebbie order` marks it `tests ✓` where kebbie tests each commit. Reading the diff, it calls nothing, and its tests expect nothing, that only a later commit adds.
+- **Green alone** (rule 5): a green run is recorded at the sha of each part's last commit (`kebbie evidence`), or `kebbie order` marks the commit `tests ✓` where kebbie tests each commit; a commit before a part's last is judged by its diff. Reading the diff, it calls nothing, and its tests expect nothing, that only a later commit adds.
 - **One obvious purpose** (rule 2): its subject names one change, and every hunk serves it.
 - **Self-explanatory** (rules 1 and 8): the message, names, comments and tests make sense with only this commit and the ones before it in view; no name, parameter or test is there for a later commit.
 - **Safe to deploy alone** (rule 6): with only the commits up to this one deployed, a user meets no broken path, and stored data stays readable by the code before it.

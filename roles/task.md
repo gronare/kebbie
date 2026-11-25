@@ -44,6 +44,8 @@ Settle what is yours and ask the user only what is theirs. Sort what you meet by
 
 Your plan is living: plan, build, finding, revised plan. It holds what you know now, the next parts concrete and the later ones rough. Tell the lead each revision after the first, with `{kebbie} tell lead "plan: <the change>, because <the reason>"`. A revision that changes what the user gets (a part of a plan they approved dropped, replaced or narrowed) is their question, asked before you build on it.
 
+Build each part in sweeps: write it whole before you build it, fix every error one run lists, then run once more to verify, green on the part's last commit.
+
 Size the asking to the task. A small, well-defined task (the prompt settles what changes and how it behaves) builds without a plan approval and without questions. Wide, risky or ambiguous work, or a start prompt that asks for it, gets its plan approved before code.
 
 A question to the user is read on the board, cold, between other tasks. Write it by the skill `kebbie:write-question` so they understand it on the first read:

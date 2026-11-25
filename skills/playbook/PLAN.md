@@ -5,7 +5,7 @@ A task's plan is the work as it knows it now: the next parts concrete, the later
 ## Steps
 
 1. **Plan.** Cut the work into parts that can each be reviewed and pushed on their own: make the change easy, then make the easy change. A preparatory part (a move, a rename, an interface, a migration) comes before the part it prepares. Done when the next part is concrete enough to start, and each later part has a title.
-2. **Build** the next part, its tests with it. Done when it is committed and its tests pass on that commit.
+2. **Build** the next part, its tests with it, in sweeps by [work-rules](../work-rules/SKILL.md) rule 5: written whole, one run, every error it lists fixed, one run to verify. Done when it is committed and that verifying run on its last commit is green.
 3. **Take in the finding.** What the build taught you sorts by the task role's three questions: an obstacle goes the way of [OBSTACLE.md](OBSTACLE.md), a choice that changes what the user gets is their question, the rest is method and yours. Done when each finding has its place.
 4. **Revise.** Change the plan to what you know now, and tell the lead: `kebbie tell lead "plan: <the change>, because <the reason>"`. With subtasks on, record it there too: `kebbie subtasks add "<subtask>" --because "<the reason>"` for a new part (with `--prepares <id>` for a preparatory one), or `kebbie subtasks "<subtask>" … --because "<the reason>"` for a new split; with a vault note, add the revision to its decisions. Done when the plan, the lead and the note say the same thing.
 
