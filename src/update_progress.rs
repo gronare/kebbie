@@ -441,22 +441,26 @@ impl Printer {
 }
 
 pub fn print_while(path: PathBuf, stop: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
-        use std::io::Write;
-        let tty = std::io::IsTerminal::is_terminal(&std::io::stdout());
-        let width = ratatui::crossterm::terminal::size().map_or(80, |(width, _)| width as usize).max(40);
-        let mut printer = Printer::new(tty);
-        loop {
-            let last = stop.load(Ordering::SeqCst);
-            if let Some(progress) = load(&path) {
-                print!("{}", printer.frame(&progress, crate::messages::now(), width.saturating_sub(1)));
-            }
-            if last {
-                let _ = std::io::stdout().flush();
-                return;
-            }
-            let _ = std::io::stdout().flush();
-            std::thread::sleep(Duration::from_millis(200));
+    let tty = std::io::IsTerminal::is_terminal(&std::io::stdout());
+    let width = ratatui::crossterm::terminal::size().map_or(80, |(width, _)| width as usize).max(40);
+    print_to(std::io::stdout(), Printer::new(tty), width.saturating_sub(1), path, stop)
+}
+
+// The first frame is drawn before the thread starts, so a step that ends before the thread's first look still shows that it began.
+fn print_to(mut out: impl std::io::Write + Send + 'static, mut printer: Printer, width: usize, path: PathBuf, stop: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
+    let mut draw = move |printer: &mut Printer| {
+        if let Some(progress) = load(&path) {
+            let _ = write!(out, "{}", printer.frame(&progress, crate::messages::now(), width));
+        }
+        let _ = out.flush();
+    };
+    draw(&mut printer);
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_millis(200));
+        let last = stop.load(Ordering::SeqCst);
+        draw(&mut printer);
+        if last {
+            return;
         }
     })
 }
@@ -594,6 +598,33 @@ mod tests {
         assert!(fraction(&downloaded, 100) < 0.3, "{}", fraction(&downloaded, 100));
         downloaded.meter = Some(Meter::Count { what: "plugins".to_string(), done: 2, total: 2 });
         assert!(fraction(&downloaded, 100) > 0.5 && fraction(&downloaded, 100) < 0.9, "the restarts still carry the rest: {}", fraction(&downloaded, 100));
+    }
+
+    #[derive(Clone, Default)]
+    struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Captured {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_step_that_ends_before_the_printer_looks_again_still_shows_it_began() {
+        let state = crate::sh::test_dir("progress-quick-fetch");
+        let mut tracker = Tracker::start(&file(&state), "Fetching main", "Build kebbie", true, 100);
+        let (out, stop) = (Captured::default(), Arc::new(AtomicBool::new(false)));
+        let printer = print_to(out.clone(), Printer::new(false), 60, file(&state), stop.clone());
+        tracker.done(FETCH, "Fetched main");
+        stop.store(true, Ordering::SeqCst);
+        printer.join().unwrap();
+        let said = String::from_utf8(out.0.lock().unwrap().clone()).unwrap();
+        assert!(said.starts_with("▸ Fetching main") && said.contains("\n✓ Fetched main\n"), "{said:?}");
     }
 
     #[test]
