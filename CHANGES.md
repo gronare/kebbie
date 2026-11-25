@@ -8,6 +8,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Tasks build and test in sweeps: one run lists every error, all get fixed, one run verifies.
 - Tasks and the lead consult an advisor, the best one your account can use, or the profile's advisor.
 - n asks only what you want done: Claude picks the repo, writes the card and asks its questions, then starts it or files it.
+- A task's build refuses to start when the disk is nearly full, and says how much is free.
 
 ### Fixed
 - The line under a task's row on the board says only what you do next, on one line; review findings, rule breaks and review suggestions go to the lead.

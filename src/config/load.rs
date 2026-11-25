@@ -40,6 +40,11 @@ pub fn build_settings() -> Result<(u32, Vec<String>)> {
     Ok((builds.slots.unwrap_or(super::DEFAULT_BUILD_SLOTS), builds.commands.unwrap_or_else(|| super::DEFAULT_BUILD_COMMANDS.map(str::to_string).to_vec())))
 }
 
+pub fn disk_limits() -> Result<(crate::disk::Limit, crate::disk::Limit)> {
+    let disk = load_machine(&path())?.disk;
+    Ok((disk.trim_below.unwrap_or(crate::disk::DEFAULT_TRIM_BELOW), disk.builds_below.unwrap_or(crate::disk::DEFAULT_BUILDS_BELOW)))
+}
+
 // Whether new ideas from your devices go to this machine first: hub.ideas_machine names it.
 pub fn is_idea_machine() -> bool {
     load_machine(&path()).ok().is_some_and(|machine| names_itself(&machine, &short_hostname()))

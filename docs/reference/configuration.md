@@ -369,6 +369,8 @@ commands = ["cargo", "xcodebuild", "npm run build"]
 
 Each worktree builds into its own `target/`, a few GB each, so a machine with many tasks can fill its disk. kebbie watches the free space on the disks that hold the repos' worktrees.
 
+When the free space under a worktree is below `disk.builds_below`, a task's build there takes no build slot and does not run. The guard says how much is free and exits with status 75, and a task in line whose own worktree is on such a disk gets no build turn: it keeps its place while the turn goes to the next task whose disk has room.
+
 Each limit is free space in GB, as `"30 GB"`, or a share of the whole disk, as `"15%"`.
 
 ```toml

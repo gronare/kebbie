@@ -35,6 +35,8 @@ pub struct Queue {
     pub line: Vec<String>,
     pub turns: Vec<Turn>,
     pub ticked: u64,
+    pub builds_below: Option<crate::disk::Limit>,
+    pub low_disk: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -139,7 +141,7 @@ impl Queue {
         self.line.sort_by_key(|address| if address == UPDATE { 0 } else if heads.contains(address) { 1 } else { 2 });
     }
 
-    // The keeper's round: dead builds free their slots, as does one that held its slot MAX_HOLD while others wait, a turn not taken in time passes on, and each free slot goes to the next in line, a push line's head first; what to tell whom comes back.
+    // The keeper's round: a task whose own disk is low gets no turn and keeps its place, dead builds free their slots, as does one that held its slot MAX_HOLD while others wait, a turn not taken in time passes on, and each free slot goes to the next in line, a push line's head first; what to tell whom comes back.
     pub fn tick(&mut self, slots: u32, commands: &[String], heads: &[String], alive: impl Fn(&str) -> bool, now: u64) -> Vec<(String, String)> {
         self.slots = Some(slots);
         self.commands = Some(commands.to_vec());
@@ -155,8 +157,13 @@ impl Queue {
         self.turns = kept;
         self.put_first(heads);
         told.extend(expired.into_iter().filter(|turn| turn.told).map(|turn| (turn.address, MISSED.to_string())));
-        while self.used() < self.slots() && !self.line.is_empty() {
-            let address = self.line.remove(0);
+        let mut at = 0;
+        while self.used() < self.slots() && at < self.line.len() {
+            if self.low_disk.contains(&self.line[at]) {
+                at += 1;
+                continue;
+            }
+            let address = self.line.remove(at);
             let tell = address != UPDATE;
             self.turns.push(Turn { address: address.clone(), until: now + if tell { HOLD } else { UPDATE_HOLD }, told: tell });
             if tell {
@@ -212,6 +219,12 @@ pub fn holding(holders: &[Holder], turns: &[Turn]) -> String {
         parts.insert(0, format!("{} building", building.join(", ")));
     }
     parts.join("; ")
+}
+
+// The keeper publishes the limit in the queue, as a sandboxed task reads no config, and the guard measures the disk under the build itself.
+pub fn disk_refusal(space: Option<crate::disk::Space>, limit: Option<crate::disk::Limit>) -> Option<String> {
+    let (space, limit) = (space?, limit?);
+    space.below(limit).then(|| format!("kebbie: the disk under this worktree has {} free, below the {} a build needs (disk.builds_below), so this build takes no build slot and does not run. The keeper trims build output from worktrees nobody uses when the disk runs low; free space and build again.", crate::disk::gb(space.free), limit.shown()))
 }
 
 pub fn board_note(place: usize) -> String {
@@ -367,7 +380,13 @@ pub fn tick_now() -> Result<Vec<String>> {
     let dir = dir()?;
     let (slots, commands) = crate::config::build_settings().unwrap_or_else(|_| (crate::config::DEFAULT_BUILD_SLOTS, crate::config::DEFAULT_BUILD_COMMANDS.map(str::to_string).to_vec()));
     let heads = crate::lead::state_dir().map(|state| crate::tasks::push_heads(&state, &crate::messages::load())).unwrap_or_default();
-    let told = with_queue(&dir, |queue| queue.tick(slots, &commands, &heads, |id| alive_in(&dir, id), crate::messages::now()))?;
+    let builds_below = crate::config::disk_limits().map_or(crate::disk::DEFAULT_BUILDS_BELOW, |(_, builds_below)| builds_below);
+    let low = low_disk(builds_below);
+    let told = with_queue(&dir, |queue| {
+        queue.low_disk = queue.line.iter().filter(|address| low.contains(address)).cloned().collect();
+        queue.builds_below = Some(builds_below);
+        queue.tick(slots, &commands, &heads, |id| alive_in(&dir, id), crate::messages::now())
+    })?;
     if told.is_empty() {
         return Ok(Vec::new());
     }
@@ -382,6 +401,19 @@ pub fn tick_now() -> Result<Vec<String>> {
             Err(error) => format!("builds: could not tell {address}: {error}"),
         }
     }).collect())
+}
+
+// The tasks whose own worktree's disk is below the limit, as the guard would refuse their build; read outside the queue's lock and matched to the line inside it, and the task list is read only when some pooled disk is low.
+fn low_disk(builds_below: crate::disk::Limit) -> Vec<String> {
+    let low = |path: &Path| crate::disk::space(path).is_some_and(|space| space.below(builds_below));
+    if !crate::repo::pooled_checkouts().iter().any(|repo| low(repo)) {
+        return Vec::new();
+    }
+    crate::status::gather().unwrap_or_default().into_iter().filter_map(|item| {
+        let (path, repo) = (item.path.as_deref()?, item.repo.as_deref()?);
+        let address = crate::peers::address(&item.name, &crate::repo::name_of(repo));
+        low(path).then_some(address)
+    }).collect()
 }
 
 // Whether this call of the program builds: cargo's compiling subcommands, or a configured command's first words.
@@ -582,9 +614,14 @@ pub fn guard(argv: &[String]) -> ExitCode {
         command.status()
     };
     let queue = dir();
-    let gated = std::env::var_os(HELD_VAR).is_none() && queue.as_ref().is_ok_and(|dir| builds(program, args, &load(dir).commands()));
+    let loaded = queue.as_ref().map(|dir| load(dir)).unwrap_or_default();
+    let gated = std::env::var_os(HELD_VAR).is_none() && queue.is_ok() && builds(program, args, &loaded.commands());
     let address = if gated { task_address() } else { None };
     let (Ok(dir), Some(address)) = (queue, address) else { return exit_of(run(&mut command), program) };
+    if let Some(refusal) = disk_refusal(std::env::current_dir().ok().and_then(|cwd| crate::disk::space(&cwd)), loaded.builds_below) {
+        eprintln!("{refusal}");
+        return ExitCode::from(QUEUED_EXIT);
+    }
     let slot = match take_slot(&dir, &address, false, true) {
         Ok(Took::Slot(slot)) => slot,
         Ok(Took::Queued(place, held)) => {
@@ -786,6 +823,32 @@ mod tests {
         let told = queue.tick(1, &[], &[], |_| true, 101 + MAX_HOLD);
         assert_eq!(told, vec![("a@app".to_string(), OUTHELD.to_string()), ("b@app".to_string(), TURN.to_string())]);
         assert!(queue.holders.is_empty());
+    }
+
+    #[test]
+    fn a_task_on_a_low_disk_keeps_its_place_while_the_turn_goes_to_one_on_a_disk_with_room() {
+        let mut queue = queue(1, 100);
+        queue.take("a@app", "1", false, true, 100);
+        queue.take("b@app", "2", false, true, 100);
+        queue.take("c@app", "3", false, true, 100);
+        queue.low_disk = strings(&["b@app"]);
+        assert_eq!(queue.tick(1, &[], &[], |id| id != "1", 101), vec![("c@app".to_string(), TURN.to_string())], "nobody is told a turn the guard would refuse");
+        assert_eq!(queue.line, strings(&["b@app"]));
+        queue.turns.clear();
+        assert!(queue.tick(1, &[], &[], |_| true, 102).is_empty(), "a line of only low disks hands out nothing");
+        queue.low_disk.clear();
+        assert_eq!(queue.tick(1, &[], &[], |_| true, 103), vec![("b@app".to_string(), TURN.to_string())]);
+    }
+
+    #[test]
+    fn a_build_below_the_disk_limit_is_refused_with_the_free_space_and_the_key() {
+        use crate::disk::{Limit, Space};
+        let low = Space { free: 8_200_000_000, total: 242_000_000_000 };
+        let refusal = disk_refusal(Some(low), Some(Limit::Gb(10))).unwrap();
+        assert!(refusal.contains("8.2 GB free, below the 10 GB") && refusal.contains("disk.builds_below"), "{refusal}");
+        assert_eq!(disk_refusal(Some(low), Some(Limit::Gb(8))), None);
+        assert_eq!(disk_refusal(None, Some(Limit::Gb(10))), None, "a disk that cannot be read never stops a build");
+        assert_eq!(disk_refusal(Some(low), None), None, "without a keeper's limit the build goes ahead");
     }
 
     #[test]
