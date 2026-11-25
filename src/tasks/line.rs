@@ -127,6 +127,11 @@ fn fixes(state: &Path, log: &[Message], now: u64, read: Read) -> Vec<String> {
     notes
 }
 
+// The push each repo's line works now, the one a free build slot should go to: past a lead push held until a task it names lands, as drive passes it.
+pub(crate) fn heads(state: &Path, log: &[Message]) -> Vec<String> {
+    intent::repos(state).iter().filter_map(|repo| intent::line(state, repo).into_iter().find(|queued| queued.by != By::Lead || open_before(queued, log).is_empty())).map(|head| head.address).collect()
+}
+
 // Works the head of a repo's line until one waits; with `mine`, only while that push is the head, and the outcome of its turn comes back.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn drive(state: &Path, repo: &Path, mine: Option<&str>, log: &[Message], now: u64, read: Read, working: Working, push: Push) -> Driven {
@@ -397,6 +402,8 @@ mod tests {
         };
         let done = Notice::new(Tone::Done, "Pushed 1 commit to main").to_string();
         queue(By::Lead);
+        assert_eq!(heads(&state, &[]), std::slice::from_ref(&address), "without a ready report naming a task to go first, the first queued push heads its line");
+        assert_eq!(heads(&state, &ready), [format!("copy@{}", crate::repo::name_of(&dir))], "the held push steps aside, so the build slot goes to the push behind it");
         let mut pushed = Vec::new();
         let notes = complete_in(&state, &ready, 300, &|_, _| None, &|_| false, &mut |intent, _| { pushed.push(intent.task.clone()); Ok(Sent::Pushed(done.clone())) });
         assert_eq!(pushed, ["copy"], "the held push steps aside and the one behind it goes out: {notes:?}");

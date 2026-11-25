@@ -348,6 +348,7 @@ Each Claude task runs its builds through a guard kebbie puts first on the PATH o
 - A task that finds every slot taken is told its place in line, and its command exits with status 75. The board shows `waiting for a build slot, 2nd` on its row.
 - When a slot frees, the keeper tells the next task in line that its turn has come and holds the slot 3 minutes for it. A task that does not build in that time loses its turn to the next, and is told so.
 - `kebbie update` goes first in line and waits there, at most 10 minutes, then builds without a slot.
+- The head of a repo's [push line](../explanation/trunk-based.md#one-push-line-per-repo) goes next, before every other task, since its push waits on its build.
 - A build that has held its slot 30 minutes while other tasks wait loses it to the next in line and is told so; it runs on outside the queue.
 - A command a build runs, such as `cargo` from a build script, runs in its build's slot. The next command of the same script finds the slot it just left for 10 seconds.
 - The guard runs cargo with `sccache` as `RUSTC_WRAPPER` when `sccache` is on PATH and neither `RUSTC_WRAPPER` nor a cargo config sets a wrapper, so the machine compiles each dependency once; each worktree builds its own crate in its own `target/`.

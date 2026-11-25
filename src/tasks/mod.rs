@@ -35,7 +35,7 @@ pub(crate) use finish::{FORCE, done, drop, drop_routine_ok, reset};
 pub(crate) use follow::{follow, follows, tick as follow_tick, toggle as toggle_follow};
 pub(crate) use history::{Commit, commits, draft_squash_message, reword, squash};
 pub(crate) use intent::{By as PushBy, Pending as PendingPush, Work as PushWork, after_red_ci, left as push_left, pending as pending_push};
-pub(crate) use line::complete as complete_pushes;
+pub(crate) use line::{complete as complete_pushes, heads as push_heads};
 pub(crate) use park::{all as parked_all, Parked, UNPARKED, load as park_of, morning_in as park_morning_in, park, park_address, unpark, unpark_address, until as park_until};
 pub(crate) use landed::{AfterCancel, EVERY as LANDED_EVERY, after_cancel, Unsure as LandedUnsure, mark as landed_mark, tick as landed_tick, tick_cli as landed_tick_cli};
 pub(crate) use red_ci::{dismiss as dismiss_ci, dismissed as ci_dismissed, outside as ci_outside, outside_reason as ci_outside_reason};
