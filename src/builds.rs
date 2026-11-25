@@ -98,8 +98,8 @@ impl Queue {
         self.commands.clone().unwrap_or_else(|| crate::config::DEFAULT_BUILD_COMMANDS.map(str::to_string).to_vec())
     }
 
-    // A turn handed to the address, a slot it already holds, or a free slot with nobody ahead of it is taken; else it keeps or takes its place in line, unless no keeper is there to tell it its turn.
-    pub fn take(&mut self, address: &str, id: &str, front: bool, needs_keeper: bool, now: u64) -> Take {
+    // A turn handed to the address, a slot it already holds, or a free slot with nobody ahead of it is taken; else it keeps or takes its place in line, the line in the order the keeper's round hands out slots, unless no keeper is there to tell it its turn.
+    pub fn take(&mut self, address: &str, id: &str, front: bool, heads: &[String], needs_keeper: bool, now: u64) -> Take {
         self.lapse(now);
         let turn = self.turns.iter().position(|turn| turn.address == address);
         let holding = self.holders.iter().any(|holder| holder.address == address);
@@ -118,6 +118,7 @@ impl Queue {
         if self.place(address).is_none() {
             if front { self.line.insert(0, address.to_string()) } else { self.line.push(address.to_string()) }
         }
+        self.put_first(heads);
         Take::Queued(self.place(address).unwrap_or(1))
     }
 
@@ -328,7 +329,7 @@ pub enum Took {
     NoKeeper,
 }
 
-pub fn take_slot(dir: &Path, address: &str, front: bool, needs_keeper: bool) -> Result<Took> {
+pub fn take_slot(dir: &Path, address: &str, front: bool, heads: &[String], needs_keeper: bool) -> Result<Took> {
     crate::state::private_dir(dir)?;
     let id = crate::messages::new_id("build");
     let path = held_file(dir, &id);
@@ -338,7 +339,7 @@ pub fn take_slot(dir: &Path, address: &str, front: bool, needs_keeper: bool) -> 
     }
     let (took, held) = with_queue(dir, |queue| {
         queue.holders.retain(|holder| alive_in(dir, &holder.id));
-        let took = queue.take(address, &id, front, needs_keeper, crate::messages::now());
+        let took = queue.take(address, &id, front, heads, needs_keeper, crate::messages::now());
         (took, Blocked::of(queue, address))
     })?;
     match took {
@@ -367,7 +368,7 @@ fn wait_in(dir: &Path, limit: Duration, pause: Duration) -> Option<Slot> {
             eprintln!("still no build slot after {} minutes; building without one", limit.as_secs() / 60);
             return None;
         }
-        match take_slot(dir, UPDATE, true, false) {
+        match take_slot(dir, UPDATE, true, &[], false) {
             Ok(Took::Slot(slot)) => return Some(slot),
             Ok(Took::Queued(_, held)) => {
                 if !said {
@@ -627,7 +628,8 @@ pub fn guard(argv: &[String]) -> ExitCode {
         eprintln!("{refusal}");
         return ExitCode::from(QUEUED_EXIT);
     }
-    let slot = match take_slot(&dir, &address, false, true) {
+    let heads = crate::lead::state_dir().map(|state| crate::tasks::push_heads(&state, &crate::messages::load())).unwrap_or_default();
+    let slot = match take_slot(&dir, &address, false, &heads, true) {
         Ok(Took::Slot(slot)) => slot,
         Ok(Took::Queued(place, held)) => {
             eprintln!("{}", queued_line(place, &held));
@@ -720,60 +722,75 @@ mod tests {
     #[test]
     fn a_build_takes_a_free_slot_and_the_next_task_waits_in_line_by_its_place() {
         let mut queue = queue(1, 100);
-        assert_eq!(queue.take("a@app", "1", false, true, 100), Take::Taken);
-        assert_eq!(queue.take("b@app", "2", false, true, 100), Take::Queued(1));
-        assert_eq!(queue.take("c@app", "3", false, true, 100), Take::Queued(2));
-        assert_eq!(queue.take("b@app", "4", false, true, 101), Take::Queued(1), "a task asking again keeps its place");
-        assert_eq!(queue.take("a@app", "5", false, true, 101), Take::Taken, "a task already building runs its second command, which cargo's own lock orders");
+        assert_eq!(queue.take("a@app", "1", false, &[], true, 100), Take::Taken);
+        assert_eq!(queue.take("b@app", "2", false, &[], true, 100), Take::Queued(1));
+        assert_eq!(queue.take("c@app", "3", false, &[], true, 100), Take::Queued(2));
+        assert_eq!(queue.take("b@app", "4", false, &[], true, 101), Take::Queued(1), "a task asking again keeps its place");
+        assert_eq!(queue.take("a@app", "5", false, &[], true, 101), Take::Taken, "a task already building runs its second command, which cargo's own lock orders");
         assert_eq!(board_note(queue.place("c@app").unwrap()), "waiting for a build slot, 2nd");
     }
 
     #[test]
     fn kebbie_update_goes_first_in_line() {
         let mut queue = queue(1, 100);
-        queue.take("a@app", "1", false, true, 100);
-        queue.take("b@app", "2", false, true, 100);
-        assert_eq!(queue.take(UPDATE, "3", true, false, 100), Take::Queued(1));
+        queue.take("a@app", "1", false, &[], true, 100);
+        queue.take("b@app", "2", false, &[], true, 100);
+        assert_eq!(queue.take(UPDATE, "3", true, &[], false, 100), Take::Queued(1));
         assert_eq!(queue.line, strings(&[UPDATE, "b@app"]));
     }
 
     #[test]
     fn the_head_of_a_push_line_goes_before_other_tasks_but_after_kebbie_update() {
         let mut queue = queue(1, 100);
-        queue.take("a@app", "1", false, true, 100);
-        queue.take("b@app", "2", false, true, 100);
-        queue.take("c@app", "3", false, true, 100);
-        queue.take("head@app", "4", false, true, 100);
-        queue.take(UPDATE, "5", true, false, 100);
+        queue.take("a@app", "1", false, &[], true, 100);
+        queue.take("b@app", "2", false, &[], true, 100);
+        queue.take("c@app", "3", false, &[], true, 100);
+        queue.take("head@app", "4", false, &[], true, 100);
+        queue.take(UPDATE, "5", true, &[], false, 100);
         assert!(queue.tick(1, &[], &strings(&["head@app"]), |_| true, 101).is_empty(), "the slot is still a's");
         assert_eq!(queue.line, strings(&[UPDATE, "head@app", "b@app", "c@app"]));
         assert_eq!(queue.place("head@app"), Some(2));
         queue.line.retain(|address| address != UPDATE);
         let told = queue.tick(1, &[], &strings(&["head@app"]), |id| id != "1", 102);
         assert_eq!(told, vec![("head@app".to_string(), TURN.to_string())], "the freed slot goes to the push line's head");
-        assert_eq!(queue.take("head@app", "6", false, true, 103), Take::Taken);
+        assert_eq!(queue.take("head@app", "6", false, &[], true, 103), Take::Taken);
+    }
+
+    #[test]
+    fn the_head_of_a_push_line_joining_the_queue_is_told_its_real_place_ahead_of_other_tasks() {
+        let heads = strings(&["head@app"]);
+        let mut line = queue(1, 100);
+        line.take("a@app", "1", false, &[], true, 100);
+        line.take("b@app", "2", false, &[], true, 100);
+        line.take("c@app", "3", false, &[], true, 100);
+        line.take(UPDATE, "4", true, &[], false, 100);
+        assert_eq!(line.take("head@app", "5", false, &heads, true, 100), Take::Queued(2), "after kebbie update, before b and c");
+        assert_eq!(line.line, strings(&[UPDATE, "head@app", "b@app", "c@app"]));
+        let mut free = queue(1, 100);
+        free.line = strings(&["b@app", "c@app"]);
+        assert_eq!(free.take("head@app", "2", false, &heads, true, 100), Take::Queued(1), "a free slot past a waiting line is the keeper's to hand out, and it hands it to the head next");
     }
 
     #[test]
     fn the_keeper_hands_a_freed_slot_to_the_next_in_line_and_holds_it_for_it() {
         let mut queue = queue(1, 100);
-        queue.take("a@app", "1", false, true, 100);
-        queue.take("b@app", "2", false, true, 100);
+        queue.take("a@app", "1", false, &[], true, 100);
+        queue.take("b@app", "2", false, &[], true, 100);
         queue.release("1", 110);
-        assert_eq!(queue.take("c@app", "3", false, true, 111), Take::Queued(2), "the slot a finished build keeps a moment is not free for another");
+        assert_eq!(queue.take("c@app", "3", false, &[], true, 111), Take::Queued(2), "the slot a finished build keeps a moment is not free for another");
         assert!(queue.tick(1, &[], &[], |_| true, 115).is_empty(), "the finished build's moment is not over");
         let told = queue.tick(1, &[], &[], |_| true, 121);
         assert_eq!(told, vec![("b@app".to_string(), TURN.to_string())]);
-        assert_eq!(queue.take("c@app", "4", false, true, 122), Take::Queued(1), "the held slot is b's");
-        assert_eq!(queue.take("b@app", "5", false, true, 130), Take::Taken);
+        assert_eq!(queue.take("c@app", "4", false, &[], true, 122), Take::Queued(1), "the held slot is b's");
+        assert_eq!(queue.take("b@app", "5", false, &[], true, 130), Take::Taken);
     }
 
     #[test]
     fn a_turn_not_taken_in_time_passes_to_the_next_and_the_task_hears_it() {
         let mut queue = queue(1, 100);
-        queue.take("a@app", "1", false, true, 100);
-        queue.take("b@app", "2", false, true, 100);
-        queue.take("c@app", "3", false, true, 100);
+        queue.take("a@app", "1", false, &[], true, 100);
+        queue.take("b@app", "2", false, &[], true, 100);
+        queue.take("c@app", "3", false, &[], true, 100);
         queue.tick(1, &[], &[], |id| id != "1", 101);
         let told = queue.tick(1, &[], &[], |_| true, 101 + HOLD);
         assert_eq!(told, vec![("b@app".to_string(), MISSED.to_string()), ("c@app".to_string(), TURN.to_string())]);
@@ -782,10 +799,10 @@ mod tests {
     #[test]
     fn a_build_that_died_frees_its_slot_and_a_script_keeps_its_slot_between_commands() {
         let mut queue = queue(1, 100);
-        queue.take("a@app", "1", false, true, 100);
-        queue.take("b@app", "2", false, true, 100);
+        queue.take("a@app", "1", false, &[], true, 100);
+        queue.take("b@app", "2", false, &[], true, 100);
         queue.release("1", 105);
-        assert_eq!(queue.take("a@app", "3", false, true, 106), Take::Taken, "check.sh's next cargo finds the slot it just left");
+        assert_eq!(queue.take("a@app", "3", false, &[], true, 106), Take::Taken, "check.sh's next cargo finds the slot it just left");
         let mut died = queue.clone();
         died.tick(1, &[], &[], |_| false, 107);
         assert!(died.holders.is_empty() && died.turns[0].address == "b@app");
@@ -794,19 +811,19 @@ mod tests {
     #[test]
     fn without_a_keeper_a_build_goes_ahead_and_joins_no_line() {
         let mut queue = queue(1, 0);
-        queue.take("a@app", "1", false, true, 1000);
-        assert_eq!(queue.take("b@app", "2", false, true, 1000), Take::NoKeeper);
+        queue.take("a@app", "1", false, &[], true, 1000);
+        assert_eq!(queue.take("b@app", "2", false, &[], true, 1000), Take::NoKeeper);
         assert!(queue.line.is_empty());
     }
 
     #[test]
     fn without_a_keeper_a_lapsed_turn_frees_its_slot_for_kebbie_update() {
         let mut queue = queue(1, 0);
-        queue.take("a@app", "1", false, false, 100);
-        assert_eq!(queue.take(UPDATE, "2", true, false, 100), Take::Queued(1));
+        queue.take("a@app", "1", false, &[], false, 100);
+        assert_eq!(queue.take(UPDATE, "2", true, &[], false, 100), Take::Queued(1));
         queue.release("1", 101);
-        assert_eq!(queue.take(UPDATE, "3", true, false, 105), Take::Queued(1), "a's script keeps its slot a moment");
-        assert_eq!(queue.take(UPDATE, "4", true, false, 101 + LINGER), Take::Taken);
+        assert_eq!(queue.take(UPDATE, "3", true, &[], false, 105), Take::Queued(1), "a's script keeps its slot a moment");
+        assert_eq!(queue.take(UPDATE, "4", true, &[], false, 101 + LINGER), Take::Taken);
     }
 
     #[test]
@@ -815,16 +832,16 @@ mod tests {
         let dead = Queue { holders: vec![Holder { address: "a@app".into(), id: "1-1-0-build".into(), at: 1 }], ..queue(1, 0) };
         crate::state::write(&dir.join(QUEUE), serde_json::to_string(&dead).unwrap()).unwrap();
         fs::write(held_file(&dir, "1-1-0-build"), "").unwrap();
-        assert!(matches!(take_slot(&dir, UPDATE, true, false), Ok(Took::Slot(_))), "a lock nobody holds is a build that ended");
+        assert!(matches!(take_slot(&dir, UPDATE, true, &[], false), Ok(Took::Slot(_))), "a lock nobody holds is a build that ended");
         let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
     fn a_build_that_holds_its_slot_past_the_limit_while_others_wait_loses_it_and_hears_so() {
         let mut queue = queue(1, 100);
-        queue.take("a@app", "1", false, true, 100);
+        queue.take("a@app", "1", false, &[], true, 100);
         assert!(queue.tick(1, &[], &[], |_| true, 100 + MAX_HOLD).is_empty(), "nobody waits, so the slot stays");
-        queue.take("b@app", "2", false, true, 100 + MAX_HOLD);
+        queue.take("b@app", "2", false, &[], true, 100 + MAX_HOLD);
         let told = queue.tick(1, &[], &[], |_| true, 101 + MAX_HOLD);
         assert_eq!(told, vec![("a@app".to_string(), OUTHELD.to_string()), ("b@app".to_string(), TURN.to_string())]);
         assert!(queue.holders.is_empty());
@@ -833,9 +850,9 @@ mod tests {
     #[test]
     fn a_task_on_a_low_disk_keeps_its_place_while_the_turn_goes_to_one_on_a_disk_with_room() {
         let mut queue = queue(1, 100);
-        queue.take("a@app", "1", false, true, 100);
-        queue.take("b@app", "2", false, true, 100);
-        queue.take("c@app", "3", false, true, 100);
+        queue.take("a@app", "1", false, &[], true, 100);
+        queue.take("b@app", "2", false, &[], true, 100);
+        queue.take("c@app", "3", false, &[], true, 100);
         queue.low_disk = strings(&["b@app"]);
         assert_eq!(queue.tick(1, &[], &[], |id| id != "1", 101), vec![("c@app".to_string(), TURN.to_string())], "nobody is told a turn the guard would refuse");
         assert_eq!(queue.line, strings(&["b@app"]));
@@ -866,7 +883,7 @@ mod tests {
     fn kebbie_update_waits_for_a_held_slot_only_so_long() {
         let dir = crate::sh::test_dir("builds-update-wait");
         crate::state::write(&dir.join(QUEUE), serde_json::to_string(&queue(1, crate::messages::now())).unwrap()).unwrap();
-        let Ok(Took::Slot(_held)) = take_slot(&dir, "a@app", false, true) else { panic!("a free slot is taken") };
+        let Ok(Took::Slot(_held)) = take_slot(&dir, "a@app", false, &[], true) else { panic!("a free slot is taken") };
         let (sent, got) = std::sync::mpsc::channel();
         let inside = dir.clone();
         std::thread::spawn(move || {
@@ -879,8 +896,8 @@ mod tests {
     #[test]
     fn a_dropped_task_leaves_the_line_and_its_turn() {
         let mut queue = queue(1, 100);
-        queue.take("a@app", "1", false, true, 100);
-        queue.take("b@app", "2", false, true, 100);
+        queue.take("a@app", "1", false, &[], true, 100);
+        queue.take("b@app", "2", false, &[], true, 100);
         queue.forget("b@app");
         assert!(queue.line.is_empty());
     }
@@ -1088,10 +1105,10 @@ mod tests {
         let dir = crate::lead::state_location().unwrap().join(format!("builds-slot-{}", std::process::id()));
         crate::state::private_dir(&dir).unwrap();
         crate::state::write(&dir.join(QUEUE), serde_json::to_string(&queue(1, crate::messages::now())).unwrap()).unwrap();
-        let Ok(Took::Slot(slot)) = take_slot(&dir, "a@app", false, true) else { panic!("a free slot is taken") };
+        let Ok(Took::Slot(slot)) = take_slot(&dir, "a@app", false, &[], true) else { panic!("a free slot is taken") };
         let id = load(&dir).holders[0].id.clone();
         assert!(alive_in(&dir, &id), "a running build's lock is held");
-        assert!(matches!(take_slot(&dir, "b@app", false, true), Ok(Took::Queued(1, _))));
+        assert!(matches!(take_slot(&dir, "b@app", false, &[], true), Ok(Took::Queued(1, _))));
         drop(slot);
         assert!(load(&dir).holders.is_empty() && !alive_in(&dir, &id));
         let _ = fs::remove_dir_all(dir);
@@ -1104,7 +1121,7 @@ mod tests {
         let now = crate::messages::now();
         let turned = Queue { turns: vec![Turn { address: "alpha@app".into(), until: now + HOLD, told: true }], ..queue(1, now) };
         crate::state::write(&dir.join(QUEUE), serde_json::to_string(&turned).unwrap()).unwrap();
-        let Ok(Took::Queued(place, held)) = take_slot(&dir, "b@app", false, false) else { panic!("a slot held by a turn queues the next build") };
+        let Ok(Took::Queued(place, held)) = take_slot(&dir, "b@app", false, &[], false) else { panic!("a slot held by a turn queues the next build") };
         assert_eq!(queued_line(place, &held), "kebbie: no build slot is free for this task (alpha@app has its turn); it is 1st in line, and kebbie tells it when its turn comes.");
         let _ = fs::remove_dir_all(dir);
     }
@@ -1115,7 +1132,7 @@ mod tests {
         crate::state::private_dir(&dir).unwrap();
         let ahead = Queue { line: strings(&["alpha@app"]), ..queue(1, crate::messages::now()) };
         crate::state::write(&dir.join(QUEUE), serde_json::to_string(&ahead).unwrap()).unwrap();
-        let Ok(Took::Queued(place, held)) = take_slot(&dir, "b@app", false, false) else { panic!("a task ahead in line keeps the free slot from the next build") };
+        let Ok(Took::Queued(place, held)) = take_slot(&dir, "b@app", false, &[], false) else { panic!("a task ahead in line keeps the free slot from the next build") };
         assert_eq!(queued_line(place, &held), "kebbie: a build slot is free, but it goes first to the tasks ahead of this one (alpha@app); it is 2nd in line, and kebbie tells it when its turn comes.");
         assert_eq!(held.who(), "alpha@app ahead in line");
         let _ = fs::remove_dir_all(dir);
@@ -1127,7 +1144,7 @@ mod tests {
         crate::state::private_dir(&dir).unwrap();
         let ahead = Queue { line: strings(&["alpha@app"]), ..queue(1, crate::messages::now()) };
         crate::state::write(&dir.join(QUEUE), serde_json::to_string(&ahead).unwrap()).unwrap();
-        let Ok(Took::Queued(place, held)) = take_slot(&dir, UPDATE, true, false) else { panic!("kebbie update waits for the keeper to hand it the free slot") };
+        let Ok(Took::Queued(place, held)) = take_slot(&dir, UPDATE, true, &[], false) else { panic!("kebbie update waits for the keeper to hand it the free slot") };
         assert_eq!((place, held.clone()), (1, Blocked::Next));
         assert_eq!(held.who(), "one is free and kebbie hands it here next");
         assert_eq!(queued_line(place, &held), "kebbie: a build slot is free and kebbie hands it to this task next; it is 1st in line, and kebbie tells it when its turn comes.");

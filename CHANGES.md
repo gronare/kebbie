@@ -16,6 +16,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task asks you whether its change works only once its push is out and green, and Verified closes it.
 
 ### Fixed
+- The head of a push line is told its real place when it joins the build queue.
 - A task keeps its own name until it is released.
 - A task is never restarted onto an older kebbie.
 - A push whose rebase went over another task's CHANGES.md line or docs page asks no test run for them.
