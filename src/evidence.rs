@@ -123,7 +123,7 @@ fn listed_in(repo: &Path) -> Vec<String> {
     crate::config::resolve(Some(repo)).map(|loaded| listed_for(&loaded.settings)).unwrap_or_else(|_| commands(&[]))
 }
 
-// The first command in the line that starts with `full` is it, with flags of its own at most, so a run narrowed to some tests never counts as the whole suite.
+// The first command in the line that starts with `full` is it, with flags of its own and their values at most, so a run narrowed to some tests never counts as the whole suite.
 pub fn whole_run(command: &str, full: &str) -> bool {
     let listed = [full.to_string()];
     for (text, _) in shell::pieces(command) {
@@ -137,10 +137,43 @@ pub fn whole_run(command: &str, full: &str) -> bool {
 }
 
 fn whole_in(simple: &str, full: &str) -> bool {
-    let wanted: Vec<&str> = full.split_whitespace().collect();
-    let words: Vec<&str> = words(simple);
+    let wanted = shell::split_words(full);
+    let words: Vec<&str> = shell::split_words(simple).into_iter().take_while(|word| !redirection(word)).collect();
     let bare = |word: &str| word.trim_start_matches("./").to_string();
-    words.len() >= wanted.len() && words.iter().zip(&wanted).all(|(word, want)| bare(word) == bare(want)) && words[wanted.len()..].iter().all(|word| word.starts_with('-'))
+    if words.len() < wanted.len() || !words.iter().zip(&wanted).all(|(word, want)| bare(word) == bare(want)) {
+        return false;
+    }
+    let valued = valued(wanted.first().map_or("", |program| program.rsplit('/').next().unwrap_or(program)));
+    let mut rest = words.into_iter().skip(wanted.len()).peekable();
+    while let Some(word) = rest.next() {
+        if !word.starts_with('-') || narrowing(word) {
+            return false;
+        }
+        if valued.contains(&word) {
+            rest.next_if(|value| !value.starts_with('-'));
+        }
+    }
+    true
+}
+
+// Only the listed program's own value flags take the next word, so a flag kebbie does not know for it (`cargo test -p app`, `pytest -vv`) followed by a word stays a filtered run.
+fn valued(program: &str) -> &'static [&'static str] {
+    match program {
+        "xcodebuild" => &["-project", "-workspace", "-scheme", "-destination", "-configuration", "-sdk", "-arch", "-target", "-testPlan", "-derivedDataPath", "-resultBundlePath", "-xcconfig", "-toolchain"],
+        "go" => &["-count", "-timeout", "-tags", "-parallel", "-cpu", "-coverprofile", "-covermode", "-coverpkg", "-p"],
+        _ => &[],
+    }
+}
+
+const NARROWING: [&str; 6] = ["-only-testing", "-skip-testing", "-only-test-configuration", "-skip-test-configuration", "-run", "-skip"];
+
+fn narrowing(flag: &str) -> bool {
+    let name = flag.split([':', '=']).next().unwrap_or(flag);
+    NARROWING.contains(&name) || name.strip_prefix('-').is_some_and(|single| NARROWING.contains(&single))
+}
+
+fn redirection(word: &str) -> bool {
+    word.starts_with(['>', '<']) || word.contains(">&") || word.starts_with(|char: char| char.is_ascii_digit() && word.contains('>'))
 }
 
 // The command a recorded run ran as a whole suite, a listed command with flags of its own at most, as doctor proposes it for tests.full_command.
@@ -310,7 +343,7 @@ pub fn recognise<'a>(command: &str, listed: &'a [String]) -> Option<&'a str> {
 
 // The words of a simple command up to the first redirection.
 fn words(simple: &str) -> Vec<&str> {
-    simple.split_whitespace().take_while(|word| !word.starts_with(['>', '<']) && !word.contains(">&") && !word.starts_with(|char: char| char.is_ascii_digit() && word.contains('>'))).collect()
+    simple.split_whitespace().take_while(|word| !redirection(word)).collect()
 }
 
 fn runner_word(word: &str) -> bool {
@@ -1093,6 +1126,21 @@ mod tests {
         assert!(!whole_run("cargo test --locked evidence", "cargo test --locked"), "a filter narrows it");
         assert!(!whole_run("cargo test", "cargo test --locked"), "a shorter command is another one");
         assert!(!whole_run("cargo test --locked evidence; cargo test --locked", "cargo test --locked"), "the first run of it in the line is the one recorded");
+        let full = "xcodebuild test";
+        assert!(whole_run("xcodebuild test -project App.xcodeproj -scheme App", full), "a single-dash word flag takes the next word as its value");
+        assert!(whole_run("xcodebuild test -scheme App -destination 'platform=iOS Simulator,name=iPhone 15' -quiet", full), "a quoted value with spaces is one value");
+        assert!(whole_run("go test ./... -count 1 -v", "go test ./..."), "a value after the command's own words");
+        assert!(whole_run("xcodebuild test -quiet -scheme App", full), "a flag followed by a flag has no value");
+        assert!(!whole_run("cargo test -q evidence", "cargo test"), "a one-letter flag takes no value");
+        assert!(!whole_run("xcodebuild test -project App.xcodeproj -only-testing AppTests/Login", full), "a run narrowed to some tests is not the whole suite");
+        assert!(!whole_run("xcodebuild test -project App.xcodeproj -only-testing:AppTests/Login", full), "nor with its value joined on");
+        assert!(!whole_run("go test ./... -run=TestLogin", "go test ./..."));
+        assert!(!whole_run("pytest -vv tests/test_a.py", "pytest"), "stacked short flags take no value");
+        assert!(!whole_run("rspec -fd spec/a_spec.rb", "rspec"));
+        assert!(!whole_run("cargo test -p app", "cargo test"), "a value flag of one runner is no value flag of another");
+        assert!(whole_run("go test ./... -p 4", "go test ./..."));
+        assert!(!whole_run("xcodebuild test -scheme \"My App\" -only-testing:AppTests/Login", "xcodebuild test -scheme \"My App\""), "a quoted value in the command itself is one word");
+        assert!(whole_run("xcodebuild test -scheme \"My App\" -quiet", "xcodebuild test -scheme \"My App\""));
         let list = listed(&["scripts/check.sh"]);
         assert_eq!(whole_command("uv run pytest -q", &list).as_deref(), Some("uv run pytest"));
         assert_eq!(whole_command("./scripts/check.sh", &list).as_deref(), Some("scripts/check.sh"));

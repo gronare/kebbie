@@ -148,6 +148,17 @@ fn split_word(text: &str) -> (&str, &str) {
     (&text[..end], text[end..].trim_start())
 }
 
+pub fn split_words(text: &str) -> Vec<&str> {
+    let mut words = Vec::new();
+    let mut rest = text.trim_start();
+    while !rest.is_empty() {
+        let (word, after) = split_word(rest);
+        words.push(word);
+        rest = after;
+    }
+    words
+}
+
 // The words of options a wrapper takes before the command, where the listed ones take a value of their own.
 fn skip_options<'a>(mut rest: &'a str, with_value: &[&str]) -> &'a str {
     loop {
