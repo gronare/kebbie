@@ -262,7 +262,7 @@ fn turn(state: &Path, head: &Intent, log: &[Message], now: u64, read: Read, work
             intent::forget(state, &head.address);
             phase::record(state, &head.address, "push", &Event::PushFailed);
             let text = format!("kebbie could not finish the push of {} that {} asked for: {error}", head.address, head.by.word());
-            tell_lead(&text);
+            tell_lead(&failed_text(&text, lead_pushes_again(state, head)));
             Turn::Out(text)
         }
     }
@@ -280,12 +280,28 @@ fn open_before(head: &Intent, log: &[Message]) -> Vec<String> {
     }).collect()
 }
 
+const AGAIN: &str = "Your push permission covers it, so it stays yours under Going out, off the user's Needs you: push it again once it is ready, at the end of the line.";
+
+// A task under the lead's push permission is the lead's to push again once it leaves the line.
+fn lead_pushes_again(state: &Path, head: &Intent) -> bool {
+    crate::permit::in_state(state, &head.address, &name_of(&head.repo)).is_some()
+}
+
+fn failed_text(text: &str, lead: bool) -> String {
+    if lead { format!("{text}. {AGAIN}") } else { text.to_string() }
+}
+
+fn left_text(address: &str, why: &str, lead: bool) -> String {
+    let waits = if lead { AGAIN } else { "It waits for the user under Needs you; a push from there puts it at the end of the line." };
+    format!("kebbie took {address} out of the push line, unpushed: {why}. {waits}")
+}
+
 // The push leaves its line for good; a task already under Needs you keeps its own reason there.
 fn leave(state: &Path, head: &Intent, why: &str) -> Turn {
     intent::forget(state, &head.address);
     intent::record_left(state, &head.address, why);
     phase::update(state, &head.address, "push", |current| (!matches!(current, Some(Phase::NeedsYou(_)))).then_some(Phase::NeedsYou(Why::LeftLine)));
-    tell_lead(&format!("kebbie took {} out of the push line, unpushed: {why}. It waits for the user under Needs you; a push from there puts it at the end of the line.", head.address));
+    tell_lead(&left_text(&head.address, why, lead_pushes_again(state, head)));
     Turn::Out(format!("out of the push line: {why}"))
 }
 
@@ -311,6 +327,23 @@ mod tests {
     use crate::tasks::intent::{By, Through, forget, load, save};
     use crate::tasks::intent::tests::{intent, report};
     use crate::tasks::test_support::*;
+
+    #[test]
+    fn the_lead_hears_a_task_under_its_permission_that_left_the_line_is_its_to_push_again() {
+        let state = crate::sh::test_dir("line-left-permit");
+        let head = intent(By::Lead, std::path::Path::new("/src/web"), "abc");
+        assert!(!lead_pushes_again(&state, &head));
+        let users = left_text(&head.address, "it reported needs-you", false);
+        assert!(users.contains("waits for the user under Needs you"), "{users}");
+        crate::permit::set_repo_in(&state, "web", true).unwrap();
+        assert!(lead_pushes_again(&state, &head), "the repo's permission covers it");
+        let leads = left_text(&head.address, "it reported needs-you", true);
+        assert!(leads.contains("stays yours under Going out") && !leads.contains("waits for the user"), "{leads}");
+        let failed = "kebbie could not finish the push of billing@web that the lead asked for: remote hung up";
+        assert_eq!(failed_text(failed, false), failed, "without the permission the push is the user's again");
+        assert_eq!(failed_text(failed, true), format!("{failed}. {AGAIN}"), "under the permission the lead hears it is its to push again");
+        std::fs::remove_dir_all(state).unwrap();
+    }
 
     fn pushed(_: &Intent, _: &Slot) -> Result<Sent> {
         Ok(Sent::Pushed(String::new()))

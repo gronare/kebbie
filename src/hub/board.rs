@@ -32,7 +32,7 @@ pub struct Seen {
 fn group(group: status::Group) -> Option<Group> {
     Some(match group {
         status::Group::NeedsYou => Group::NeedsYou,
-        status::Group::Working => Group::Working,
+        status::Group::Working | status::Group::GoingOut => Group::Working,
         status::Group::InReview => Group::ToReview,
         status::Group::ReadyToPush => Group::ReadyToPush,
         status::Group::CiRunning => Group::CiRunning,
@@ -695,6 +695,20 @@ pub(crate) mod tests {
         for local in ["/Users/someone", "w_secret_space", "localhost:3003", "w1:p9"] {
             assert!(!text.contains(local), "{local} leaked: {text}");
         }
+    }
+
+    #[test]
+    fn what_is_going_out_reaches_the_phone_under_working_with_its_place_and_never_under_ready_to_push() {
+        let mut item = task(Some("idle"), Some("ready"), 2);
+        crate::status::tests::in_phase(&mut item, crate::phase::Phase::Ready { head: None });
+        item.permit = Some(crate::permit::Permit::Repo);
+        let shown = &build(&[item.clone()], &[], Vec::new(), None, &Seen::default()).items[0];
+        assert_eq!((shown.group, shown.summary.as_str()), (Group::Working, "2 commits · the lead pushes it"));
+        item.permit = None;
+        item.push_waits = Some(crate::tasks::PendingPush { by: crate::tasks::PushBy::Lead, work: crate::tasks::PushWork::Turn, at: 5, ahead: 1, after: None });
+        crate::status::tests::in_phase(&mut item, crate::phase::Phase::Pushing { ahead: 1 });
+        let shown = &build(&[item], &[], Vec::new(), None, &Seen::default()).items[0];
+        assert_eq!((shown.group, shown.summary.as_str()), (Group::Working, "2 commits · pushing for the lead · 2nd in line"));
     }
 
     pub(crate) fn listed(id: &str, number: usize, title: &str, state: crate::tasks::SubtaskState, shas: &[&str], accepted: bool) -> crate::tasks::Subtask {

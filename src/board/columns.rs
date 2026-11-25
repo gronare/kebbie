@@ -19,6 +19,7 @@ pub(super) fn group_color(group: Group) -> Color {
         Group::Working => BLUE,
         Group::InReview => TEAL,
         Group::ReadyToPush => GREEN,
+        Group::GoingOut => BLUE,
         Group::CiRunning => YELLOW,
         Group::Idle => MUTED,
         Group::WaitingOn => MAUVE,

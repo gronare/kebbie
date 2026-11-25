@@ -148,7 +148,7 @@ fn going(item: &Item, owed: &HashSet<String>) -> Option<Going> {
         Some(Going::Question)
     } else if owed.contains(&crate::peers::address(&item.name, &item.place)) {
         Some(Going::Owed)
-    } else if unpushed && matches!(group, Group::ReadyToPush | Group::NeedsYou) {
+    } else if unpushed && matches!(group, Group::ReadyToPush | Group::GoingOut | Group::NeedsYou) {
         Some(Going::Unpushed)
     } else if item.subtasks.items.iter().any(|subtask| matches!(subtask.state, SubtaskState::Planned | SubtaskState::InProgress)) {
         Some(Going::Subtasks)

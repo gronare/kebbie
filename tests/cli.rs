@@ -1192,7 +1192,7 @@ fn after_a_push_the_task_waits_under_ci_running_and_closes_as_done_once_ci_is_gr
 }
 
 #[test]
-fn a_failed_run_sends_the_task_the_failing_job_and_its_log_and_keeps_it_under_the_push_while_its_claude_fixes_it() {
+fn a_failed_run_sends_the_task_the_failing_job_and_its_log_and_keeps_it_going_out_while_its_claude_fixes_it() {
     let lab = Lab::new("ci-failed");
     let (app, slot) = lab.task_fixture();
     on_github(&lab, &app);
@@ -1212,7 +1212,7 @@ fn a_failed_run_sends_the_task_the_failing_job_and_its_log_and_keeps_it_under_th
     let digest = stdout(&lab.run(&["messages", "--unread"]));
     assert!(digest.contains("CI failed for billing@app") && digest.contains("the reviewer checks the fix"), "the lead reads it with the user's next prompt: {digest}");
     let task = task_json(&lab);
-    assert_eq!((task["group"].as_str(), task["push_waits"].as_str()), (Some("READY TO PUSH"), Some("user")), "the push is under way, not the user's to act on: {task}");
+    assert_eq!((task["group"].as_str(), task["push_waits"].as_str()), (Some("GOING OUT"), Some("user")), "the push is under way, not the user's to act on: {task}");
     assert_eq!(task["summary"], "pushing for you · its Claude fixes the red CI", "{task}");
     assert_eq!(git(&slot, &["branch", "--show-current"]), "billing", "the task stays open to fix it");
     let calls = gh_calls(&lab).len();

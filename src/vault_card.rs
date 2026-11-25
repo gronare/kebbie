@@ -47,7 +47,7 @@ impl Push {
 
     pub fn of(group: Group) -> Push {
         match group {
-            Group::ReadyToPush => Push::Ready,
+            Group::ReadyToPush | Group::GoingOut => Push::Ready,
             Group::CiRunning => Push::Pushed,
             _ => Push::Waiting,
         }
@@ -256,7 +256,7 @@ fn writes(cli: &Cli) -> bool {
 fn due(items: &[Item], state: &Path) -> bool {
     items.iter().any(|item| {
         let address = crate::peers::address(&item.name, &item.place);
-        crate::task_note::linked(state, &address).is_some() && (item.group() == Group::ReadyToPush || load(state, &address).is_some())
+        crate::task_note::linked(state, &address).is_some() && (Push::of(item.group()) == Push::Ready || load(state, &address).is_some())
     })
 }
 
@@ -430,6 +430,20 @@ mod tests {
         let (text, _) = vault.read(KEY).unwrap();
         assert!(text.starts_with("---\ntitle: \"billing\"\ntags: [kebbie, card]\nstatus: active\nup: \"[[web-billing]]\"\nkebbie-card: \"billing@web\"\npush: ready\n---\n\n## Built\nThe board shows cards.\n"), "{text}");
         assert_eq!(*vault.writes.borrow(), [KEY]);
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn a_task_going_out_gets_its_card_note_as_a_push_ready_one_does() {
+        let (vault, state) = (Vault::default(), state("going-out"));
+        let mut going = ready();
+        going.permit = Some(crate::permit::Permit::Repo);
+        assert_eq!(going.group(), Group::GoingOut);
+        crate::state::write(&state.join("started").join("billing@web"), NOTE).unwrap();
+        assert!(due(std::slice::from_ref(&going), &state), "a task going out is due its card");
+        assert!(run(&vault, &state, &going, "## Built
+The board shows cards.").is_empty());
+        assert!(vault.read(KEY).unwrap().0.contains("push: ready\n"), "{:?}", vault.read(KEY));
         let _ = std::fs::remove_dir_all(&state);
     }
 
