@@ -109,6 +109,7 @@ fn with_require_accept_a_push_takes_only_accepted_subtasks_and_the_task_waits_on
     assert!(!rest.status.success() && stderr(&rest).contains("is not accepted"), "the next subtask waits for its accept: {}", stderr(&rest));
 
     assert!(lab.run_as_user(&["-C", lab.app(), "accept", "billing", &second]).status.success());
+    crate::scenarios::full_suite::ran(&lab, &billing, "cargo test", None);
     let all = lab.run_as_user(&["-C", lab.app(), "push", "billing"]);
     assert!(all.status.success() && stdout(&all).contains("closed the task"), "{}\n{}", stdout(&all), stderr(&all));
     assert_eq!(git(&lab.root.join("origin.git"), &["log", "-1", "--format=%s", "main"]), "Document refunds");

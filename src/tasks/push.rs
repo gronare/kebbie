@@ -256,7 +256,7 @@ fn overlap(path: &Path, upstream: &str, since: Option<&str>) -> Result<Vec<Touch
 }
 
 // Release notes and docs pages run no test, so a change both sides made there asks for no test run; a repo's full suite or lint still runs on the rebased HEAD.
-fn text_only(file: &str) -> bool {
+pub(crate) fn text_only(file: &str) -> bool {
     file == RELEASE_NOTES || file.starts_with("docs/")
 }
 
@@ -618,13 +618,13 @@ pub(super) fn join_on(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, t
         return Notice::new(Tone::NotNow, "Not pushed: a rebase is under way in its worktree").next("Push it once the rebase is finished.").detail("task", &task).err();
     }
     authorize(caller, repo, slot, &upstream, through)?;
-    if let Some(gap) = crate::required_runs::owed_at(&slot.path, &address, pushed_end(&slot.path, &upstream, through)?.as_deref()) {
-        return Err(crate::required_runs::push_refusal(&gap, "Not pushed", &task));
-    }
     let by = By::of(caller).ok_or_else(|| Notice::new(Tone::Failed, format!("Not pushed: {} may not push it", crate::permit::describe(caller))).detail("task", &task).to_string())?;
     let waiting = intent::load(state, &address);
     if waiting.is_some() && !By::of(caller).is_some_and(|by| by.is_user()) {
         return Notice::new(Tone::NotNow, "Already being pushed").next("It is in the push line; kebbie pushes it when its turn comes.").detail("task", &task).err();
+    }
+    if let Some(gap) = crate::required_runs::owed_at(&slot.path, &address, pushed_end(&slot.path, &upstream, through)?.as_deref()) {
+        return Err(crate::required_runs::push_refusal(&gap, "Not pushed", &task));
     }
     let now = messages::now();
     let queued = waiting.and_then(|waiting| waiting.queued).unwrap_or(now);
@@ -1593,7 +1593,7 @@ mod tests {
         assert_eq!(git(&origin, &["log", "--format=%s", "-3", branch]).unwrap(), "fifth\nfourth\nsomeone else's work", "fifth went out once, fourth not twice");
         assert_eq!(git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), sixth, "the worktree is still the Claude's");
         let all = chosen(&slot, &upstream, None, false).unwrap();
-        assert_eq!(prepare(&pushing.state, &Caller::User, &dir, &slot, all, None, &hand).map(|prepared| matches!(prepared, Prepared::Push(..))), Ok(true));
+        assert!(matches!(prepare(&pushing.state, &Caller::User, &dir, &slot, all, None, &hand), Ok(Prepared::Handed(said)) if said.contains("so its tests run first")), "the rebased rest runs its tests first");
         assert_eq!(git(&slot.path, &["log", "--format=%s", &format!("{upstream}..HEAD")]).unwrap(), "sixth", "a full push rebases the worktree as ever, and the pushed ones drop out");
         cleanup(dir, origin, &slot);
     }
@@ -1702,12 +1702,53 @@ mod tests {
         upstream_commit(&dir, "elsewhere", "x", "someone else's work");
         let (texts, hand) = handed();
         let handed = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap();
-        assert!(matches!(&handed, Prepared::Handed(said) if said.contains("moved under it, so its lint runs first")), "a lint green before the rebase does not stand for the rebased code: {handed:?}");
-        assert!(texts.borrow()[0].contains(&format!("Run `{lint}` in this worktree")) && texts.borrow()[0].contains("tests.lint_command") && texts.borrow()[0].contains("Do not push"), "{}", texts.borrow()[0]);
+        assert!(matches!(&handed, Prepared::Handed(said) if said.contains("moved under it, so its lint and its tests run first")), "a lint green before the rebase does not stand for the rebased code: {handed:?}");
+        assert!(texts.borrow()[0].contains(&format!("Run `{lint}` and the tests that cover your change in this worktree")) && texts.borrow()[0].contains("tests.lint_command") && texts.borrow()[0].contains("Do not push"), "{}", texts.borrow()[0]);
         green(&git(&slot.path, &["rev-parse", "HEAD"]).unwrap());
+        let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        crate::evidence::save(&pushing.state, &pushing.address, &Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result: Outcome::Passed, sha: head.clone(), code: head, ..Run::default() }).unwrap();
         assert!(matches!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap(), Prepared::Push(..)), "the lint on the rebased HEAD lets it go");
         let _ = std::fs::remove_file(file);
         let _ = std::fs::remove_file(crate::evidence::file(&pushing.state, &pushing.address));
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_push_whose_rebase_moved_head_without_touching_its_files_hands_its_tests_to_its_claude_and_waits_for_them_green() {
+        use crate::evidence::{Outcome, Run};
+        use crate::permit::Caller;
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        let pushing = Pushing::new(&dir);
+        let run = |head: &str, result: Outcome| crate::evidence::save(&pushing.state, &pushing.address, &Run { command: "cargo test --lib billing".to_string(), runner: "cargo test".to_string(), result, sha: head.to_string(), code: head.to_string(), ..Run::default() }).unwrap();
+        let head = || git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        run(&head(), Outcome::Passed);
+        upstream_commit(&dir, "elsewhere", "x", "someone else's work");
+        let (texts, hand) = handed();
+        let handed = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap();
+        assert!(matches!(&handed, Prepared::Handed(said) if said.contains("moved under it, so its tests run first")), "tests green before the rebase do not stand for the rebased code, though no file overlaps: {handed:?}");
+        assert!(texts.borrow()[0].contains("Run `cargo test` in this worktree") && texts.borrow()[0].contains("the default branch moved under its tests"), "{}", texts.borrow()[0]);
+        run(&head(), Outcome::Failed);
+        let again = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand);
+        assert!(again.as_ref().is_err_and(|refused| refused.contains("its tests have no green run on HEAD")), "the resumed push needs the green run too, though its HEAD did not move this time: {again:?}");
+        crate::required_runs::excuse(&pushing.state, &pushing.address, &head()).unwrap();
+        assert!(matches!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap(), Prepared::Push(..)), "the red run on the rebased HEAD its ready report left red with --red-cause answers the push gate as it answered the report");
+        run(&head(), Outcome::Passed);
+        assert!(matches!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap(), Prepared::Push(..)), "a green test run on the rebased HEAD lets it go");
+        let _ = std::fs::remove_file(crate::evidence::file(&pushing.state, &pushing.address));
+        let _ = std::fs::remove_file(crate::evidence::excuse_file(&pushing.state, &pushing.address));
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_task_that_never_ran_a_test_needs_one_on_the_rebased_code_before_its_push() {
+        use crate::permit::Caller;
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        let pushing = Pushing::new(&dir);
+        let (_, hand) = handed();
+        assert!(crate::required_runs::owed_at(&slot.path, &pushing.address, None).is_none(), "on the base its branch started on, nothing is owed");
+        upstream_commit(&dir, "elsewhere", "x", "someone else's work");
+        let handed = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap();
+        assert!(matches!(&handed, Prepared::Handed(said) if said.contains("so its tests run first")), "no recorded run is no proof the rebased code works: {handed:?}");
         cleanup(dir, origin, &slot);
     }
 
@@ -1855,8 +1896,9 @@ mod tests {
         let pushing = Pushing::new(&dir);
         text_on_both_sides(&dir, &slot, &upstream, false);
         let (texts, hand) = handed();
-        assert!(matches!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap(), Prepared::Push(..)), "a related repo pushes at once");
-        assert!(texts.borrow().is_empty(), "nothing for its Claude to do");
+        let outcome = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap();
+        assert!(matches!(&outcome, Prepared::Handed(said) if said.contains("so its tests run first")), "text on both sides is no overlap, though the task's own code still runs its tests on the rebased code: {outcome:?}");
+        assert!(!texts.borrow()[0].contains("changed files this task changes too"), "{}", texts.borrow()[0]);
         cleanup(dir, origin, &slot);
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         let pushing = Pushing::new(&dir);
@@ -1880,8 +1922,8 @@ mod tests {
         crate::evidence::save(&pushing.state, &pushing.address, &Run { command: lint.to_string(), runner: lint.to_string(), result: Outcome::Passed, sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), code: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), lint: true, ..Run::default() }).unwrap();
         let (texts, hand) = handed();
         let outcome = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap();
-        assert!(matches!(&outcome, Prepared::Handed(said) if said.contains("so its lint runs first")), "{outcome:?}");
-        assert!(texts.borrow()[0].contains(&format!("Run `{lint}` in this worktree")), "{}", texts.borrow()[0]);
+        assert!(matches!(&outcome, Prepared::Handed(said) if said.contains("so its lint and its tests run first")), "{outcome:?}");
+        assert!(texts.borrow()[0].contains(&format!("Run `{lint}` and the tests that cover your change in this worktree")), "{}", texts.borrow()[0]);
         let _ = std::fs::remove_file(file);
         let _ = std::fs::remove_file(crate::evidence::file(&pushing.state, &pushing.address));
         cleanup(dir, origin, &slot);
@@ -2016,7 +2058,15 @@ mod tests {
             intent::forget(&self.state, &self.address);
             let _ = crate::permit::set_task_in(&self.state, &self.address, false);
             let _ = std::fs::remove_file(approval_file(&self.state, &self.address));
+            let _ = std::fs::remove_file(crate::evidence::file(&self.state, &self.address));
+            let _ = std::fs::remove_file(crate::evidence::excuse_file(&self.state, &self.address));
         }
+    }
+
+    // A green test run on the task's HEAD as it stands, as its Claude records once kebbie hands it the rebased code.
+    fn tested(pushing: &Pushing, slot: &crate::tasks::Slot) {
+        let code = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        crate::evidence::save(&pushing.state, &pushing.address, &crate::evidence::Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result: crate::evidence::Outcome::Passed, sha: code.clone(), code, ..Default::default() }).unwrap();
     }
 
     type Typed = std::rc::Rc<std::cell::RefCell<Vec<String>>>;
@@ -2036,9 +2086,11 @@ mod tests {
         std::fs::write(slot.path.join("notes.txt"), "scratch").unwrap();
         assert_eq!(ahead_behind(&slot.path, &upstream).unwrap(), (1, 1));
         let (texts, hand) = handed();
-        assert_eq!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap(), Prepared::Push("the user".to_string(), Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false }));
+        assert!(matches!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap(), Prepared::Handed(said) if said.contains("so its tests run first")), "the rebased code runs its tests first");
         assert_eq!(ahead_behind(&slot.path, &upstream).unwrap(), (1, 0), "rebased, ready for the push");
-        assert!(texts.borrow().is_empty(), "nothing for its Claude to do");
+        assert_eq!(texts.borrow().len(), 1);
+        tested(&pushing, &slot);
+        assert_eq!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap(), Prepared::Push("the user".to_string(), Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false }), "green on the rebased code, it goes");
         std::fs::write(slot.path.join("d"), "half done").unwrap();
         let dirty = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap_err();
         assert!(dirty.contains("1 uncommitted file") && dirty.contains("files: d"), "{dirty}");
@@ -2056,6 +2108,7 @@ mod tests {
         assert!(matches!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap(), Prepared::Handed(_)), "m changed under it: its Claude runs the tests");
         upstream_commit(&dir, "elsewhere", "x", "landed while the tests ran");
         let finish = |race: &dyn Fn()| {
+            tested(&pushing, &slot);
             intent::forget(&pushing.state, &pushing.address);
             let sends = std::cell::Cell::new(0);
             let said = push_task_with(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand, &mut |_, out| {
@@ -2067,13 +2120,17 @@ mod tests {
             });
             (said, sends.get())
         };
+        let (said, sends) = finish(&|| {});
+        assert!(matches!(&said, Ok(Sent::Handed(said)) if said.contains("so its tests run first")) && sends == 0, "main moved while its tests ran, so they run again on the rebased code: {said:?}");
         let (said, sends) = finish(&|| upstream_commit(&dir, "m", "1\n2\n3\n4\n5\n6\n7\n8\nnine\nten\n", "another line of m"));
         assert!(matches!(&said, Ok(Sent::Handed(said)) if said.contains("runs those tests")) && sends == 1, "rejected, rebased over m again: back to its Claude, {said:?}");
         let waiting = intent::load(&pushing.state, &pushing.address).expect("the same push waits again");
         assert_eq!((waiting.by, waiting.work), (By::User, Work::Tests));
-        assert_eq!(texts.borrow().len(), 2);
+        assert_eq!(texts.borrow().len(), 3);
         let (said, sends) = finish(&|| upstream_commit(&dir, "other", "y", "pushed in between"));
-        assert_eq!((said, sends), (Ok(Sent::Pushed("pushed 2".to_string())), 2), "rejected, rebased cleanly, pushed on the second try");
+        assert!(matches!(&said, Ok(Sent::Handed(said)) if said.contains("so its tests run first")) && sends == 1, "rejected, rebased cleanly over other work: its tests run on the new code first, {said:?}");
+        let (said, sends) = finish(&|| {});
+        assert_eq!((said, sends), (Ok(Sent::Pushed("pushed 2".to_string())), 1), "green on the rebased code, pushed");
         let landed = git(&origin, &["log", "--format=%s", upstream.trim_start_matches("origin/")]).unwrap();
         assert!(landed.starts_with("first line of m\nfourth\npushed in between\n"), "the task's commits on top of everything that landed: {landed}");
         cleanup(dir, origin, &slot);
@@ -2117,6 +2174,7 @@ mod tests {
         assert!(approved(&slot.path, &upstream, &pushing.address), "the clean rebase kept the approval");
         let waits = join(&pushing.state, &Caller::Lead, &dir, &slot, Through::All).unwrap_err();
         assert!(waits.contains("Already being pushed"), "{waits}");
+        tested(&pushing, &slot);
         join(&pushing.state, &Caller::User, &dir, &slot, Through::All).unwrap();
         let again = intent::load(&pushing.state, &pushing.address).unwrap();
         assert_eq!((again.by, again.work, again.queued), (By::User, Work::Turn, recorded.queued), "the user may push past it, in the same place in line");
@@ -2156,6 +2214,8 @@ mod tests {
         let pushing = Pushing::new(&dir);
         let seen = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
         upstream_commit(&dir, "elsewhere", "x", "landed after the phone showed the task");
+        git(&slot.path, &["rebase", "--quiet", &upstream]).unwrap();
+        tested(&pushing, &slot);
         let (_, hand) = handed();
         let phone = Caller::hub("acc_01");
         let pushed = device_push(&pushing.state, &phone, &dir, &slot, None, &|_, _| None, &|_| false, &mut device_pushes(&pushing.state, &hand));

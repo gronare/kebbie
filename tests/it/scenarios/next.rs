@@ -5,7 +5,8 @@ use crate::scenarios::lab::{Lab, git, stderr, stdout};
 
 fn ready(lab: &Lab, task: &str, subject: &str) -> PathBuf {
     let worktree = lab.start(task, subject, &[]);
-    lab.work(&worktree, &format!("{task}.rb"), subject);
+    std::fs::create_dir_all(worktree.join("docs")).unwrap();
+    lab.work(&worktree, &format!("docs/{task}.md"), subject);
     lab.ok(&["-C", worktree.to_str().unwrap(), "report", "--state", "ready", "--next", "push", subject]);
     worktree
 }

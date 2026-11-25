@@ -58,7 +58,7 @@ pub(crate) use pool::{Slot, clean_build_output, find_task, list, move_work, slot
 pub(crate) use push_steps::watched as push_watched;
 #[cfg(test)]
 pub(crate) use push_steps::step as push_step;
-pub(crate) use push::{DevicePush, after_ci, for_by as push_for, given as push_given, cancel as cancel_push, land, ordinal, place_in_line, push, push_as, rebase, tidy};
+pub(crate) use push::{DevicePush, after_ci, for_by as push_for, given as push_given, cancel as cancel_push, land, ordinal, place_in_line, push, push_as, rebase, text_only, tidy};
 pub(crate) use stage::{WAIT_CEILING as STAGE_WAIT, stage, staged, tick as stage_tick, unstage};
 pub(crate) use started::{link, started_items, started_links};
 pub(crate) use promise::{EVERY as PROMISES_EVERY, command as promise, first_prompt_line as promises_first_line, list as promises, overdue_line as promises_overdue_line, overdue_now as promises_overdue, tick as promises_tick};

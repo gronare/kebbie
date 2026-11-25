@@ -2205,6 +2205,38 @@ fn kebbie_order_shows_the_push_order_moves_and_groups_and_refuses_what_it_cannot
 }
 
 #[test]
+fn a_red_run_left_red_with_its_cause_on_the_rebased_code_lets_the_push_go_once_the_report_is_taken() {
+    let lab = Lab::new("red-cause-push");
+    let (app, slot) = lab.task_fixture();
+    let slot_str = slot.to_str().unwrap();
+    git(&slot, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend", "-m", "Add refunds\n\nThe billing page lists refunds now."]);
+    commit(&app, "c", "Someone else's work");
+    git(&app, &["push", "--quiet", "origin", "main"]);
+    git(&app, &["fetch", "--quiet", "origin"]);
+    git(&slot, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "rebase", "--quiet", "origin/main"]);
+    let head = git(&slot, &["rev-parse", "HEAD"]);
+    let task_bin = lab.root.join("task-bin");
+    fs::create_dir_all(&task_bin).unwrap();
+    crate::executable::write(task_bin.join("claude"), "#!/bin/sh\ncat > /dev/null\n").unwrap();
+    let report = |card: &str| {
+        fs::write(slot.join("card.md"), card).unwrap();
+        lab.command().env("PATH", format!("{}:{}", task_bin.display(), lab.path())).args(["-C", slot_str, "report", "--state", "ready", "--next", "push", "--card", "card.md", "--red-cause", "the VAT test fails on main too, at tests/vat.rs:12", "refunds done"]).output().unwrap()
+    };
+    fs::create_dir_all(lab.state.join("evidence")).unwrap();
+    fs::write(lab.state.join("evidence/billing@app.jsonl"), format!("{{\"command\":\"cargo test\",\"runner\":\"cargo test\",\"result\":\"failed\",\"sha\":\"{head}\",\"code\":\"{head}\",\"at\":1}}\n")).unwrap();
+    let excuse = lab.state.join("evidence/billing@app.red-cause");
+    let refused = report("**Refunds show.**\n\nBuilt:\n- Each invoice lists its refunds.\n\nConfirm:\n- Old refunds are not backfilled.\n");
+    assert!(!refused.status.success() && !excuse.exists(), "a refused report excuses nothing: {}", stderr(&refused));
+    let unexcused = run_as_user(&lab, &["-C", app.to_str().unwrap(), "push", "billing"]);
+    assert!(!unexcused.status.success() && stderr(&unexcused).contains("its tests have no green run on HEAD"), "{}\n{}", stdout(&unexcused), stderr(&unexcused));
+    let taken = report("**Refunds show under each invoice.**\n\nBuilt:\n- Each invoice lists its refunds at /billing.\n");
+    assert!(taken.status.success(), "{}", stderr(&taken));
+    assert_eq!(fs::read_to_string(&excuse).unwrap(), head, "the taken report keeps which red run it left red");
+    let pushed = run_as_user(&lab, &["-C", app.to_str().unwrap(), "push", "billing"]);
+    assert!(!stderr(&pushed).contains("no green run"), "the push gate answers to the same red run the report did: {}\n{}", stdout(&pushed), stderr(&pushed));
+}
+
+#[test]
 fn a_ready_report_keeps_the_card_as_data_refuses_a_part_to_confirm_and_a_red_run_without_its_cause() {
     let lab = Lab::new("card-data");
     let (_, slot) = lab.task_fixture();

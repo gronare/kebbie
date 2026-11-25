@@ -11,10 +11,11 @@ pub enum Kind {
     Tests(After),
 }
 
-// Why any green test run on HEAD is owed: the review had findings.
+// Why any green test run on HEAD is owed: the review had findings, or the default branch moved under the task's tests.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum After {
     Findings,
+    Rebase,
 }
 
 impl Kind {
@@ -31,6 +32,7 @@ impl Kind {
             Kind::Full => "tests.before_push = \"full\"",
             Kind::Lint => "tests.lint_command",
             Kind::Tests(After::Findings) => "its review had findings",
+            Kind::Tests(After::Rebase) => "the default branch moved under its tests",
         }
     }
 }
@@ -148,6 +150,24 @@ fn had_findings(state: &Path, address: &str) -> bool {
     std::fs::read_to_string(crate::review::verdict_file(state, address)).ok().and_then(|text| crate::review::parse_verdict(&text)).is_some_and(|verdict| !verdict.ok && !verdict.asks_only_confirmation())
 }
 
+// The default branch moved under the task's tests: no green test run holds the base HEAD now sits on, as after a rebase onto a newer default branch; a task that never ran a test needs one once HEAD left the base its branch started on, unless it changes only files that run no test.
+fn rebased(worktree: &Path, head: &str, tests: &[Run]) -> bool {
+    let Some(upstream) = crate::repo::main_checkout(worktree).and_then(|repo| crate::repo::default_branch(&repo)).map(|upstream| crate::repo::tracking(&upstream)).ok() else { return false };
+    let Ok(base) = git(worktree, &["merge-base", head, &upstream]) else { return false };
+    if tests.is_empty() {
+        let code = git(worktree, &["diff", "--name-only", "--no-renames", &base, head]).map(|files| files.lines().any(|file| !file.is_empty() && !crate::tasks::text_only(file)));
+        return code.unwrap_or(true) && started_on(worktree, &upstream).is_none_or(|start| start != base);
+    }
+    !tests.iter().any(|run| run.result == Outcome::Passed && crate::sh::succeeds("git", &["merge-base", "--is-ancestor", &base, &run.code], Some(worktree)))
+}
+
+// Where the task's branch left the default branch when it was made, from the oldest entry of its reflog.
+fn started_on(worktree: &Path, upstream: &str) -> Option<String> {
+    let branch = git(worktree, &["symbolic-ref", "--short", "HEAD"]).ok()?;
+    let created = git(worktree, &["reflog", "show", "--format=%H", &format!("refs/heads/{branch}")]).ok()?.lines().last()?.to_string();
+    git(worktree, &["merge-base", &created, upstream]).ok()
+}
+
 // The test command a task is pointed to when any green test run will do: the one it ran last, else the repo's first named one.
 fn suggested(settings: &Settings, tests: &[Run]) -> String {
     tests.last().map(|run| run.runner.clone()).or_else(|| settings.test_commands.value.first().cloned()).unwrap_or_default()
@@ -161,7 +181,7 @@ fn owed_in(state: &Path, worktree: &Path, address: &str, end: Option<&str>, find
     let on_head = |run: &Run| run.code == head || (head_tree.is_some() && crate::evidence::tree_of(worktree, &run.code) == head_tree);
     let (tests, lints) = (crate::evidence::runs_in(state, address), crate::evidence::lint_runs_in(state, address));
     let mut required = required(&settings);
-    let after = findings.then_some(After::Findings);
+    let after = if findings { Some(After::Findings) } else if rebased(worktree, &head, &tests) { Some(After::Rebase) } else { None };
     if let Some(after) = after.filter(|_| !required.iter().any(|required| required.kind == Kind::Full)) {
         required.push(Required { kind: Kind::Tests(after), command: suggested(&settings, &tests) });
     }

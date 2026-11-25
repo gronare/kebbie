@@ -537,6 +537,7 @@ mod tests {
         fn drop(&mut self) {
             for address in &self.addresses {
                 forget(&self.state, address);
+                let _ = std::fs::remove_file(crate::evidence::file(&self.state, address));
                 intent::forget_left(&self.state, address);
                 phase::forget(&self.state, address);
             }
@@ -562,6 +563,13 @@ mod tests {
         git(&slot.path, &["rev-parse", "HEAD"]).unwrap()
     }
 
+    // The task rebased onto main itself and its tests passed there, as its Claude does when kebbie hands it the rebased code.
+    fn tested_on_main(state: &Path, address: &str, slot: &Slot, upstream: &str) {
+        git(&slot.path, &["rebase", "--quiet", upstream]).unwrap();
+        let code = head(slot);
+        crate::evidence::save(state, address, &crate::evidence::Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result: crate::evidence::Outcome::Passed, sha: code.clone(), code, ..Default::default() }).unwrap();
+    }
+
     fn landed(origin: &Path, upstream: &str) -> String {
         git(origin, &["log", "--format=%s", upstream.trim_start_matches("origin/")]).unwrap()
     }
@@ -577,7 +585,7 @@ mod tests {
     #[test]
     fn a_repos_pushes_go_out_one_at_a_time_in_the_order_asked_and_the_next_is_rebased_only_when_its_turn_comes() {
         let (dir, origin, alpha, upstream) = task_with_a_commit("alpha");
-        let beta = another_task(&dir, "beta", "e");
+        let beta = another_task(&dir, "beta", "CHANGES.md");
         let state = crate::lead::state_dir().unwrap();
         let (first, second) = (crate::peers::address("alpha", &name_of(&dir)), crate::peers::address("beta", &name_of(&dir)));
         let _line = Line { state: state.clone(), addresses: vec![first.clone(), second.clone()] };
@@ -589,6 +597,7 @@ mod tests {
         assert_eq!(phase_of(&state, &second), Some(Phase::Pushing { ahead: 1 }));
         upstream_commit(&dir, "elsewhere", "x", "someone else's work");
         let before = head(&beta);
+        tested_on_main(&state, &first, &alpha, &upstream);
         let (typed, mut push) = real_push(&state);
         let driven = drive(&state, &dir, Some(&second), &[], 1000, &|_, _| None, &|_| false, &mut push);
         assert!(driven.mine.is_none() && !landed(&origin, &upstream).contains("fourth"), "kebbie push of beta leaves alpha's turn to the keeper and says where beta stands: {driven:?}");
@@ -631,7 +640,7 @@ mod tests {
     #[test]
     fn a_head_its_claude_leaves_waiting_past_the_ceiling_goes_to_needs_you_and_the_next_push_goes_out() {
         let (dir, origin, alpha, upstream) = task_with_a_commit("alpha");
-        let beta = another_task(&dir, "beta", "e");
+        let beta = another_task(&dir, "beta", "CHANGES.md");
         let state = crate::lead::state_dir().unwrap();
         let (first, second) = (crate::peers::address("alpha", &name_of(&dir)), crate::peers::address("beta", &name_of(&dir)));
         let _line = Line { state: state.clone(), addresses: vec![first.clone(), second.clone()] };
@@ -688,7 +697,7 @@ mod tests {
     #[test]
     fn a_head_whose_build_waits_on_its_own_low_disk_gives_way_at_the_ceiling() {
         let (dir, origin, alpha, upstream) = task_with_a_commit("alpha");
-        let beta = another_task(&dir, "beta", "e");
+        let beta = another_task(&dir, "beta", "CHANGES.md");
         let state = crate::lead::state_dir().unwrap();
         let (first, second) = (crate::peers::address("alpha", &name_of(&dir)), crate::peers::address("beta", &name_of(&dir)));
         let _line = Line { state: state.clone(), addresses: vec![first.clone(), second.clone()] };
@@ -713,7 +722,7 @@ mod tests {
     #[test]
     fn a_head_alone_keeps_its_place_past_the_ceiling_while_its_claude_works_and_gives_way_once_a_push_waits_behind_it() {
         let (dir, origin, alpha, upstream) = task_with_a_commit("alpha");
-        let beta = another_task(&dir, "beta", "e");
+        let beta = another_task(&dir, "beta", "CHANGES.md");
         let state = crate::lead::state_dir().unwrap();
         let (first, second) = (crate::peers::address("alpha", &name_of(&dir)), crate::peers::address("beta", &name_of(&dir)));
         let _line = Line { state: state.clone(), addresses: vec![first.clone(), second.clone()] };
@@ -804,7 +813,7 @@ mod tests {
     #[test]
     fn a_head_found_mid_rebase_waits_untouched_up_to_the_ceiling_and_a_task_mid_rebase_cannot_join() {
         let (dir, origin, alpha, upstream) = task_with_a_commit("alpha");
-        let beta = another_task(&dir, "beta", "e");
+        let beta = another_task(&dir, "beta", "CHANGES.md");
         let state = crate::lead::state_dir().unwrap();
         let (first, second) = (crate::peers::address("alpha", &name_of(&dir)), crate::peers::address("beta", &name_of(&dir)));
         let _line = Line { state: state.clone(), addresses: vec![first.clone(), second.clone()] };
@@ -898,7 +907,7 @@ mod tests {
     #[test]
     fn the_fix_of_a_red_main_goes_first_in_its_line_and_the_head_it_passed_keeps_its_place_with_a_fresh_ceiling() {
         let (dir, origin, alpha, upstream) = task_with_a_commit("alpha");
-        let beta = another_task(&dir, "beta", "e");
+        let beta = another_task(&dir, "beta", "CHANGES.md");
         let state = crate::lead::state_dir().unwrap();
         let (first, second) = (crate::peers::address("alpha", &name_of(&dir)), crate::peers::address("beta", &name_of(&dir)));
         let _line = Line { state: state.clone(), addresses: vec![first.clone(), second.clone()] };

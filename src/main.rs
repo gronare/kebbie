@@ -358,9 +358,10 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
   kebbie push [name]              put the task in its repo's push line; at the head, fetch, rebase it onto origin's
                                   default branch and push it, then close it as done (once CI is green, when kebbie
                                   watches it; see kebbie ci); one push per repo at a time, in the order they were
-                                  asked for, and a task is rebased only when its turn comes; when the new upstream
-                                  commits changed files the task changes, its Claude runs their tests first and kebbie
-                                  pushes once it reports ready with the same commits; a conflict goes to its Claude;
+                                  asked for, and a task is rebased only when its turn comes; when the rebase moved
+                                  its code, its Claude runs its tests (and the repo's lint) on the rebased code first,
+                                  those for the files the new upstream commits changed too, and kebbie pushes once it
+                                  reports ready with the same commits; a conflict goes to its Claude;
                                   either way it keeps the head while its Claude works, and leaves the line for Needs
                                   you after 30 minutes without a ready report, or new commits nobody checked
                                   (--cancel takes it out of the line, unpushed; a task that waits for another is pushed
