@@ -6,6 +6,7 @@ mod area_page;
 mod areas;
 mod behind;
 mod builds;
+mod disk;
 mod assessment;
 mod backlog;
 mod backlog_file;

@@ -304,6 +304,8 @@ commands = ["answer", "prompt", "idea"]
 | `recover.enabled` | `true` | config.toml only | Whether kebbie resumes a task whose Claude an API error stopped, and puts a Codex task an API error stopped under Needs you. |
 | `builds.slots` | `1` | config.toml only | How many task builds run at once on this machine, a whole number from 1 to 64. See [Builds](#builds). |
 | `builds.commands` | `["cargo"]` | config.toml only | The commands that take a build slot: a program, and the words its arguments start with, such as `"npm run build"`. |
+| `disk.trim_below` | `"30 GB"` | config.toml only | Free space, as `"30 GB"` or `"15%"` of the disk, below which the keeper trims build output from worktrees nobody uses. See [Disk space](#disk-space). |
+| `disk.builds_below` | `"10 GB"` | config.toml only | Free space below which a task's build does not start. Below `disk.trim_below` when both use the same unit. See [Disk space](#disk-space). |
 
 `ci.watch` needs origin on GitHub and `gh` logged in. `false` closes the task right after the push, as for a repo without useful CI. See [Watch CI after a push](../explanation/trunk-based.md#ci-after-the-push).
 
@@ -361,6 +363,19 @@ Each Claude task runs its builds through a guard kebbie puts first on the PATH o
 [builds]
 slots = 2
 commands = ["cargo", "xcodebuild", "npm run build"]
+```
+
+#### Disk space
+
+Each worktree builds into its own `target/`, a few GB each, so a machine with many tasks can fill its disk. kebbie watches the free space on the disks that hold the repos' worktrees.
+
+Each limit is free space in GB, as `"30 GB"`, or a share of the whole disk, as `"15%"`.
+
+```toml
+# ~/.config/kebbie/config.toml
+[disk]
+trim_below = "15%"
+builds_below = "10 GB"
 ```
 
 `recover.enabled`: see [When the API stops a task](../explanation/lead-and-away-mode.md#when-the-api-stops-a-task).

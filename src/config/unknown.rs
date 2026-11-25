@@ -23,9 +23,9 @@ pub(super) fn warn_once<T>(value: T, unknown: &[String]) -> T {
     value
 }
 
-pub(super) const MACHINE_KEYS: [&str; 25] = ["board", "worktree", "task", "review", "investigate", "writer", "notify", "vault", "update", "restart", "keeper", "builds", "recover", "machine", "hub", "keys", "ci", "tests", "comments", "routines", "report", "issues", "lead", "worker", "link"];
+pub(super) const MACHINE_KEYS: [&str; 26] = ["board", "worktree", "task", "review", "investigate", "writer", "notify", "vault", "update", "restart", "keeper", "builds", "disk", "recover", "machine", "hub", "keys", "ci", "tests", "comments", "routines", "report", "issues", "lead", "worker", "link"];
 pub(super) const REPO_KEYS: [&str; 11] = ["actions", "worktree", "task", "review", "investigate", "ci", "tests", "comments", "docs", "routines", "jobs"];
-const SECTION_KEYS: [(&str, &[&str]); 25] = [
+const SECTION_KEYS: [(&str, &[&str]); 26] = [
     ("worker", &["enabled"]),
     ("link", &["networks"]),
     ("board", &["groups", "next_question", "backlog"]),
@@ -34,6 +34,7 @@ const SECTION_KEYS: [(&str, &[&str]); 25] = [
     ("restart", &["idle_minutes", "auto", "lead_context"]),
     ("keeper", &["enabled"]),
     ("builds", &["slots", "commands"]),
+    ("disk", &["trim_below", "builds_below"]),
     ("recover", &["enabled"]),
     ("report", &["signals", "text", "enabled", "inbox_token"]),
     ("issues", &["propose"]),
