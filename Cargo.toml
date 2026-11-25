@@ -42,3 +42,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros"]
 
 [profile.release]
 strip = true
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
