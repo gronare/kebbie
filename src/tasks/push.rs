@@ -95,7 +95,11 @@ fn update_in(path: &Path, upstream: &str, options: &[&str], from: Option<&str>) 
         Some(from) => vec!["rebase", "--quiet", "--onto", &tracked, from],
         None => vec!["rebase", "--quiet", &tracked],
     };
-    match rebase_writing(path, options, &rebase) {
+    let mut rebased = rebase_writing(path, options, &rebase);
+    while rebased.is_err() && rebase_in_progress(path) && union_release_notes(path, options) {
+        rebased = rebase_writing(path, options, &["-c", "core.editor=true", "rebase", "--continue"]);
+    }
+    match rebased {
         Ok(_) if touched.is_empty() => Ok(Updated::Clean),
         Ok(_) => Ok(Updated::Overlap(touched)),
         Err(error) if rebase_in_progress(path) => {
@@ -107,6 +111,64 @@ fn update_in(path: &Path, upstream: &str, options: &[&str], from: Option<&str>) 
         }
         Err(error) => Err(refused(path, upstream, &error)),
     }
+}
+
+const RELEASE_NOTES: &str = crate::changes::FILE;
+
+// Every task adds its line at the top of the same list in CHANGES.md, so a rebase stopped on that file alone keeps both sides' lines and goes on; a side that changed or dropped a line, or a union that would repeat a heading, is left a conflict.
+fn union_release_notes(path: &Path, options: &[&str]) -> bool {
+    if git(path, &["diff", "--name-only", "--diff-filter=U"]).ok().as_deref() != Some(RELEASE_NOTES) {
+        return false;
+    }
+    let Ok(dir) = git(path, &["rev-parse", "--path-format=absolute", "--git-path", "kebbie-union"]) else { return false };
+    let dir = Path::new(&dir);
+    let merged = union_stages(path, dir);
+    let _ = std::fs::remove_dir_all(dir);
+    let Some(merged) = merged.filter(|text| !heading_twice(text)) else { return false };
+    std::fs::write(path.join(RELEASE_NOTES), merged).is_ok() && git_writing(path, &[options, &["add", "--", RELEASE_NOTES]].concat()).is_ok()
+}
+
+// The union of the conflicted file's three stages, a missing base read as empty; ours is the upstream side, so its lines come first.
+fn union_stages(path: &Path, dir: &Path) -> Option<String> {
+    std::fs::create_dir_all(dir).ok()?;
+    let stage = |number: u8| -> Option<std::path::PathBuf> {
+        let shown = crate::sh::run_untrimmed("git", &["show", &format!(":{number}:{RELEASE_NOTES}")], Some(path));
+        let text = if number == 1 { shown.unwrap_or_default() } else { shown.ok()? };
+        let file = dir.join(number.to_string());
+        std::fs::write(&file, text).ok().map(|_| file)
+    };
+    let (base, ours, theirs) = (stage(1)?, stage(2)?, stage(3)?);
+    let read = |file: &std::path::PathBuf| std::fs::read_to_string(file).ok();
+    let base_text = read(&base)?;
+    if !only_adds(&base_text, &read(&ours)?) || !only_adds(&base_text, &read(&theirs)?) {
+        return None;
+    }
+    let [ours_path, base_path, theirs_path] = [&ours, &base, &theirs].map(|file| file.to_string_lossy().to_string());
+    git(path, &["merge-file", "--union", &ours_path, &base_path, &theirs_path]).ok()?;
+    std::fs::read_to_string(&ours).ok()
+}
+
+// Whether side keeps every line of base in order, so it only added lines: a union with a side that reworded or dropped a line would keep the old wording beside the new.
+fn only_adds(base: &str, side: &str) -> bool {
+    let mut kept = side.lines();
+    base.lines().all(|line| kept.any(|candidate| candidate == line))
+}
+
+// A heading met twice in the same part of the notes: a version twice, or a group twice under one version.
+fn heading_twice(text: &str) -> bool {
+    let mut versions = BTreeSet::new();
+    let mut groups = BTreeSet::new();
+    for line in text.lines().map(str::trim_end) {
+        if line.starts_with("## ") {
+            groups.clear();
+            if !versions.insert(line) {
+                return true;
+            }
+        } else if line.starts_with("### ") && !groups.insert(line) {
+            return true;
+        }
+    }
+    false
 }
 
 // Every kebbie rebase of a worktree runs under this, through rebase_writing, and none starts over a rebase under way there.
@@ -1640,6 +1702,85 @@ mod tests {
         assert_eq!(update(&slot.path, &upstream).unwrap(), Updated::Conflict(vec!["d".to_string()]), "the conflict names the file both sides changed");
         assert!(!rebase_in_progress(&slot.path) && git(&slot.path, &["rev-parse", "HEAD"]).unwrap() == head, "a conflict is aborted and leaves the branch as it was");
         cleanup(dir, origin, &slot);
+    }
+
+    const NOTES: &str = "# Changes\n\n## Unreleased\n\n### What's new\n- old feature\n\n### Fixed\n- old fix\n\n## 0.1.0\n\n### Fixed\n- first fix\n";
+
+    fn notes_on_both_sides(task_lines: &str, main_lines: &str) -> (std::path::PathBuf, std::path::PathBuf, crate::tasks::Slot, String) {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        upstream_commit(&dir, "CHANGES.md", NOTES, "add notes");
+        git(&slot.path, &["rebase", "--quiet", &upstream]).unwrap();
+        std::fs::write(slot.path.join("CHANGES.md"), NOTES.replacen("### Fixed\n", &format!("### Fixed\n{task_lines}"), 1)).unwrap();
+        git(&slot.path, &["commit", "--quiet", "-am", "task line"]).unwrap();
+        upstream_commit(&dir, "CHANGES.md", &NOTES.replacen("### Fixed\n", &format!("### Fixed\n{main_lines}"), 1), "main line");
+        (dir, origin, slot, upstream)
+    }
+
+    fn unreleased(slot: &crate::tasks::Slot) -> crate::changes::Section {
+        crate::changes::parse(&std::fs::read_to_string(slot.path.join("CHANGES.md")).unwrap()).into_iter().find(|section| section.version == "Unreleased").unwrap()
+    }
+
+    #[test]
+    fn a_rebase_stopped_only_on_changes_md_keeps_both_sides_lines_under_their_heading_and_goes_on() {
+        let (dir, origin, slot, upstream) = notes_on_both_sides("- the task's fix\n", "- main's fix\n");
+        assert!(!matches!(update(&slot.path, &upstream).unwrap(), Updated::Conflict(_)), "CHANGES.md alone never conflicts");
+        assert!(!rebase_in_progress(&slot.path) && ahead_behind(&slot.path, &upstream).unwrap().1 == 0, "the rebase finished on top of main");
+        let notes = unreleased(&slot);
+        assert_eq!(notes.fixed, ["main's fix", "the task's fix", "old fix"], "each line once, under Fixed of Unreleased");
+        assert_eq!(notes.new, ["old feature"]);
+        assert!(git(&slot.path, &["status", "--porcelain"]).unwrap().is_empty(), "the worktree holds the merged file, committed");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_changes_md_union_beside_another_conflict_stays_a_conflict() {
+        let (dir, origin, slot, upstream) = notes_on_both_sides("- the task's fix\n", "- main's fix\n");
+        std::fs::write(slot.path.join("d"), "mine").unwrap();
+        git(&slot.path, &["add", "d"]).unwrap();
+        git(&slot.path, &["commit", "--quiet", "-m", "d in the task"]).unwrap();
+        upstream_commit(&dir, "d", "theirs", "d on main");
+        let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        let Updated::Conflict(files) = update(&slot.path, &upstream).unwrap() else { panic!("d conflicts") };
+        assert!(files.contains(&"d".to_string()), "{files:?}");
+        assert!(!rebase_in_progress(&slot.path) && git(&slot.path, &["rev-parse", "HEAD"]).unwrap() == head, "the whole rebase is aborted, its union with it");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_changes_md_union_that_would_repeat_a_heading_stays_a_conflict() {
+        let (dir, origin, slot, upstream) = notes_on_both_sides("- the task's fix\n\n### Changed\n- the task's change\n", "- main's fix\n\n### Changed\n- main's change\n");
+        let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        assert_eq!(update(&slot.path, &upstream).unwrap(), Updated::Conflict(vec!["CHANGES.md".to_string()]), "a new Changed heading on each side goes to its Claude");
+        assert!(!rebase_in_progress(&slot.path) && git(&slot.path, &["rev-parse", "HEAD"]).unwrap() == head, "the branch is left as it was");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_changes_md_side_that_rewords_or_drops_a_line_stays_a_conflict() {
+        let (dir, origin, slot, upstream) = notes_on_both_sides("- the task's fix\n", "- main's fix\n");
+        git(&slot.path, &["reset", "--quiet", "--hard", "HEAD~1"]).unwrap();
+        std::fs::write(slot.path.join("CHANGES.md"), NOTES.replacen("### Fixed\n- old fix\n", "### Fixed\n- the old fix, said better\n", 1)).unwrap();
+        git(&slot.path, &["commit", "--quiet", "-am", "reword a line"]).unwrap();
+        let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        assert_eq!(update(&slot.path, &upstream).unwrap(), Updated::Conflict(vec!["CHANGES.md".to_string()]), "a reworded line would sit beside its old wording");
+        assert!(!rebase_in_progress(&slot.path) && git(&slot.path, &["rev-parse", "HEAD"]).unwrap() == head, "the branch is left as it was");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_side_only_adds_when_it_keeps_every_line_of_the_base_in_order() {
+        assert!(only_adds("a\nb\n", "new\na\nnew\nb\n"));
+        assert!(only_adds("", "a\n"));
+        assert!(!only_adds("a\nb\n", "a\nb said better\n"), "a reworded line");
+        assert!(!only_adds("a\nb\n", "b\n"), "a dropped line");
+        assert!(!only_adds("a\nb\n", "b\na\n"), "lines moved out of order");
+    }
+
+    #[test]
+    fn a_heading_counts_twice_only_within_one_part_of_the_notes() {
+        assert!(!heading_twice(NOTES), "Fixed under two versions is two parts");
+        assert!(heading_twice("## Unreleased\n### Fixed\n- a\n### Fixed\n- b\n"));
+        assert!(heading_twice("## Unreleased\n## Unreleased\n"));
     }
 
     #[test]

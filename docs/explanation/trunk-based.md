@@ -14,6 +14,7 @@ So kebbie keeps branches short. A task is meant to finish, land and free its wor
 
 - When the commits it goes over changed files the task changes too, kebbie hands the task to its Claude to run their tests, and pushes once it reports ready with the same commits.
 - When the rebase conflicts, kebbie aborts it, leaves the worktree as it was, and hands the conflict to the task's Claude, which knows the change best.
+- When the rebase stops only on `CHANGES.md`, where every task adds its line at the top of the same list, kebbie keeps both sides' lines and goes on. It stays a conflict when a side changed or removed a line already there, when the merge would repeat a heading, or when another file conflicts too.
 
 ## One push line per repo
 

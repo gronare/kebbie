@@ -18,6 +18,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### Fixed
 - A task keeps its own name until it is released.
 - A task is never restarted onto an older kebbie.
+- A push whose rebase stops only on CHANGES.md keeps both sides' lines and goes on.
 - The line under a task's row on the board says only what you do next, on one line; review findings, rule breaks and review suggestions go to the lead.
 - The lead never compacts its conversation, so it keeps its rules: near restart.lead_context it writes a handover and starts fresh on it.
 - kebbie setup run outside herdr ends with how to start herdr instead of opening the board on its error page.
