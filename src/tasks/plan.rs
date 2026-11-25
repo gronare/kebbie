@@ -524,6 +524,13 @@ pub(super) fn read_now(state: &Path, path: &Path, upstream: &str, address: &str)
     tips_of(&Task { path, upstream, address }).map(|tips| read_at(state, path, address, &tips, false)).unwrap_or_default()
 }
 
+// The same, an error where git cannot read the tips or the commits still to push, for a caller that must not read that as nothing left.
+pub(super) fn read_now_or_err(state: &Path, path: &Path, upstream: &str, address: &str) -> Result<Subtasks> {
+    let Some(plan) = load(state, address) else { return Ok(Subtasks::default()) };
+    let tips = tips_of(&Task { path, upstream, address })?;
+    current_at(state, path, address, &plan, &tips, false).map(|(subtasks, _)| subtasks)
+}
+
 // Read, change and write the plan under the task's own lock, so the hook, the task, the hub and the investigator never write over each other.
 pub(super) fn changed<T>(state: &Path, address: &str, change: impl FnOnce(Option<Plan>) -> Result<(Option<Plan>, T)>) -> Result<T> {
     let _held = crate::state::Locked::wait(&lock_file(state, address))?;

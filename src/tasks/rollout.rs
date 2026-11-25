@@ -534,17 +534,25 @@ pub fn check_open(state: &Path, address: &str, ids: &[String], note: &str) {
     });
 }
 
-// A report with no watch over the push left, while a stage waits on the task's check: held meets the stage, else the user answered, which clears what failed while the stage waits on its check.
-pub fn check_reported_later(state: &Path, address: &str, held: bool, now: u64) -> Option<Rolled> {
-    let open: Vec<String> = plan::load(state, address)?.stages.iter().filter(|stage| stage.kind == RequirementKind::Check && stage.kept == Some(StageState::Waiting)).map(|stage| stage.id.clone()).collect();
-    if open.is_empty() {
+// The subtasks of the task's commits still to push, or None when git cannot tell.
+pub fn unpushed_subtasks(state: &Path, address: &str, path: &Path) -> Option<Vec<String>> {
+    let upstream = main_checkout(path).and_then(|repo| default_branch(&repo)).ok()?;
+    unpushed_on(state, address, path, &upstream)
+}
+
+fn unpushed_on(state: &Path, address: &str, path: &Path, upstream: &str) -> Option<Vec<String>> {
+    Some(plan::read_now_or_err(state, path, upstream, address).ok()?.order.into_iter().map(|row| row.subtask).collect())
+}
+
+// A ready report with no watch over the push left is that the task's check held: it meets each stage waiting on its check whose fix is not still to push, since a fix in the stage's own subtask asks for its check again once pushed.
+pub fn check_reported_later(state: &Path, address: &str, unpushed: &[String], now: u64) -> Option<Rolled> {
+    let plans = plan::load(state, address)?.stages;
+    let fixing: Vec<String> = unpushed.iter().filter_map(|subtask| stage_for(&plans, subtask)).collect();
+    let held: Vec<String> = plans.iter().filter(|stage| stage.kind == RequirementKind::Check && stage.kept == Some(StageState::Waiting) && !fixing.contains(&stage.id)).map(|stage| stage.id.clone()).collect();
+    if held.is_empty() {
         return None;
     }
-    if held {
-        return Some(check_held(state, address, &open, now));
-    }
-    let _ = each(state, address, &open, |stage| stage.note = None);
-    None
+    Some(check_held(state, address, &held, now))
 }
 
 // A stage that failed holds every stage after it; the task and the lead hear what failed, and the task raises it as an obstacle when the cause is not its own to fix.
@@ -658,6 +666,7 @@ pub(crate) fn checking_after_push(state: &Path, address: &str) -> Result<()> {
     migrate.through = Some("m".repeat(40));
     migrate.pushed_at = Some(5);
     migrate.kept = Some(StageState::Waiting);
+    migrate.subtasks = vec!["migrate".to_string()];
     let cut = StagePlan::new("cut".to_string(), "Drop the old column".to_string(), RequirementKind::Deploy, None);
     let part = super::plan::Part { id: "migrate".to_string(), title: "Migrate".to_string(), ..super::plan::Part::default() };
     changed(state, address, |_| Ok((Some(Plan { base: "base".to_string(), parts: vec![part], stages: vec![migrate, cut], ..Plan::default() }), ())))

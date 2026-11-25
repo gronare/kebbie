@@ -284,20 +284,32 @@ fn a_check_that_did_not_hold_leaves_its_stage_out_with_the_check_open_until_it_h
     checking_after_push(&state, &address).unwrap();
     let ids = vec!["migrate".to_string()];
     let now = || stages_in(&state, &address);
+    let what = "the check did not hold: a report still reads users.mail";
 
-    check_open(&state, &address, &ids, "the check did not hold: a report still reads users.mail");
+    check_open(&state, &address, &ids, what);
     let stages = now();
     assert_eq!((stages[0].state, stages[1].state), (StageState::Waiting, StageState::Locked), "the stage is out, not failed, and the next stays locked");
     assert_eq!(stage_word(&stages[0], &stages), "check open");
     assert_eq!(note(&stages).as_deref(), Some("stage 1 of 2 out · check open: the check did not hold: a report still reads users.mail"));
 
-    assert_eq!(check_reported_later(&state, &address, false, 50), None);
+    assert_eq!(check_reported_later(&state, &address, &["migrate".to_string()], 50), None, "a fix still to push in the stage's own subtask");
     let stages = now();
-    assert_eq!((stages[0].state, stages[0].note.as_deref(), stage_word(&stages[0], &stages)), (StageState::Waiting, None, "task checks".to_string()), "the user answered: the note goes, the stage still waits on its check");
+    assert_eq!((stages[0].state, stages[0].note.as_deref(), stages[1].state), (StageState::Waiting, Some(what), StageState::Locked), "the stage waits for its fix, and what failed stays on the board");
 
-    let held = check_reported_later(&state, &address, true, 60).unwrap();
-    assert_eq!(held.met, ["Migrate".to_string()], "held: the stage is met");
-    assert_eq!(now().iter().map(|stage| stage.state).collect::<Vec<_>>(), [StageState::Met, StageState::Open]);
-    assert_eq!(check_reported_later(&state, &address, true, 70), None, "a met stage is not met again");
+    let held = check_reported_later(&state, &address, &[], 60).unwrap();
+    assert_eq!(held.met, ["Migrate".to_string()], "ready with no fix to push: the check held");
+    assert_eq!(now().iter().map(|stage| (stage.state, stage.note.clone())).collect::<Vec<_>>(), [(StageState::Met, None), (StageState::Open, None)]);
+    assert_eq!(check_reported_later(&state, &address, &[], 70), None, "a met stage is not met again");
     let _ = std::fs::remove_dir_all(state);
+}
+
+#[test]
+fn the_commits_still_to_push_are_unknown_when_git_cannot_read_them() {
+    let (dir, origin, slot, upstream) = task_with_a_commit("unknown");
+    let state = state_of(&dir);
+    let address = peers::address("unknown", &name_of(&dir));
+    super::super::plan::list_at(&state, &slot.path, &upstream, &address, &["Migrate"]).unwrap();
+    assert_eq!(unpushed_on(&state, &address, &slot.path, &upstream), Some(vec!["migrate".to_string()]), "the fix still to push, by its subtask");
+    assert_eq!(unpushed_on(&state, &address, &slot.path, "no-such-branch"), None, "git could not read the tips: unknown, never nothing left");
+    cleanup(dir, origin, &slot);
 }

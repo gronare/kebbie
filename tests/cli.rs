@@ -209,6 +209,7 @@ fn a_refused_ready_report_leaves_a_stage_with_its_check_open_as_it_was() {
     let slot_str = slot.to_str().unwrap();
     assert!(lab.run(&["-C", slot_str, "subtasks", "Migrate", "Cut"]).status.success());
     assert!(lab.run(&["-C", slot_str, "stages", "Migrate:check:nothing reads users.mail", "Cut:deploy"]).status.success());
+    assert!(lab.run(&["-C", slot_str, "stages", "assign", "migrate", "migrate"]).status.success());
     let plan_file = lab.state.join("steps/billing@app.json");
     let mut plan: serde_json::Value = serde_json::from_str(&fs::read_to_string(&plan_file).unwrap()).unwrap();
     let migrate = &mut plan["stages"][0];
@@ -221,6 +222,15 @@ fn a_refused_ready_report_leaves_a_stage_with_its_check_open_as_it_was() {
     let shown: serde_json::Value = serde_json::from_str(&stdout(&lab.run(&["-C", slot_str, "stages", "--json"]))).unwrap();
     let states: Vec<(&str, Option<&str>)> = shown["stages"].as_array().unwrap().iter().map(|stage| (stage["state"].as_str().unwrap(), stage["note"].as_str())).collect();
     assert_eq!(states, [("waiting", Some("the check did not hold: a report reads users.mail")), ("locked", None)], "a refused ready neither meets the stage nor opens the next");
+    fs::write(slot.join("card.md"), "# Refunds are listed\n\n**Built**\n- The billing page lists refunds.\n").unwrap();
+    let task_bin = lab.root.join("task-bin");
+    fs::create_dir_all(&task_bin).unwrap();
+    crate::executable::write(task_bin.join("claude"), "#!/bin/sh\ncat > /dev/null\necho 'verdict: ok'\n").unwrap();
+    let ready = lab.command().env("PATH", format!("{}:{}", task_bin.display(), lab.path())).args(["-C", slot_str, "report", "--state", "ready", "--card", "card.md", "--next", "push", "the fix is in"]).output().unwrap();
+    assert!(ready.status.success(), "{}", stderr(&ready));
+    let shown: serde_json::Value = serde_json::from_str(&stdout(&lab.run(&["-C", slot_str, "stages", "--json"]))).unwrap();
+    let states: Vec<(&str, Option<&str>)> = shown["stages"].as_array().unwrap().iter().map(|stage| (stage["state"].as_str().unwrap(), stage["note"].as_str())).collect();
+    assert_eq!(states, [("waiting", Some("the check did not hold: a report reads users.mail")), ("locked", None)], "a ready with the stage's own fix still to push waits for that push");
 }
 
 #[test]

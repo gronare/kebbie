@@ -83,7 +83,7 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
         save_check(&state, &me, check)?;
         kept.push_str(" kebbie asks you to run your check once the push lands, and closes the task when it holds.");
     }
-    settle_open_check(&state, &me, &report.state);
+    settle_open_check(cwd, &state, &me, &report.state);
     show_in_sidebar(&report);
     if report.state == "ready" && crate::task_note::linked(&state, &me).is_some() && let Some(cli) = crate::vault_cli::detect() {
         crate::task_note::heartbeat(&cli, &state, &me);
@@ -150,10 +150,10 @@ fn check_reported(state: &Path, me: &str, watch: &crate::ci::Watch, report: &Rep
     }
 }
 
-// With no watch over the push left, a report settles a stage whose check stayed open: ready is that the check held, as it is while the watch runs, and any report but needs-you that the user answered.
-fn settle_open_check(state: &Path, me: &str, reported: &str) {
-    if reported != "needs-you" && crate::ci::load(state, me).is_none() {
-        crate::tasks::rollout::check_reported_later(state, me, reported == "ready", messages::now());
+// With no watch over the push left, a ready report settles a stage whose check stayed open, as it does while the watch runs.
+fn settle_open_check(cwd: &Path, state: &Path, me: &str, reported: &str) {
+    if reported == "ready" && crate::ci::load(state, me).is_none() && let Some(unpushed) = crate::tasks::rollout::unpushed_subtasks(state, me, cwd) {
+        crate::tasks::rollout::check_reported_later(state, me, &unpushed, messages::now());
     }
 }
 
@@ -762,19 +762,18 @@ mod tests {
     }
 
     #[test]
-    fn a_report_after_the_check_stayed_open_settles_the_stage_though_a_later_stage_waits_to_be_pushed() {
+    fn only_a_ready_report_settles_an_open_check_and_the_others_keep_what_failed() {
         use kebbie_hub_protocol::StageState;
-        let state = crate::sh::test_dir("report-settle-open");
-        let me = format!("settle-{}@app", std::process::id());
+        let state = crate::sh::test_dir("report-keep-open");
+        let me = format!("keep-{}@app", std::process::id());
         crate::tasks::rollout::checking_after_push(&state, &me).unwrap();
-        crate::tasks::rollout::check_open(&state, &me, &["migrate".to_string()], "the check did not hold: a report still reads users.mail");
-        let stages = || crate::tasks::rollout::stages_in(&state, &me).iter().map(|stage| (stage.state, stage.note.clone())).collect::<Vec<_>>();
-        settle_open_check(&state, &me, "needs-you");
-        assert_eq!(stages()[0], (StageState::Waiting, Some("the check did not hold: a report still reads users.mail".to_string())), "still waiting on the user");
-        settle_open_check(&state, &me, "working");
-        assert_eq!(stages(), [(StageState::Waiting, None), (StageState::Locked, None)], "the user answered: the note goes, the next stage stays locked");
-        settle_open_check(&state, &me, "ready");
-        assert_eq!(stages(), [(StageState::Met, None), (StageState::Open, None)], "ready is that the check held, though the next stage's commits are still to push");
+        let what = "the check did not hold: a report still reads users.mail";
+        crate::tasks::rollout::check_open(&state, &me, &["migrate".to_string()], what);
+        for reported in ["working", "blocked", "needs-you"] {
+            settle_open_check(&state, &state, &me, reported);
+            let stages = crate::tasks::rollout::stages_in(&state, &me);
+            assert_eq!((stages[0].state, stages[0].note.as_deref(), stages[1].state), (StageState::Waiting, Some(what), StageState::Locked), "{reported} keeps what failed on the board");
+        }
         fs::remove_dir_all(state).unwrap();
     }
 
