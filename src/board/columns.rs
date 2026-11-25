@@ -340,7 +340,7 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
         if let Some(at) = cursor {
             selected_line = lines.len() + cursor_line(item, at);
         }
-        let reads = app.subtask_reads(item);
+        let reads = if item.lead_pushes() { Vec::new() } else { app.subtask_reads(item) };
         lines.extend(step_lines(item, selected && open && unfold, width, cursor, &reads));
         if let Some(wanted) = item.wanted(&keys::key(Act::Go).to_string()).or_else(|| accept_wanted(item)) {
             lines.push(under_row(&wanted, PEACH, selected && open && unfold, width));

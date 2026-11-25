@@ -6,7 +6,7 @@ use super::review_data::short;
 use super::subtasks::read_text;
 use crate::status::Item;
 use crate::tasks::{self, Subtask, SubtaskState};
-use super::widgets::{BLUE, FAINT, GREEN, MAUVE, MUTED, RAISED, RED, SURFACE, TEXT, YELLOW, bold, cut, plural, style, text_width};
+use super::widgets::{BLUE, FAINT, GREEN, MAUVE, MUTED, RAISED, RED, SURFACE, TEAL, TEXT, YELLOW, bold, cut, plural, style, text_width};
 
 const INDENT: &str = "    ";
 
@@ -24,9 +24,9 @@ fn waiting(subtask: &Subtask) -> bool {
     subtask.state == SubtaskState::Ready
 }
 
-// Accepting a ready subtask means something when task.require_accept holds the push for it, or when the task is still building a later subtask, so the push can take this one ahead; otherwise the push takes what is committed, accepted or not.
+// Accepting a ready subtask is the user's and means something when task.require_accept holds the push for it, or when the task the lead does not push is still building a later subtask, so the push can take this one ahead; otherwise the push takes what is committed, accepted or not.
 pub(super) fn accept_matters(item: &Item, subtask: &Subtask) -> bool {
-    item.to_accept.is_some() || (!item.reported_ready() && item.subtasks.items.iter().skip_while(|other| other.id != subtask.id).skip(1).any(|later| matches!(later.state, SubtaskState::Planned | SubtaskState::InProgress)))
+    item.to_accept.is_some() || (!item.lead_pushes() && !item.reported_ready() && item.subtasks.items.iter().skip_while(|other| other.id != subtask.id).skip(1).any(|later| matches!(later.state, SubtaskState::Planned | SubtaskState::InProgress)))
 }
 
 pub(super) fn accept_offered(item: &Item, subtask: &Subtask) -> bool {
@@ -58,6 +58,11 @@ pub(super) fn accept_wanted(item: &Item) -> Option<String> {
     }
     let subtask = to_accept(item).next()?;
     Some(format!("accept “{}” · {} review", subtask.title, keys::key(Act::Review)))
+}
+
+// A ready subtask the lead pushes waits on no one at this board, so it is not drawn in the user's yellow.
+fn step_color(item: &Item, state: &SubtaskState) -> Color {
+    if *state == SubtaskState::Ready && item.lead_pushes() { TEAL } else { mark_color(state) }
 }
 
 pub(super) fn mark_color(state: &SubtaskState) -> Color {
@@ -112,7 +117,7 @@ fn step_line(item: &Item, step: &Subtask, width: usize, on: bool, read: Option<(
     let number = format!("{} ", step.number);
     let room = width.saturating_sub(INDENT.len() + 2 + number.len());
     let (title, label) = fitted(&step.title, &state_word(item, step, read), room);
-    let color = mark_color(&step.state);
+    let color = step_color(item, &step.state);
     let planned = step.state == SubtaskState::Planned;
     let gap = room.saturating_sub(text_width(&title) + text_width(&label));
     let indent = if on { vec![Span::raw("  "), Span::styled("▌ ", style(MAUVE))] } else { vec![Span::raw(INDENT)] };
@@ -403,6 +408,32 @@ pub(crate) mod tests {
             }
             assert!(lines[0].contains('…'), "{width}: {screen}");
             assert!(lines.iter().all(|line| text_width(line) <= usize::from(width)), "{width}: {screen}");
+        }
+    }
+
+    #[test]
+    fn a_task_the_lead_pushes_shows_no_read_count_no_accept_and_no_yellow_under_its_row() {
+        let mut item = stepped(stripe());
+        item.path = Some(std::path::PathBuf::from("/work/wt1.billing"));
+        let shown = |item: &Item| {
+            let mut app = test_app(vec![item.clone()]);
+            app.subtask_io.count = std::rc::Rc::new(|_, step| (!step.commits.is_empty()).then_some((0, 9)));
+            app.work_selected = 9;
+            let (rows, buffer) = render(&mut app, 120, 30);
+            let ready = cell_fg(&rows, &buffer, "● 2");
+            (rows.join("\n"), ready)
+        };
+        let (screen, ready) = shown(&item);
+        assert!(screen.contains("0/9 read") && screen.contains("1 subtask to accept") && screen.contains("accept “Charge through a PaymentGateway”"), "the user pushes it, so reading and accepting are his: {screen}");
+        assert_eq!(ready, Some(YELLOW), "{screen}");
+        for permit in [crate::permit::Permit::Repo, crate::permit::Permit::Task] {
+            item.permit = Some(permit);
+            let (screen, ready) = shown(&item);
+            for users in ["/9 read", "to accept", "accept “", "review"] {
+                assert!(!screen.contains(users), "{permit:?}: the lead pushes it, so {users} is not the user's: {screen}");
+            }
+            assert_eq!(ready, Some(TEAL), "{permit:?}: a ready subtask the lead pushes is not in the user's yellow: {screen}");
+            assert!(screen.contains("ready"), "the subtask still says where it stands: {screen}");
         }
     }
 

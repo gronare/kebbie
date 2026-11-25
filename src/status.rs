@@ -622,6 +622,11 @@ impl Item {
         self.report.as_ref()?.next_for_you().map(str::to_string)
     }
 
+    // The lead holds push permission for it, so accepting and pushing it are the lead's unless task.require_accept leaves accepting to the user.
+    pub fn lead_pushes(&self) -> bool {
+        self.permit.is_some() && self.to_accept.is_none()
+    }
+
     // A task that reported ready is pushed whole, so without task.require_accept nothing in it waits on accepting.
     pub fn reported_ready(&self) -> bool {
         matches!(self.phase(), Some(Phase::Ready { .. } | Phase::Staged { .. }))
