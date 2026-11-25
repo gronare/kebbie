@@ -10,6 +10,7 @@ use crate::vault_cli::Wrote;
 use crate::vault_machines::Machine;
 
 pub const EVERY: u64 = 30;
+pub const WAIT: u64 = 5 * 60;
 const TRIES: u32 = 3;
 
 // A backlog item on its way to the machine that writes it out, as kebbie backlog add or n filed it.
@@ -133,7 +134,7 @@ fn sent_notice(target: &Target) -> Option<Result<String, String>> {
         Target::Ideas(machine) => (format!("Sent to {machine}, the ideas machine"), machine),
         Target::OnlyRepo(machine) => (format!("Sent to {machine}, the only machine with its repo"), machine),
     };
-    Some(Notice::new(Tone::Moving, headline).next(format!("{machine} writes it out and files it in the vault; its row waits on {machine}'s board.")).ok())
+    Some(Notice::new(Tone::Moving, headline).next(format!("{machine} writes it out and files it in the vault; its row waits on {machine}'s board. If {machine} does not take it within {} minutes, it is added here.", WAIT / 60)).ok())
 }
 
 // An item for the vault goes to the machine the rule picks; None files it here, as when the vault or the other machine was not reached.
@@ -149,6 +150,9 @@ pub fn send_with(store: &dyn Store, state: &Path, me: &Machine, filing: &Filing,
         crate::vault_cli::warn_log(state, &format!("\"{}\" was filed on this machine, as {to}'s inbox was not reached: {error}", filing.line));
         return None;
     }
+    if let Err(error) = change_sent(state, |sent| sent.push(Sent { to, mail, unreached: false })) {
+        crate::vault_cli::warn_log(state, &format!("\"{}\" is not taken back if it waits: {error}", filing.line));
+    }
     sent_notice(&chosen)
 }
 
@@ -160,6 +164,96 @@ pub fn send(sources: &[Source], filing: &Filing) -> Option<Result<String, String
     let state = crate::lead::state_dir().ok()?;
     let now = crate::messages::now();
     send_with(&cli, &state, &crate::vault_machines::me(now), filing, now)
+}
+
+// An item sent to another machine, kept until that machine takes it or it is taken back.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct Sent {
+    to: String,
+    mail: Mail,
+    #[serde(default)]
+    unreached: bool,
+}
+
+fn sent_file(state: &Path) -> PathBuf {
+    state.join("idea-mail-sent.json")
+}
+
+fn sent(state: &Path) -> Vec<Sent> {
+    std::fs::read_to_string(sent_file(state)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+}
+
+// kebbie backlog add and the keeper's round both change the list, so each change reads and writes it under one lock.
+fn change_sent(state: &Path, edit: impl FnOnce(&mut Vec<Sent>)) -> Result<(), String> {
+    let _held = crate::state::Locked::wait(&state.join("idea-mail-sent.lock"))?;
+    let mut all = sent(state);
+    edit(&mut all);
+    crate::state::write(&sent_file(state), serde_json::to_string(&all).unwrap_or_default())
+}
+
+#[derive(Debug, Default, PartialEq)]
+pub struct Reclaimed {
+    pub back: Vec<String>,
+    pub unreached: Vec<String>,
+    pub failed: Vec<String>,
+}
+
+// An item still in the other machine's inbox after WAIT is filed here; one gone from it was taken there. An inbox that cannot be read proves neither, so its item waits and the lead hears it once. An item is kept here before it leaves the inbox, so a failed save loses nothing.
+pub fn reclaim(store: &dyn Store, state: &Path, now: u64) -> Reclaimed {
+    let mut lines = Reclaimed::default();
+    let (mut settled, mut told) = (Vec::new(), Vec::new());
+    for one in sent(state) {
+        if now < one.mail.at + WAIT {
+            continue;
+        }
+        let id = one.mail.id.clone();
+        let waiting = match read_inbox(store, &one.to, true) {
+            Ok((mails, _)) => mails.iter().any(|mail| mail.id == id),
+            Err(error) => {
+                if !one.unreached {
+                    lines.unreached.push(format!("{}'s inbox could not be read for {} minutes, so \"{}\" waits there until it can be read ({error})", one.to, WAIT / 60, one.mail.line));
+                    told.push(id);
+                }
+                continue;
+            }
+        };
+        if !waiting {
+            settled.push(id);
+            continue;
+        }
+        if let Err(error) = keep_pending(state, std::slice::from_ref(&one.mail)) {
+            lines.failed.push(error);
+            continue;
+        }
+        match remove(store, &one.to, true, std::slice::from_ref(&id)) {
+            Ok(gone) if gone.is_empty() => {
+                lines.back.push(format!("{} did not take \"{}\" within {} minutes: added here", one.to, one.mail.line, WAIT / 60));
+                settled.push(id);
+            }
+            Ok(gone) => {
+                if let Err(error) = drop_pending(state, &gone) {
+                    lines.failed.push(error);
+                }
+                settled.push(id);
+            }
+            Err(error) => {
+                if let Err(error) = drop_pending(state, std::slice::from_ref(&id)) {
+                    lines.failed.push(error);
+                }
+                lines.failed.push(format!("\"{}\" waits in {}'s inbox, which was not written ({error})", one.mail.line, one.to));
+            }
+        }
+    }
+    if !settled.is_empty() || !told.is_empty() {
+        let saved = change_sent(state, |sent| {
+            sent.retain(|one| !settled.contains(&one.mail.id));
+            sent.iter_mut().filter(|one| told.contains(&one.mail.id)).for_each(|one| one.unreached = true);
+        });
+        if let Err(error) = saved {
+            lines.failed.push(error);
+        }
+    }
+    lines
 }
 
 fn pending_file(state: &Path) -> PathBuf {
@@ -208,7 +302,7 @@ pub fn receive(store: &dyn Store, state: &Path, me: &str, file: &dyn Fn(&Filing)
     let mut lines = Vec::new();
     let mut left = Vec::new();
     for mail in waiting {
-        let by = by_of(&mail);
+        let by = if mail.from.eq_ignore_ascii_case(me) { mail.by.clone() } else { by_of(&mail) };
         let filing = Filing { priority: &mail.priority, repo: &mail.repo, line: &mail.line, words: mail.words.as_deref(), body: mail.body.as_deref(), by: &by, start: mail.start, repos: &mail.repos };
         match file(&filing) {
             Ok(_) => {}
@@ -231,11 +325,15 @@ pub fn tick(state: &Path) -> Vec<String> {
     let write = |text: &str| crate::backlog_writer::hand(state, text, &caller, &tell);
     let shelf = Shelf { dir: &dir, state, tell: &tell, write: &write };
     let file = |filing: &Filing| crate::backlog_file::file_item_on(&shelf, &sources, filing, false);
-    let failed = receive(&cli, state, &crate::config::machine(), &file).unwrap_or_else(|error| vec![error]);
+    let Reclaimed { back, unreached, mut failed } = reclaim(&cli, state, crate::messages::now());
+    for line in back.iter().chain(&unreached) {
+        let _ = crate::messages::to_lead(crate::messages::ToLead::Notice, &format!("{line}. Tell the user, as they were told it went there."));
+    }
+    failed.extend(receive(&cli, state, &crate::config::machine(), &file).unwrap_or_else(|error| vec![error]));
     for line in &failed {
         crate::vault_cli::warn_log(state, line);
     }
-    failed
+    back.into_iter().chain(unreached).chain(failed).collect()
 }
 
 #[cfg(test)]
@@ -304,6 +402,84 @@ mod tests {
     }
 
     #[test]
+    fn an_item_the_ideas_machine_did_not_take_in_five_minutes_is_added_where_it_was_added() {
+        let (vault, mac, devbox) = (Vault::default(), scratch("mac-back"), scratch("devbox-back"));
+        vault.notes.borrow_mut().insert(crate::vault_machines::KEY.to_string(), (crate::vault_machines::render(&[machine("devbox", true, &[], 100)]), 1));
+        let me = machine("mac", false, &[], 100);
+        let said = send_with(&vault, &mac, &me, &filing("Asleep", ""), 100).unwrap().unwrap();
+        assert!(said.contains("within 5 minutes, it is added here"), "{said}");
+        assert_eq!(reclaim(&vault, &mac, 100 + WAIT - 1), Reclaimed::default(), "within the wait it stays with devbox");
+        assert_eq!(reclaim(&vault, &mac, 100 + WAIT).back, vec!["devbox did not take \"Asleep\" within 5 minutes: added here".to_string()]);
+        let filed = std::cell::RefCell::new(Vec::new());
+        let file = |filing: &Filing| {
+            filed.borrow_mut().push(filing.line.to_string());
+            Ok(String::new())
+        };
+        receive(&vault, &mac, "mac", &file).unwrap();
+        assert_eq!(filed.borrow().as_slice(), ["Asleep".to_string()], "filed here");
+        receive(&vault, &devbox, "devbox", &file).unwrap();
+        assert_eq!(filed.borrow().len(), 1, "devbox, waking, finds nothing to file");
+        assert_eq!(reclaim(&vault, &mac, 100 + 2 * WAIT), Reclaimed::default(), "taken back once");
+    }
+
+    #[test]
+    fn an_inbox_that_cannot_be_read_keeps_its_item_waiting_and_the_lead_hears_it_once() {
+        let (vault, mac) = (Vault::default(), scratch("mac-unread"));
+        vault.notes.borrow_mut().insert(crate::vault_machines::KEY.to_string(), (crate::vault_machines::render(&[machine("devbox", true, &[], 100)]), 1));
+        send_with(&vault, &mac, &machine("mac", false, &[], 100), &filing("Waiting", ""), 100).unwrap().unwrap();
+        let inbox = vault.notes.borrow_mut().remove(&inbox_key("devbox")).unwrap();
+        let first = reclaim(&vault, &mac, 100 + WAIT);
+        assert!(first.back.is_empty() && first.unreached.len() == 1, "{first:?}");
+        assert_eq!(reclaim(&vault, &mac, 100 + WAIT + 30), Reclaimed::default(), "said once");
+        assert!(pending(&mac).is_empty(), "nothing filed here on a failed read");
+        vault.notes.borrow_mut().insert(inbox_key("devbox"), inbox);
+        assert_eq!(reclaim(&vault, &mac, 100 + WAIT + 60).back.len(), 1, "taken back once the inbox reads and holds it");
+    }
+
+    #[test]
+    fn a_failed_read_after_the_item_was_taken_files_nothing_twice() {
+        let (vault, mac, devbox) = (Vault::default(), scratch("mac-taken-unread"), scratch("devbox-taken-unread"));
+        vault.notes.borrow_mut().insert(crate::vault_machines::KEY.to_string(), (crate::vault_machines::render(&[machine("devbox", true, &[], 100)]), 1));
+        send_with(&vault, &mac, &machine("mac", false, &[], 100), &filing("Taken", ""), 100).unwrap().unwrap();
+        receive(&vault, &devbox, "devbox", &|_: &Filing| Ok(String::new())).unwrap();
+        vault.notes.borrow_mut().remove(&inbox_key("devbox")).unwrap();
+        let round = reclaim(&vault, &mac, 100 + WAIT);
+        assert!(round.back.is_empty() && pending(&mac).is_empty(), "{round:?}");
+        vault.notes.borrow_mut().insert(inbox_key("devbox"), (render("devbox", &[]), 9));
+        assert_eq!(reclaim(&vault, &mac, 100 + WAIT + 30), Reclaimed::default());
+        assert!(sent(&mac).is_empty(), "settled once the inbox reads without it");
+    }
+
+    #[test]
+    fn an_item_sent_while_a_round_runs_stays_on_the_list() {
+        let (vault, mac) = (Vault::default(), scratch("mac-race"));
+        vault.notes.borrow_mut().insert(crate::vault_machines::KEY.to_string(), (crate::vault_machines::render(&[machine("devbox", true, &[], 100)]), 1));
+        send_with(&vault, &mac, &machine("mac", false, &[], 100), &filing("Old", ""), 100).unwrap().unwrap();
+        struct Sending<'a> {
+            vault: &'a Vault,
+            state: &'a Path,
+            sent: std::cell::Cell<bool>,
+        }
+        impl Store for Sending<'_> {
+            fn read(&self, key: &str) -> Result<(String, String), String> {
+                if key == inbox_key("devbox") && !self.sent.replace(true) {
+                    send_with(self.vault, self.state, &machine("mac", false, &[], 100 + WAIT), &filing("New", ""), 100 + WAIT).unwrap().unwrap();
+                }
+                self.vault.read(key)
+            }
+            fn write(&self, key: &str, etag: &str, text: &str) -> Result<Wrote, String> {
+                self.vault.write(key, etag, text)
+            }
+            fn close(&self, key: &str) -> Result<String, String> {
+                self.vault.close(key)
+            }
+        }
+        let store = Sending { vault: &vault, state: &mac, sent: std::cell::Cell::new(false) };
+        assert_eq!(reclaim(&store, &mac, 100 + WAIT).back.len(), 1, "the old one comes back");
+        assert_eq!(sent(&mac).iter().map(|one| one.mail.line.as_str()).collect::<Vec<_>>(), ["New"], "the one sent meanwhile is still on the list");
+    }
+
+    #[test]
     fn an_item_is_kept_here_before_it_leaves_its_inbox_so_a_failed_save_loses_nothing() {
         let (vault, devbox) = (Vault::default(), scratch("devbox-unsaved"));
         post(&vault, "devbox", &mail_of(&filing("Kept", ""), "mac", 5)).unwrap();
@@ -311,6 +487,18 @@ mod tests {
         std::fs::write(&unwritable, "").unwrap();
         assert!(receive(&vault, &unwritable, "devbox", &|_: &Filing| Ok(String::new())).is_err());
         assert_eq!(read_inbox(&vault, "devbox", true).unwrap().0.len(), 1, "the receiver left it in its inbox");
+    }
+
+    #[test]
+    fn an_item_is_kept_here_before_it_is_taken_back_so_a_failed_save_loses_nothing() {
+        let (vault, mac) = (Vault::default(), scratch("mac-unsaved"));
+        vault.notes.borrow_mut().insert(crate::vault_machines::KEY.to_string(), (crate::vault_machines::render(&[machine("devbox", true, &[], 100)]), 1));
+        send_with(&vault, &mac, &machine("mac", false, &[], 100), &filing("Back", ""), 100).unwrap().unwrap();
+        std::fs::create_dir_all(mac.join("idea-mail-pending.json")).unwrap();
+        assert_eq!(reclaim(&vault, &mac, 100 + WAIT).failed.len(), 1, "the save failed");
+        assert!(read_inbox(&vault, "devbox", true).unwrap().0.iter().any(|mail| mail.line == "Back"), "the sender left it in the inbox");
+        std::fs::remove_dir_all(mac.join("idea-mail-pending.json")).unwrap();
+        assert_eq!(reclaim(&vault, &mac, 100 + WAIT).back.len(), 1, "taken back once the save works");
     }
 
     #[test]
@@ -324,6 +512,21 @@ mod tests {
             Ok(String::new())
         }).unwrap();
         assert_eq!(seen.borrow().as_slice(), repos);
+    }
+
+    #[test]
+    fn an_item_the_ideas_machine_took_is_not_taken_back() {
+        let (vault, mac, devbox) = (Vault::default(), scratch("mac-took"), scratch("devbox-took"));
+        vault.notes.borrow_mut().insert(crate::vault_machines::KEY.to_string(), (crate::vault_machines::render(&[machine("devbox", true, &[], 100)]), 1));
+        send_with(&vault, &mac, &machine("mac", false, &[], 100), &filing("Taken", ""), 100).unwrap().unwrap();
+        receive(&vault, &devbox, "devbox", &|_: &Filing| Ok(String::new())).unwrap();
+        assert_eq!(reclaim(&vault, &mac, 100 + WAIT), Reclaimed::default());
+        let filed = std::cell::Cell::new(0);
+        receive(&vault, &mac, "mac", &|_: &Filing| {
+            filed.set(filed.get() + 1);
+            Ok(String::new())
+        }).unwrap();
+        assert_eq!(filed.get(), 0, "the mac files nothing");
     }
 
     #[test]

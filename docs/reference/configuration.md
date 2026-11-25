@@ -213,7 +213,7 @@ profile = "quick-codex"
 `hub.ideas_machine`: one machine writes out the backlog items you add, wherever you add them.
 
 - The machine it names says so on its board, and the phone's **New idea** picks it while it is awake, and an awake machine while it sleeps. The line under the machine says why: `ideas machine`, or `ideas machine is asleep, sent to workstation`.
-- An item you add on another machine with `kebbie backlog add` or `n` goes to the same machine when the backlog is the vault. When its repo has a checkout on only one machine, it goes to that machine instead. The machine you added it on says where it went, such as `Sent to workstation, the ideas machine`, and the item shows on that machine's board.
+- An item you add on another machine with `kebbie backlog add` or `n` goes to the same machine when the backlog is the vault. When its repo has a checkout on only one machine, it goes to that machine instead. The machine you added it on says where it went, such as `Sent to workstation, the ideas machine`, and the item shows on that machine's board. When that machine has not taken it within 5 minutes, as while it sleeps, the machine you added it on takes it back and adds it there.
 - Machines find each other through the vault: each one keeps its name, its repos and whether it is the ideas machine in the vault note `Kebbie/machines.md`, and items for a machine wait in its `Kebbie/inbox-<name>.md` until its keeper files them. A machine silent for a week drops out of the note.
 - An item you asked to start once it is written goes along and starts on that machine. A task already running stays on the machine where it started, and so does a local backlog without the vault.
 - Set it on the machine it names, or the same value on every machine.
