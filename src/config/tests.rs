@@ -434,9 +434,19 @@ fn board_groups_take_the_listed_order_and_the_rest_follow_by_default() {
     assert_eq!(settings(&Worktree::default(), &Machine::default()).groups.value, Group::ALL, "no list keeps today's order");
     assert_eq!(error("[board]\ngroups = [\"needs-me\"]\n"), "/home/u/.config/kebbie/config.toml: board.groups: \"needs-me\" is not a group; use \"needs-you\", \"working\", \"in-review\", \"ready-to-push\", \"going-out\", \"ci-running\", \"waiting-for-work\", \"waiting-on\", \"queued\"");
     assert!(error("[board]\ngroups = [\"queued\", \"queued\"]\n").contains("board.groups: \"queued\" is listed twice"));
-    assert!(unknown_machine("[board]\ncolumns = []\n").contains("board.columns: unknown key; known keys here: groups, next_question, backlog"));
+    assert!(unknown_machine("[board]\ncolumns = []\n").contains("board.columns: unknown key; known keys here: groups, next_question, tab_questions, backlog"));
     let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: set });
     assert!(shown.contains("board.groups = [\"ready-to-push\", \"waiting-for-work\", \"needs-you\", \"working\", \"in-review\", \"going-out\", \"ci-running\", \"waiting-on\", \"queued\"]  (machine config)\n  The order of the Work column's groups"), "{shown}");
+}
+
+#[test]
+fn tab_questions_is_off_unless_config_toml_turns_it_on() {
+    assert!(!settings(&Worktree::default(), &Machine::default()).tab_questions.value, "unset keeps tab on the open question");
+    let on = settings(&Worktree::default(), &machine("[board]\ntab_questions = true\n"));
+    assert!(on.tab_questions.value && on.tab_questions.layer == Layer::Machine);
+    assert!(parse_machine("[board]\ntab_questions = 1\n", "config.toml").unwrap_err().contains("board.tab_questions"));
+    let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: on });
+    assert!(shown.contains("board.tab_questions = true  (machine config)\n  Whether tab and shift-tab move between"), "{shown}");
 }
 
 #[test]
@@ -740,7 +750,7 @@ fn sample(entry: &Entry) -> String {
 fn each_keys_scope_is_the_files_that_take_it_and_what_its_text_says() {
     let loaded = Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
     let all = entries(&loaded);
-    assert_eq!(all.len(), 67);
+    assert_eq!(all.len(), 68);
     for entry in all {
         let (section, field) = entry.key.rsplit_once('.').unwrap();
         let text = format!("[{section}]\n{field} = {}\n", sample(&entry));

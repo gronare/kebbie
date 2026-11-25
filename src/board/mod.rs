@@ -226,6 +226,7 @@ struct App {
     groups: Vec<Group>,
     ongoing_at: OngoingAt,
     next_question: bool,
+    tab_questions: bool,
     parked_open: bool,
     details: HashMap<PathBuf, std::rc::Rc<Detail>>,
     detail_requests: Option<Sender<DetailRequest>>,
@@ -1316,7 +1317,7 @@ impl App {
             column: Column::Work, tasks: Vec::new(), checkouts: Vec::new(), backlog, found: Vec::new(), work_selected: 0, backlog_selected: 0,
             mode: Mode::Normal, overlay, loaded: false, error: None, screens: Default::default(), refresh, quit: false, leaving: false, wanted_task: None, hits: Vec::new(), links: Vec::new(),
             page: Page::Work, areas: area_page::Page::new(sources.clone()), routines: routine_page::Page::new(config::path(), config::repos_dir()), settings: settings_page::Page::new(settings_page::Paths::current(), None), sources, fetch_failures: Vec::new(), away: false,
-            messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, after_message: None, questions: Vec::new(), answering: None, sending: None, offers: Vec::new(), offer_panel: Default::default(), reporter: Default::default(), fixed: None, fixed_seen: 0, usage: None, ongoing: Vec::new(), groups: Group::ALL.to_vec(), ongoing_at: OngoingAt::default(), next_question: false, parked_open: false,
+            messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, after_message: None, questions: Vec::new(), answering: None, sending: None, offers: Vec::new(), offer_panel: Default::default(), reporter: Default::default(), fixed: None, fixed_seen: 0, usage: None, ongoing: Vec::new(), groups: Group::ALL.to_vec(), ongoing_at: OngoingAt::default(), next_question: false, tab_questions: false, parked_open: false,
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
             graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, focus_tint: background::focus_tint(None), decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(), plan_reads: Default::default(), card_read: None, card_reader: false,
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel).map(|outcome| outcome.details.join("\n"))), update: None, progress_file: None, recheck: None, stale: Vec::new(), stale_at: 0, restart_after_update: false,
@@ -1419,8 +1420,8 @@ pub fn run(overlay: bool) -> Result<String> {
                 match update {
                     Ok(snapshot) => {
                         let previous = app.selected_task().map(|item| (item.name, item.place));
-                        if let Ok((groups, ongoing_at, next_question)) = config::board_layout() {
-                            (app.groups, app.ongoing_at, app.next_question) = (groups, ongoing_at, next_question);
+                        if let Ok((groups, ongoing_at, next_question, tab_questions)) = config::board_layout() {
+                            (app.groups, app.ongoing_at, app.next_question, app.tab_questions) = (groups, ongoing_at, next_question, tab_questions);
                         }
                         app.set_tasks(snapshot.items);
                         app.areas.tasks = app.tasks.clone();

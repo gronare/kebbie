@@ -241,8 +241,8 @@ impl App {
             }
             KeyCode::Esc => return,
             KeyCode::Char(character) if character == keys::key(Act::Close) => return,
-            KeyCode::Tab => window.select(&self.questions, (window.selected + 1) % count),
-            KeyCode::BackTab => window.select(&self.questions, (window.selected + count - 1) % count),
+            KeyCode::Tab if self.tab_questions => window.select(&self.questions, (window.selected + 1) % count),
+            KeyCode::BackTab if self.tab_questions => window.select(&self.questions, (window.selected + count - 1) % count),
             KeyCode::Up | KeyCode::Char('k') => window.pick((window.option + count_answers - 1) % count_answers),
             KeyCode::Down | KeyCode::Char('j') => window.pick((window.option + 1) % count_answers),
             KeyCode::Left if planned => window.pick((window.option + count_answers - 1) % count_answers),
@@ -516,13 +516,14 @@ pub(super) fn draw_questions(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit
     });
     let questions = app.questions.clone();
     let viewer = app.viewer.is_some();
+    let tab = app.tab_questions;
     let Mode::Questions(window) = &mut app.mode else { return hits };
     let Some(message) = questions.get(window.selected) else { return hits };
     let question = message.question.as_ref();
     let planned = question.is_some_and(|question| question.plan.is_some());
     let (name, _) = split_address(&message.from);
     if !planned {
-        draw_ask(frame, window, message, questions.len(), &mut hits);
+        draw_ask(frame, window, message, questions.len(), tab, &mut hits);
         return hits;
     }
     let full = frame.area();
@@ -593,7 +594,7 @@ pub(super) fn draw_questions(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit
         keys.push(Span::styled(format!("{} {} · ", if *ok { "✓" } else { "!" }, notice.split_whitespace().collect::<Vec<_>>().join(" ")), style(if *ok { GREEN } else { RED })));
     }
     let open = viewer && plan_file(message).is_some();
-    keys.push(Span::styled(question_keys(window.typing, planned, questions.len() > 1, open), style(MUTED)));
+    keys.push(Span::styled(question_keys(window.typing, planned, tab && questions.len() > 1, open), style(MUTED)));
     frame.render_widget(Paragraph::new(fit(keys, foot.width as usize)), foot);
     hits
 }
@@ -693,7 +694,7 @@ fn ask_offset(block: (usize, usize), rows: usize, view: usize) -> usize {
     (end - view).min(start)
 }
 
-fn draw_ask(frame: &mut Frame, window: &mut QuestionWindow, message: &Message, count: usize, hits: &mut Vec<(Rect, Hit)>) {
+fn draw_ask(frame: &mut Frame, window: &mut QuestionWindow, message: &Message, count: usize, tab: bool, hits: &mut Vec<(Rect, Hit)>) {
     let full = frame.area();
     faint_behind(frame);
     let width = ASK_WIDTH.min(full.width.saturating_sub(4));
@@ -741,7 +742,7 @@ fn draw_ask(frame: &mut Frame, window: &mut QuestionWindow, message: &Message, c
         keys.push(Span::styled(format!("{} {} · ", if *ok { "✓" } else { "!" }, notice.split_whitespace().collect::<Vec<_>>().join(" ")), style(if *ok { GREEN } else { RED })));
     }
     let options = answers.iter().filter(|answer| answer.choice.is_some()).count();
-    keys.push(Span::styled(ask_keys(window.typing, options, count > 1, inner_width >= 70), style(MUTED)));
+    keys.push(Span::styled(ask_keys(window.typing, options, tab && count > 1, inner_width >= 70), style(MUTED)));
     frame.render_widget(Paragraph::new(fit(keys, foot.width as usize)), foot);
 }
 
@@ -890,9 +891,10 @@ mod tests {
     }
 
     #[test]
-    fn tab_moves_to_the_next_question_and_the_title_counts_it() {
+    fn tab_moves_to_the_next_question_when_tab_questions_is_on_and_the_title_counts_it() {
         let mut app = test_app(Vec::new());
         long_plan(&mut app);
+        app.tab_questions = true;
         app.open_questions(Some(0));
         let screen = render(&mut app, 100, 30).0.join("\n");
         assert!(screen.contains("question 1/2 · ask · billing") && screen.contains("tab next"), "{screen}");
@@ -902,6 +904,18 @@ mod tests {
         assert!(render(&mut app, 60, 30).0.join("\n").contains("question 2/2 · plan · payload"));
         press(&mut app, KeyCode::Tab);
         assert!(render(&mut app, 100, 30).0.join("\n").contains("question 1/2 · ask · billing"), "tab wraps around");
+    }
+
+    #[test]
+    fn tab_stays_on_the_open_question_when_tab_questions_is_off() {
+        let mut app = test_app(Vec::new());
+        long_plan(&mut app);
+        app.open_questions(Some(0));
+        let screen = render(&mut app, 100, 30).0.join("\n");
+        assert!(screen.contains("question 1/2 · ask · billing") && !screen.contains("tab next"), "the count stays, the hint goes: {screen}");
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::BackTab);
+        assert!(render(&mut app, 100, 30).0.join("\n").contains("question 1/2 · ask · billing"), "tab and shift-tab leave the question open");
     }
 
     #[test]
@@ -1397,7 +1411,7 @@ mod tests {
         let answered = std::time::Instant::now();
         crate::board::clock::pin_instant(answered - SETTLE);
         let mut app = test_app(vec![served("search-filters")]);
-        app.next_question = true;
+        (app.next_question, app.tab_questions) = (true, true);
         app.questions = three_questions();
         app.open_questions(Some(0));
         crate::board::clock::pin_instant(answered);
