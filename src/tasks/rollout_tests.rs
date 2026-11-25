@@ -276,3 +276,28 @@ fn a_column_rename_goes_out_in_three_stages_through_ci_a_not_yet_something_wrong
     let _ = std::fs::remove_dir_all(dir.with_extension("gh"));
     let _ = super::super::pool::find_task(&dir, Some("email"), &dir).map(|slot| cleanup(dir.clone(), origin.clone(), &slot));
 }
+
+#[test]
+fn a_check_that_did_not_hold_leaves_its_stage_out_with_the_check_open_until_it_holds() {
+    let state = crate::sh::test_dir("rollout-check-open");
+    let address = format!("open-{}@app", std::process::id());
+    checking_after_push(&state, &address).unwrap();
+    let ids = vec!["migrate".to_string()];
+    let now = || stages_in(&state, &address);
+
+    check_open(&state, &address, &ids, "the check did not hold: a report still reads users.mail");
+    let stages = now();
+    assert_eq!((stages[0].state, stages[1].state), (StageState::Waiting, StageState::Locked), "the stage is out, not failed, and the next stays locked");
+    assert_eq!(stage_word(&stages[0], &stages), "check open");
+    assert_eq!(note(&stages).as_deref(), Some("stage 1 of 2 out · check open: the check did not hold: a report still reads users.mail"));
+
+    assert_eq!(check_reported_later(&state, &address, false, 50), None);
+    let stages = now();
+    assert_eq!((stages[0].state, stages[0].note.as_deref(), stage_word(&stages[0], &stages)), (StageState::Waiting, None, "task checks".to_string()), "the user answered: the note goes, the stage still waits on its check");
+
+    let held = check_reported_later(&state, &address, true, 60).unwrap();
+    assert_eq!(held.met, ["Migrate".to_string()], "held: the stage is met");
+    assert_eq!(now().iter().map(|stage| stage.state).collect::<Vec<_>>(), [StageState::Met, StageState::Open]);
+    assert_eq!(check_reported_later(&state, &address, true, 70), None, "a met stage is not met again");
+    let _ = std::fs::remove_dir_all(state);
+}

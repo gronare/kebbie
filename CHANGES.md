@@ -17,6 +17,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A repo's push permission lets the lead push a task the assessor said needs no review, once its rules check passed.
 - The shared sccache server runs from kebbie's own folder under ~/.cache, so builds keep compiling when the task that started it ends; a server whose temp folder is gone is restarted.
 - Done closes a task's vault note even when its claim carries the machine's former name.
+- A stage that was pushed and rolled out shows as out with its check open, not failed, when only the task's check after the push did not hold; the next stage still waits for the check.
 - A deploy cancelled outside the repo's ci.deploy_window stays under CI running and is re-run when it opens.
 - A blocked task shows under Working again once its obstacle is decided or the lead answers it.
 - A task leaves Needs you for Working once the lead settles its question with kebbie decide.

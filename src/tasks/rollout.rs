@@ -154,7 +154,7 @@ fn state_line(stage: &Stage, stages: &[Stage]) -> String {
         StageState::Pushed => format!("pushed · waits until {}", requirement_line(&stage.requirement)),
         StageState::Waiting => match stage.requirement.kind {
             RequirementKind::Verified => "deployed · waits on your verification".to_string(),
-            RequirementKind::Check => "deployed · the task runs its check".to_string(),
+            RequirementKind::Check => stage.note.as_deref().map_or("deployed · the task runs its check".to_string(), |note| format!("out · check open: {note}")),
             RequirementKind::Deploy => "pushed · waits on your word that it deployed".to_string(),
         },
         StageState::Met => "met".to_string(),
@@ -168,6 +168,7 @@ pub fn stage_word(stage: &Stage, stages: &[Stage]) -> String {
         StageState::Locked => held_by(stages, &stage.id).map_or("locked".to_string(), |before| format!("after {}", before.title)),
         StageState::Open => "open".to_string(),
         StageState::Pushed => format!("pushed · {}", kind_word(stage.requirement.kind)),
+        StageState::Waiting if stage.requirement.kind == RequirementKind::Check && stage.note.is_some() => "check open".to_string(),
         StageState::Waiting if stage.requirement.kind == RequirementKind::Check => "task checks".to_string(),
         StageState::Waiting => "verify".to_string(),
         StageState::Met => "met".to_string(),
@@ -512,6 +513,7 @@ pub fn check_held(state: &Path, address: &str, ids: &[String], now: u64) -> Roll
         if stage.kind == RequirementKind::Check && matches!(stage.kept, Some(StageState::Waiting | StageState::Pushed)) {
             stage.kept = Some(StageState::Met);
             stage.met_at = Some(now);
+            stage.note = None;
             met.push(stage.title.clone());
         }
     }).unwrap_or_default();
@@ -519,6 +521,30 @@ pub fn check_held(state: &Path, address: &str, ids: &[String], now: u64) -> Roll
         unlocked(address, &met, &stages);
     }
     Rolled { all_met: !stages.is_empty() && stages.iter().all(|stage| stage.state == StageState::Met), met, ..Rolled::default() }
+}
+
+// The check after the push did not hold though push, CI and deploy did: the stage stays out with its check open, the note naming what failed, and every stage after it stays locked.
+pub fn check_open(state: &Path, address: &str, ids: &[String], note: &str) {
+    let note: String = note.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_STAGE_NOTE_CHARS).collect();
+    let _ = each(state, address, ids, |stage| {
+        if stage.kind == RequirementKind::Check && matches!(stage.kept, Some(StageState::Waiting | StageState::Pushed)) {
+            stage.kept = Some(StageState::Waiting);
+            stage.note = Some(note.clone()).filter(|note| !note.is_empty());
+        }
+    });
+}
+
+// A report with no watch over the push left, while a stage waits on the task's check: held meets the stage, else the user answered, which clears what failed while the stage waits on its check.
+pub fn check_reported_later(state: &Path, address: &str, held: bool, now: u64) -> Option<Rolled> {
+    let open: Vec<String> = plan::load(state, address)?.stages.iter().filter(|stage| stage.kind == RequirementKind::Check && stage.kept == Some(StageState::Waiting)).map(|stage| stage.id.clone()).collect();
+    if open.is_empty() {
+        return None;
+    }
+    if held {
+        return Some(check_held(state, address, &open, now));
+    }
+    let _ = each(state, address, &open, |stage| stage.note = None);
+    None
 }
 
 // A stage that failed holds every stage after it; the task and the lead hear what failed, and the task raises it as an obstacle when the cause is not its own to fix.
@@ -623,6 +649,18 @@ pub(crate) fn waiting_on_you(state: &Path, address: &str) -> Result<()> {
     let cut = StagePlan::new("cut".to_string(), "Drop the old column".to_string(), RequirementKind::Deploy, None);
     let part = super::plan::Part { id: "fill".to_string(), title: "Backfill".to_string(), ..super::plan::Part::default() };
     changed(state, address, |_| Ok((Some(Plan { base: "base".to_string(), parts: vec![part], stages: vec![fill, cut], ..Plan::default() }), ())))
+}
+
+// A task whose first stage, Migrate, is out and waits on its check after the push, and whose second, Drop the old column, is locked behind it.
+#[cfg(test)]
+pub(crate) fn checking_after_push(state: &Path, address: &str) -> Result<()> {
+    let mut migrate = StagePlan::new("migrate".to_string(), "Migrate".to_string(), RequirementKind::Check, Some("no query reads users.mail".to_string()));
+    migrate.through = Some("m".repeat(40));
+    migrate.pushed_at = Some(5);
+    migrate.kept = Some(StageState::Waiting);
+    let cut = StagePlan::new("cut".to_string(), "Drop the old column".to_string(), RequirementKind::Deploy, None);
+    let part = super::plan::Part { id: "migrate".to_string(), title: "Migrate".to_string(), ..super::plan::Part::default() };
+    changed(state, address, |_| Ok((Some(Plan { base: "base".to_string(), parts: vec![part], stages: vec![migrate, cut], ..Plan::default() }), ())))
 }
 
 #[cfg(test)]

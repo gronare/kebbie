@@ -203,6 +203,27 @@ fn help_lists_every_command_and_an_unknown_command_fails_with_the_usage() {
 }
 
 #[test]
+fn a_refused_ready_report_leaves_a_stage_with_its_check_open_as_it_was() {
+    let lab = Lab::new("check-open");
+    let (_, slot) = lab.task_fixture();
+    let slot_str = slot.to_str().unwrap();
+    assert!(lab.run(&["-C", slot_str, "subtasks", "Migrate", "Cut"]).status.success());
+    assert!(lab.run(&["-C", slot_str, "stages", "Migrate:check:nothing reads users.mail", "Cut:deploy"]).status.success());
+    let plan_file = lab.state.join("steps/billing@app.json");
+    let mut plan: serde_json::Value = serde_json::from_str(&fs::read_to_string(&plan_file).unwrap()).unwrap();
+    let migrate = &mut plan["stages"][0];
+    (migrate["through"], migrate["pushed_at"], migrate["state"], migrate["note"]) = ("m".repeat(40).into(), 5.into(), "waiting".into(), "the check did not hold: a report reads users.mail".into());
+    fs::write(&plan_file, plan.to_string()).unwrap();
+    git(&slot, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend", "-m", "Add refunds\n\nThe billing page lists refunds now."]);
+    fs::write(slot.join("card.md"), "   \n").unwrap();
+    let refused = lab.run(&["-C", slot_str, "report", "--state", "ready", "--card", "card.md", "--next", "push", "the check holds now"]);
+    assert!(!refused.status.success() && stderr(&refused).contains("is empty"), "{}", stderr(&refused));
+    let shown: serde_json::Value = serde_json::from_str(&stdout(&lab.run(&["-C", slot_str, "stages", "--json"]))).unwrap();
+    let states: Vec<(&str, Option<&str>)> = shown["stages"].as_array().unwrap().iter().map(|stage| (stage["state"].as_str().unwrap(), stage["note"].as_str())).collect();
+    assert_eq!(states, [("waiting", Some("the check did not hold: a report reads users.mail")), ("locked", None)], "a refused ready neither meets the stage nor opens the next");
+}
+
+#[test]
 fn stages_and_a_verification_are_a_tasks_and_refused_outside_one() {
     let lab = Lab::new("stages");
     let (repo, slot) = lab.task_fixture();
