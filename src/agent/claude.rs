@@ -188,11 +188,14 @@ pub fn end_claude(pane: &str) -> Result<()> {
 }
 
 pub(crate) fn end_agent(name: &str, pane: &str) -> Result<()> {
-    end_with(|key| herdr::send_keys(pane, &[key]), || Ok(herdr::foreground(pane)?.is_none()), || std::thread::sleep(Duration::from_millis(500)), 10)
-        .map_err(|_| format!("{name} in {pane} did not exit after escape and ctrl-c; see what holds it there"))
+    end_with(|key| herdr::send_keys(pane, &[key]), || Ok(herdr::foreground(pane)?.is_none()), || std::thread::sleep(Duration::from_millis(500)), 10, EXIT_WATCH)
+        .map_err(|_| format!("{name} in {pane} did not exit within a minute of escape and ctrl-c; see what holds it there"))
 }
 
-fn end_with(mut send: impl FnMut(&str) -> Result<()>, mut at_shell: impl FnMut() -> Result<bool>, mut pause: impl FnMut(), tries: usize) -> Result<()> {
+// A Claude that took the ctrl-c can take many seconds to save and run its exit hooks, and the resume must follow it rather than give up on a pane it leaves as a bare shell.
+const EXIT_WATCH: usize = 120;
+
+fn end_with(mut send: impl FnMut(&str) -> Result<()>, mut at_shell: impl FnMut() -> Result<bool>, mut pause: impl FnMut(), tries: usize, watch: usize) -> Result<()> {
     send("esc")?;
     pause();
     for _ in 0..tries {
@@ -200,6 +203,12 @@ fn end_with(mut send: impl FnMut(&str) -> Result<()>, mut at_shell: impl FnMut()
             return Ok(());
         }
         send("ctrl+c")?;
+        pause();
+    }
+    for _ in 0..watch {
+        if at_shell()? {
+            return Ok(());
+        }
         pause();
     }
     if at_shell()? { Ok(()) } else { Err("still running".to_string()) }
@@ -574,7 +583,7 @@ mod tests {
     fn ending_a_claude_sends_escape_then_ctrl_c_only_until_the_shell_is_back() {
         let run = |exits_after: usize, tries: usize| {
             let keys = std::cell::RefCell::new(Vec::new());
-            let result = end_with(|key| { keys.borrow_mut().push(key.to_string()); Ok(()) }, || Ok(keys.borrow().iter().filter(|key| *key == "ctrl+c").count() >= exits_after), || {}, tries);
+            let result = end_with(|key| { keys.borrow_mut().push(key.to_string()); Ok(()) }, || Ok(keys.borrow().iter().filter(|key| *key == "ctrl+c").count() >= exits_after), || {}, tries, 0);
             (result, keys.into_inner())
         };
         assert_eq!(run(2, 10), (Ok(()), vec!["esc".to_string(), "ctrl+c".to_string(), "ctrl+c".to_string()]));
@@ -582,6 +591,19 @@ mod tests {
         let (result, keys) = run(usize::MAX, 3);
         assert!(result.is_err());
         assert_eq!(keys.len(), 4, "{keys:?}");
+    }
+
+    #[test]
+    fn a_claude_that_exits_after_the_last_ctrl_c_is_watched_until_the_shell_is_back_without_more_keys() {
+        let keys = std::cell::RefCell::new(Vec::new());
+        let pauses = std::cell::Cell::new(0);
+        let exits_at = 30;
+        let result = end_with(|key| { keys.borrow_mut().push(key.to_string()); Ok(()) }, || Ok(pauses.get() >= exits_at), || pauses.set(pauses.get() + 1), 3, EXIT_WATCH);
+        assert_eq!(result, Ok(()), "the restart goes on to the resume once the late exit comes");
+        assert_eq!(keys.into_inner(), vec!["esc", "ctrl+c", "ctrl+c", "ctrl+c"], "no ctrl-c reaches the shell the Claude leaves");
+        assert_eq!(pauses.get(), exits_at);
+        let never = end_with(|_| Ok(()), || Ok(false), || {}, 3, EXIT_WATCH);
+        assert!(never.is_err(), "a Claude that never exits still fails the restart");
     }
 
     #[test]

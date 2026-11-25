@@ -111,6 +111,8 @@ kebbie restarts a Codex only in a task: the lead is Claude, and your own Codex s
 
 A restart is `claude --resume <session id>` in the same pane, with the process's own flags such as `--model`, `--permission-mode` and `--add-dir`. The conversation stays, and the new process loads the new Claude Code, plugins, MCP servers and hooks.
 
+kebbie ends the old process with escape and ctrl-c, then watches the pane for up to a minute, sending nothing more, until the shell is back, and resumes the moment it is. A Claude that takes many seconds to save and run its exit hooks is resumed all the same; one still running after that minute fails the restart, and the board says so.
+
 A Codex task restarts with `codex resume <session id>` in its pane, with the arguments a start of the task gets today: its profile's model and effort, its permission mode, kebbie's sandbox and permissions, and kebbie's plugin enabled and trusted with the update check off. The flags its old process ran with are not kept, so a task an older kebbie started picks up kebbie's current sandbox on its restart. Its role is written anew, and its `SessionStart` hook gives it to the resumed session.
 
 A task's Claude gets its role and settings written anew, as `kebbie start` writes them, in place of the ones it ran with, from the profile it started with. When that profile no longer loads, the task restarts as the built-in `task`, and the lead is told which file failed and why. The lead is restarted through `kebbie lead --restart`, which also rewrites its role.
