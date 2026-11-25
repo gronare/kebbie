@@ -110,6 +110,7 @@ mod vault;
 mod vault_card;
 mod vault_cli;
 mod vault_found;
+mod vault_machines;
 mod vault_snapshot;
 mod vault_watch;
 mod when;
