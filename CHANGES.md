@@ -18,6 +18,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A repo can name its lint command (tests.lint_command): kebbie records its runs, and a task reports ready and pushes only once that lint passed on its latest code, also after the push line rebased it.
 - A task asks you whether its change works only once its push is out and green, and Verified closes it.
 - Backlog items whose questions wait on you show under Needs you on the Work and Backlog pages and in the Next window.
+- Red CI on main goes only to the task whose push made it red; tasks that pushed on top wait under CI running and close once the fix is green.
 
 ### Fixed
 - A task the lead pushes shows no yellow read count or subtask to accept, and no task row shows its recipe or rules check.

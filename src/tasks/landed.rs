@@ -322,13 +322,19 @@ fn later_runs(watch: &crate::ci::Watch, workflows: &[String], gh: &str) -> Resul
     if workflows.is_empty() {
         return Ok(Vec::new());
     }
+    Ok(branch_runs(watch, gh)?.into_iter().filter(|(sha, run)| *sha != watch.sha && workflows.iter().any(|workflow| workflow == run.title()))
+        .map(|(sha, run)| LaterRun { sha, workflow: run.title().to_string(), status: run.status, conclusion: run.conclusion }).collect())
+}
+
+// Every push run on the watch's branch with the commit it ran on, newest first as gh lists them.
+pub(crate) fn branch_runs(watch: &crate::ci::Watch, gh: &str) -> Result<Vec<(String, crate::ci::Run)>> {
     let target = if watch.pushed.target.is_empty() { default_branch(&watch.repo).map(|upstream| upstream.trim_start_matches("origin/").to_string()).unwrap_or_default() } else { watch.pushed.target.clone() };
     let listed = crate::sh::run(gh, &["run", "list", "-R", &watch.slug, "--branch", &target, "--event", "push", "--limit", "100", "--json", "databaseId,name,status,conclusion,workflowName,url,headSha,event"], Some(&watch.repo))?;
     let Ok(Value::Array(entries)) = serde_json::from_str::<Value>(&listed) else { return Err(format!("gh run list --branch {target} gave no list")) };
     Ok(entries.iter().filter(|entry| entry["event"] == "push").filter_map(|entry| {
         let sha = entry["headSha"].as_str()?;
         let run = crate::ci::parse_runs(&Value::Array(vec![entry.clone()]).to_string()).unwrap_or_default().pop()?;
-        (sha != watch.sha && workflows.iter().any(|workflow| workflow == run.title())).then(|| LaterRun { sha: sha.to_string(), workflow: run.title().to_string(), status: run.status.clone(), conclusion: run.conclusion.clone() })
+        Some((sha.to_string(), run))
     }).collect())
 }
 

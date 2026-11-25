@@ -169,6 +169,13 @@ mod tests {
             state: crate::ci::State::Failed { at: 2, what: "deploy · release · Deploy".to_string(), url: String::new() }, error: None, erring_since: None, following: None, pushed: crate::ci::Pushed::default(),
         });
         assert!(crate::board::options::task_choices(Some(&item), None, None).iter().any(|choice| choice.act == Some(crate::keys::Act::DismissCi) && choice.label == "Dismiss the red CI"));
+        let mut waiting = item.clone();
+        let inherited = crate::ci::Inherited { from: "1111111".to_string(), since: "0000000".to_string(), what: "ci · clippy".to_string(), url: String::new(), culprit: None };
+        waiting.ci = waiting.ci.map(|ci| crate::ci::Watch { state: crate::ci::State::Running, pushed: crate::ci::Pushed { inherited: Some(inherited), ..crate::ci::Pushed::default() }, ..ci });
+        assert!(crate::board::options::task_choices(Some(&waiting), None, None).iter().any(|choice| choice.act == Some(crate::keys::Act::DismissCi) && choice.label == "Dismiss the inherited red CI"), "a red it inherited and waits out is the user's to dismiss too");
+        let mut inherited_app = test_app(vec![waiting]);
+        inherited_app.handle_normal(key(KeyCode::Char('C')));
+        assert!(matches!(inherited_app.mode, Mode::ConfirmDismiss { .. }), "C asks before it dismisses an inherited red too");
         let mut app = test_app(vec![item]);
         app.handle_normal(key(KeyCode::Char('C')));
         assert!(matches!(app.mode, Mode::ConfirmDismiss { nudged: false, .. }), "C asks before it dismisses");

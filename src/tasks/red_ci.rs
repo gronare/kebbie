@@ -25,7 +25,7 @@ fn read(state: &Path, address: &str) -> Value {
 }
 
 fn red(state: &Path, address: &str) -> Option<crate::ci::Watch> {
-    crate::ci::load(state, address).filter(|watch| !watch.running())
+    crate::ci::load(state, address).filter(crate::ci::Watch::dismissable)
 }
 
 pub(crate) fn outside_reason(state: &Path, address: &str) -> Option<String> {
@@ -77,7 +77,7 @@ pub(crate) fn dismiss_as(state: &Path, caller: &Caller, cwd: &Path, name: Option
     let what = match &watch.state {
         crate::ci::State::Failed { what, url, .. } | crate::ci::State::Cancelled { what, url, .. } => json!({ "what": what, "url": url }),
         crate::ci::State::Unknown { error, .. } => json!({ "what": error }),
-        crate::ci::State::Running => json!({}),
+        crate::ci::State::Running => watch.pushed.inherited.as_ref().map_or_else(|| json!({}), |inherited| json!({ "what": inherited.what, "url": inherited.url })),
     };
     let named = match &watch.state {
         crate::ci::State::Cancelled { .. } => "cancelled",
@@ -146,6 +146,23 @@ mod tests {
         crate::tasks::landed::keep_open(&state, &address, true);
         let kept = dismiss_as(&state, &Caller::User, &dir, Some("billing"), Some("a flake")).unwrap();
         assert!(kept.contains("It stays open, as the user chose") && !kept.contains("kebbie closes"), "{kept}");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn the_user_may_dismiss_a_red_ci_the_task_inherited_and_waits_out() {
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let address = peers::address("billing", &name_of(&dir));
+        let inherited = crate::ci::Inherited { from: "1111111aaa".to_string(), since: "0000000bbb".to_string(), what: "ci · clippy".to_string(), url: "https://ci/9".to_string(), culprit: Some("ledger@app".to_string()) };
+        let waiting = crate::ci::Watch { state: crate::ci::State::Running, pushed: crate::ci::Pushed { inherited: Some(inherited), ..crate::ci::Pushed::default() }, ..red_watch(&dir, &address) };
+        crate::ci::save(&state, &waiting).unwrap();
+        assert!(waiting.dismissable() && waiting.running(), "it waits under CI running, yet the user may dismiss it");
+        let said = dismiss_as(&state, &Caller::User, &dir, Some("billing"), Some("main is fixed by hand")).unwrap();
+        assert!(said.contains("Dismissed the red CI"), "{said}");
+        assert!(crate::ci::load(&state, &address).is_none(), "the waiting watch goes");
+        let archived = dismissed(&state, &address);
+        assert_eq!((archived[0]["state"].as_str(), archived[0]["failed"]["what"].as_str(), archived[0]["failed"]["url"].as_str(), archived[0]["why"].as_str()), (Some("red"), Some("ci · clippy"), Some("https://ci/9"), Some("main is fixed by hand")), "the record keeps the red it inherited");
         cleanup(dir, origin, &slot);
     }
 }

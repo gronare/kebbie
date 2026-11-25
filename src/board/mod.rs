@@ -1170,7 +1170,7 @@ impl App {
                         self.about("ci", &item.name);
                         self.task_in_background(&item.name, item.path.as_deref(), "re-running CI", format!("Re-running CI for {}", item.name), move || crate::ci::rerun(&address));
                     }
-                    Act::DismissCi if item.ci.as_ref().is_some_and(|ci| !ci.running()) => {
+                    Act::DismissCi if item.ci.as_ref().is_some_and(crate::ci::Watch::dismissable) => {
                         if let Some(path) = item.path.clone() {
                             self.mode = Mode::ConfirmDismiss { path, name: item.name, nudged: false };
                         }

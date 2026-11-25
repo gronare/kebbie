@@ -19,6 +19,7 @@ pub const UNSEEN_AFTER: u64 = 30 * 60;
 pub const CHECK_UNREPORTED_AFTER: u64 = 60 * 60;
 pub const GH_VAR: &str = "KEBBIE_GH_BIN";
 pub const CANCELLED_POLL: u64 = 5 * 60;
+pub const BLAME_WAIT: u64 = 30 * 60;
 const PASSED: [&str; 3] = ["success", "skipped", "neutral"];
 
 #[derive(Clone, Debug, PartialEq)]
@@ -79,6 +80,49 @@ pub struct Pushed {
     pub deploy: Option<String>,
     pub window: Option<String>,
     pub held: Option<u64>,
+    pub inherited: Option<Inherited>,
+}
+
+// The push ran red on a job the nearest earlier run of its workflow on the branch already failed: the task that first made it red has the log, and this one waits for its fix.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Inherited {
+    pub from: String,
+    pub since: String,
+    pub what: String,
+    pub url: String,
+    pub culprit: Option<String>,
+}
+
+impl Inherited {
+    fn workflow(&self) -> &str {
+        self.what.split(" · ").next().unwrap_or_default()
+    }
+
+    fn by(&self) -> String {
+        self.culprit.as_deref().map_or_else(|| "no task kebbie watches".to_string(), crate::status::with_titles)
+    }
+
+    fn short(&self) -> &str {
+        &self.from[..7.min(self.from.len())]
+    }
+
+    fn since_short(&self) -> &str {
+        &self.since[..7.min(self.since.len())]
+    }
+
+    fn note(&self) -> String {
+        format!("CI red since {} ({}): {}; waits for the fix there, and kebbie closes it once a later push holding it is green", self.since_short(), self.by(), self.what)
+    }
+
+    fn to_json(&self) -> Value {
+        json!({ "from": self.from, "since": self.since, "what": self.what, "url": self.url, "culprit": self.culprit })
+    }
+
+    fn from_json(value: &Value) -> Option<Inherited> {
+        let text = |key: &str| value[key].as_str().map(str::to_string);
+        let from = text("from")?;
+        Some(Inherited { since: text("since").unwrap_or_else(|| from.clone()), from, what: text("what")?, url: text("url").unwrap_or_default(), culprit: text("culprit") })
+    }
 }
 
 // What the task named to verify once its push lands; asked is when kebbie told it to run it, passed once it reported that it held.
@@ -141,6 +185,11 @@ impl Watch {
         self.state == State::Running
     }
 
+    // What the user may dismiss: a watch that ended, or one waiting on another push's fix for a red it inherited.
+    pub fn dismissable(&self) -> bool {
+        !self.running() || self.pushed.inherited.is_some()
+    }
+
     // CI is green and the task runs the check it named for after the push; the rounds ask gh nothing more.
     pub fn checking(&self) -> Option<&Check> {
         self.pushed.check.as_ref().filter(|check| check.asked.is_some() && self.running())
@@ -173,6 +222,7 @@ impl Watch {
             State::Failed { what, .. } => format!("CI failed: {what}"),
             State::Cancelled { what, .. } => format!("CI cancelled: {what}; G re-runs it (gh run rerun), C dismisses it"),
             State::Unknown { error, .. } => format!("CI unknown: gh could not read the runs of {} for {} min ({}); C dismisses it", self.short(), UNREADABLE_AFTER / 60, error.split_whitespace().collect::<Vec<_>>().join(" ")),
+            State::Running if self.pushed.inherited.is_some() => self.pushed.inherited.as_ref().map(Inherited::note).unwrap_or_default(),
             State::Running if self.checking().is_some_and(|check| check.passed) => "the check after the push held · kebbie closes it".to_string(),
             State::Running if self.check_unreported() => format!("its check after the push was never reported in {} min: {}; ask it again, or kebbie done", CHECK_UNREPORTED_AFTER / 60, self.checking().map_or("", |check| check.what.as_str())),
             State::Running if self.checking().is_some() => format!("checking after push: {}", self.checking().map_or("", |check| check.what.as_str())),
@@ -216,7 +266,7 @@ impl Watch {
             "started_at": self.started_at, "checked_at": self.checked_at, "close": self.close,
             "runs": self.runs.iter().map(Run::to_json).collect::<Vec<_>>(),
             "state": state, "failed_at": failed_at, "failure": failure, "failure_url": failure_url, "error": self.error, "erring_since": self.erring_since, "following": self.following,
-            "pushed": { "pusher": self.pushed.pusher, "target": self.pushed.target, "commits": self.pushed.commits, "note": self.pushed.note, "logged": self.pushed.logged, "check": self.pushed.check.as_ref().map(Check::to_json), "stages": self.pushed.stages, "deploy": self.pushed.deploy, "window": self.pushed.window, "held": self.pushed.held },
+            "pushed": { "pusher": self.pushed.pusher, "target": self.pushed.target, "commits": self.pushed.commits, "note": self.pushed.note, "logged": self.pushed.logged, "check": self.pushed.check.as_ref().map(Check::to_json), "stages": self.pushed.stages, "deploy": self.pushed.deploy, "window": self.pushed.window, "held": self.pushed.held, "inherited": self.pushed.inherited.as_ref().map(Inherited::to_json) },
         })
     }
 
@@ -238,7 +288,7 @@ impl Watch {
             state, error: text("error"), erring_since: value["erring_since"].as_u64(), following: text("following"),
             pushed: Pushed { pusher: pushed_text("pusher"), target: pushed_text("target"), commits: pushed_text("commits"), note: pushed["note"].as_str().map(str::to_string), logged: pushed["logged"].as_bool(), check: Check::from_json(&pushed["check"]),
                 stages: pushed["stages"].as_array().map(|ids| ids.iter().filter_map(|id| id.as_str().map(str::to_string)).collect()).unwrap_or_default(), deploy: pushed["deploy"].as_str().map(str::to_string),
-                window: pushed["window"].as_str().map(str::to_string), held: pushed["held"].as_u64() },
+                window: pushed["window"].as_str().map(str::to_string), held: pushed["held"].as_u64(), inherited: Inherited::from_json(&pushed["inherited"]) },
         })
     }
 }
@@ -301,6 +351,12 @@ pub fn failed_job(text: &str) -> Option<(String, Option<u64>)> {
     let value: Value = serde_json::from_str(text).ok()?;
     let job = value["jobs"].as_array()?.iter().find(|job| job["status"] == "completed" && !PASSED.contains(&job["conclusion"].as_str().unwrap_or_default()))?;
     Some((job["name"].as_str().unwrap_or("a job").to_string(), job["databaseId"].as_u64()))
+}
+
+// Every job of a run that failed, not counting the ones cancelled for it.
+pub fn failed_jobs(text: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<Value>(text) else { return Vec::new() };
+    value["jobs"].as_array().map(|jobs| jobs.iter().filter(|job| job["status"] == "completed" && !PASSED.contains(&job["conclusion"].as_str().unwrap_or_default()) && job["conclusion"] != "cancelled").filter_map(|job| job["name"].as_str().map(str::to_string)).collect()).unwrap_or_default()
 }
 
 pub fn cancelled_job(text: &str) -> Option<String> {
@@ -546,7 +602,7 @@ pub fn rerun_with(state: &Path, address: &str, gh: &str, now: u64) -> Result<Str
     }
     let names: Vec<&str> = again.iter().map(|run| run.title()).collect();
     crate::phase::record(state, address, "ci", &crate::phase::Event::PushOut { sha: &watch.sha });
-    save(state, &Watch { state: State::Running, started_at: now, checked_at: None, runs: Vec::new(), error: None, erring_since: None, following: None, pushed: Pushed { held: None, ..watch.pushed.clone() }, ..watch.clone() })?;
+    save(state, &Watch { state: State::Running, started_at: now, checked_at: None, runs: Vec::new(), error: None, erring_since: None, following: None, pushed: Pushed { held: None, inherited: None, ..watch.pushed.clone() }, ..watch.clone() })?;
     if let Err(error) = messages::to_lead(messages::ToLead::CiGreen, &format!("The user re-ran CI for {address} ({}): {}. kebbie watches the new runs as after a push.", watch.short(), names.join(", "))) {
         eprintln!("Could not tell the lead: {error}");
     }
@@ -576,6 +632,21 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
         }
         if watch.close && crate::tasks::find_task(&watch.repo, Some(watch.task()), &watch.repo).is_err() {
             forget(state, &watch.address);
+            continue;
+        }
+        if let Some(inherited) = watch.pushed.inherited.clone() {
+            if watch.checked_at.is_none_or(|at| now.saturating_sub(at) >= CANCELLED_POLL) {
+                let mut failed: Vec<String> = watch.runs.iter().filter(|run| run.failed()).map(|run| run.title().to_string()).collect();
+                if failed.is_empty() {
+                    failed.push(inherited.workflow().to_string());
+                }
+                if crate::tasks::passed_later(&watch, &failed, gh) {
+                    let fixed = Watch { pushed: Pushed { inherited: None, ..watch.pushed.clone() }, ..watch.clone() };
+                    events.push(green(state, &fixed, format!("CI is green for {}: a later push holding it passed {}, red since {}", watch.short(), inherited.what, inherited.short()), now));
+                } else {
+                    let _ = save(state, &Watch { checked_at: Some(now), ..watch });
+                }
+            }
             continue;
         }
         let (read_before, erring_before) = (watch.checked_at.unwrap_or(watch.started_at), watch.erring_since);
@@ -643,7 +714,13 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
                 }
                 crate::tasks::AfterCancel::Nothing => events.extend(held_for_window(state, gh, &mut watch, read_before, now, &crate::recover::local_offset)),
             },
-            Verdict::Failed(failed) => events.push(failed_run(state, gh, &mut watch, &failed[0], now)),
+            Verdict::Failed(failed) => match blame(state, gh, &watch, now) {
+                Blame::Own => events.push(failed_run(state, gh, &mut watch, &failed[0], now)),
+                Blame::Inherited(inherited) => events.push(inherit(state, &mut watch, inherited, now)),
+                Blame::Undecided => {
+                    let _ = save(state, &watch);
+                }
+            },
         }
     }
     events
@@ -878,6 +955,7 @@ fn failed_run(state: &Path, gh: &str, watch: &mut Watch, run: &Run, now: u64) ->
     }
     watch.state = State::Failed { at: now, what: what.clone(), url: run.url.clone() };
     let _ = save(state, watch);
+    remember_red(state, &watch.sha, &watch.address);
     crate::tasks::rollout::failed(state, &watch.address, &watch.pushed.stages, &format!("CI failed: {what}"), false);
     let handed = open && match messages::hand_to(&watch.address, &task_message(watch, run, &format!("{job}{step}"), &log_tail(&log, LOG_LINES), who)) {
         Ok(()) => true,
@@ -910,6 +988,149 @@ fn failed_run(state: &Path, gh: &str, watch: &mut Watch, run: &Run, now: u64) ->
         None => "It waits under Needs you".to_string(),
     };
     crate::hub::notices::send(&crate::hub::notices::About::CiFailed { address: watch.address.clone(), what: what.clone(), done: Some(done) }, None);
+    Event { address: watch.address.clone(), kind: Kind::Failed, text }
+}
+
+enum Blame {
+    Own,
+    Undecided,
+    Inherited(Inherited),
+}
+
+// What the branch held before the push for one failed workflow: its nearest earlier finished run failed the same jobs, from `from` back to `oldest`, the commit that first made them red.
+enum Before {
+    Own,
+    Running,
+    Red { from: String, oldest: String, jobs: Vec<String> },
+}
+
+// Trap: GitHub runs only the head of a push, so what the branch was before it is the nearest earlier commit with a finished, uncancelled run of the workflow; one still running there leaves the verdict to a later round.
+fn blame(state: &Path, gh: &str, watch: &Watch, now: u64) -> Blame {
+    let jobs_of = |id: u64| crate::sh::run(gh, &["run", "view", &id.to_string(), "-R", &watch.slug, "--json", "jobs"], Some(&watch.repo)).ok().as_deref().map(failed_jobs).unwrap_or_default();
+    let Ok(runs) = crate::tasks::branch_runs(watch, gh) else { return Blame::Own };
+    let Ok(earlier) = crate::repo::git(&watch.repo, &["rev-list", "--first-parent", "--skip=1", "--max-count=100", &watch.sha]) else { return Blame::Own };
+    let earlier: Vec<&str> = earlier.lines().collect();
+    let (mut first, mut running) = (None, false);
+    for run in watch.runs.iter().filter(|run| run.failed()) {
+        match red_before(&runs, &earlier, run, &jobs_of) {
+            Before::Own => return Blame::Own,
+            Before::Running => running = true,
+            Before::Red { from, oldest, jobs } => {
+                first.get_or_insert((run.clone(), from, oldest, jobs));
+            }
+        }
+    }
+    if running && now.saturating_sub(watch.started_at) >= BLAME_WAIT {
+        return Blame::Own;
+    }
+    if running || !watch.runs.iter().all(Run::done) {
+        return Blame::Undecided;
+    }
+    let Some((run, from, oldest, jobs)) = first else { return Blame::Own };
+    let culprit = red_owner(state, &oldest, &watch.address);
+    if culprit.as_deref() == Some(watch.address.as_str()) {
+        return Blame::Own;
+    }
+    Blame::Inherited(Inherited { from, since: oldest, what: format!("{} · {}", run.title(), jobs.join(", ")), url: run.url.clone(), culprit })
+}
+
+fn red_before(runs: &[(String, Run)], earlier: &[&str], run: &Run, jobs_of: &dyn Fn(u64) -> Vec<String>) -> Before {
+    let ours = jobs_of(run.id);
+    if ours.is_empty() {
+        return Before::Own;
+    }
+    let mut found: Option<(String, String)> = None;
+    for sha in earlier {
+        let here: Vec<&Run> = runs.iter().filter(|(other, before)| other == sha && before.title() == run.title()).map(|(_, before)| before).collect();
+        if here.is_empty() {
+            continue;
+        }
+        if here.iter().any(|before| !before.done()) {
+            if found.is_none() {
+                return Before::Running;
+            }
+            break;
+        }
+        if here.iter().all(|before| before.cancelled()) {
+            continue;
+        }
+        let same = here.iter().find(|before| before.failed()).is_some_and(|red| {
+            let theirs = jobs_of(red.id);
+            ours.iter().all(|job| theirs.contains(job))
+        });
+        if !same {
+            break;
+        }
+        let from = found.map_or_else(|| sha.to_string(), |(from, _)| from);
+        found = Some((from, sha.to_string()));
+    }
+    found.map_or(Before::Own, |(from, oldest)| Before::Red { from, oldest, jobs: ours })
+}
+
+fn red_file(state: &Path) -> PathBuf {
+    dir(state).join(".red.json")
+}
+
+fn same_sha(one: &str, other: &str) -> bool {
+    !one.is_empty() && !other.is_empty() && (one.starts_with(other) || other.starts_with(one))
+}
+
+// Which task first made each red commit red, kept past its watch so a push landing on it later still finds who fixes it.
+fn remember_red(state: &Path, sha: &str, address: &str) {
+    let mut reds: Vec<Value> = fs::read_to_string(red_file(state)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+    reds.retain(|red| !same_sha(red["sha"].as_str().unwrap_or_default(), sha));
+    reds.push(json!({ "sha": sha, "address": address }));
+    let over = reds.len().saturating_sub(200);
+    reds.drain(..over);
+    let _ = crate::state::write(&red_file(state), Value::Array(reds).to_string());
+}
+
+// A watch the same round has yet to read counts too, since rounds take the watches in name order.
+fn red_owner(state: &Path, sha: &str, asking: &str) -> Option<String> {
+    let reds: Vec<Value> = fs::read_to_string(red_file(state)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+    if let Some(address) = reds.iter().rev().find(|red| same_sha(red["sha"].as_str().unwrap_or_default(), sha)).and_then(|red| red["address"].as_str()) {
+        return Some(address.to_string());
+    }
+    let watch = all(state).into_iter().find(|watch| watch.address != asking && same_sha(&watch.sha, sha))?;
+    match watch.pushed.inherited {
+        Some(inherited) => inherited.culprit,
+        None => Some(watch.address),
+    }
+}
+
+// The push landed on a red it did not make: its task is told to leave it, the task that made it hears who waits on its fix, and the watch waits for a later push holding it to pass.
+fn inherit(state: &Path, watch: &mut Watch, inherited: Inherited, now: u64) -> Event {
+    if let Some(culprit) = &inherited.culprit {
+        remember_red(state, &watch.sha, culprit);
+    }
+    watch.pushed.inherited = Some(inherited.clone());
+    watch.checked_at = Some(now);
+    let _ = save(state, watch);
+    let branch = watch.branch().to_string();
+    if task_open(watch, &messages::load()) {
+        let text = format!(
+            "CI failed for {} on {branch}: {} ({}), but {} before your push was already red on that job, red since {} from the push of {}. That push's task fixes it: change nothing for it and make no commit. kebbie closes this task once a later push that holds your commits is green there. End your turn with kebbie report --state ready --next nothing \"waits for the fix of the red CI\"; not blocked, which takes it out of CI running.",
+            watch.short(), inherited.what, inherited.url, inherited.short(), inherited.since_short(), inherited.by()
+        );
+        if let Err(error) = messages::hand_to(&watch.address, &text) {
+            eprintln!("Could not tell {} that its CI inherited a red: {error}", watch.address);
+        }
+    }
+    let fixing = inherited.culprit.as_deref().filter(|culprit| crate::tasks::find_task(&watch.repo, Some(crate::peers::task_part(culprit)), &watch.repo).is_ok());
+    if let Some(culprit) = fixing {
+        let text = format!("The push of {} ({}) landed on the red {} of your push ({}), so it waits for your fix: one fix on {branch} settles both.", crate::status::with_titles(&watch.address), watch.short(), inherited.what, inherited.since_short());
+        if let Err(error) = messages::hand_to(culprit, &text) {
+            eprintln!("Could not tell {culprit} who waits on its fix: {error}");
+        }
+    }
+    let text = format!(
+        "CI failed for {} ({}): {}, which {} on {branch} already failed, red since {} from the push of {}. kebbie sent it no log; {}, and it closes once a later push holding it is green. {}",
+        watch.address, watch.short(), inherited.what, inherited.short(), inherited.since_short(), inherited.by(), if fixing.is_some() { "it waits for that task's fix" } else { "no open task fixes it, so start one for it" }, inherited.url
+    );
+    let kind = if fixing.is_some() { messages::ToLead::CiHanded } else { messages::ToLead::RedCi };
+    if let Err(error) = messages::to_lead(kind, &text) {
+        eprintln!("Could not tell the lead: {error}");
+    }
     Event { address: watch.address.clone(), kind: Kind::Failed, text }
 }
 
@@ -1260,7 +1481,7 @@ mod tests {
         let mut watch = Watch {
             address: "billing@app".to_string(), repo: PathBuf::from("/src/app"), slug: "acme/app".to_string(), sha: "abcdef0123".to_string(),
             started_at: 100, checked_at: Some(130), close: true, runs: vec![run("in_progress", "")], state: State::Running, error: None, erring_since: None, following: None,
-            pushed: Pushed { pusher: "the user".to_string(), target: "main".to_string(), commits: "abc Add refunds".to_string(), note: Some("Projects/x.md".to_string()), logged: Some(true), check: Some(Check { what: "the old key gets 401".to_string(), asked: Some(120), passed: false }), stages: Vec::new(), deploy: None, window: None, held: None },
+            pushed: Pushed { pusher: "the user".to_string(), target: "main".to_string(), commits: "abc Add refunds".to_string(), note: Some("Projects/x.md".to_string()), logged: Some(true), check: Some(Check { what: "the old key gets 401".to_string(), asked: Some(120), passed: false }), stages: Vec::new(), deploy: None, window: None, held: None, inherited: None },
         };
         save(&state, &watch).unwrap();
         assert_eq!(load(&state, "billing@app").as_ref(), Some(&watch));
@@ -1555,4 +1776,142 @@ mod tests {
         assert_eq!((round.pushed.stages, round.pushed.deploy), (vec!["fill".to_string()], Some("Deploy".to_string())), "kept across rounds");
     }
 
+    // Each push's head with its runs, as gh lists the branch; each run's failed jobs are the given ones, clippy otherwise.
+    fn chain_gh(state: &Path, name: &str, heads: &[(&str, &str, &str, &str)], jobs: &[(usize, &str)]) -> String {
+        let path = state.join(name);
+        let entry = |index: usize, (sha, workflow, status, conclusion): &(&str, &str, &str, &str)| format!(r#"{{"databaseId":{},"name":"{workflow}","workflowName":"{workflow}","status":"{status}","conclusion":"{conclusion}","url":"https://ci/{}","headSha":"{sha}","event":"push"}}"#, index + 10, index + 10);
+        let branch = heads.iter().enumerate().rev().map(|(index, head)| entry(index, head)).collect::<Vec<_>>().join(",");
+        let mut shas: Vec<&str> = heads.iter().map(|head| head.0).collect();
+        shas.dedup();
+        let mut cases: String = shas.iter().map(|sha| format!("*--commit\\ {sha}*) echo '[{}]';;\n", heads.iter().enumerate().filter(|(_, head)| head.0 == *sha).map(|(index, head)| entry(index, head)).collect::<Vec<_>>().join(","))).collect();
+        for (index, _) in heads.iter().enumerate() {
+            let named: Vec<String> = jobs.iter().filter(|(at, _)| *at == index).map(|(_, job)| format!(r#"{{"name":"{job}","status":"completed","conclusion":"failure","databaseId":{}}}"#, index + 100)).collect();
+            let named = if named.is_empty() { format!(r#"{{"name":"clippy","status":"completed","conclusion":"failure","databaseId":{}}}"#, index + 100) } else { named.join(",") };
+            cases.push_str(&format!("*\"view {} \"*jobs*) echo '{{\"jobs\":[{named}]}}';;\n", index + 10));
+        }
+        crate::executable::write(&path, format!("#!/bin/sh\ncase \"$*\" in\n{cases}*--branch*) echo '[{branch}]';;\n*--log-failed*) echo 'error: unused variable';;\nesac\n")).unwrap();
+        path.to_string_lossy().to_string()
+    }
+
+    fn commit(dir: &Path) -> String {
+        crate::repo::git(dir, &["commit", "--quiet", "--allow-empty", "-m", "push"]).unwrap();
+        crate::repo::git(dir, &["rev-parse", "HEAD"]).unwrap()
+    }
+
+    fn pushed(dir: &Path, state: &Path, address: &str, sha: &str, branch: &str) {
+        save(state, &Watch { address: address.to_string(), repo: dir.to_path_buf(), slug: "acme/app".to_string(), sha: sha.to_string(), started_at: 0, checked_at: None, close: false, runs: Vec::new(), state: State::Running, error: None, erring_since: None, following: None, pushed: Pushed { target: branch.to_string(), ..Pushed::default() } }).unwrap();
+    }
+
+    #[test]
+    fn red_ci_on_a_chain_of_pushes_goes_to_the_push_that_made_the_job_red_and_the_rest_wait_for_its_fix() {
+        let dir = crate::tasks::test_support::repo();
+        let state = crate::sh::test_dir("ci-red-chain");
+        let branch = crate::repo::git(&dir, &["branch", "--show-current"]).unwrap();
+        let green = crate::repo::git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        let (made, landed, last) = (commit(&dir), commit(&dir), commit(&dir));
+        for (task, sha) in [("billing", &made), ("cart", &landed), ("auth", &last)] {
+            pushed(&dir, &state, &format!("{task}@app"), sha, &branch);
+        }
+        let gh = chain_gh(&state, "chain", &[(&green, "ci", "completed", "success"), (&made, "ci", "completed", "failure"), (&landed, "ci", "completed", "failure"), (&last, "ci", "completed", "failure")], &[]);
+        let events = tick_with(&state, &gh, 1000);
+        assert_eq!(events.len(), 3, "{events:?}");
+        assert!(matches!(load(&state, "billing@app").unwrap().state, State::Failed { ref what, .. } if what.starts_with("ci · clippy")), "the push whose parent was green owns the red");
+        for (task, from) in [("cart", &made), ("auth", &landed)] {
+            let waiting = load(&state, &format!("{task}@app")).unwrap();
+            let inherited = waiting.pushed.inherited.clone().unwrap_or_else(|| panic!("{task} inherits the red"));
+            assert!(waiting.running() && waiting.dismissable(), "{task} waits under CI running, and the user may still dismiss it");
+            assert_eq!((inherited.from.as_str(), inherited.since.as_str(), inherited.what.as_str(), inherited.culprit.as_deref()), (from.as_str(), made.as_str(), "ci · clippy", Some("billing@app")), "{task}: the task that first made the job red, though the round reads auth before the push it landed on");
+            assert!(waiting.note().starts_with(&format!("CI red since {} (billing@app): ci · clippy; waits for the fix there", &made[..7])), "{task}: the row names the commit the red began on: {}", waiting.note());
+        }
+        assert!(tick_with(&state, &gh, 1000 + CANCELLED_POLL - 1).is_empty(), "a waiting watch asks gh every few minutes, not every round");
+        let fix = commit(&dir);
+        let fixed = chain_gh(&state, "fixed", &[(&green, "ci", "completed", "success"), (&made, "ci", "completed", "failure"), (&landed, "ci", "completed", "failure"), (&last, "ci", "completed", "failure"), (&fix, "ci", "completed", "success")], &[]);
+        let events = tick_with(&state, &fixed, 1000 + CANCELLED_POLL);
+        assert_eq!(events.iter().filter(|event| event.kind == Kind::Green).count(), 2, "{events:?}");
+        assert!(load(&state, "auth@app").is_none() && load(&state, "cart@app").is_none(), "the fix that holds them closes the ones that waited");
+        fs::remove_dir_all(state).unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_red_push_is_its_own_unless_every_failure_was_already_red_on_the_nearest_finished_run_before_it() {
+        let dir = crate::tasks::test_support::repo();
+        let state = crate::sh::test_dir("ci-red-own");
+        let branch = crate::repo::git(&dir, &["branch", "--show-current"]).unwrap();
+        let (red, cancelled, watched) = (commit(&dir), commit(&dir), commit(&dir));
+        let verdict_with = |name: &str, (status, before): (&str, &str), also: &[(&str, &str, &str, &str)], jobs: &[(usize, &str)]| {
+            pushed(&dir, &state, "auth@app", &watched, &branch);
+            let mut heads = vec![(red.as_str(), "ci", status, before), (cancelled.as_str(), "ci", "completed", "cancelled"), (watched.as_str(), "ci", "completed", "failure")];
+            heads.extend_from_slice(also);
+            tick_with(&state, &chain_gh(&state, name, &heads, jobs), 1000);
+            load(&state, "auth@app").unwrap()
+        };
+        let own = |watch: &Watch| matches!(watch.state, State::Failed { .. }) && watch.pushed.inherited.is_none();
+        let inherited = verdict_with("hand-pushed", ("completed", "failure"), &[], &[]);
+        assert_eq!(inherited.pushed.inherited.as_ref().map(|inherited| (inherited.from.clone(), inherited.culprit.clone())), Some((red.clone(), None)), "a cancelled run says nothing, so the red before it counts; a hand push has no task");
+        assert!(inherited.note().contains("(no task kebbie watches)"), "{}", inherited.note());
+        let asked = messages::load().into_iter().filter(|message| message.to == crate::status::LEAD_LABEL && message.text.contains(&format!("auth@app ({})", &watched[..7]))).collect::<Vec<_>>();
+        assert!(asked.iter().any(|message| message.kind.as_deref() == Some("ci") && !message.fyi && message.text.contains("no open task fixes it, so start one for it")), "the lead is asked to see to a red no open task made: {:?}", asked.iter().map(|message| (&message.kind, &message.text)).collect::<Vec<_>>());
+        assert!(own(&verdict_with("other-job", ("completed", "failure"), &[], &[(0, "test")])), "another job failing before is no excuse");
+        assert!(own(&verdict_with("one-more-job", ("completed", "failure"), &[], &[(2, "clippy"), (2, "test")])), "a job of its own beside the inherited one makes it its own");
+        assert!(own(&verdict_with("green-before", ("completed", "success"), &[], &[])));
+        assert!(own(&verdict_with("own-workflow", ("completed", "failure"), &[(&red, "lint", "completed", "success"), (&watched, "lint", "completed", "failure")], &[])), "a workflow it broke itself beside the inherited one");
+        let running = verdict_with("still-running", ("in_progress", ""), &[], &[]);
+        assert!(running.running() && running.pushed.inherited.is_none(), "while the run before it still runs, the verdict waits a round");
+        tick_with(&state, &state.join("still-running").to_string_lossy(), BLAME_WAIT);
+        assert!(own(&load(&state, "auth@app").unwrap()), "a run before it that never finishes holds its own red back no longer than BLAME_WAIT");
+        let running = verdict_with("own-still-running", ("completed", "failure"), &[(&watched, "lint", "in_progress", "")], &[]);
+        assert!(running.running() && running.pushed.inherited.is_none(), "while another workflow of its own still runs, an inherited red waits for it");
+        fs::remove_dir_all(state).unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_fix_that_is_still_red_stays_with_the_task_that_made_the_red() {
+        let dir = crate::tasks::test_support::repo();
+        let state = crate::sh::test_dir("ci-red-own-fix");
+        let branch = crate::repo::git(&dir, &["branch", "--show-current"]).unwrap();
+        let (made, fix) = (commit(&dir), commit(&dir));
+        remember_red(&state, &made, "billing@app");
+        pushed(&dir, &state, "billing@app", &fix, &branch);
+        tick_with(&state, &chain_gh(&state, "fix-red", &[(&made, "ci", "completed", "failure"), (&fix, "ci", "completed", "failure")], &[]), 1000);
+        let watch = load(&state, "billing@app").unwrap();
+        assert!(matches!(watch.state, State::Failed { .. }) && watch.pushed.inherited.is_none(), "its own fix that failed is its own red");
+        fs::remove_dir_all(state).unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_task_that_made_the_red_gets_the_log_and_the_one_on_top_only_a_note_to_wait() {
+        use crate::phase::Phase;
+        let (dir, origin, slot, _) = crate::tasks::test_support::task_with_a_commit("ledger");
+        let other = crate::tasks::test_support::another_task(&dir, "refunds", "r");
+        let third = crate::tasks::test_support::another_task(&dir, "cards", "c");
+        let state = crate::tasks::test_support::state_of(&dir);
+        let (culprit, follower) = (crate::peers::address("ledger", &crate::repo::name_of(&dir)), crate::peers::address("refunds", &crate::repo::name_of(&dir)));
+        let branch = crate::repo::git(&dir, &["branch", "--show-current"]).unwrap();
+        let on_top = crate::peers::address("cards", &crate::repo::name_of(&dir));
+        let (made, landed, last) = (commit(&dir), commit(&dir), commit(&dir));
+        for (address, sha) in [(&culprit, &made), (&follower, &landed), (&on_top, &last)] {
+            save(&state, &Watch { close: true, pushed: Pushed { pusher: "the user".to_string(), target: branch.clone(), ..Pushed::default() }, ..load_or(&dir, address, sha) }).unwrap();
+            crate::phase::record(&state, address, "push", &crate::phase::Event::PushOut { sha });
+        }
+        tick_with(&state, &chain_gh(&state, "delivery", &[(&made, "ci", "completed", "failure"), (&landed, "ci", "completed", "failure"), (&last, "ci", "completed", "failure")], &[]), messages::now());
+        let told = |to: &str| messages::load().into_iter().filter(|message| message.to == to).map(|message| message.text).collect::<Vec<_>>().join("\n");
+        assert!(told(&culprit).contains("error: unused variable") && told(&culprit).contains("so it waits for your fix"), "{}", told(&culprit));
+        assert!(told(&culprit).contains(&format!("of your push ({})", &made[..7])) && !told(&culprit).contains(&format!("of your push ({})", &landed[..7])), "the push on top of a push on top is told of the commit the red began on, not the one it landed on: {}", told(&culprit));
+        assert!(told(&on_top).contains(&format!("red since {} from the push of", &made[..7])), "{}", told(&on_top));
+        assert!(told(&follower).contains("change nothing for it and make no commit") && !told(&follower).contains("<log>"), "{}", told(&follower));
+        assert!(crate::tasks::pending_push(&state, &follower).is_none(), "kebbie pushes no fix for the one that waits");
+        assert_eq!(crate::phase::load(&state, &follower).map(|record| record.phase), Some(Phase::CiRunning { sha: landed.clone() }), "it stays under CI running");
+        crate::tasks::test_support::cleanup_intents(&state, &culprit);
+        for slot in [&other, &third] {
+            crate::repo::git(&dir, &["worktree", "remove", "--force", &slot.path.to_string_lossy()]).unwrap();
+        }
+        crate::tasks::test_support::cleanup(dir, origin, &slot);
+    }
+
+    fn load_or(dir: &Path, address: &str, sha: &str) -> Watch {
+        Watch { address: address.to_string(), repo: dir.to_path_buf(), slug: "acme/app".to_string(), sha: sha.to_string(), started_at: 0, checked_at: None, close: true, runs: Vec::new(), state: State::Running, error: None, erring_since: None, following: None, pushed: Pushed::default() }
+    }
 }

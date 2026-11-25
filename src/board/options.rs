@@ -76,6 +76,7 @@ pub(super) fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_wo
         choices.push(choice(Act::RerunCi, "Re-run CI", "gh runs its failed or cancelled runs again; kebbie watches them and closes the task once they are green"));
     }
     match item.and_then(|item| item.ci.as_ref()).map(|ci| &ci.state) {
+        Some(crate::ci::State::Running) if item.and_then(|item| item.ci.as_ref()).is_some_and(|ci| ci.pushed.inherited.is_some()) => choices.push(choice(Act::DismissCi, "Dismiss the inherited red CI", "stop waiting for the push that made it red to be fixed: kept on record, and the task closes once its commits are on main (asks first)")),
         Some(crate::ci::State::Failed { .. }) => choices.push(choice(Act::DismissCi, "Dismiss the red CI", "the failure is not the code's (a deploy window, infra, a flake): kept on record, and the task closes once its commits are on main (asks first)")),
         Some(crate::ci::State::Cancelled { .. }) => choices.push(choice(Act::DismissCi, "Dismiss the cancelled CI", "leave the run cancelled: kept on record, and the task closes once its commits are on main (asks first)")),
         Some(crate::ci::State::Unknown { .. }) => choices.push(choice(Act::DismissCi, "Dismiss the unknown CI", "gh could not read its runs: kept on record, and the task closes once its commits are on main (asks first)")),
