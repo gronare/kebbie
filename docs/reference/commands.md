@@ -610,7 +610,7 @@ The **push order** is the branch's commits not yet on origin's default branch, o
 | `kebbie areas` | The vault's areas with their repo: main against origin, the last release, notes and actions. Needs the vault. |
 | `kebbie peers` | Who you are and the other task sessions, with what each is doing and the title its row on the board shows. |
 | `kebbie messages` | The sessions' messages, live. `--print` prints the last 30. |
-| `kebbie backlog` | The backlog the board shows. |
+| `kebbie backlog` | The backlog the board shows, each item with its state and `1 question waits on you` while a question on it blocks its start. |
 | `kebbie backlog --search "<words>"` | The backlog items and Found by tasks holding every word, from the backlog as kebbie last read it. It changes nothing, and a task runs it before it files what it noticed. |
 | `kebbie backlog add [--priority <p>] [--repo <repo>] "<line>" [-]` | Add a backlog item where new items go. A line alone is a short item the lead writes out in full; with `-`, the written-out item comes on stdin, in any shape. See [Fill the backlog](../how-to/fill-the-backlog.md#add-an-item). |
 | `kebbie backlog template [--local\|--vault] [--json]` | The sections a backlog item is written in where new items go, the required ones marked: the vault's task template, the file [`board.backlog.template`](configuration.md#backlog-sources) names, or kebbie's own. `--local` or `--vault` shows the other place's. After them, how the item reads: the vault's [backlog style](vault-contract.md#the-backlog-style), your override in place of the default, or kebbie's bundled default when the vault gives none. `--json` adds it as `style`, with `from` and `text`. |

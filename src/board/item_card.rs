@@ -32,14 +32,14 @@ pub(super) fn row_facts(entry: &Entry) -> (String, Option<(String, Color)>) {
         let word = if entry.shape.start { format!("{word} · then starts") } else { word };
         if entry.age.is_empty() { word } else { format!("{word} · {}", entry.age) }
     };
+    if entry.shape.waiting > 0 {
+        let questions = plural(entry.shape.waiting, "question");
+        return (with_age(questions.clone()), Some((questions, YELLOW)));
+    }
     if let Some(at) = entry.shape.writing {
         return (with_age(crate::backlog_file::writing_word(at, crate::messages::now())), None);
     }
     match entry.shape.state {
-        Some(State::Drafting) if entry.shape.waiting > 0 => {
-            let questions = plural(entry.shape.waiting, "question");
-            (with_age(questions.clone()), Some((questions, YELLOW)))
-        }
         Some(State::Drafting) => (with_age("drafting".to_string()), None),
         Some(State::ToWrite) => (with_age("to write".to_string()), None),
         _ => (entry.age.clone(), None),
@@ -47,6 +47,9 @@ pub(super) fn row_facts(entry: &Entry) -> (String, Option<(String, Color)>) {
 }
 
 pub(super) fn lead_line(entry: &Entry) -> Option<&'static str> {
+    if entry.shape.waiting > 0 {
+        return Some(ANSWER_ON_CARD);
+    }
     match entry.shape.state {
         Some(State::ToWrite) if entry.shape.kept => Some("the lead files it in the vault"),
         Some(State::ToWrite) => Some("the lead writes it out"),
@@ -54,6 +57,8 @@ pub(super) fn lead_line(entry: &Entry) -> Option<&'static str> {
         _ => None,
     }
 }
+
+pub(super) const ANSWER_ON_CARD: &str = "you: answer on its card";
 
 fn waits(count: usize) -> String {
     if count == 1 { "1 question waits".to_string() } else { format!("{count} questions wait") }
@@ -68,11 +73,13 @@ fn about_state(entry: &Entry) -> String {
     if !entry.shape.into.is_empty() {
         return format!("merged into the note {}: ⏎ opens it", entry.shape.into);
     }
+    if entry.shape.waiting > 0 {
+        return format!("{}: {} on you before it can start", entry.shape.state.unwrap_or(State::Drafting).word(), waits(entry.shape.waiting));
+    }
     if let Some(at) = entry.shape.writing {
         return format!("{}: the lead writes it out, as you asked", crate::backlog_file::writing_word(at, crate::messages::now()));
     }
     match entry.shape.state {
-        Some(State::Drafting) if entry.shape.waiting > 0 => format!("drafting: {} on you before it can start", waits(entry.shape.waiting)),
         Some(State::Drafting) => "drafting: the lead writes it out".to_string(),
         Some(State::ToWrite) if entry.shape.kept => "to write: the lead writes it out and files it in the vault".to_string(),
         Some(State::ToWrite) => "to write: the lead writes it out".to_string(),
@@ -562,7 +569,11 @@ mod tests {
         let questions = entry("Projects/a.md", Shape { state: Some(State::Drafting), waiting: 2, ..Shape::default() });
         assert_eq!(row_facts(&questions), ("2 questions · 0 d".to_string(), Some(("2 questions".to_string(), YELLOW))));
         assert_eq!(about(&questions), "drafting: 2 questions wait on you before it can start");
-        assert_eq!(lead_line(&questions), None, "the user, not the lead, holds it");
+        assert_eq!(lead_line(&questions), Some("you: answer on its card"), "the user, not the lead, holds it");
+        let asked_while_writing = entry("Projects/a.md", Shape { state: Some(State::Drafting), waiting: 1, writing: Some(1_000), ..Shape::default() });
+        assert_eq!((row_facts(&asked_while_writing).0.as_str(), lead_line(&asked_while_writing), about(&asked_while_writing).as_str()), ("1 question · 0 d", Some("you: answer on its card"), "drafting: 1 question waits on you before it can start"), "a question shows while the lead writes the item out");
+        let to_write = entry("Projects/a.md", Shape { state: Some(State::ToWrite), waiting: 1, ..Shape::default() });
+        assert_eq!((row_facts(&to_write).0.as_str(), about(&to_write).as_str()), ("1 question · 0 d", "to write: 1 question waits on you before it can start"), "and on an item still to write");
         let one = entry("Projects/a.md", drafting(1));
         assert_eq!(about(&one), "drafting: 1 question waits on you before it can start");
         let writing = entry("Projects/b.md", drafting(0));

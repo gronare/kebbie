@@ -631,6 +631,18 @@ pub fn role_texts(sources: &[Source], vault: bool) -> Role {
     Role { finding: format!("{}; name the one you recommend and why, in a line. The user starts it from the board or on their word to you", joined(sources, role_finding, " and ")), backlog: parts.join("\n\n"), intake, vault_work, after_push }
 }
 
+// One item's line in kebbie backlog: its state, the questions that wait on the user whatever the state, and its file.
+fn listed(entry: &Entry, file: Option<&Path>) -> String {
+    let state = match (entry.shape.writing, entry.shape.state) {
+        (Some(at), _) => format!("  {}", crate::backlog_file::writing_word(at, now())),
+        (None, state) => state.filter(|state| *state != crate::backlog_file::State::Ready).map_or(String::new(), |state| format!("  {}", state.word())),
+    };
+    let asks = match entry.shape.waiting { 0 => String::new(), 1 => "  1 question waits on you".to_string(), many => format!("  {many} questions wait on you") };
+    let start = if entry.shape.start { "  starts once written" } else { "" };
+    let file = file.map_or(String::new(), |path| format!("  {}", path.display()));
+    format!("  [{}] {}  ({} · {}){state}{asks}{start}{file}", entry.priority, entry.title, entry.reference, entry.area)
+}
+
 pub fn show() -> Result<String> {
     let sources = config::sources()?;
     let backlog = load();
@@ -640,13 +652,7 @@ pub fn show() -> Result<String> {
     let mut lines = vec![if fetched(&sources).is_empty() { format!("from {}", local_dir()) } else { format!("updated {}", age(backlog.updated)) }];
     for entry in &backlog.entries {
         let item = (entry.source == "local").then(|| crate::backlog_file::find(&entry.reference)).flatten();
-        let state = match (entry.shape.writing, entry.shape.state) {
-            (Some(at), _) => format!("  {}", crate::backlog_file::writing_word(at, now())),
-            (None, state) => state.filter(|state| *state != crate::backlog_file::State::Ready).map_or(String::new(), |state| format!("  {}", state.word())),
-        };
-        let file = item.as_ref().map_or(String::new(), |(path, _)| format!("  {}", path.display()));
-        let start = if entry.shape.start { "  starts once written" } else { "" };
-        lines.push(format!("  [{}] {}  ({} · {}){state}{start}{file}", entry.priority, entry.title, entry.reference, entry.area));
+        lines.push(listed(entry, item.as_ref().map(|(path, _)| path.as_path())));
     }
     Ok(lines.join("\n"))
 }
@@ -678,6 +684,20 @@ pub fn search_in(backlog: &Backlog, found: &[crate::found::Item], query: &str) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_vault_item_reads_drafting_because_its_question_blocks_and_its_line_says_the_question_waits() {
+        let body = "## Bakgrund\nVarje task på boardet har en rad med länkar.\n\n## Mål\nLänkraden visar bara de sidor som hör till tasken.\n\n## Det vi vet\n- Rättningen är liten.\n\n## Öppna frågor\n- [ ] Vilka länkar ska raden visa? Förslag: bara de som tasken själv listar.\n\n## Källa\nRapport r51.\n";
+        let template = crate::item_template::Template::builtin();
+        let state = crate::backlog_file::state_of(false, false, body, &template);
+        assert_eq!(state, crate::backlog_file::State::Drafting, "the open question is what makes it drafting, with the note's status backlog");
+        let shape = crate::backlog_file::shape_of(state, body, &[], "", &template);
+        assert_eq!(shape.waiting, 1);
+        let item = Entry { title: "Länkraden visar bara webbplatser tasken använt".to_string(), priority: "low".to_string(), area: "kebbie".to_string(), reference: "Projects/kebbie-lankraden-visar-anvanda-sidor.md".to_string(), shape, ..entry("vault") };
+        assert_eq!(listed(&item, None), "  [low] Länkraden visar bara webbplatser tasken använt  (Projects/kebbie-lankraden-visar-anvanda-sidor.md · kebbie)  drafting  1 question waits on you");
+        let writing = Entry { shape: crate::backlog_file::Shape { writing: Some(now()), ..item.shape.clone() }, ..item };
+        assert!(listed(&writing, None).ends_with("  1 question waits on you"), "the lead writing it out keeps the question in view: {}", listed(&writing, None));
+    }
 
     #[test]
     fn a_search_lists_the_items_holding_every_word_from_the_backlog_and_found_by_tasks() {

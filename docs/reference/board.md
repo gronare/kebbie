@@ -88,7 +88,7 @@ A backlog item's row shows its state in the right field:
 | `to write · 0 d` | An item the lead has yet to write out: a short one you added, a note the vault filed as a draft, or one with no more than one line of text. A row marked `kept by kebbie` is one you added while the vault takes new items: kebbie keeps it until the lead's note replaces it. A vault note shows its state once kebbie has its text, never before. |
 | `drafting · 0 d` | The lead is writing it out. A muted line under the row says so. |
 | `writing… 2 h · 0 d` | You asked for it to be written out 2 hours ago, and the lead has yet to finish it. It shows from the moment you ask until its text is complete, also after a restart. |
-| `2 questions · 3 d` | Questions on the item wait on you before it can start, in yellow. Answer them on its card. |
+| `2 questions · 3 d` | Questions on the item wait on you before it can start, in yellow, with `you: answer on its card` under the row. Answer them on its card. The questions show whatever else the item's state is, also while the lead writes it out: an item reads `drafting` because a question blocks its start. |
 | `6 d` | Ready: written out, and no question holds it. Its age alone. |
 | `<your words> · merged into <note>` | An item you added that the lead filed into an older note. The row stays 7 days, its age counted from when you added it; `⏎` opens the note's card and `g` starts the note. |
 

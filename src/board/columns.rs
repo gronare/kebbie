@@ -521,7 +521,7 @@ pub(super) fn backlog_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usi
             let (facts, tint) = item_card::row_facts(entry);
             lines.push(tinted(row(selected, focused, icon, &entry.title, None, &facts, width), tint));
             if let Some(working) = item_card::lead_line(entry) {
-                lines.push(under_row(working, MUTED, false, width));
+                lines.push(under_row(working, if entry.shape.waiting > 0 { PEACH } else { MUTED }, false, width));
             }
         }
         rows.push((start, lines.len(), Hit::Entry(index)));
