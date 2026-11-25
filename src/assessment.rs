@@ -64,10 +64,6 @@ impl Word {
             Word::Review { reason } => format!("review: {reason}"),
         }
     }
-
-    pub fn asks_for_review(&self) -> bool {
-        matches!(self, Word::Suggested { .. } | Word::NotAssessed)
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -398,7 +394,6 @@ mod tests {
         for auto in ReviewAuto::ALL {
             assert_eq!(Word::of(Some(&no), auto).text(), "no review: wording in two templates");
             assert_eq!(Word::of(None, auto), Word::NotAssessed);
-            assert!(Word::of(None, auto).asks_for_review() && !Word::of(Some(&no), auto).asks_for_review());
         }
         assert_eq!(Word::NotAssessed.text(), "review not assessed");
     }
