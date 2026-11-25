@@ -188,6 +188,10 @@ pub(super) fn queued_refusal(state: &Path, address: &str) -> Result<()> {
     }
 }
 
+pub(crate) fn queued_addresses(state: &Path) -> Vec<String> {
+    all(state).iter().map(Wait::address).collect()
+}
+
 pub(crate) fn queued_name_refusal(state: &Path, name: &str) -> Result<()> {
     let task = slug(name)?;
     match all(state).iter().any(|wait| wait.task == task) {

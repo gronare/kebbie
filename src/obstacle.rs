@@ -776,7 +776,8 @@ pub fn carry_out(state: &Path, address: &str, obstacle: &Obstacle, answer: &Answ
             format!("{header}: subtask. Build \"{title}\" next, before more of the work it prepares ({}); {why}.{placed} {}", answer.plan, answer.reason)
         }
         Kind::Task => {
-            let started = start_task(address, answer)?;
+            let running: Vec<String> = peers::sessions().unwrap_or_default().into_iter().map(|session| session.address).collect();
+            let started = start_task(state, address, answer, &running)?;
             if let Some(id) = &obstacle.found {
                 let name = answer.task.clone().unwrap_or_default();
                 if let Err(error) = crate::found::started_in(state, id, name.split(|character: char| character.is_whitespace() || character == ',').next().unwrap_or_default()) {
@@ -817,13 +818,15 @@ fn file_real_fix(address: &str, obstacle: &Obstacle) -> Result<String> {
     crate::backlog_file::file_item(&sources, &crate::backlog_file::Filing { priority: "medium", repo, line: &line, words: None, body: None, by: "kebbie's investigator", start: false, repos: &[] }, false).map(|_| format!("\"{line}\" in the backlog"))
 }
 
-// A running task by that name already builds it; else kebbie queues the new task the lead's way, to start at once.
-fn start_task(address: &str, answer: &Answer) -> Result<String> {
+// A running or queued task by that name already builds it; else kebbie queues the new task the lead's way, to start at once.
+fn start_task(state: &Path, address: &str, answer: &Answer, running: &[String]) -> Result<String> {
     let named = answer.task.clone().ok_or("the decision task names no task")?;
     let name = named.split(|character: char| character.is_whitespace() || character == ',').next().unwrap_or_default().trim().to_string();
-    let sessions = peers::sessions().unwrap_or_default();
-    if let Some(running) = sessions.iter().find(|session| session.address == name || session.address.split_once('@').is_some_and(|(task, _)| task == name)) {
-        return Ok(format!("{} already builds it: the work it blocks waits for that task; go on with what it does not touch, or report blocked naming it.", running.address));
+    if let Some(running) = running.iter().find(|running| of_task(running, &name)) {
+        return Ok(format!("{running} already builds it: the work it blocks waits for that task; go on with what it does not touch, or report blocked naming it."));
+    }
+    if let Some(queued) = crate::tasks::queued_addresses(state).into_iter().find(|queued| of_task(queued, &name)) {
+        return Ok(format!("{queued} is queued already and builds it: the work it blocks waits for that task; go on with what it does not touch, or report blocked naming it."));
     }
     let repo_name = answer.repo.clone().unwrap_or_else(|| address.split_once('@').map_or(String::new(), |(_, repo)| repo.to_string()));
     let repo = crate::repo::locate(&repo_name)?;
@@ -950,6 +953,19 @@ mod tests {
         update(&state, address, "o1", |found| found.state = State::Decided).unwrap();
         assert_eq!(load(&state, address).iter().map(|obstacle| (obstacle.id.as_str(), obstacle.state == State::Decided)).collect::<Vec<_>>(), [("o1", true), ("o2", false)]);
         std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_task_decision_naming_a_queued_task_points_at_it_and_queues_no_second() {
+        let state = crate::sh::test_dir("obstacle-queued-task");
+        let queued = crate::tasks::test_support::queued(&state, "index-frontmatter", Path::new("/src/notes"), "Store frontmatter in the index");
+        let answer = parse("decision: task\nreason: another repo\ntask: index-frontmatter\nrepo: notes\nprompt: Index the frontmatter again").unwrap();
+        let said = start_task(&state, "billing@app", &answer, &[]).unwrap();
+        assert!(said.starts_with(&format!("{queued} is queued already and builds it")), "{said}");
+        assert_eq!(crate::tasks::queued_addresses(&state), [queued], "the queued task stays the only one");
+        let running = start_task(&state, "billing@app", &answer, &["index-frontmatter@notes".to_string()]).unwrap();
+        assert!(running.starts_with("index-frontmatter@notes already builds it"), "{running}");
+        fs::remove_dir_all(state).unwrap();
     }
 
     #[test]

@@ -98,3 +98,9 @@ pub(crate) fn upstream_commit(dir: &Path, file: &str, text: &str, message: &str)
 pub(crate) fn cleanup_intents(state: &Path, address: &str) {
     super::intent::forget(state, address);
 }
+
+pub(crate) fn queued(state: &Path, task: &str, repo: &Path, prompt: &str) -> String {
+    let wait = super::after::Wait { task: task.to_string(), repo: repo.to_path_buf(), after: Vec::new(), prompt: prompt.to_string(), mode: None, profile: None, backlog: None, by: super::intent::By::Lead, at: 1, blocked: None, gone_since: None, why: None, starts_at: Some(1) };
+    super::after::save(state, &wait).unwrap();
+    wait.address()
+}
