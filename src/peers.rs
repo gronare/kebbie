@@ -75,12 +75,34 @@ pub fn sessions() -> Result<Vec<Session>> {
 
 // Who runs this: the task whose worktree holds cwd, or the lead by its herdr Space.
 pub fn me(cwd: &Path) -> Option<String> {
-    if let Ok(repo) = main_checkout(cwd)
-        && let Some(task) = task_slots(&repo).ok()?.into_iter().find(|slot| slot.task.is_some() && cwd.starts_with(&slot.path)).and_then(|slot| slot.task)
-    {
-        return Some(address(&task, &name_of(&repo)));
-    }
-    in_lead_space().then(|| LEAD_LABEL.to_string())
+    task_at(cwd, known_repos).or_else(|| in_lead_space().then(|| LEAD_LABEL.to_string()))
+}
+
+fn known_repos() -> Vec<PathBuf> {
+    crate::status::known_repos(&herdr::workspaces().unwrap_or_default(), crate::repo::pooled_checkouts()).into_iter().collect()
+}
+
+// A cwd in a task's own temp folder stands for the task's worktree, so its commands run git there and name the task.
+pub fn worktree_at(cwd: &Path) -> PathBuf {
+    worktree_in(cwd, known_repos)
+}
+
+fn worktree_in(cwd: &Path, repos: impl FnOnce() -> Vec<PathBuf>) -> PathBuf {
+    worktree_of_tmp(cwd, &crate::tasks::task_tmp_root(), repos).unwrap_or_else(|| cwd.to_path_buf())
+}
+
+fn task_at(cwd: &Path, repos: impl FnOnce() -> Vec<PathBuf>) -> Option<String> {
+    let cwd = &worktree_in(cwd, repos);
+    let repo = main_checkout(cwd).ok()?;
+    let task = task_slots(&repo).ok()?.into_iter().find(|slot| slot.task.is_some() && cwd.starts_with(&slot.path)).and_then(|slot| slot.task)?;
+    Some(address(&task, &name_of(&repo)))
+}
+
+fn worktree_of_tmp(cwd: &Path, root: &Path, repos: impl FnOnce() -> Vec<PathBuf>) -> Option<PathBuf> {
+    let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    let tmp = root.join(cwd.strip_prefix(root).ok()?.components().next()?);
+    repos().iter().flat_map(|repo| task_slots(repo).unwrap_or_default()).map(|slot| slot.path)
+        .find(|worktree| crate::tasks::task_tmp(worktree).is_ok_and(|own| own == tmp))
 }
 
 pub fn in_lead_space() -> bool {
@@ -476,6 +498,44 @@ mod tests {
 
     fn addresses(found: Result<Vec<&Session>>) -> Vec<String> {
         found.unwrap().iter().map(|session| session.address.clone()).collect()
+    }
+
+    #[test]
+    fn a_command_run_in_a_tasks_temp_folder_is_the_tasks() {
+        let (dir, origin, slot, _) = crate::tasks::test_support::task_with_a_commit("billing");
+        let (other_dir, other_origin, other_slot, _) = crate::tasks::test_support::task_in_another_repo("api");
+        let tmp = crate::tasks::task_tmp(&slot.path).unwrap();
+        let repos = || vec![other_dir.clone(), dir.clone()];
+        let address = address("billing", &name_of(&dir));
+        assert_eq!(task_at(&tmp.join("claude-1001/scratchpad"), repos).as_deref(), Some(address.as_str()), "a session whose cwd is its temp folder is named as its task, never as a session in /tmp");
+        assert_eq!(task_at(&slot.path, Vec::new).as_deref(), Some(address.as_str()), "the worktree itself needs no repo list");
+        assert_eq!(worktree_of_tmp(&tmp.with_file_name("wt9.other-abc123"), &crate::tasks::task_tmp_root(), repos), None, "a temp folder no task owns names nobody");
+        assert_eq!(worktree_of_tmp(&tmp, &crate::tasks::task_tmp_root(), Vec::new), None, "nor does one whose repo kebbie does not know");
+        crate::tasks::test_support::cleanup(dir, origin, &slot);
+        crate::tasks::test_support::cleanup(other_dir, other_origin, &other_slot);
+    }
+
+    #[test]
+    fn a_ready_report_from_a_tasks_temp_folder_runs_git_in_its_worktree() {
+        let (dir, origin, slot, _) = crate::tasks::test_support::task_with_a_commit("refunds");
+        crate::repo::git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend", "-m", "Add refunds\n\nThe billing page lists refunds now."]).unwrap();
+        let tmp = crate::tasks::task_tmp(&slot.path).unwrap();
+        std::fs::create_dir_all(tmp.join("scratch")).unwrap();
+        let cwd = worktree_in(&tmp.join("scratch"), || vec![dir.clone()]);
+        assert_eq!(cwd, slot.path, "the temp folder stands for the worktree");
+        crate::report::report(&cwd, Some("ready"), Some("push and close"), None, &[], None, None, None, "refunds done").unwrap();
+        let state = crate::lead::state_dir().unwrap();
+        crate::assessment::forget_in(&state, &address("refunds", &name_of(&dir)));
+        let _ = std::fs::remove_dir_all(&tmp);
+        crate::tasks::test_support::cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn every_command_reads_a_tasks_temp_folder_as_its_worktree() {
+        let main = include_str!("main.rs");
+        let run = &main[main.find("\nfn run(").unwrap()..];
+        assert!(run[..run.find("match arguments.positional(0)").unwrap()].contains("peers::worktree_at(&typed)"), "kebbie's commands take their cwd through peers::worktree_at");
+        assert!(include_str!("report.rs").contains("map(|cwd| peers::worktree_at(&cwd))"), "and so does the hook");
     }
 
     #[test]

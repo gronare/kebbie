@@ -536,7 +536,7 @@ pub fn hook(input: &str) -> String {
 }
 
 pub fn answer(input: &Payload) -> Answer {
-    let cwd = input.cwd().map(PathBuf::from).or_else(|| std::env::current_dir().ok());
+    let cwd = input.cwd().map(PathBuf::from).or_else(|| std::env::current_dir().ok()).map(|cwd| peers::worktree_at(&cwd));
     let Some(me) = cwd.and_then(|cwd| peers::me(&cwd)).filter(|me| me != LEAD_LABEL) else { return Answer::Silent };
     let Ok(turn) = turn_file(&me) else { return Answer::Silent };
     match input.event() {

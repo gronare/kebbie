@@ -205,6 +205,49 @@ fn help_lists_every_command_and_an_unknown_command_fails_with_the_usage() {
     assert_eq!(stdout(&mindin), stdout(&vault), "kebbie setup vault keeps working as the same command");
 }
 
+// The temp folder kebbie gives a task's worktree, as src/tasks/launch.rs names it.
+fn task_tmp(worktree: &Path) -> PathBuf {
+    let git_dir = git(worktree, &["rev-parse", "--absolute-git-dir"]);
+    let name: String = Path::new(&git_dir).file_name().unwrap().to_string_lossy().chars().filter(|char| char.is_ascii_alphanumeric() || ['.', '-', '_'].contains(char)).take(12).collect();
+    let hash = &sha1_smol::Sha1::from(git_dir.as_bytes()).digest().to_string()[..6];
+    // SAFETY: getuid cannot fail.
+    Path::new("/tmp").canonicalize().unwrap().join(format!("kebbie-{}", unsafe { libc::getuid() })).join(format!("{name}-{hash}"))
+}
+
+#[test]
+fn a_ready_report_from_the_tasks_temp_folder_reads_its_card_there_and_runs_git_in_the_worktree() {
+    let lab = Lab::new("tmp-report");
+    let (_, slot) = lab.task_fixture();
+    git(&slot, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend", "-m", "Add refunds\n\nThe billing page lists refunds now."]);
+    let tmp = task_tmp(&slot);
+    let scratch = tmp.join("scratch");
+    fs::create_dir_all(&scratch).unwrap();
+    fs::write(scratch.join("card.md"), "# Refunds are listed\n\n**Built**\n- The billing page lists refunds.\n").unwrap();
+    let ready = lab.command().current_dir(&scratch).args(["report", "--state", "ready", "--card", "card.md", "--next", "push and close", "refunds done"]).output().unwrap();
+    let _ = fs::remove_dir_all(&tmp);
+    assert!(ready.status.success(), "the card is read where the command was typed and git runs in the worktree: {}", stderr(&ready));
+    assert!(stdout(&ready).starts_with("Reported to the lead and the board as billing@app.") && stdout(&ready).contains("The card is kept"), "{}", stdout(&ready));
+}
+
+#[test]
+fn a_plan_asked_from_the_tasks_temp_folder_is_read_there() {
+    let lab = Lab::new("tmp-plan");
+    let (_, slot) = lab.task_fixture();
+    let tmp = task_tmp(&slot);
+    let scratch = tmp.join("scratch");
+    fs::create_dir_all(&scratch).unwrap();
+    fs::write(scratch.join("plan.md"), "# Refunds\n\nThe billing page lists refunds.\n").unwrap();
+    let asked = lab.command().current_dir(&scratch).args(["ask", "--plan", "plan.md", "-"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().and_then(|mut child| {
+        use std::io::Write;
+        child.stdin.take().unwrap().write_all(b"Approve the refunds list.\n\nYou see refunds on the billing page.\n")?;
+        child.wait_with_output()
+    }).unwrap();
+    let _ = fs::remove_dir_all(&tmp);
+    assert!(asked.status.success(), "the plan is read where the command was typed: {}", stderr(&asked));
+    let kept: Vec<String> = fs::read_dir(lab.state.join("plans")).unwrap().flatten().map(|entry| fs::read_to_string(entry.path()).unwrap()).collect();
+    assert_eq!(kept, ["# Refunds\n\nThe billing page lists refunds.\n"], "and kept as asked");
+}
+
 #[test]
 fn a_refused_ready_report_leaves_a_stage_with_its_check_open_as_it_was() {
     let lab = Lab::new("check-open");

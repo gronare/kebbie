@@ -23,6 +23,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task the lead pushes shows no yellow read count or subtask to accept, and no task row shows its recipe or rules check.
 - The head of a push line is told its real place when it joins the build queue.
 - A task keeps its own name until it is released.
+- A task's kebbie tell, report and ask run from its own temp folder count as the task's, never as a session in /tmp.
 - A task is never restarted onto an older kebbie.
 - A push whose rebase went over another task's CHANGES.md line or docs page asks no test run for them.
 - A push whose rebase stops only on CHANGES.md keeps both sides' lines and goes on.

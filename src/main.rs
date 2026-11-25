@@ -664,11 +664,17 @@ fn takes_focus(focus: bool, no_focus: bool, caller: &permit::Caller) -> bool {
     focus || (!no_focus && matches!(caller, permit::Caller::User))
 }
 
+// A file argument names a file from the folder the command was typed in, which for a task may be its temp folder, never its worktree.
+fn typed_file(typed: &std::path::Path, value: Option<&str>) -> Option<String> {
+    value.map(|value| if value.trim().starts_with(questions::VAULT_PLAN) { value.to_string() } else { typed.join(value.trim()).display().to_string() })
+}
+
 fn run(arguments: &Arguments) -> Result<String> {
-    let cwd = match arguments.value("-C") {
+    let typed = match arguments.value("-C") {
         Some(dir) => std::path::PathBuf::from(dir),
         None => std::env::current_dir().map_err(|error| error.to_string())?,
     };
+    let cwd = peers::worktree_at(&typed);
     if arguments.flag("-h") || arguments.flag("--help") {
         return Ok(USAGE.to_string());
     }
@@ -767,7 +773,7 @@ fn run(arguments: &Arguments) -> Result<String> {
             if forced { messages::tell_forced(to, Some(&text)) } else { messages::tell(&cwd, to, &text) }
         }
         Some("release") => messages::tell_forced(name.ok_or("kebbie release needs the task whose held messages go through")?, None),
-        Some("report") => report::report(&cwd, arguments.value("--state"), arguments.value("--next"), arguments.value("--card"), &arguments.values_of("--after"), arguments.value("--after-push"), arguments.value("--verify-after-push"), arguments.value("--red-cause"), &arguments.rest(1).join(" ")),
+        Some("report") => report::report(&cwd, arguments.value("--state"), arguments.value("--next"), typed_file(&typed, arguments.value("--card")).as_deref(), &arguments.values_of("--after"), arguments.value("--after-push"), arguments.value("--verify-after-push"), arguments.value("--red-cause"), &arguments.rest(1).join(" ")),
         Some("obstacle") if arguments.flag("--investigate") => obstacle::run(&cwd),
         Some("obstacle") => arguments.only("obstacle", &["--on"]).and_then(|_| obstacle::raise(&cwd, arguments.value("--on"), &arguments.rest(1).join(" "))),
         Some("obstacles") if name == Some("decide") => {
@@ -784,7 +790,7 @@ fn run(arguments: &Arguments) -> Result<String> {
             } else {
                 text = arguments.rest(1).join(" ");
             }
-            questions::ask(&cwd, &arguments.values_of("--option"), arguments.value("--recommend"), arguments.value("--plan"), &text)
+            questions::ask(&cwd, &arguments.values_of("--option"), arguments.value("--recommend"), typed_file(&typed, arguments.value("--plan")).as_deref(), &text)
         }
         Some("notify") => {
             let text: Vec<String> = std::env::args().skip_while(|argument| argument != "notify").skip(1).collect();
@@ -1096,6 +1102,15 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_file_argument_is_read_from_the_folder_typed_in_and_a_vault_plan_passes_unchanged() {
+        let typed = std::path::Path::new("/tmp/kebbie-501/wt1.app-a1b2c3/scratch");
+        assert_eq!(super::typed_file(typed, Some("card.md")).as_deref(), Some("/tmp/kebbie-501/wt1.app-a1b2c3/scratch/card.md"));
+        assert_eq!(super::typed_file(typed, Some("/src/plan.md")).as_deref(), Some("/src/plan.md"), "an absolute path stays as it is");
+        assert_eq!(super::typed_file(typed, Some("vault:Projects/refunds.md")).as_deref(), Some("vault:Projects/refunds.md"), "a vault note is no file");
+        assert_eq!(super::typed_file(typed, None), None);
+    }
+
     #[test]
     fn a_run_refuses_a_dash_word_before_the_double_dash_instead_of_dropping_it() {
         let parsed = |flags: &[&str]| super::Arguments { positionals: vec!["run".to_string(), "ls".to_string()], flags: flags.iter().map(|flag| flag.to_string()).collect(), values: vec![("--on".to_string(), "studio".to_string())] };
