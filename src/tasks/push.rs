@@ -763,6 +763,7 @@ pub(super) fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through
     super::push_steps::step(&task, &format!("pushing to {}", main_of(upstream)));
     let (count, watch, staged) = send(state, repo, slot, upstream, &address, &task, pusher, &went, watch)?;
     let (vault, log) = after_push(state, repo, slot, &address, &task, &went, &crate::vault_cli::detect);
+    let freed = (!went.keep_open).then(|| super::pool::tidy(&slot.path, &super::pool::build_folders(repo))).flatten().unwrap_or_default();
     let Went { sha, keep_open, rest, pushed, note, target, .. } = went;
     let main = main_of(upstream);
     let logged = log.as_ref().map(crate::task_note::logged_text).unwrap_or_default();
@@ -777,7 +778,7 @@ pub(super) fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through
         crate::ci::Begin::Off => String::new(),
     };
     let headline = |through: bool| if through { format!("Pushed {} through {short} to {main}", plural(count, "commit")) } else { format!("Pushed {} to {main}", plural(count, "commit")) };
-    let said = |notice: Notice| notice.detail("task", &task).detail("commit", short).detail("ci", &ci).detail("log", &logged);
+    let said = |notice: Notice| notice.detail("task", &task).detail("commit", short).detail("ci", &ci).detail("log", &logged).detail("freed", &freed);
     if !staged.stages.is_empty() {
         let rolled = (!matches!(watch, crate::ci::Begin::Watching)).then(|| unwatched_stages(state, repo, &address, &sha, &target, &staged, &watch, keep_open));
         let stages = rolled.as_ref().map(|rolled| rolled.text()).filter(|text| !text.is_empty()).unwrap_or_else(|| "kebbie follows CI for them, then asks for each stage's requirement".to_string());
@@ -800,7 +801,7 @@ pub(super) fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through
                 Some(check) => format!("CI runs now; once it is green the task checks {check}, and kebbie closes it when that holds."),
                 None => "CI runs now; kebbie closes the task when it is green.".to_string(),
             };
-            let notice = Notice::new(Tone::Done, headline(false)).next(next).detail("task", &task).detail("commit", short).detail("log", &logged);
+            let notice = Notice::new(Tone::Done, headline(false)).next(next).detail("task", &task).detail("commit", short).detail("log", &logged).detail("freed", &freed);
             return Ok(notice.detail("checkout", follow_upstream(repo, upstream, &super::stage::load(state, repo))?).to_string());
         }
         if let Some(check) = check {
@@ -1186,6 +1187,42 @@ mod tests {
         let told = told_lead(&address);
         assert_eq!(told.len(), 1, "{told:?}");
         assert!(told[0].fyi && told[0].kind.is_none() && told[0].text.starts_with(&format!("The user pushed {address}: 1 commit to {}. kebbie watches CI", upstream.trim_start_matches("origin/"))), "the push under CI watch is a notice for the digest, not a turn of the lead's: {:?}", told[0]);
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_full_push_empties_the_tasks_build_output_and_says_how_much_while_a_push_that_keeps_it_open_leaves_it() {
+        let built = |slot: &Slot| {
+            std::fs::create_dir_all(slot.path.join("target/debug")).unwrap();
+            std::fs::write(slot.path.join("target/debug/app"), vec![0u8; 1_500_000]).unwrap();
+        };
+        let rust_task = |name: &str| {
+            let (dir, origin, slot, upstream) = task_with_a_commit(name);
+            upstream_commit(&dir, ".gitignore", "target/\n", "ignore target");
+            upstream_commit(&dir, "Cargo.toml", "[package]\n", "a Rust repo");
+            git(&slot.path, &["rebase", "--quiet", &upstream]).unwrap();
+            built(&slot);
+            (dir, origin, slot, upstream)
+        };
+        let (dir, origin, slot, upstream) = rust_task("billing");
+        let state = state_of(&dir);
+        let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head, rebased: false }, "the user", &state, &watching).unwrap();
+        assert!(said.contains("removed target/ (1.5 MB)"), "CI still runs, but the build is not needed past the push: {said}");
+        assert!(!slot.path.join("target").exists());
+        crate::ci::forget(&state, &crate::peers::address("billing", &name_of(&dir)));
+        cleanup(dir, origin, &slot);
+
+        let (dir, origin, slot, upstream) = rust_task("rates");
+        let state = state_of(&dir);
+        let first = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        std::fs::write(slot.path.join("more"), "more").unwrap();
+        git(&slot.path, &["add", "more"]).unwrap();
+        git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "-m", "more"]).unwrap();
+        let said = deliver(&dir, &slot, &upstream, Through::First { count: 1, of: 2 }, &Out { sha: first, rebased: false }, "the user", &state, &watching).unwrap();
+        assert!(!said.contains("removed"), "{said}");
+        assert!(slot.path.join("target/debug/app").exists(), "the task builds on, so its build stays");
+        crate::ci::forget(&state, &crate::peers::address("rates", &name_of(&dir)));
         cleanup(dir, origin, &slot);
     }
 

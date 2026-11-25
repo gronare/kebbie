@@ -111,10 +111,17 @@ pub fn list(cwd: &Path) -> Result<Vec<Value>> {
 
 // -D because callers have already checked the commits are on upstream; git's -d checks the main checkout's local branch, which is still behind right after a push.
 pub(super) fn release(repo: &Path, slot: &Slot, upstream: &str) -> Result<Option<String>> {
-    let settings = config::resolve(Some(repo)).map(|loaded| loaded.settings);
-    let folders = settings.as_ref().map(|settings| settings.clean_on_release.value.clone()).unwrap_or_else(|_| vec!["target".to_string()]);
-    let command = settings.ok().and_then(|settings| settings.release_command.value);
-    release_with(repo, slot, upstream, &folders, command, crate::repo::sandboxed_worktree(&slot.path))
+    let command = config::resolve(Some(repo)).ok().and_then(|loaded| loaded.settings.release_command.value);
+    release_with(repo, slot, upstream, &build_folders(repo), command, crate::repo::sandboxed_worktree(&slot.path))
+}
+
+pub(super) fn build_folders(repo: &Path) -> Vec<String> {
+    config::resolve(Some(repo)).map(|loaded| loaded.settings.clean_on_release.value).unwrap_or_else(|_| vec!["target".to_string()])
+}
+
+pub(super) fn tidy(worktree: &Path, folders: &[String]) -> Option<String> {
+    let removed = clean_build_output(worktree, folders);
+    (!removed.is_empty()).then(|| format!("removed {}", removed.iter().map(|(folder, bytes)| format!("{folder}/ ({})", size(*bytes))).collect::<Vec<_>>().join(", ")))
 }
 
 // The worktree is back on upstream before the release command runs, so the repo's own version of it runs and never one the task changed; in a sandboxed worktree a program path git does not track as upstream has it is not run at all.
@@ -129,8 +136,7 @@ pub(super) fn release_with(repo: &Path, slot: &Slot, upstream: &str, folders: &[
         let _ = std::fs::remove_file(record);
     }
     git(repo, &["branch", "-D", task_of(slot)])?;
-    let removed = clean_build_output(&slot.path, folders);
-    let freed = (!removed.is_empty()).then(|| format!("removed {}", removed.iter().map(|(folder, bytes)| format!("{folder}/ ({})", size(*bytes))).collect::<Vec<_>>().join(", ")));
+    let freed = tidy(&slot.path, folders);
     let said: Vec<String> = ran.into_iter().chain(freed).collect();
     Ok((!said.is_empty()).then(|| said.join("; ")))
 }
