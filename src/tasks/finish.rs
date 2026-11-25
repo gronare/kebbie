@@ -133,7 +133,7 @@ pub(super) fn finish(repo: &Path, slot: &Slot, upstream: &str, state: &Path, vau
                 said.push(format!("{item} stays open for the task's other halves"));
                 continue;
             }
-            Some(cli) => match crate::task_note::release(cli, state, &item, task) {
+            Some(cli) => match crate::task_note::release_at_done(cli, state, &item, task, &name_of(repo)) {
                 crate::vault_cli::Released::Held(claim) => {
                     said.push(crate::task_note::held_text(&item, &claim, crate::backlog::today()));
                     messages::to_lead(messages::ToLead::NoteUnsettled, &format!("{task} is done and its commits are on the default branch, but {} on {} has taken over its note {item}, so kebbie left the note open: settle it with the user.", claim.task, claim.machine))
@@ -534,6 +534,24 @@ mod tests {
         assert!(said.contains("note: Projects/billing.md is left as it is: working on devbox · billing-v2"), "{said}");
         assert_eq!(fake.calls(), ["task release Projects/billing.md --machine mac"], "a note another machine took over is not closed under it");
         cleanup(dir, origin, &slot);
+        for same_repo in [true, false] {
+            let fake = crate::vault_cli::fake::Fake::new(if same_repo { "finish-renamed" } else { "finish-other-repo" });
+            let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+            git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), "billing"]).unwrap();
+            let state = state_of(&dir);
+            record_start(&started_file_in(&state, "billing", &dir).unwrap(), "Projects/billing.md").unwrap();
+            let repo = if same_repo { name_of(&dir) } else { "api".to_string() };
+            std::fs::write(fake.dir.join("vault"), format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{0}/argv.log'\nif [ \"$2\" = close ]; then echo '{{\"path\":\"Archive/billing.md\"}}'; elif [ \"$4\" = --machine ]; then echo '{{\"released\":false,\"claim\":{{\"machine\":\"MeanMachine\",\"task\":\"billing\",\"repo\":\"{1}\",\"since\":\"2026-10-23T15:13:55Z\"}}}}'; else echo '{{\"released\":true,\"claim\":null}}'; fi\n", fake.dir.display(), repo)).unwrap();
+            let said = finish(&dir, &slot, &upstream, &state, Some(&fake.claiming())).unwrap().to_string();
+            if same_repo {
+                assert!(said.contains("note: closed (Archive/billing.md)"), "the same task's claim under this machine's former name is this machine's own: {said}");
+                assert_eq!(fake.calls(), ["task release Projects/billing.md --machine mac", "task release Projects/billing.md", "task close Projects/billing.md"]);
+            } else {
+                assert!(said.contains("note: Projects/billing.md is left as it is: working on MeanMachine · billing"), "a task by the same name in another repo keeps its claim: {said}");
+                assert_eq!(fake.calls(), ["task release Projects/billing.md --machine mac"]);
+            }
+            cleanup(dir, origin, &slot);
+        }
         let landed = include_str!("landed.rs");
         assert!(landed.contains("close_task(repo, Some(task), vault.as_ref(), None)"), "a landed task closes through close_task and so clears its claim as done does");
     }

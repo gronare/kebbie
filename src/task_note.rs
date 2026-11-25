@@ -87,6 +87,17 @@ pub fn release(cli: &Cli, state: &Path, note: &str, task: &str) -> Released {
     })
 }
 
+// A claim of this same task under a machine name kebbie no longer goes by, such as the host's name before [machine] name was set, would keep a done task's note open for good.
+pub fn release_at_done(cli: &Cli, state: &Path, note: &str, task: &str, repo: &str) -> Released {
+    match release(cli, state, note, task) {
+        Released::Held(claim) if claim.task == task && claim.repo == repo => cli.release_whoever(note).unwrap_or_else(|error| {
+            vault_cli::warn_log(state, &format!("{note}: the claim {} wrote for {task} was not cleared ({error})", claim.machine));
+            Released::Held(claim)
+        }),
+        released => released,
+    }
+}
+
 pub fn gone_text(note: &str) -> String {
     format!("{note} is gone from the vault, and its claim with it")
 }

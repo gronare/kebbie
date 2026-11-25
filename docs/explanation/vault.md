@@ -87,6 +87,7 @@ Claims need a vault that states the `claims` capability. With an older vault keb
 - A note moved or renamed since is found by its claim's machine and task.
 - A note deleted since counts as released, and the answer says it is gone.
 - When another machine has taken the note over meanwhile, kebbie leaves the note as it is and says so.
+- At done, a claim that names this same task and repo under another machine name, such as the host's name from before `machine.name` was set, is cleared all the same and the note closed: one task is not done on two machines.
 
 ## Each machine needs its own name
 

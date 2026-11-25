@@ -114,6 +114,14 @@ fn field(value: &Value, key: &str) -> String {
     value[key].as_str().unwrap_or_default().to_string()
 }
 
+fn released(value: &Value) -> Result<Released> {
+    match value["released"].as_bool() {
+        Some(true) => Ok(Released::Done),
+        Some(false) => crate::vault::Claim::from_json(&value["claim"], "").map(Released::Held).ok_or_else(|| "vault task release: kept without naming who holds it".to_string()),
+        None => Err("vault task release: no released in its answer".to_string()),
+    }
+}
+
 impl Cli {
     pub fn new(command: Vec<String>) -> Self {
         Self { command, claims: false, machine: String::new(), plugin: String::new(), capabilities: None }
@@ -233,11 +241,12 @@ impl Cli {
             }
             answer => answer?,
         };
-        match value["released"].as_bool() {
-            Some(true) => Ok(Released::Done),
-            Some(false) => crate::vault::Claim::from_json(&value["claim"], "").map(Released::Held).ok_or_else(|| "vault task release: kept without naming who holds it".to_string()),
-            None => Err("vault task release: no released in its answer".to_string()),
-        }
+        released(&value)
+    }
+
+    // Clears the note's claim whichever machine it names.
+    pub fn release_whoever(&self, note: &str) -> Result<Released> {
+        released(&self.call(&["task", "release", note])?)
     }
 
     pub fn log(&self, cwd: &Path, branch: Option<&str>, line: &str, commits: &[&str]) -> Result<String> {
