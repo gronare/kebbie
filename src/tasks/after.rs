@@ -157,7 +157,7 @@ pub(crate) fn held_items(state: &Path) -> HashSet<String> {
 }
 
 fn waited_on(state: &Path, address: &str) -> bool {
-    all(state).iter().any(|wait| wait.after.iter().any(|dep| dep.address == address)) || super::waiting::waited_on(state, address)
+    all(state).iter().any(|wait| wait.after.iter().any(|dep| dep.address == address)) || super::waiting::waited_on(state, address) || super::promise::waited_on(state, address)
 }
 
 // A done task's CI watch is kept when a wait names it, so the wait starts only on green.

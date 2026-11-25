@@ -326,6 +326,12 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   green, the keeper rebases it and tells its Claude what landed and what to do, and a
                                   dropped one is told to it; --off ends the wait; without --on, what it waits for, and
                                   without a name, every wait; yours, or the lead's on your word
+  kebbie promise \"<what you will do>\" [--after <task[@repo]>] [--at <time>] [--answered <task>]
+                                  the lead's promise, kept by kebbie: every condition given must hold (a task landed,
+                                  CI green where kebbie watches it; a time; the user's answer to the task's open
+                                  question), then the keeper reminds the lead; done <n> closes it, drop <n> \"<why>\"
+                                  lets it go; the lead's or yours
+  kebbie promises                 the open promises, each with what it waits for, due since when, or why it cannot hold
   kebbie recipe [task] [\"<recipe>: <why>\"]
                                   the playbook's recipes; a task's recipe and why; or a new one for it, shown under its
                                   row on the board and written to its note
@@ -568,7 +574,7 @@ impl Arguments {
                 arguments.positionals.extend(input.by_ref());
                 break;
             }
-            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--after-push", "--verify-after-push", "--profile", "--why", "--name", "--until", "--recipe", "--step", "--on", "--id", "--subtask", "--because", "--prepares", "--before", "--verify", "--stage", "--red-cause", "--search", "--send", "--fetch", "--out"].contains(&argument.as_str()) {
+            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--after-push", "--verify-after-push", "--profile", "--why", "--name", "--until", "--recipe", "--step", "--on", "--id", "--subtask", "--because", "--prepares", "--before", "--verify", "--stage", "--red-cause", "--search", "--send", "--fetch", "--out", "--answered"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
                 arguments.flags.push(argument);
@@ -856,6 +862,8 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("park") => tasks::park(&cwd, name, arguments.value("--until")),
         Some("recipe") => arguments.only("recipe", &[]).and_then(|_| recipe::command(&cwd, arguments.rest(1))),
         Some("unpark") => tasks::unpark(&cwd, name),
+        Some("promise") => arguments.only("promise", &["--after", "--at", "--answered"]).and_then(|_| tasks::promise(arguments.rest(1), &arguments.values_of("--after"), arguments.value("--at"), arguments.value("--answered"))),
+        Some("promises") => arguments.only("promises", &[]).and_then(|_| tasks::promises()),
         Some("wait") => tasks::wait(&cwd, name, &arguments.values_of("--on"), arguments.flag("--off"), arguments.rest(2)),
         Some("push") if arguments.flag("--cancel") => tasks::cancel_push(&cwd, name),
         Some("push") => tasks::push(&cwd, name, arguments.value("--through"), arguments.value("--through").is_some(), arguments.flag("--anyway")),

@@ -159,7 +159,7 @@ fn go() -> Result<String> {
 
 // Each of the user's prompts carries what sessions told each other since the lead last looked; the lead pushes only through kebbie push, which checks the user's permission; a compaction would drop the lead's rules, so it never compacts on its own.
 fn settings(kebbie: &str) -> String {
-    let allow = ["peers", "tell", "release", "answered", "messages", "status", "next", "areas", "approve", "review", "land", "push", "try", "stage", "unstage", "decide", "defer", "notify", "issues", "issue", "handover"].map(|command| format!("Bash({kebbie} {command}:*)"));
+    let allow = ["peers", "tell", "release", "answered", "messages", "status", "next", "areas", "approve", "review", "land", "push", "try", "stage", "unstage", "decide", "defer", "notify", "issues", "issue", "handover", "promise", "promises"].map(|command| format!("Bash({kebbie} {command}:*)"));
     let settings = json!({
         "hooks": { "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": format!("{} messages --unread", crate::sh::quote(kebbie)) }] }] },
         "permissions": { "allow": allow },
