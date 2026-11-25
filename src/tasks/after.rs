@@ -1762,7 +1762,7 @@ mod tests {
         let starting = &role[role.find("- **Starting a task**").unwrap()..];
         let starting = &starting[..starting.find("- **Holding tasks to the rules**").unwrap()];
         assert!(starting.contains("--after <task[@repo]>") && starting.contains("never hold the order yourself"));
-        assert!(starting.contains("on your own initiative") && starting.contains("say so in your next summary"));
+        assert!(starting.contains("on your own initiative") && starting.contains("say so in one line"));
         assert!(starting.contains("kebbie after <task> --now") && starting.contains("on their word"), "a blocked wait is the user's");
     }
 

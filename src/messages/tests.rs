@@ -262,7 +262,7 @@ fn the_leads_digest_leaves_a_parked_task_out_and_names_it_parked() {
     crate::tasks::park_address(&dir, "billing@web", None, now(), &|_| 0).unwrap();
     let unread = unread_in(&dir).unwrap();
     assert!(unread.contains("filters done") && !unread.contains("refunds done") && !unread.contains("question q1") && !unread.contains("CI failed"), "its report, its question's copy and its notices stay out: {unread}");
-    assert!(unread.contains("Parked by the user (leave them out of Done, Going on and Needs you until they are back") && unread.contains("- billing@web (back when you unpark it)"), "{unread}");
+    assert!(unread.contains("Parked by the user (leave them out of your replies until they are back") && unread.contains("- billing@web (back when you unpark it)"), "{unread}");
     fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -875,13 +875,13 @@ fn what_kebbie_sent_its_maintainers_and_the_reports_it_filed_show_on_the_board_a
 }
 
 #[test]
-fn a_message_that_starts_a_lead_turn_asks_it_to_work_silently_and_end_in_the_roles_three_parts() {
+fn a_message_that_starts_a_lead_turn_asks_it_to_work_silently_and_end_short() {
     let cued = |from: &str, to: &str| typed_text(from, to, "text").ends_with(&format!("\n  {LEAD_CUE}"));
-    assert!(cued("kebbie", LEAD_LABEL), "kebbie's message, whether it needs the user or not: a turn that needs the user ends in Needs you, one that does not on one line");
+    assert!(cued("kebbie", LEAD_LABEL), "kebbie's message, whether it needs the user or not: a turn that needs the user ends in 1 to 3 lines, one that does not on one line");
     assert!(cued("billing@app", LEAD_LABEL), "a task's message to the lead");
     assert_eq!(typed_text("billing@app", LEAD_LABEL, "two\nlines"), format!("[from billing@app] two\n  lines\n  {LEAD_CUE}"), "the cue follows the message, indented like its lines, so it reads as kebbie's and never as a sender line");
     let role = include_str!("../../roles/lead.md");
-    assert!(role.contains("(kebbie: work silently; …)") && role.contains("**Work silently**") && "Done / Going on / Needs you".split(" / ").all(|part| role.contains(&format!("**{part}**"))), "the cue names the role's own words");
+    assert!(role.contains("(kebbie: work silently; …)") && role.contains("**Work silently**") && role.contains("**A turn kebbie's message started** ends in 1 to 3 lines"), "the cue names the role's own words");
     assert!(!cued(USER_LABEL, LEAD_LABEL), "the user's own word gets an answer");
     assert!(!cued("kebbie", "billing@app") && !cued(LEAD_LABEL, "billing@app"), "only the lead's turns");
     let held = fold(&json!({ "id": "m1", "at": 1, "from": "kebbie", "to": LEAD_LABEL, "text": "text", "state": "held", "kind": RULES_KIND }).to_string());

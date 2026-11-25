@@ -42,7 +42,7 @@ pub fn profile(dir: &Path, name: &str) -> Result<crate::profiles::Profile> {
 }
 
 pub fn review_text(request: &str, draft: &str, profile: &str) -> String {
-    format!("kebbie's writer ({profile}) wrote out the backlog item of this request for you to review, below. Do not research it again: read the draft, add what you know from your conversation with the user, take out an open question the code or the notes settle and keep each one only the user can answer, then save it as the request says and show the user the written item.\n\nThe request:\n\n{request}\n\nThe draft:\n\n{draft}")
+    format!("kebbie's writer ({profile}) wrote out the backlog item of this request for you to review, below. Do not research it again: read the draft, add what you know from your conversation with the user, take out an open question the code or the notes settle and keep each one only the user can answer, then save it as the request says and tell the user in one line, by its title, that it is written.\n\nThe request:\n\n{request}\n\nThe draft:\n\n{draft}")
 }
 
 pub fn fallback_text(request: &str, why: &str) -> String {

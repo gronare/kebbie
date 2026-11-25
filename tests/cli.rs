@@ -670,7 +670,7 @@ fn a_task_reports_asks_and_messages_through_the_log_and_the_fake_herdr_sees_only
     assert_eq!(stdout(&told), "Told lead.");
     let prompts: Vec<Vec<String>> = lab.herdr_calls().into_iter().filter(|call| call[..2] == ["agent", "prompt"]).collect();
     assert!(!prompts.iter().any(|call| call[2] == "p_lead" && call[3].contains("billing@app") && call[3].contains("rules")), "the lead hears nothing of a rules check under way: {prompts:?}");
-    assert!(prompts.iter().any(|call| call[2] == "p_lead" && call[3] == "[from billing@app] payload renamed to amount\n  (kebbie: work silently; end in Done / Going on / Needs you, or one line if nothing needs the user)"), "{prompts:?}");
+    assert!(prompts.iter().any(|call| call[2] == "p_lead" && call[3] == "[from billing@app] payload renamed to amount\n  (kebbie: work silently; end in 1 to 3 lines, or one line if nothing needs the user)"), "{prompts:?}");
     assert!(lab.herdr_calls().iter().all(|call| ["workspace list", "agent list", "agent prompt", "workspace get", "pane read"].contains(&call[..2].join(" ").as_str())), "nothing but reads and prompts reach herdr: {:?}", lab.herdr_calls());
 
     let printed = stdout(&lab.run(&["messages", "--print"]));
@@ -747,7 +747,7 @@ fn a_lead_whose_session_start_recorded_its_inbox_gets_a_message_there_once_the_u
     assert!(stdout(&told).contains("lead has a draft in its input box; held"), "the user's text in the lead's box holds it: {}\n{}", stdout(&told), stderr(&told));
     lab.screen("❯ ");
     lab.run(&["messages", "--unread"]);
-    assert_eq!(reader.join().unwrap(), "{\"type\":\"auth\",\"token\":\"tok-9\"}\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"<cross-session-message from=\\\"kebbie\\\" from-name=\\\"kebbie\\\">\\n[from billing@app] payload renamed\\n  (kebbie: work silently; end in Done / Going on / Needs you, or one line if nothing needs the user)\\n</cross-session-message>\"},\"from\":\"kebbie\"}\n");
+    assert_eq!(reader.join().unwrap(), "{\"type\":\"auth\",\"token\":\"tok-9\"}\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"<cross-session-message from=\\\"kebbie\\\" from-name=\\\"kebbie\\\">\\n[from billing@app] payload renamed\\n  (kebbie: work silently; end in 1 to 3 lines, or one line if nothing needs the user)\\n</cross-session-message>\"},\"from\":\"kebbie\"}\n");
     let _ = fs::remove_file(&socket);
     assert!(!lab.herdr_calls().iter().any(|call| call[..2] == ["agent", "prompt"]), "nothing is typed, so the user's draft stays as it is");
     assert!(fs::read_to_string(lab.state.join("messages.jsonl")).unwrap().contains("\"via\":\"inbox\""));
@@ -756,7 +756,7 @@ fn a_lead_whose_session_start_recorded_its_inbox_gets_a_message_there_once_the_u
     assert!(gone.wait().unwrap().success());
     lab.screen("❯ ");
     lab.run(&["-C", slot.to_str().unwrap(), "tell", "lead", "and typed without an inbox"]);
-    assert!(prompts_to(&lab, "p_lead").iter().any(|text| text == "[from billing@app] and typed without an inbox\n  (kebbie: work silently; end in Done / Going on / Needs you, or one line if nothing needs the user)"), "a session that started without a socket is typed into: {:?}", prompts_to(&lab, "p_lead"));
+    assert!(prompts_to(&lab, "p_lead").iter().any(|text| text == "[from billing@app] and typed without an inbox\n  (kebbie: work silently; end in 1 to 3 lines, or one line if nothing needs the user)"), "a session that started without a socket is typed into: {:?}", prompts_to(&lab, "p_lead"));
 }
 
 #[test]
@@ -787,7 +787,7 @@ fn a_session_outside_kebbies_tasks_tells_the_lead_and_is_named_by_its_folder() {
     assert!(from_claude.status.success(), "{}", stderr(&from_claude));
     assert_eq!(stdout(&from_claude), "Told lead.");
     let typed = |lab: &Lab| lab.herdr_calls().into_iter().filter(|call| call[..2] == ["agent", "prompt"] && call[2] == "p_lead").map(|call| call[3].clone()).collect::<Vec<_>>();
-    assert_eq!(typed(&lab), [format!("[from a Claude session in {notes_str}] the notes server moved to port 8040\n  (kebbie: work silently; end in Done / Going on / Needs you, or one line if nothing needs the user)")]);
+    assert_eq!(typed(&lab), [format!("[from a Claude session in {notes_str}] the notes server moved to port 8040\n  (kebbie: work silently; end in 1 to 3 lines, or one line if nothing needs the user)")]);
     let from_shell = lab.command().env_remove("HERDR_WORKSPACE_ID").args(["-C", notes_str, "tell", "billing", "port 8040 now"]).output().unwrap();
     assert!(from_shell.status.success(), "{}", stderr(&from_shell));
     assert!(lab.herdr_calls().iter().any(|call| call[..2] == ["agent", "prompt"] && call[2] == "p_task" && call[3] == format!("[from a shell in {notes_str}] port 8040 now")), "{:?}", lab.herdr_calls());

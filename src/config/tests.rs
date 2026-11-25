@@ -500,7 +500,7 @@ fn the_lead_proposes_kebbie_issues_unless_config_toml_turns_it_off() {
     assert!(unknown_machine("[issues]\npropose = false\n").is_empty());
     assert!(parse_repo("[issues]\npropose = false\n", "app.toml").unwrap_err().contains("issues: applies to every repo, so it lives in config.toml; set [issues] propose in"));
     let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: off });
-    assert!(shown.contains("issues.propose = false  (machine config)\n  Whether the lead proposes saving a bug or wish about kebbie") && shown.contains("Takes effect when the lead next restarts"), "{shown}");
+    assert!(shown.contains("issues.propose = false  (machine config)\n  Whether the lead saves a bug or wish about kebbie by itself") && shown.contains("Takes effect when the lead next restarts"), "{shown}");
 }
 
 #[test]

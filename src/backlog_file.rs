@@ -350,7 +350,7 @@ pub fn tell_new_drafts() {
         return;
     }
     let listed: Vec<String> = new.iter().map(|item| format!("\"{}\" ({})", item.title, file(&dir, &item.stem).display())).collect();
-    let text = format!("The backlog has {} item{} to write out: {}. Write each out now with the skill `{SKILL}` in its own file, show the user the written item, and say it waited for you if it did.", new.len(), if new.len() == 1 { "" } else { "s" }, listed.join("; "));
+    let text = format!("The backlog has {} item{} to write out: {}. Write each out now with the skill `{SKILL}` in its own file, tell the user in one line, by its title, that it is written, and say it waited for you if it did.", new.len(), if new.len() == 1 { "" } else { "s" }, listed.join("; "));
     if crate::messages::to_lead(crate::messages::ToLead::BacklogItem, &text).is_ok() {
         mark_told(&state, &dir, &new.iter().map(|item| item.stem.clone()).collect::<Vec<_>>());
     }
@@ -390,16 +390,16 @@ pub fn writable(entry: &Entry, now: u64) -> bool {
 // The user asked for an item to write to be written out; the lead hears it at once.
 pub fn write_out_text(who: &str, title: &str, place: &str, words: Option<&str>) -> String {
     let words = words.map(str::trim).filter(|words| !words.is_empty()).map_or(String::new(), |words| format!(" In their words when they added it:\n\n{}\n\n", quoted_block(words)));
-    format!("{who} asks you to write out the backlog item \"{title}\" ({place}) with the skill `{SKILL}`:{words} read it, the code and the notes, write it out in place, and show the user the written item.")
+    format!("{who} asks you to write out the backlog item \"{title}\" ({place}) with the skill `{SKILL}`:{words} read it, the code and the notes, write it out in place, and tell the user in one line, by its title, that it is written.")
 }
 
 fn lead_text(filing: &Filing, priority: &str, repo: &str, place: &str) -> String {
     let (who, line) = (filing.by, filing.line);
     let priority = if priority == "none" { String::new() } else { format!(" [{priority}]") };
     let asked = if let Some(words) = filing.words {
-        format!("{who} added an idea to the backlog{priority}, in their words:\n\n{}\n\nIts title \"{}\" is a placeholder. Write it out now with the skill `{SKILL}` from what you know (your conversation with the user, the code, the notes), give it a short title in the user's words, show the user the written item, and save it {place}. If it reached you only now, say that it waited for you.", quoted_block(words), line.trim())
+        format!("{who} added an idea to the backlog{priority}, in their words:\n\n{}\n\nIts title \"{}\" is a placeholder. Write it out now with the skill `{SKILL}` from what you know (your conversation with the user, the code, the notes), give it a short title in the user's words, tell the user in one line, by its title, that it is written, and save it {place}. If it reached you only now, say that it waited for you.", quoted_block(words), line.trim())
     } else {
-        format!("{who} added a quick item to the backlog: \"{}\"{priority}. Write it out now with the skill `{SKILL}` from what you know (your conversation with the user, the code, the notes), show the user the written item, and save it {place}. If it reached you only now, say that it waited for you.", line.trim())
+        format!("{who} added a quick item to the backlog: \"{}\"{priority}. Write it out now with the skill `{SKILL}` from what you know (your conversation with the user, the code, the notes), tell the user in one line, by its title, that it is written, and save it {place}. If it reached you only now, say that it waited for you.", line.trim())
     };
     format!("{asked}{}{}", repo_text(repo, filing.repos), if filing.start { START_TEXT } else { "" })
 }
@@ -821,7 +821,7 @@ mod tests {
 
     #[test]
     fn a_write_out_the_user_asks_for_names_the_item_and_their_words() {
-        assert_eq!(write_out_text("The user", "Retry", "vault: Projects/retry.md", None), "The user asks you to write out the backlog item \"Retry\" (vault: Projects/retry.md) with the skill `kebbie:write-backlog-item`: read it, the code and the notes, write it out in place, and show the user the written item.");
+        assert_eq!(write_out_text("The user", "Retry", "vault: Projects/retry.md", None), "The user asks you to write out the backlog item \"Retry\" (vault: Projects/retry.md) with the skill `kebbie:write-backlog-item`: read it, the code and the notes, write it out in place, and tell the user in one line, by its title, that it is written.");
         assert!(write_out_text("The user", "Retry…", "kept by kebbie", Some("rerun\nonce")).contains("In their words when they added it:\n\n> rerun\n> once\n\n read it"));
     }
 

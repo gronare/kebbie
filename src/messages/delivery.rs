@@ -41,7 +41,7 @@ pub(super) fn part(message: &Message) -> String {
     if message.kind.as_deref() == Some(PROMPT_KIND) { message.text.clone() } else { delivered(&message.from, &message.text) }
 }
 
-pub const LEAD_CUE: &str = "(kebbie: work silently; end in Done / Going on / Needs you, or one line if nothing needs the user)";
+pub const LEAD_CUE: &str = "(kebbie: work silently; end in 1 to 3 lines, or one line if nothing needs the user)";
 
 // A message that starts a lead turn carries the cue for how that turn ends; the user's own word does not.
 pub(super) fn typed_text(from: &str, to: &str, text: &str) -> String {

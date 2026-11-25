@@ -1,6 +1,6 @@
 ---
 name: write-jobs
-description: Turn the commands tasks keep running on another machine with kebbie run --on into named jobs in the repo's kebbie config, on the user's yes, and run each once to check it passes. Use after a task ran kebbie run --on for the same commands more than once (a build, a simulator boot, a UI test), when kebbie job suggest lists commands, or when the user asks to make jobs of what tasks run often.
+description: Turn the commands tasks keep running on another machine with kebbie run --on into named jobs in the repo's kebbie config, once the user said yes on the board, and run each once to check it passes. Use after a task ran kebbie run --on for the same commands more than once (a build, a simulator boot, a UI test), when kebbie job suggest lists commands, or when the user asks to make jobs of what tasks run often.
 ---
 
 # Write jobs from repeated runs
@@ -13,10 +13,10 @@ kebbie keeps the last 200 commands `kebbie run --on` ran per repo, with where ea
 2. Propose the jobs. For each, a short kebab-case name for what it does (`build-dev`, `boot`, `launch-dev`, `ui-test`, `shutdown`), `run` the command line from the history, `on` the system or machine it ran with, and `timeout_minutes` only where `kebbie job suggest` names one or the longest run nears 60 minutes. Then fix what a job folder changes:
    - A job's folder on the worker is a fresh checkout for its task: a folder the repo does not track is missing in its first job. A command that writes into one (`build/foo.log`, `-derivedDataPath build/dd`, `> out/screen.png`) starts with `mkdir -p <folder> && `.
    - Each job runs on its own, so one that needs another's state (a launch after a boot, an install after a build) either says so in its name and is run in order, or does both steps in one `run` joined by `&&`.
-   - A command with a value of one session in it, such as a simulator UDID or a temp path, is kept only when the value is stable on that machine; otherwise ask the user for the stable form, such as the simulator's name.
+   - A command with a value of one session in it, such as a simulator UDID or a temp path, is kept only when the value is stable on that machine, or written in its stable form, such as the simulator's name; one you cannot make stable is left out and named in your report.
 
    Done when every proposed job has a name, `run` and `on`, and none writes into a folder it did not create.
-3. Show the user the TOML you would add to the repo config, the `repo config:` line of `kebbie config --repo <main checkout>`, in one block, and ask once whether to write it:
+3. Write the TOML you add to the repo config, the `repo config:` line of `kebbie config --repo <main checkout>`, as one block. The user's yes on the board, or their own ask, is the go-ahead for the jobs step 2 proposed:
 
    ```toml
    [jobs.build-dev]
@@ -29,7 +29,7 @@ kebbie keeps the last 200 commands `kebbie run --on` ran per repo, with where ea
    on = "macos"
    ```
 
-   Done when the user said yes, named the ones to keep, or said no; on no, stop.
-4. Write them. Add the tables to the repo config, keeping every other line, creating the file and its folder with `mkdir -p` when missing. A name that is already a job is the user's: ask before replacing it. Done when `kebbie doctor` reads `ok` and `parses` on that file and `kebbie job run` lists the new names.
+   Done when every proposed job is a table in that block.
+4. Write them. Add the tables to the repo config, keeping every other line, creating the file and its folder with `mkdir -p` when missing. A name that is already a job is the user's: keep it, and give the new job another name. Done when `kebbie doctor` reads `ok` and `parses` on that file and `kebbie job run` lists the new names.
 5. Run each new job once from a worktree of the repo, in the order step 2 gave: `kebbie job run <name>`. It exits 0 when the job exited 0 and 1 otherwise, with the reason in its last line. A job that fails where its `kebbie run --on` passed usually lacks a folder (step 2's `mkdir -p`) or something the run's folder kept from an earlier run; fix its `run` and run it again, at most twice. Done when every job has a pass or a failure with its last line.
 6. Report in one line per job: its name, pass or fail, and for a failure the last line. Say which jobs you wrote and where.

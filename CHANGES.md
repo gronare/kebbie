@@ -11,6 +11,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The keeper trims build output from idle worktrees when the disk runs low, and says so under Needs you when that is not enough.
 - A task's build refuses to start when the disk is nearly full, and says how much is free.
 - A backlog item added on any machine is written out on the ideas machine, and the machine you added it on says where it went.
+- The lead asks only on the board, answers in a few lines and starts a fix for each fault you point out.
 
 ### Fixed
 - A task keeps its own name until it is released.

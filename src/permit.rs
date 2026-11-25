@@ -182,7 +182,7 @@ pub fn return_brief(log: &[Message], since: u64, waiting: &[Message]) -> String 
     let section = |title: &str, lines: Vec<String>| if lines.is_empty() { format!("{title}: none.") } else { format!("{title}:\n{}", lines.join("\n")) };
     let kept: Vec<String> = waiting.iter().map(|question| format!("- {} asks: {}", question.from, crate::plan_brief::title(&question.text))).collect();
     format!(
-        "{AWAY_OFF} Write them the summary now, a screen at most, in your three parts: what landed and what you decided for them and why under Done, the kept questions under Needs you.\n{}\n{}\n{}",
+        "{AWAY_OFF} Tell them now in 1 to 3 lines what landed and which calls you made for them; the kept questions wait for them on the board.\n{}\n{}\n{}",
         section("Pushed while they were away", since_left("push")), section("Your calls", since_left("decision")), section("Questions kept for them", kept),
     )
 }

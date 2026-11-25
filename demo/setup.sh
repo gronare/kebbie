@@ -457,12 +457,9 @@ screen() { mkdir -p "$D/screens"; cat > "$D/screens/$1"; }
 tee "$D/lead.screen" <<'EOF' | screen lead
 > what needs me?
 
-● Going on:
-  - rate-limit: counting requests per key; the limiter is next.
-  - checkout-copy: rules ✓, ready; I'd push it.
-Needs you:
-  - search-filters: how should the price filter work? Answer 1, fixed ranges.
-  - vat-rounding: check the totals in its preview.
+● Search filters asks how the price filter works (I'd pick fixed ranges),
+  Vat rounding wants its preview totals checked, and Checkout copy is
+  ready; I'd push it.
 
 EOF
 screen wt1.shop <<'EOF'
@@ -735,16 +732,9 @@ if [ "$scene" = demo ]; then
   cat > "$D/lead.screen" <<'EOF'
 > what needs me?
 
-● Going on:
-  - rate-limit: counting requests per key; the limiter is next.
-  - refunds: in review, as it moves money; push it once the reviewer passes it.
-  - checkout-copy: rules ✓, ready; I'd push it.
-  - request-ids: on local main to try before you push it.
-  - product-images: broke rule 2; its Claude splits the commit.
-  - devbox has the order export.
-Needs you:
-  - search-filters: how should the price filter work? Answer 1, fixed ranges.
-  - vat-rounding: check the totals in its preview.
+● Search filters asks how the price filter works (I'd pick fixed ranges),
+  and Vat rounding wants its preview totals checked. Checkout copy is
+  ready; I'd push it, and Refunds waits on its review.
 
 EOF
 fi

@@ -1,5 +1,5 @@
 #!/bin/bash
-# The lead: starts saved-carts when asked, and approves a task's commits when kebbie says it is ready; it works silently and ends each turn in Done / Going on / Needs you.
+# The lead: starts saved-carts when asked, and approves a task's commits when kebbie says it is ready; it works silently and ends each turn in 1 to 3 lines.
 . "$KDEMO_DIR/react/lib.sh"
 text=$1
 case "$text" in
@@ -12,11 +12,8 @@ case "$text" in
     out=$(kebbie start saved-carts --repo shop --no-focus "$prompt" 2>&1 | head -1)
     more "  ⎿  ${out/$HOME/~}"
     sleep 1
-    say "● Done: started saved-carts in shop." \
-      "Going on:" \
-      "  - saved-carts: reading the cart code; where carts are kept is yours, so it asks you on the board." \
-      "Needs you:" \
-      "  - search-filters: answer 1, fixed ranges."
+    say "● Started Saved carts in shop; where carts are kept is yours, so it asks you on the board." \
+      "  Search filters waits for your answer there too."
     mode idle
     ;;
   *"is ready at"*" approve "*)
@@ -49,14 +46,8 @@ case "$text" in
     sleep 0.6
     mode working
     sleep 1.5
-    say "● Done:" \
-      "  - Landed: nothing; no task had your push permission." \
-      "  - Decided: search-filters' price filter uses fixed ranges, as recommended; it asked how, not what." \
-      "Going on:" \
-      "  - search-filters: built the fixed ranges, ready to push." \
-      "Needs you:" \
-      "  - vat-rounding: check the totals in its preview." \
-      "  - checkout-copy: push it; rules ✓."
+    say "● Nothing landed. I settled Search filters' price filter as fixed ranges, as recommended." \
+      "  Vat rounding and Checkout copy wait for you on the board."
     mode idle
     ;;
 esac

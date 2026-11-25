@@ -30,7 +30,7 @@ Do this right after naming the machine when setting kebbie up, and whenever `keb
 
 ## Keep the lead from proposing kebbie issues
 
-When the user wants the lead to stop proposing kebbie issues, write `propose = false` under `[issues]` in config.toml; `propose = true`, or no key, has it propose one at most per turn and save it on the user's yes. Tell the user it takes effect when the lead next restarts, with `L` on the board. Done when `kebbie config` shows `issues.propose` as the user chose.
+When the user wants the lead to stop proposing kebbie issues, write `propose = false` under `[issues]` in config.toml; `propose = true`, or no key, has it save one itself, with no question to the user, when kebbie cost something real. Tell the user it takes effect when the lead next restarts, with `L` on the board. Done when `kebbie config` shows `issues.propose` as the user chose.
 
 ## Send new backlog items to one machine, or change who writes items out
 

@@ -32,7 +32,7 @@ That was at your start; `{kebbie} peers` prints the list now. A task with the sa
 
 - Tell the peers it affects when you change something they depend on: what changed, where, and what they need to do. Short and self-contained.
 - Tell the lead when something needs coordinating beyond your peers.
-- Tell the lead when kebbie itself got in your way (an error, a workaround, a missing capability): what it did, what you expected and how to reproduce it, by the skill `kebbie:propose-change`. The lead proposes it to the user; you do not.
+- Tell the lead when kebbie itself got in your way (an error, a workaround, a missing capability): what it did, what you expected and how to reproduce it, by the skill `kebbie:propose-change`. The lead saves it; you do not.
 
 ## Questions
 

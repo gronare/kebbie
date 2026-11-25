@@ -591,11 +591,11 @@ fn intake_role(sources: &[Source], vault: bool) -> String {
     let steps = format!(
         "Every item in the backlog is written out by the skill `{skill}`, whoever files it, at the moment it is filed: it reads what bears on the work first, keeps the item the user's intent, and puts what you could not find out under Open questions.\n\n\
          When the user brings an idea rather than a task to start, take it in:\n\n\
-         1. Write it out with the skill `{skill}`.\n\
-         2. Show the user the item, and ask with the AskUserQuestion tool: start it now as a task, file it in the backlog, or change it first.\n\
-         3. On file: {save}. On start: {start}. On change: rewrite it and ask again.\n\n\
-         The idea is taken in when the user has picked start or file and the item exists.\n\n\
-         A short item the user adds outside this chat (`n` on the board, `kebbie backlog add`, an idea from their phone, Write it out) goes to kebbie's writer (`writer.profile`), which researches and writes it apart from your chat; its draft reaches you as a message from kebbie. Review it before the user sees it: add what you know from your conversation, keep only the open questions the user must answer, then save it where it is and show the user the written item. One that reaches you without a draft (the writer is off or failed), or a file of their own that `kebbie backlog` marks `to write`, you write out by the skill at once. \
+         1. Write it out with the skill `{skill}`, with what you could not settle under its Open questions, which the user answers on its card on the board.\n\
+         2. When the user asked to start it: {start}. Otherwise: {save}.\n\
+         3. Tell the user in one line, by its title, that it is filed or started.\n\n\
+         The idea is taken in when the item exists, filed or started.\n\n\
+         A short item the user adds outside this chat (`n` on the board, `kebbie backlog add`, an idea from their phone, Write it out) goes to kebbie's writer (`writer.profile`), which researches and writes it apart from your chat; its draft reaches you as a message from kebbie. Review it before the user sees it: add what you know from your conversation, keep only the open questions the user must answer, then save it where it is; the user reads it on the board. One that reaches you without a draft (the writer is off or failed), or a file of their own that `kebbie backlog` marks `to write`, you write out by the skill at once. \
          An item's questions belong to the item: they stay under its Open questions, never in `kebbie ask` and never under Needs you. The user answers them on the item's card on the board, and kebbie brings you each answer with its question: fold the answer into the item and take the question out; the item is ready once no question blocks it.",
     );
     let steps = if source == Source::Vault { format!("{steps}\n\n{OLD_NOTES}") } else { steps };
@@ -617,7 +617,7 @@ pub fn role_texts(sources: &[Source], vault: bool) -> Role {
     let (vault_work, after_push) = (vault_work.to_string(), after_push.to_string());
     if sources.is_empty() {
         let backlog = format!("No backlog source is configured (`[board.backlog] sources` in {}), so the Backlog tab stays empty and there is nothing to refresh.", config::path().display());
-        return Role { finding: "ask the user what to work on".to_string(), backlog, intake, vault_work, after_push };
+        return Role { finding: "with no backlog the user names the work; until they do, say in one line that no backlog source is configured".to_string(), backlog, intake, vault_work, after_push };
     }
     let local = sources.contains(&Source::Local);
     let fetched = fetched(sources);
@@ -628,7 +628,7 @@ pub fn role_texts(sources: &[Source], vault: bool) -> Role {
     if !fetched.is_empty() {
         parts.push(fetched_role(&fetched, local));
     }
-    Role { finding: joined(sources, role_finding, " and "), backlog: parts.join("\n\n"), intake, vault_work, after_push }
+    Role { finding: format!("{}; name the one you recommend and why, in a line. The user starts it from the board or on their word to you", joined(sources, role_finding, " and ")), backlog: parts.join("\n\n"), intake, vault_work, after_push }
 }
 
 pub fn show() -> Result<String> {
@@ -832,7 +832,7 @@ mod tests {
     fn labels_and_the_role_follow_the_sources() {
         assert_eq!(from(&[Source::Vault]), "the vault");
         let Role { finding, backlog, intake, .. } = role_texts(&[Source::Vault], false);
-        assert_eq!(finding, "the vault backlog by priority");
+        assert!(finding.starts_with("the vault backlog by priority; name the one you recommend"), "{finding}");
         assert!(!backlog.contains("Linear") && backlog.contains("`source` (`vault`)") && !backlog.contains("backlog.md"));
         assert!(intake.contains("task note in the vault's Projects/") && intake.contains("--backlog <the note's path>") && !intake.contains("Linear") && !intake.contains("local:"), "{intake}");
         let Role { finding, backlog, intake, .. } = role_texts(&[], false);

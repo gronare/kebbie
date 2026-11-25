@@ -32,13 +32,13 @@ Working detail (research, paths, commits, history, reasoning) goes in your own v
    - **the local backlog**: `kebbie backlog add --priority <priority> --repo <repo> "<Title>" -` with the body on stdin in a quoted heredoc (`<<'EOF'`); an item already filed you rewrite in its own file, keeping its `+++` header and setting `status = "backlog"`.
 
    Done when `kebbie backlog` lists it with the state its questions give it.
-5. **Show it.** As the lead, put the written item in your reply, its open questions last; say so in a line when it waited for you. A task lists it under Also noticed.
+5. **Say it.** As the lead, say in one line, by its title, that it is filed, and that it waited for you when it did; the user reads it, its open questions with it, on the board. A task lists it under Also noticed.
 
 ## As kebbie's writer, and the lead's review
 
 When kebbie runs you as its writer, the lead was asked to write the item out and you do it in its place: search, research and write as above, but save nothing and mark nothing, and answer with the written item alone, `# <title>` first and its body after it. The lead never saw your research, so put what you found in the item or under its open questions.
 
-When kebbie hands the lead a writer's draft, the lead reviews it instead of researching again: it adds what it knows from its conversation with the user, takes out an open question the code or the notes settle, keeps each one only the user can answer, then saves and shows it as steps 4 and 5 say.
+When kebbie hands the lead a writer's draft, the lead reviews it instead of researching again: it adds what it knows from its conversation with the user, takes out an open question the code or the notes settle, keeps each one only the user can answer, then saves it and says so as steps 4 and 5 say.
 
 ## Answers to open questions
 

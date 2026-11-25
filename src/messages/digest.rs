@@ -53,7 +53,7 @@ pub(crate) fn unread_in(dir: &Path) -> Result<String> {
     }
     if !parked.is_empty() {
         let lines: Vec<String> = parked.iter().map(|(address, parked)| format!("- {} ({})", crate::status::with_titles_in(dir, address), parked.back_now())).collect();
-        sections.push(format!("Parked by the user (leave them out of Done, Going on and Needs you until they are back; what they said meanwhile waits on the board):\n{}", lines.join("\n")));
+        sections.push(format!("Parked by the user (leave them out of your replies until they are back; what they said meanwhile waits on the board):\n{}", lines.join("\n")));
     }
     Ok(sections.join("\n\n"))
 }

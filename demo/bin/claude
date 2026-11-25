@@ -123,7 +123,7 @@ def wrapped(text, width):
 def colored(line):
     if line.startswith("> "):
         return f"{DIM}>{RESET} {line[2:]}"
-    part = re.match(r"^(● )?(Done|Going on|Needs you|Noted):", line)
+    part = re.match(r"^(● )?(Done|Noted):", line)
     if part:
         return f"{BOLD}{line[:part.end()]}{RESET}{line[part.end():]}"
     if line.startswith("● "):

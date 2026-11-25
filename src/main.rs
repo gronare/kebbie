@@ -498,9 +498,9 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   save one, the text from the argument or stdin: what happened, what you expected,
                                   how to reproduce; the user's or the lead's (a task tells the lead)
   kebbie issue hold <line> | --take
-                                  the lead's note of what kebbie did, held on this machine for a calm moment to propose
-                                  it; one at a time, a new one replaces it, and it is never an issue, offered or sent;
-                                  --take prints it and clears it; nothing is held with [issues] propose = false
+                                  a note of what kebbie did, held on this machine; the lead saves issues itself and
+                                  holds nothing; one at a time, a new one replaces it, and it is never an issue, offered
+                                  or sent; --take prints it and clears it; nothing is held with [issues] propose = false
   kebbie issue list [--json] [--all]
                                   the same as kebbie issues
   kebbie issue show|retry <id>    print one; retry marks it worth trying again
