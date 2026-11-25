@@ -90,9 +90,11 @@ impl Report {
 pub struct Restart {
     pub idle_minutes: Option<u64>,
     pub auto: Option<bool>,
+    pub lead_context: Option<u64>,
 }
 
 pub const DEFAULT_IDLE_MINUTES: u64 = 10;
+pub const DEFAULT_LEAD_CONTEXT: u64 = 75;
 
 fn backlog_sources(backlog: &Table) -> Result<Option<Vec<Source>>> {
     let Some(value) = backlog.get("sources") else { return Ok(None) };
@@ -177,7 +179,11 @@ fn restart(table: &Table) -> Result<Restart> {
         Some(value) => Some(value.as_integer().filter(|minutes| (1..=1440).contains(minutes)).ok_or("restart.idle_minutes: must be a whole number of minutes, 1 to 1440")? as u64),
     };
     let auto = flag(restart, "auto", "restart.auto")?;
-    Ok(Restart { idle_minutes, auto })
+    let lead_context = match restart.get("lead_context") {
+        None => None,
+        Some(value) => Some(value.as_integer().filter(|percent| (10..=95).contains(percent)).ok_or("restart.lead_context: must be a whole percentage, 10 to 95")? as u64),
+    };
+    Ok(Restart { idle_minutes, auto, lead_context })
 }
 
 fn builds(table: &Table) -> Result<Builds> {

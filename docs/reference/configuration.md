@@ -297,6 +297,7 @@ commands = ["answer", "prompt", "idea"]
 | `update.agents` | `"ask"` | config.toml only | What happens when Codex, which does not update itself, has a newer version: `"ask"` offers it in a window after `U` on the board, `"auto"` has `U` install it with Codex's own installer, `"notify"` only puts a notice on the board and a line in `kebbie doctor`. kebbie checks once a day. |
 | `restart.auto` | `true` | config.toml only | Whether kebbie restarts the Claude sessions and Codex tasks that run older code than is installed, after an update or a new Claude Code or Codex; no other session restarts. |
 | `restart.idle_minutes` | `10` | config.toml only | How long, an integer from 1 to 1440 minutes, a session on older code waits to be idle and out of focus before that restart. |
+| `restart.lead_context` | `75` | config.toml only | How full the lead's context may get, a whole percentage of its model's window from 10 to 95, before kebbie has it write a handover and starts it fresh to read it. The board's `L` line shows from this share on. |
 | `keeper.enabled` | `true` | config.toml only | Whether the keeper, one background kebbie per machine, runs the routines. |
 | `worker.enabled` | `false` | config.toml only | Whether this machine runs [jobs](#jobs) and [`kebbie run`](commands.md#commands-on-another-machine) commands for the other machines of its hub account. |
 | `link.networks` | `["tailscale", "wireguard"]` | config.toml only | The private networks [`kebbie run`](commands.md#commands-on-another-machine) links over, in the order to try them: `"tailscale"` and `"wireguard"`. |
@@ -645,6 +646,7 @@ channel = "release"
 [restart]
 auto = true
 idle_minutes = 10
+lead_context = 75
 
 [keeper]
 enabled = true

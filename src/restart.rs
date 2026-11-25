@@ -836,6 +836,88 @@ pub fn failed_said(error: &str) -> String {
     }
 }
 
+struct Round {
+    mode: Mode,
+    auto: bool,
+    at: u64,
+    start: u64,
+    used: f64,
+}
+
+// The handover round's effects on the lead's pane, the board and its restart, apart so a test can stand in for them.
+pub(crate) trait HandoverEffects {
+    fn screen(&mut self) -> Option<String>;
+    fn ask(&mut self, used: f64) -> Result<()>;
+    fn restart(&mut self) -> Result<String>;
+    fn tell(&mut self, text: &str);
+}
+
+struct LiveHandover<'a> {
+    state: &'a Path,
+    pane: &'a Pane,
+    session: &'a str,
+}
+
+impl HandoverEffects for LiveHandover<'_> {
+    fn screen(&mut self) -> Option<String> {
+        crate::typing::screen(&self.pane.pane).ok()
+    }
+
+    fn ask(&mut self, used: f64) -> Result<()> {
+        let text = crate::lead_restart::handover_request(&crate::peers::kebbie_command().map_err(|error| error.to_string())?, used);
+        crate::inbox::prompt(&self.pane.pane, &messages::delivered(FROM, &text), crate::status::LEAD_LABEL).map(|_| ()).map_err(|refused| refused.reason())
+    }
+
+    fn restart(&mut self) -> Result<String> {
+        SessionLock::take(self.state, self.session).and_then(|_lock| crate::lead_restart::restart_with_handover())
+    }
+
+    fn tell(&mut self, text: &str) {
+        tell_board(text);
+    }
+}
+
+// A lead past restart.lead_context is asked for its handover, then started fresh on it, under the same holds as any routine restart and without a line on the board until it is done.
+fn handover_round(state: &Path, round: Round, memory: &mut Memory, pane: &Pane, session: &str, cwd: Option<&Path>, effects: &mut impl HandoverEffects) -> Line {
+    let Round { mode, auto, at, start, used } = round;
+    let said = |said: String| Line { label: pane.label.clone(), said, stale: false, reasons: Vec::new() };
+    if !auto {
+        return said(format!("context {used:.0}% full: restart.auto is off, so L starts it fresh"));
+    }
+    let transcript = pane.agent.home().and_then(|home| pane.agent.session_transcript(&home, cwd, session));
+    let mode = mode_for(mode, true);
+    let facts = Facts { stale: true, waiting: pane.waiting, focused: pane.focused, idle_for: memory.idle_for(session, pane.waiting && !pane.focused, transcript.as_deref(), at), asked: false, answer: None };
+    let verdict = match decide(mode, auto, &facts, || transcript.as_deref().is_some_and(|path| !memory.background(path, start, at).is_empty())) {
+        Verdict::Ask | Verdict::Asked => Verdict::Keep,
+        other => with_screen(mode, other, pane.agent, &pane.title, || false, || effects.screen()),
+    };
+    if verdict != Verdict::Restart {
+        return said(format!("context {used:.0}% full: {}", verdict.words(auto)));
+    }
+    let request = crate::lead_restart::load_request(state);
+    match crate::lead_restart::handover_step(request.as_ref(), session, crate::lead_restart::handover_written(state), at) {
+        crate::lead_restart::Handover::Wait => said(format!("context {used:.0}% full: writing its handover")),
+        crate::lead_restart::Handover::Ask => match crate::lead_restart::save_request(state, session, at).and_then(|()| effects.ask(used).inspect_err(|_| crate::lead_restart::forget_request(state))) {
+            Ok(()) => said(format!("context {used:.0}% full: asked for its handover")),
+            Err(why) => said(format!("context {used:.0}% full: not asked for its handover yet: {why}")),
+        },
+        crate::lead_restart::Handover::Restart => match effects.restart() {
+            Ok(_) => {
+                crate::lead_restart::forget_request(state);
+                effects.tell(&crate::lead_restart::handover_said(used));
+                said("restarted with its handover".to_string())
+            }
+            Err(error) => {
+                if let Some(text) = told_failure(&pane.label, &error) {
+                    effects.tell(&text);
+                    let _ = crate::lead_restart::save_request(state, session, at);
+                }
+                said(failed_said(&error))
+            }
+        },
+    }
+}
+
 pub fn run(mode: Mode, memory: &mut Memory, only: Option<&str>) -> Result<Vec<Line>> {
     run_counted(mode, memory, only, &mut |_, _| {})
 }
@@ -852,6 +934,10 @@ pub fn run_counted(mode: Mode, memory: &mut Memory, only: Option<&str>, counted:
     };
     let state = lead::state_dir()?;
     let at = now();
+    let full = match mode {
+        Mode::Routine { .. } => config::lead_context_limit().map(|limit| crate::usage::lead_context_in(&state).filter(|used| *used >= limit as f64))?,
+        _ => None,
+    };
     let changes = Changes::gather(&state, at);
     let lead_space = lead::lead_workspace(&herdr::workspaces()?);
     let mut asked = load_asked(&state);
@@ -908,6 +994,13 @@ pub fn run_counted(mode: Mode, memory: &mut Memory, only: Option<&str>, counted:
         }
         if mode == Mode::Restore {
             reasons.retain(|reason| restores(reason));
+        }
+        if lead && pane.focused {
+            crate::lead_restart::forget_request(&state);
+        }
+        if lead && reasons.is_empty() && let Some(used) = full {
+            lines.push(handover_round(&state, Round { mode, auto, at, start, used }, memory, &pane, &session, cwd.as_deref(), &mut LiveHandover { state: &state, pane: &pane, session: &session }));
+            continue;
         }
         let (kebbie, started_on) = if reasons.iter().any(|reason| reason == KEBBIE_UPDATE) {
             let address = if lead { Some(crate::status::LEAD_LABEL.to_string()) } else { task_address(cwd.as_deref()) };
@@ -1322,7 +1415,7 @@ mod tests {
         let reasons = ["Claude Code 2.1.325 → 2.1.326".to_string()];
         assert_eq!(restarted_said("lead", Agent::Claude, &reasons, &tasks::Started::Ready, false), "Restarted lead with a new conversation, as it ran older code (Claude Code 2.1.325 → 2.1.326) and had none to resume.");
         let lead = include_str!("lead.rs").split("\n#[cfg(test)]").next().unwrap();
-        assert!(lead.contains("Err(error) if error.starts_with(crate::agent::claude::RESUME_FAILED) => {\n            start_chat(&pane, Session::New(tasks::new_session_id()?))?;"), "a lead whose resume falls back to its shell starts a new conversation in the same pane");
+        assert!(lead.contains("Err(error) if error.starts_with(crate::agent::claude::RESUME_FAILED) => {\n            start_chat(&pane, Session::New(tasks::new_session_id()?), None)?;"), "a lead whose resume falls back to its shell starts a new conversation in the same pane");
         std::fs::remove_dir_all(home).unwrap();
     }
 
@@ -1416,7 +1509,7 @@ mod tests {
         let start = &start[..start.find("\n}\n").unwrap()];
         let cd = start.find("cd_line(&lead_dir()?)").expect("the pane's shell goes to the lead's folder");
         assert!(cd < start.find("Agent::Claude.start(").unwrap(), "herdr starts Claude where the shell is, so a lead started from a renamed or other folder would stay outside its own");
-        assert!(source[source.find("\nfn restart_locked(").unwrap()..].split("\n}\n").next().unwrap().contains("start_chat(&pane, session)"), "L goes through start_chat");
+        assert!(source[source.find("\nfn restart_locked(").unwrap()..].split("\n}\n").next().unwrap().contains("start_chat(&pane, session, first.as_deref())"), "L goes through start_chat");
     }
 
     #[test]
@@ -1650,5 +1743,123 @@ mod tests {
         assert_eq!(memory.idle_for("s", true, None, 1600), 600);
         assert_eq!(memory.idle_for("s", false, None, 1700), 0);
         assert_eq!(memory.idle_for("s", true, None, 1800), 100, "leaving the pane starts the wait again");
+    }
+
+    struct FakeHandover {
+        refuse_ask: Option<String>,
+        asked: Vec<f64>,
+        restarts: Vec<Result<String>>,
+        told: Vec<String>,
+    }
+
+    impl HandoverEffects for FakeHandover {
+        fn screen(&mut self) -> Option<String> {
+            let rule = "─".repeat(60);
+            Some(format!("⏺ Done.\n\n{rule}\n❯ \n{rule}\n  ⏵⏵ accept edits on (shift+tab to cycle)"))
+        }
+
+        fn ask(&mut self, used: f64) -> Result<()> {
+            if let Some(why) = &self.refuse_ask {
+                return Err(why.clone());
+            }
+            self.asked.push(used);
+            Ok(())
+        }
+
+        fn restart(&mut self) -> Result<String> {
+            self.restarts.remove(0)
+        }
+
+        fn tell(&mut self, text: &str) {
+            self.told.push(text.to_string());
+        }
+    }
+
+    fn lead_pane(session: &str, waiting: bool, focused: bool) -> Pane {
+        Pane { pane: "w1:p1".to_string(), name: None, label: "lead".to_string(), session: Some(session.to_string()), waiting, focused, cwd: None, workspace: None, agent: Agent::Claude, title: String::new() }
+    }
+
+    fn handover_at(state: &Path, pane: &Pane, memory: &mut Memory, at: u64, fake: &mut FakeHandover) -> String {
+        let session = pane.session.clone().unwrap();
+        let round = Round { mode: Mode::Routine { min_idle: 600 }, auto: true, at, start: at.saturating_sub(1_000), used: 80.0 };
+        handover_round(state, round, memory, pane, &session, None, fake).said
+    }
+
+    #[test]
+    fn a_full_lead_that_is_busy_or_has_the_user_in_its_pane_is_not_asked_for_its_handover() {
+        let state = scratch("handover-held");
+        let at = now();
+        let mut fake = FakeHandover { refuse_ask: None, asked: Vec::new(), restarts: Vec::new(), told: Vec::new() };
+        let session = format!("handover-held-{}", std::process::id());
+        let mut memory = Memory::default();
+        memory.idle_for(&session, false, None, at - 600);
+        assert_eq!(handover_at(&state, &lead_pane(&session, false, false), &mut memory, at, &mut fake), "context 80% full: restarts when idle");
+        let mut memory = Memory::default();
+        memory.idle_for(&session, false, None, at - 600);
+        assert_eq!(handover_at(&state, &lead_pane(&session, true, true), &mut memory, at, &mut fake), "context 80% full: you are in it: restarts when you leave it");
+        assert!(fake.asked.is_empty() && fake.told.is_empty(), "no request goes to a busy lead or one the user is in");
+        assert_eq!(crate::lead_restart::load_request(&state), None);
+        std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn an_idle_full_lead_is_asked_once_and_a_refused_restart_on_its_handover_is_tried_again() {
+        let state = scratch("handover-refused");
+        let at = now();
+        let session = format!("handover-refused-{}", std::process::id());
+        let pane = lead_pane(&session, true, false);
+        let mut memory = Memory::default();
+        memory.idle_for(&session, false, None, at - 1_000);
+        let mut fake = FakeHandover { refuse_ask: None, asked: Vec::new(), restarts: vec![Err(format!("{}the lead is mid-turn", lead::REFUSED)), Ok("restarted".to_string())], told: Vec::new() };
+        assert_eq!(handover_at(&state, &pane, &mut memory, at - 100, &mut fake), "context 80% full: asked for its handover");
+        assert_eq!(handover_at(&state, &pane, &mut memory, at - 90, &mut fake), "context 80% full: writing its handover");
+        assert_eq!(fake.asked, [80.0], "asked once");
+        std::fs::write(crate::lead::handover_file(&state), "billing: ready to push").unwrap();
+        assert_eq!(handover_at(&state, &pane, &mut memory, at, &mut fake), "not restarted yet: the lead is mid-turn");
+        assert!(fake.told.is_empty(), "a refusal tells the board nothing");
+        assert_eq!(crate::lead_restart::load_request(&state).unwrap()["at"], at - 100, "a refusal keeps the request");
+        assert_eq!(handover_at(&state, &pane, &mut memory, at, &mut fake), "restarted with its handover");
+        assert_eq!(fake.told, [crate::lead_restart::handover_said(80.0)]);
+        assert_eq!(crate::lead_restart::load_request(&state), None);
+        std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_failed_restart_on_the_handover_tells_the_board_and_asks_again_only_after_the_wait() {
+        let state = scratch("handover-failed");
+        let session = format!("handover-failed-{}", std::process::id());
+        let pane = lead_pane(&session, true, false);
+        crate::lead_restart::save_request(&state, &session, now() - 100).unwrap();
+        std::fs::write(crate::lead::handover_file(&state), "billing: ready to push").unwrap();
+        let at = now();
+        let mut memory = Memory::default();
+        memory.idle_for(&session, false, None, at - 1_000);
+        let mut fake = FakeHandover { refuse_ask: None, asked: Vec::new(), restarts: vec![Err("herdr: no such pane".to_string())], told: Vec::new() };
+        assert_eq!(handover_at(&state, &pane, &mut memory, at, &mut fake), "restart failed: herdr: no such pane");
+        assert_eq!(fake.told, ["Restarting lead failed: herdr: no such pane"]);
+        assert_eq!(crate::lead_restart::load_request(&state).unwrap()["at"], at, "the failure makes the request again from now");
+        assert_eq!(handover_at(&state, &pane, &mut memory, at + 60, &mut fake), "context 80% full: writing its handover", "the old handover does not restart it again at once");
+        assert_eq!(handover_at(&state, &pane, &mut memory, at + crate::lead_restart::HANDOVER_WAIT, &mut fake), "context 80% full: asked for its handover");
+        assert_eq!(fake.asked, [80.0]);
+        std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn the_request_is_saved_before_the_lead_is_asked_and_dropped_when_the_ask_does_not_reach_it() {
+        let state = scratch("handover-unsaved");
+        let at = now();
+        let session = format!("handover-unsaved-{}", std::process::id());
+        let pane = lead_pane(&session, true, false);
+        let mut memory = Memory::default();
+        memory.idle_for(&session, false, None, at - 1_000);
+        std::fs::write(state.join("restart"), "not a folder").unwrap();
+        let mut fake = FakeHandover { refuse_ask: None, asked: Vec::new(), restarts: Vec::new(), told: Vec::new() };
+        assert!(handover_at(&state, &pane, &mut memory, at, &mut fake).starts_with("context 80% full: not asked for its handover yet: "));
+        assert!(fake.asked.is_empty(), "a request kebbie cannot keep is never asked, so the next round does not ask twice");
+        std::fs::remove_file(state.join("restart")).unwrap();
+        fake.refuse_ask = Some("its pane is gone".to_string());
+        assert_eq!(handover_at(&state, &pane, &mut memory, at, &mut fake), "context 80% full: not asked for its handover yet: its pane is gone");
+        assert_eq!(crate::lead_restart::load_request(&state), None, "a request that did not reach the lead is asked again next round");
+        std::fs::remove_dir_all(state).unwrap();
     }
 }

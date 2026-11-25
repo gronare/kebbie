@@ -1,4 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
+
+use serde_json::{json, Value};
 
 use crate::board::widgets::plural;
 use crate::keys::{self, Act};
@@ -185,14 +188,74 @@ pub fn preset(items: &[Item], messages: &[Message]) -> (usize, String) {
     (RESUME, format!("resume: {}", parts.join(", ")))
 }
 
-pub const CONTEXT_FULL: f64 = 85.0;
-
-// The lead's context share from its status line; nothing below the mark or when the share is unknown.
-pub fn context_line(used: Option<f64>, width: usize) -> Option<String> {
-    let used = used.filter(|used| *used >= CONTEXT_FULL)?.round().min(100.0);
+// The lead's context share from its status line, from the keeper's own mark restart.lead_context on: a fixed share here would leave the board silent while the keeper already acts on a full lead.
+pub fn context_line(used: Option<f64>, limit: u64, width: usize) -> Option<String> {
+    let used = used.filter(|used| *used >= limit as f64)?.round().min(100.0);
     let key = keys::map().label(Act::RestartLead);
     let long = format!("The lead's context is {used}% full · {key} to restart it fresh");
     Some(if crate::board::widgets::text_width(&long) <= width { long } else { format!("Lead context {used}% · {key}") })
+}
+
+// A lead with time left before the window fills asks again; past this it may have missed the request.
+pub const HANDOVER_WAIT: u64 = 30 * 60;
+
+#[derive(Debug, PartialEq)]
+pub enum Handover {
+    Ask,
+    Wait,
+    Restart,
+}
+
+// A request stands for the conversation it went to, and only a handover saved after it counts.
+pub fn handover_step(request: Option<&Value>, session: &str, written: Option<u64>, now: u64) -> Handover {
+    let Some(asked) = request.filter(|request| request["session"] == session).and_then(|request| request["at"].as_u64()) else { return Handover::Ask };
+    if written.is_some_and(|written| written > asked) {
+        Handover::Restart
+    } else if now.saturating_sub(asked) >= HANDOVER_WAIT {
+        Handover::Ask
+    } else {
+        Handover::Wait
+    }
+}
+
+fn request_file(state: &Path) -> Result<PathBuf> {
+    Ok(crate::restart::restart_dir(state)?.join("lead-handover.json"))
+}
+
+pub fn load_request(state: &Path) -> Option<Value> {
+    serde_json::from_str(&std::fs::read_to_string(request_file(state).ok()?).ok()?).ok()
+}
+
+pub fn save_request(state: &Path, session: &str, at: u64) -> Result<()> {
+    crate::state::write(&request_file(state)?, json!({ "session": session, "at": at }).to_string())
+}
+
+pub fn forget_request(state: &Path) {
+    if let Ok(file) = request_file(state) {
+        let _ = std::fs::remove_file(file);
+    }
+}
+
+pub fn handover_written(state: &Path) -> Option<u64> {
+    let modified = std::fs::metadata(crate::lead::handover_file(state)).and_then(|metadata| metadata.modified()).ok()?;
+    modified.duration_since(std::time::UNIX_EPOCH).ok().map(|since| since.as_secs())
+}
+
+pub fn handover_request(kebbie: &str, used: f64) -> String {
+    format!("Your context is {used:.0}% full, and you never compact, so kebbie starts you on a new conversation once you are idle and the user is out of your pane. Write your handover now with {} <<'EOF' … EOF: where each task stands, the decisions since your last vault note, and what waits on the user. Then end your turn.", crate::lead::handover_command(kebbie))
+}
+
+pub fn handover_said(used: f64) -> String {
+    format!("Restarted the lead on a new conversation that reads its handover first, as its context was {used:.0}% full.")
+}
+
+// Through kebbie_command, so the start records the version that runs it; a refusal comes back as an error, on which the keeper's round keeps its request and tries the restart again.
+pub fn restart_with_handover() -> Result<String> {
+    match crate::sh::attempt(&crate::peers::kebbie_command()?, &["lead", "--restart", "--anyway", "--handover"], None)? {
+        Ok(said) => Ok(said),
+        Err(error) if error.is_empty() => Err("kebbie lead --restart --handover failed".to_string()),
+        Err(error) => Err(error),
+    }
 }
 
 pub fn outcome(ran: std::result::Result<String, String>) -> Result<String> {
@@ -306,11 +369,49 @@ mod tests {
 
     #[test]
     fn the_context_line_shows_only_once_the_leads_context_is_nearly_full_and_never_when_unknown() {
-        assert_eq!(context_line(None, 120), None, "an unknown share shows nothing");
-        assert_eq!(context_line(Some(84.4), 120), None);
-        assert_eq!(context_line(Some(87.4), 120).unwrap(), "The lead's context is 87% full · L to restart it fresh");
-        assert_eq!(context_line(Some(85.0), 30).unwrap(), "Lead context 85% · L", "a narrow board takes the short wording");
-        assert_eq!(context_line(Some(103.0), 120).unwrap(), "The lead's context is 100% full · L to restart it fresh");
+        assert_eq!(context_line(None, 85, 120), None, "an unknown share shows nothing");
+        assert_eq!(context_line(Some(84.4), 85, 120), None);
+        assert_eq!(context_line(Some(87.4), 85, 120).unwrap(), "The lead's context is 87% full · L to restart it fresh");
+        assert_eq!(context_line(Some(85.0), 85, 30).unwrap(), "Lead context 85% · L", "a narrow board takes the short wording");
+        assert_eq!(context_line(Some(103.0), 85, 120).unwrap(), "The lead's context is 100% full · L to restart it fresh");
+        assert_eq!(context_line(Some(62.0), 60, 120).unwrap(), "The lead's context is 62% full · L to restart it fresh", "the mark is restart.lead_context");
+    }
+
+    #[test]
+    fn a_full_lead_is_asked_for_its_handover_once_and_restarted_only_on_a_handover_saved_after_the_request() {
+        let asked = json!({ "session": "s1", "at": 1_000 });
+        assert_eq!(handover_step(None, "s1", None, 1_000), Handover::Ask, "nothing asked yet");
+        assert_eq!(handover_step(Some(&asked), "s1", None, 1_060), Handover::Wait, "asked, nothing saved yet");
+        assert_eq!(handover_step(Some(&asked), "s1", Some(900), 1_060), Handover::Wait, "a handover from before the request is an older one");
+        assert_eq!(handover_step(Some(&asked), "s1", Some(1_030), 1_060), Handover::Restart);
+        assert_eq!(handover_step(Some(&asked), "s2", Some(1_030), 1_060), Handover::Ask, "a request to another conversation does not count");
+        assert_eq!(handover_step(Some(&asked), "s1", None, 1_000 + HANDOVER_WAIT), Handover::Ask, "a request left unanswered is made again");
+        let dir = crate::sh::test_dir("lead-handover-request");
+        assert_eq!(load_request(&dir), None);
+        save_request(&dir, "s1", 1_000).unwrap();
+        assert_eq!(handover_step(load_request(&dir).as_ref(), "s1", Some(1_001), 1_001), Handover::Restart, "the request survives a keeper restart");
+        assert_eq!(handover_step(Some(&asked), "s1", Some(1_000), 1_000), Handover::Wait, "a request made again after a failed restart waits for a newer handover");
+        assert_eq!(handover_written(&dir), None);
+        std::fs::write(crate::lead::handover_file(&dir), "billing: ready to push").unwrap();
+        assert!(handover_written(&dir).is_some_and(|at| at >= 1_000));
+        forget_request(&dir);
+        assert_eq!(load_request(&dir), None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_request_names_what_the_handover_holds_and_the_board_hears_one_line() {
+        let asked = handover_request("/opt/kebbie/kebbie", 78.4);
+        assert!(asked.starts_with("Your context is 78% full") && asked.contains("/opt/kebbie/kebbie handover <<'EOF'") && asked.contains("where each task stands, the decisions since your last vault note, and what waits on the user"), "{asked}");
+        assert_eq!(handover_said(78.4), "Restarted the lead on a new conversation that reads its handover first, as its context was 78% full.");
+    }
+
+    #[test]
+    fn only_the_routine_restarts_a_full_lead_and_the_user_in_its_pane_makes_its_handover_stale() {
+        let source = include_str!("restart.rs");
+        let run = &source[source.find("\npub fn run_counted(").unwrap()..];
+        assert!(run.contains("if lead && pane.focused {\n            crate::lead_restart::forget_request(&state);"), "the user in the lead's pane makes its handover stale");
+        assert!(run.contains("Mode::Routine { .. } => config::lead_context_limit()"), "only the routine starts the lead fresh on its own");
     }
 
     #[test]

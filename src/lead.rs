@@ -84,7 +84,7 @@ pub fn show() -> Result<String> {
         Some(lead) => {
             herdr::focus_workspace(&lead)?;
             repair(&lead)?;
-            let chat = match restart(false, false) {
+            let chat = match restart(false, false, false) {
                 Ok(said) => said,
                 Err(why) => why.strip_prefix(REFUSED).map_or(why.clone(), |why| format!("The lead keeps running for now: {}.", why.trim_end_matches('.'))),
             };
@@ -137,12 +137,13 @@ fn go() -> Result<String> {
     }
 }
 
-// Each of the user's prompts carries what sessions told each other since the lead last looked; the lead pushes only through kebbie push, which checks the user's permission.
+// Each of the user's prompts carries what sessions told each other since the lead last looked; the lead pushes only through kebbie push, which checks the user's permission; a compaction would drop the lead's rules, so it never compacts on its own.
 fn settings(kebbie: &str) -> String {
-    let allow = ["peers", "tell", "release", "answered", "messages", "status", "next", "areas", "approve", "review", "land", "push", "try", "stage", "unstage", "decide", "defer", "notify", "issues", "issue"].map(|command| format!("Bash({kebbie} {command}:*)"));
+    let allow = ["peers", "tell", "release", "answered", "messages", "status", "next", "areas", "approve", "review", "land", "push", "try", "stage", "unstage", "decide", "defer", "notify", "issues", "issue", "handover"].map(|command| format!("Bash({kebbie} {command}:*)"));
     let settings = json!({
         "hooks": { "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": format!("{} messages --unread", crate::sh::quote(kebbie)) }] }] },
         "permissions": { "allow": allow },
+        "autoCompactEnabled": false,
     });
     crate::inbox::with_inbox(&settings.to_string(), kebbie, LEAD_LABEL)
 }
@@ -247,12 +248,13 @@ fn with_advisor(settings: &str, profile: Option<&crate::profiles::Profile>, choo
     crate::advisor::with_advisor(settings, choose(&wanted).as_deref())
 }
 
-fn chat_args(role: &Path, settings: &Path, session: &Session, profile: Option<&crate::profiles::Profile>) -> Vec<String> {
+fn chat_args(role: &Path, settings: &Path, session: &Session, profile: Option<&crate::profiles::Profile>, first: Option<&str>) -> Vec<String> {
     let mut args = ["--append-system-prompt-file", &role.to_string_lossy(), "--settings", &settings.to_string_lossy()].map(str::to_string).to_vec();
     for (flag, value) in [("--model", profile.and_then(|profile| profile.model.as_ref())), ("--effort", profile.and_then(|profile| profile.effort.as_ref()))] {
         args.extend(value.map(|value| [flag.to_string(), value.clone()]).into_iter().flatten());
     }
     args.extend(crate::agent::claude::session_args(session));
+    args.extend(first.map(str::to_string));
     args
 }
 
@@ -271,7 +273,7 @@ fn cd_line(dir: &Path) -> String {
 }
 
 // herdr's agent start has no cwd and runs Claude where the pane's shell is, and herdr's restore uses the pane's last cwd, so the shell goes to the lead's folder first.
-fn start_chat(pane: &str, session: Session) -> Result<()> {
+fn start_chat(pane: &str, session: Session, first: Option<&str>) -> Result<()> {
     let (role, text) = role_file()?;
     crate::known::began(LEAD_LABEL, &text, matches!(session, Session::Resume(_)));
     let profile = profile_in(&crate::profiles::dir(), config::lead_profile()?.as_deref()).unwrap_or_else(|error| {
@@ -279,7 +281,7 @@ fn start_chat(pane: &str, session: Session) -> Result<()> {
         None
     });
     let settings = write_settings(&roles_dir()?, LEAD_LABEL, &with_advisor(&settings(&peers::kebbie_command()?), profile.as_ref(), &crate::advisor::chosen))?;
-    let args = chat_args(&role, &settings, &session, profile.as_ref());
+    let args = chat_args(&role, &settings, &session, profile.as_ref(), first);
     tasks::wait_for_prompt(pane)?;
     herdr::run_in_pane(pane, &cd_line(&lead_dir()?))?;
     if matches!(session, Session::New(_)) {
@@ -290,7 +292,7 @@ fn start_chat(pane: &str, session: Session) -> Result<()> {
 }
 
 fn new_chat(pane: &str) -> Result<()> {
-    start_chat(pane, Session::New(tasks::new_session_id()?))
+    start_chat(pane, Session::New(tasks::new_session_id()?), None)
 }
 
 // The lead's directory is its own, so its newest conversation there is the lead's; the recorded one wins unless a newer one exists, as after /clear.
@@ -407,9 +409,41 @@ pub fn lead_agent<'a>(agents: &'a [Value], lead: &str) -> Option<&'a Value> {
 }
 
 // Every restart of the lead, by hand, from the board or from the keeper, holds this lock, so two never end and start its pane together.
-pub fn restart(anyway: bool, fresh: bool) -> Result<String> {
+pub fn restart(anyway: bool, fresh: bool, handover: bool) -> Result<String> {
     let _lock = lead_lock()?;
-    restart_locked(anyway, fresh)
+    restart_locked(anyway, fresh, handover)
+}
+
+pub const HANDOVER: &str = "lead-handover.md";
+
+// The lead's allow rule matches the command as its role writes it, the path unquoted, so the request names it the same way or a permission prompt holds the handover.
+pub fn handover_command(kebbie: &str) -> String {
+    format!("{kebbie} handover")
+}
+
+pub fn handover_file(state: &Path) -> PathBuf {
+    state.join(HANDOVER)
+}
+
+// The lead writes it through a command its settings allow, so no permission prompt holds it from going idle.
+pub fn save_handover(text: &str) -> Result<String> {
+    if text.trim().is_empty() {
+        return Err("kebbie handover: give the handover on stdin, as kebbie handover <<'EOF' … EOF".to_string());
+    }
+    crate::state::write(&handover_file(&state_dir()?), text)?;
+    Ok("Saved your handover. kebbie starts you fresh on it once you are idle and the user is out of your pane; end your turn now.".to_string())
+}
+
+fn handover_first() -> Result<String> {
+    let file = handover_file(&state_dir()?);
+    if !file.is_file() {
+        return Err(refused("the lead has written no handover"));
+    }
+    Ok(handover_prompt(&file))
+}
+
+fn handover_prompt(file: &Path) -> String {
+    format!("kebbie started you on a new conversation, as your last one's context was nearly full. Read your handover in {} before anything else and carry on from it.", file.display())
 }
 
 fn lead_lock() -> Result<crate::restart::SessionLock> {
@@ -450,16 +484,23 @@ pub fn restart_refusal() -> Result<()> {
     ready(false).map(|_| ())
 }
 
-fn restart_locked(anyway: bool, fresh: bool) -> Result<String> {
+fn restart_locked(anyway: bool, fresh: bool, handover: bool) -> Result<String> {
+    let first = if handover { Some(handover_first()?) } else { None };
     let Some(Ready { lead, pane, running }) = ready(anyway)? else { return Ok("No lead is running, so there is nothing to restart.".to_string()) };
-    let (session, how) = if fresh { (Session::New(tasks::new_session_id()?), "with a new conversation; its earlier one stays on disk") } else { previous_session()? };
+    let (session, how) = if handover {
+        (Session::New(tasks::new_session_id()?), "with a new conversation that reads its handover first; its earlier one stays on disk")
+    } else if fresh {
+        (Session::New(tasks::new_session_id()?), "with a new conversation; its earlier one stays on disk")
+    } else {
+        previous_session()?
+    };
     if running {
         Agent::Claude.end(&pane)?;
     }
     close_messages(places(&lead)?.messages.as_deref())?;
-    let how = match start_chat(&pane, session) {
+    let how = match start_chat(&pane, session, first.as_deref()) {
         Err(error) if error.starts_with(crate::agent::claude::RESUME_FAILED) => {
-            start_chat(&pane, Session::New(tasks::new_session_id()?))?;
+            start_chat(&pane, Session::New(tasks::new_session_id()?), None)?;
             FRESH_AFTER_FAILED_RESUME
         }
         other => other.map(|()| how)?,
@@ -1091,7 +1132,7 @@ mod tests {
         let kebbie = format!("/Users/someone-with-a-long-name/projects/{}/target/release/kebbie", "nested/".repeat(20));
         let file = write_settings(&dir, LEAD_LABEL, &settings(&kebbie)).unwrap();
         assert_eq!(file, dir.join("lead.settings.json"));
-        let args = chat_args(&dir.join("lead.md"), &file, &Session::New("0b5e8c1e-4a52-4c1b-9b7e-2f6a1d3c9e40".to_string()), None);
+        let args = chat_args(&dir.join("lead.md"), &file, &Session::New("0b5e8c1e-4a52-4c1b-9b7e-2f6a1d3c9e40".to_string()), None, None);
         assert!(!args.iter().any(|arg| arg == "--model" || arg == "--effort"), "no lead.profile leaves the model to Claude Code's settings");
         let line = args.join(" ");
         assert!(!line.contains('{') && line.len() < 512, "{line}");
@@ -1105,7 +1146,34 @@ mod tests {
         assert!(written["permissions"]["allow"].as_array().unwrap().contains(&json!(format!("Bash({kebbie} answered:*)"))));
         assert!(written["permissions"]["deny"].is_null() && written["env"].is_null(), "the lead may push on the user's word, outside kebbie push too");
         assert!(written["permissions"]["allow"].as_array().unwrap().contains(&json!(format!("Bash({kebbie} push:*)"))));
+        assert_eq!(written["autoCompactEnabled"], json!(false), "a compacted lead loses its rules, so it never compacts on its own");
+        assert!(written["permissions"]["allow"].as_array().unwrap().contains(&json!(format!("Bash({kebbie} handover:*)"))), "no permission prompt holds the handover");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_lead_started_on_its_handover_gets_it_as_its_first_prompt_on_a_new_conversation() {
+        let first = handover_prompt(Path::new("/s/kebbie/lead-handover.md"));
+        assert!(first.contains("Read your handover in /s/kebbie/lead-handover.md before anything else"), "{first}");
+        let args = chat_args(Path::new("/s/roles/lead.md"), Path::new("/s/roles/lead.settings.json"), &Session::New("9a".to_string()), None, Some(&first));
+        assert_eq!(args[args.len() - 3..], ["--session-id".to_string(), "9a".to_string(), first.clone()], "the prompt comes last, after the new conversation's id");
+        assert!(args.join(" ").len() < 512, "the start line stays short");
+        let source = include_str!("lead.rs");
+        let locked = &source[source.find("\nfn restart_locked(").unwrap()..];
+        let locked = &locked[..locked.find("\n}\n").unwrap()];
+        assert!(locked.contains("let first = if handover { Some(handover_first()?) } else { None };") && locked.find("handover_first()").unwrap() < locked.find("ready(anyway)").unwrap(), "no handover, no restart: refused before the lead's Claude is ended");
+        assert!(save_handover("  \n").unwrap_err().contains("give the handover on stdin"));
+    }
+
+    #[test]
+    fn the_handover_request_and_the_role_write_the_command_as_the_leads_allow_rule_matches_it() {
+        let kebbie = "/opt/kebbie/kebbie";
+        let command = handover_command(kebbie);
+        let written: Value = serde_json::from_str(&settings(kebbie)).unwrap();
+        assert!(written["permissions"]["allow"].as_array().unwrap().contains(&json!(format!("Bash({command}:*)"))), "no permission prompt holds the handover");
+        assert!(crate::lead_restart::handover_request(kebbie, 80.0).contains(&format!("with {command} <<'EOF'")), "the request names the command the rule allows");
+        let role = role_text(include_str!("../roles/lead.md"), kebbie, &[Source::Local], false, true, "English");
+        assert!(role.contains(&format!("`{command} <<'EOF'`")), "the role names the command the rule allows");
     }
 
     #[test]
@@ -1115,7 +1183,7 @@ mod tests {
         fs::write(dir.join("coder.toml"), "agent = \"codex\"\nmodel = \"gpt-5.5\"\n").unwrap();
         assert!(profile_in(&dir, None).unwrap().is_none(), "no lead.profile is Claude Code's own model");
         let deep = profile_in(&dir, Some("deep")).unwrap().unwrap();
-        let args = chat_args(Path::new("/s/roles/lead.md"), Path::new("/s/roles/lead.settings.json"), &Session::Resume("1b2c".to_string()), Some(&deep));
+        let args = chat_args(Path::new("/s/roles/lead.md"), Path::new("/s/roles/lead.settings.json"), &Session::Resume("1b2c".to_string()), Some(&deep), None);
         assert_eq!(args, ["--append-system-prompt-file", "/s/roles/lead.md", "--settings", "/s/roles/lead.settings.json", "--model", "opus", "--effort", "high", "--resume", "1b2c"]);
         let asked = std::cell::RefCell::new(Vec::new());
         let choose = |wanted: &crate::advisor::Wanted| { asked.borrow_mut().push(wanted.clone()); Some("fable".to_string()) };

@@ -169,10 +169,13 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   restarts an idle lead's Claude on its current role and settings, resuming
                                   its conversation, and --anyway also while it has background work running;
                                   --restart --fresh starts it with a new conversation instead, the old one kept;
+                                  --restart --handover starts it fresh on the handover it wrote, which it reads first;
                                   --toggle-chat hides the lead's chat so the board takes the whole width, or
                                   shows it again; --revive-board, run by herdr's startup, waits
                                   in the background for herdr's restore and starts the board in the lead Space's
                                   board pane when that pane sits at a shell)
+  kebbie handover                 the lead saves its handover from stdin, which a lead started with
+                                  --restart --handover reads first
   kebbie focus                    in the lead Space, move focus between the board and the lead's chat; from
                                   anywhere else, go to the lead's chat
   kebbie peers                    who you are and the other task sessions, with what each is doing
@@ -734,7 +737,12 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("areas") => areas::print(),
         Some("routes") => Ok(routes::print(arguments.flag("--plain-http"))),
         Some("lead") if arguments.flag("--first") => lead::keep_first(),
-        Some("lead") if arguments.flag("--restart") => lead::restart(arguments.flag("--anyway"), arguments.flag("--fresh")),
+        Some("lead") if arguments.flag("--restart") => lead::restart(arguments.flag("--anyway"), arguments.flag("--fresh"), arguments.flag("--handover")),
+        Some("handover") => {
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut text).map_err(|error| format!("kebbie handover: stdin: {error}"))?;
+            lead::save_handover(&text)
+        }
         Some("lead") if arguments.flag("--renew-board") => lead::renew_board(),
         Some("lead") if arguments.flag("--revive-board") && arguments.flag("--wait") => lead::revive_board(),
         Some("lead") if arguments.flag("--revive-board") => lead::revive_board_detached(),

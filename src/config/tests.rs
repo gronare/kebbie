@@ -461,6 +461,19 @@ fn ongoing_sits_on_top_unless_config_toml_moves_or_hides_it() {
 }
 
 #[test]
+fn the_lead_starts_fresh_with_a_handover_at_three_quarters_of_its_context_unless_config_toml_says_otherwise() {
+    let default = settings(&Worktree::default(), &Machine::default());
+    assert_eq!(default.lead_context, Setting { value: 75, layer: Layer::Default });
+    let set = settings(&Worktree::default(), &machine("[restart]\nlead_context = 60\n"));
+    assert_eq!(set.lead_context, Setting { value: 60, layer: Layer::Machine });
+    for bad in ["5", "96", "\"70\"", "70.5"] {
+        assert!(parse_machine(&format!("[restart]\nlead_context = {bad}\n"), "config.toml").unwrap_err().contains("restart.lead_context: must be a whole percentage, 10 to 95"), "{bad}");
+    }
+    let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: set });
+    assert!(shown.contains("restart.lead_context = 60  (machine config)\n  How full the lead's context may get"), "{shown}");
+}
+
+#[test]
 fn restarts_are_automatic_after_ten_idle_minutes_unless_config_toml_says_otherwise() {
     let default = settings(&Worktree::default(), &Machine::default());
     assert_eq!((default.idle_minutes, default.auto_restart), (Setting { value: 10, layer: Layer::Default }, Setting { value: true, layer: Layer::Default }));
@@ -471,7 +484,7 @@ fn restarts_are_automatic_after_ten_idle_minutes_unless_config_toml_says_otherwi
         assert!(error(&format!("[restart]\nidle_minutes = {bad}\n")).contains("restart.idle_minutes: must be a whole number of minutes, 1 to 1440"), "{bad}");
     }
     assert!(error("[restart]\nauto = \"no\"\n").contains("restart.auto: must be true or false"));
-    assert!(unknown_machine("[restart]\nidle = 5\n").contains("restart.idle: unknown key; known keys here: idle_minutes, auto"));
+    assert!(unknown_machine("[restart]\nidle = 5\n").contains("restart.idle: unknown key; known keys here: idle_minutes, auto, lead_context"));
     assert!(parse_repo("[restart]\nauto = false\n", "app.toml").unwrap_err().contains("restart: applies to every repo, so it lives in config.toml"));
     let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: set });
     assert!(shown.contains("restart.auto = false  (machine config)\n  Whether kebbie restarts") && shown.contains("restart.idle_minutes = 25  (machine config)\n  How long a session that runs older code than is installed waits"), "{shown}");
@@ -727,7 +740,7 @@ fn sample(entry: &Entry) -> String {
 fn each_keys_scope_is_the_files_that_take_it_and_what_its_text_says() {
     let loaded = Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
     let all = entries(&loaded);
-    assert_eq!(all.len(), 63);
+    assert_eq!(all.len(), 64);
     for entry in all {
         let (section, field) = entry.key.rsplit_once('.').unwrap();
         let text = format!("[{section}]\n{field} = {}\n", sample(&entry));

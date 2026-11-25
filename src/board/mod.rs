@@ -263,6 +263,7 @@ struct App {
     lead_checker: std::sync::Arc<dyn Fn() -> Result<()> + Send + Sync>,
     lead_restarted: std::sync::Arc<std::sync::atomic::AtomicU64>,
     lead_context: Option<f64>,
+    lead_context_limit: u64,
     restart_why: String,
     devices: Vec<crate::hub::devices::Request>,
     subject: Option<notices::Subject>,
@@ -610,7 +611,7 @@ impl App {
     }
 
     fn context_line_for(&self, width: usize) -> Option<String> {
-        crate::lead_restart::context_line(self.lead_context, width)
+        crate::lead_restart::context_line(self.lead_context, self.lead_context_limit, width)
     }
 
     fn lead_line(&self) -> Option<String> {
@@ -1303,7 +1304,7 @@ impl App {
             graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, focus_tint: background::focus_tint(None), decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(), plan_reads: Default::default(), card_read: None, card_reader: false,
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel).map(|outcome| outcome.details.join("\n"))), update: None, progress_file: None, recheck: None, stale: Vec::new(), stale_at: 0, restart_after_update: false,
             agent_offer: None, agent_mode: std::sync::Arc::new(|| config::agent_updates_in(&config::path())), installer: agent_updates::default_install(),
-            filter: None, ctrl_c: None, go_again: None, notice: None, lead_chat: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), lead_fresh_starter: std::sync::Arc::new(crate::lead_restart::fresh_now), lead_checker: std::sync::Arc::new(crate::lead::restart_refusal), lead_restarted: std::sync::Arc::default(), lead_context: None, restart_why: String::new(), devices: Vec::new(), subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
+            filter: None, ctrl_c: None, go_again: None, notice: None, lead_chat: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), lead_fresh_starter: std::sync::Arc::new(crate::lead_restart::fresh_now), lead_checker: std::sync::Arc::new(crate::lead::restart_refusal), lead_restarted: std::sync::Arc::default(), lead_context: None, lead_context_limit: crate::config::DEFAULT_LEAD_CONTEXT, restart_why: String::new(), devices: Vec::new(), subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
             comments: Vec::new(), comment_panel: Default::default(), comment_dir: None, copier: comments::default_copier(), reopener: comments::default_reopener(), pusher: jobs::live_pusher(), jobs: Vec::new(), outcomes: Vec::new(), dropper: jobs::live_dropper(), lead_teller: std::sync::Arc::new(crate::backlog_file::tell_lead), telling_drafts: Default::default(),
             subtask_row: None, subtask_io: Default::default(), reads: Default::default(), loads: Default::default(), space_repos: Default::default(), new_io: Default::default(), beside: Default::default(),
         }
@@ -1441,6 +1442,7 @@ pub fn run(overlay: bool) -> Result<String> {
                         app.lead_chat = snapshot.lead_chat;
                         app.restart_auto = snapshot.restart_auto;
                         app.lead_context = snapshot.lead_context;
+                        app.lead_context_limit = snapshot.lead_context_limit;
                         app.devices = snapshot.devices;
                         app.backlog_selected = app.backlog_selected.min(app.backlog_len().saturating_sub(1));
                         let newest = app.messages.last().map_or(0, |message| message.at);
@@ -2067,7 +2069,7 @@ mod tests {
     fn a_nearly_full_lead_context_shows_one_line_that_offers_l_and_nothing_below_the_mark() {
         let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
         app.lead_checker = std::sync::Arc::new(|| Ok(()));
-        for used in [None, Some(60.0), Some(84.9)] {
+        for used in [None, Some(60.0), Some(74.9)] {
             app.lead_context = used;
             let (rows, _) = render(&mut app, 170, 30);
             assert!(!rows.join("\n").contains("context is"), "{used:?} shows no line");

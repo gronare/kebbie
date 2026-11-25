@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::{group_order, load_machine, load_repo, path, repo_file, short_hostname, AgentUpdates, AlsoNoticed, ApproveFrom, AutoApprove, BeforePush, Channel, HubCommands, HubTrust, LinkNetwork, Machine, OngoingAt, ReportText, ReviewAuto, Second, Source, read_sources, Worktree, DEFAULT_BUILD_COMMANDS, DEFAULT_BUILD_SLOTS, DEFAULT_HUB_URL, DEFAULT_IDLE_MINUTES, DEFAULT_KEEPER, DEFAULT_PROPOSE_ISSUES, DEFAULT_RECOVER, NONE};
+use super::{group_order, load_machine, load_repo, path, repo_file, short_hostname, AgentUpdates, AlsoNoticed, ApproveFrom, AutoApprove, BeforePush, Channel, HubCommands, HubTrust, LinkNetwork, Machine, OngoingAt, ReportText, ReviewAuto, Second, Source, read_sources, Worktree, DEFAULT_BUILD_COMMANDS, DEFAULT_BUILD_SLOTS, DEFAULT_HUB_URL, DEFAULT_IDLE_MINUTES, DEFAULT_KEEPER, DEFAULT_LEAD_CONTEXT, DEFAULT_PROPOSE_ISSUES, DEFAULT_RECOVER, NONE};
 use crate::sh::Result;
 use crate::status::Group;
 
@@ -74,6 +74,7 @@ pub struct Settings {
     pub agent_updates: Setting<AgentUpdates>,
     pub idle_minutes: Setting<u64>,
     pub auto_restart: Setting<bool>,
+    pub lead_context: Setting<u64>,
     pub ci_watch: Setting<bool>,
     pub ci_deploy: Setting<Option<String>>,
     pub ci_deploy_window: Setting<Option<String>>,
@@ -163,6 +164,7 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         agent_updates: or_default(pick(None, machine.agent_updates.as_ref()), AgentUpdates::default()),
         idle_minutes: or_default(pick(None, machine.restart.idle_minutes.as_ref()), DEFAULT_IDLE_MINUTES),
         auto_restart: or_default(pick(None, machine.restart.auto.as_ref()), true),
+        lead_context: or_default(pick(None, machine.restart.lead_context.as_ref()), DEFAULT_LEAD_CONTEXT),
         ci_watch: or_default(pick(repo.ci_watch.as_ref(), machine.worktree.ci_watch.as_ref()), true),
         ci_deploy: unset(pick(repo.ci_deploy.as_ref(), machine.worktree.ci_deploy.as_ref())),
         ci_deploy_window: optional(pick(repo.ci_deploy_window.as_ref(), None)),
@@ -229,4 +231,8 @@ pub fn board_layout() -> Result<(Vec<Group>, OngoingAt, bool)> {
 pub fn restart_settings() -> Result<(bool, u64)> {
     let settings = resolve(None)?.settings;
     Ok((settings.auto_restart.value, settings.idle_minutes.value))
+}
+
+pub fn lead_context_limit() -> Result<u64> {
+    Ok(resolve(None)?.settings.lead_context.value)
 }

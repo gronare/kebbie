@@ -2218,7 +2218,7 @@ pub fn board(overlay: bool) -> Result<String> {
             _ => println!("{}\n", guide.text()),
         }
         if !matches!(next, Next::Quit) && in_herdr() {
-            let _ = crate::lead::restart(false, false);
+            let _ = crate::lead::restart(false, false, false);
         }
     }
     crate::board::run(overlay)

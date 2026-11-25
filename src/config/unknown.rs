@@ -31,7 +31,7 @@ const SECTION_KEYS: [(&str, &[&str]); 25] = [
     ("board", &["groups", "next_question", "backlog"]),
     ("board.backlog", &["sources", "ongoing", "template"]),
     ("update", &["channel", "agents"]),
-    ("restart", &["idle_minutes", "auto"]),
+    ("restart", &["idle_minutes", "auto", "lead_context"]),
     ("keeper", &["enabled"]),
     ("builds", &["slots", "commands"]),
     ("recover", &["enabled"]),

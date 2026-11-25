@@ -200,6 +200,7 @@ With `restart.auto` on, the default:
 
 - `kebbie update` restarts idle sessions at once,
 - the keeper restarts each other stale session once it has been idle and out of focus for `restart.idle_minutes`; the lead waits one minute instead,
+- the keeper starts the lead on a new conversation with its handover once its context passes `restart.lead_context`, under the same holds; see [The lead never compacts](lead-and-away-mode.md#the-lead-never-compacts),
 - with `[keeper] enabled = false`, the full board does this every minute; the `prefix+t` popup does not.
 
 `kebbie setup` inside herdr ends in the lead Space: it restarts an idle lead on the new kebbie and a board there on an older one, whatever `restart.auto` says.

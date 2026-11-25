@@ -175,13 +175,25 @@ Enter picks the preselected row, and a line under the rows says why it is that o
 
 `kebbie lead --restart --fresh` starts it fresh from your own terminal. A refusal, for the reasons above, goes by as a toast before the question opens.
 
-The old conversation stays on disk, where `claude --resume` still finds it. kebbie keeps the new one as the lead's, so later restarts resume that. Nothing starts the lead fresh on its own. The lead's role tells it that a fresh start reads only the role and the vault, so it keeps decisions, plans and where each task stands in the vault's notes as it goes.
+The old conversation stays on disk, where `claude --resume` still finds it. kebbie keeps the new one as the lead's, so later restarts resume that. On its own kebbie starts the lead fresh only with a handover, as the next section describes. The lead's role tells it that a fresh start reads only the role and the vault, so it keeps decisions, plans and where each task stands in the vault's notes as it goes.
+
+## The lead never compacts
+
+kebbie starts the lead's Claude with Claude Code's `autoCompactEnabled` off, as a compacted conversation loses the lead's rules. `/compact` in its chat still works.
+
+When the lead's context passes `restart.lead_context`, 75% of its model's window by default, the keeper starts it on a new conversation that carries on where the old one stopped:
+
+1. Once the lead is idle and you are out of its pane, the same holds as for a restart after an update, kebbie asks it for a handover: where each task stands, the decisions since its last vault note and what waits on you. The lead saves it with `kebbie handover`, which its settings allow.
+2. Once the handover is saved and the lead is idle again a minute later, kebbie runs `kebbie lead --restart --handover`. The new conversation's first prompt reads the handover.
+3. The board says `Restarted the lead on a new conversation that reads its handover first, as its context was N% full.` Nothing else is shown on the way.
+
+Going into the lead's pane after kebbie asked makes it ask for a new handover later, so what you said there is in it. With `restart.auto = false` nothing starts the lead fresh on its own.
 
 ## The board says when the lead's context fills up
 
-When the lead's context is 85% full or more, the board's Work page says `The lead's context is N% full · L to restart it fresh`.
+When the lead's context is past `restart.lead_context`, the board's Work page says `The lead's context is N% full · L to restart it fresh`.
 
-The share comes from Claude Code's status line for the lead. So it shows only with `kebbie statusline` as your `statusLine` command (`kebbie doctor` checks it). Without that, or before the lead's first reply, there is no line.
+The share comes from Claude Code's status line for the lead. So the line, and the restart with a handover, need `kebbie statusline` as your `statusLine` command (`kebbie doctor` checks it). Without that, or before the lead's first reply, there is no share.
 
 ## The lead runs in a folder of its own
 

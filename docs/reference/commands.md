@@ -699,6 +699,8 @@ It is refused when the id is taken or config.toml does not parse.
 | `kebbie lead` | Go to the lead Space, or back to the Space you came from when you are in it. |
 | `kebbie lead --restart [--anyway]` | Restart an idle lead's Claude on its current role and settings, resuming its conversation. |
 | `kebbie lead --restart --fresh` | Start the lead's Claude on a new conversation, with its role, settings and skills, in its folder. |
+| `kebbie lead --restart --handover` | Start the lead's Claude on a new conversation whose first prompt reads the handover it saved. |
+| `kebbie handover` | The lead saves its handover from stdin before kebbie starts it fresh. |
 | `kebbie lead --first` | Only move the lead Space to the top of herdr's Spaces. |
 | `kebbie lead --revive-board` | Run by herdr's startup hook to bring the board back in the lead Space. |
 | `kebbie lead --toggle-chat` | Hide the lead's chat so the board takes the whole width, or show it again. |
@@ -722,6 +724,7 @@ It is refused when the id is taken or config.toml does not parse.
 
 - It refuses with `Not restarted: <reason>` while the lead works, waits on a question, holds text you have not sent, has background work running (unless `--anyway`) or another kebbie restarts it.
 - After `kebbie update` the keeper runs it by itself once the lead is free, unless `restart.auto` is off.
+- `--handover` starts it fresh as `--fresh` does, its first prompt telling it to read the handover `kebbie handover` saved in `lead-handover.md` in kebbie's state folder. Without one it refuses. The keeper runs it when the lead's context passes `restart.lead_context`; see [The lead never compacts](../explanation/lead-and-away-mode.md#the-lead-never-compacts).
 - `--fresh` refuses as `--restart` does. The old conversation stays on disk, and kebbie keeps the new one as the lead's. It is yours to run, never the lead's; `L` on the board does the same with `New conversation`. See [Starting the lead fresh](../explanation/lead-and-away-mode.md#starting-the-lead-fresh).
 
 `kebbie lead --revive-board` returns at once. In the background it waits up to a minute for herdr to restore the lead Space, then starts the board in its board pane if that pane sits at a shell prompt. It never touches the lead's chat, and logs to `lead.log`.
