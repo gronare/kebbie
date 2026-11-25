@@ -10,7 +10,8 @@ The rules check is about how the work is shaped.
 
 1. kebbie checks each commit's form itself: with `kebbie:work-rules`, a ready report is refused while a commit lacks a subject, a blank line and a body.
 2. The keeper (or the board while the keeper is off) starts the reviewer from its own environment, never the task's, with a brief of the rules alone. It reads each commit against your rules skill, and in a repo with `docs.required` against the docs too.
-3. A pass clears the task's rules check, and the lead hears nothing. A break goes to the task with the commit and the rule, and to the lead as one line.
+3. A rule on linear history, or on rebasing onto the default branch, is read as a rule on the branch's own commits, never as asking it to lie on the latest default branch. A branch that is only behind the default branch breaks no rule: the [push line](trunk-based.md#one-push-line-per-repo) rebases each push onto what landed when its turn comes, so a rebase in advance would only be redone. The full review and the lead's own check read it the same way.
+4. A pass clears the task's rules check, and the lead hears nothing. A break goes to the task with the commit and the rule, and to the lead as one line.
 
 ## The lead checks when the reviewer cannot
 

@@ -20,6 +20,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A blocked task shows under Working again once its obstacle is decided or the lead answers it.
 - A task leaves Needs you for Working once the lead settles its question with kebbie decide.
 - The head of a push line keeps its place while its Claude works, until another push waits behind it.
+- The rules check no longer reads linear history as lying on the latest default branch, so a branch that is only behind the default branch passes.
 - cargo test runs in a sandboxed task, since the tests no longer write a .gitconfig into their own home.
 - A task stays a task, with its questions and kebbie tell, while its worktree is on another commit or branch.
 - A queued task starts once the task it waits for is done, even when that done takes minutes.

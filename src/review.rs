@@ -1117,6 +1117,10 @@ struct Brief<'a> {
     settled: Option<&'a str>,
 }
 
+pub(crate) fn linear_history(upstream: &str) -> String {
+    format!("Read a rule on linear history, or on rebasing onto the default branch, as a rule on the branch's own commits, never as asking the branch to lie on the latest {upstream}: a branch that is only behind {upstream} breaks no rule, since kebbie's push line rebases each push onto what landed when its turn comes.")
+}
+
 fn brief(brief: &Brief) -> String {
     let Brief { address, worktree, upstream, sha, commits, rules, rules_file, quoted, said, tests, also_noticed, docs, card, focus, settled } = *brief;
     let docs = docs.map_or(String::new(), |docs| format!("{docs}\n\n"));
@@ -1134,13 +1138,14 @@ fn brief(brief: &Brief) -> String {
          {focus}\
          {rules}\n\n\
          {}\n\n\
+         {}\n\n\
          {tests}\n\n\
          {docs}\
          {card}\
          {settled}\
          {}\n\
          Your last message is the verdict, starting with its verdict line; kebbie saves it and tells the lead.",
-        worktree.display(), scope(also_noticed), conversation(said)
+        worktree.display(), linear_history(upstream), scope(also_noticed), conversation(said)
     )
 }
 
@@ -1767,7 +1772,7 @@ mod tests {
         let quoted = "--- /home/u/code/team/RULES.md ---\n1. One change per commit.\n--- end of /home/u/code/team/RULES.md ---";
         let from_file = brief(&Brief { rules: "~/code/team/RULES.md", rules_file: Some(Path::new("/home/u/code/team/RULES.md")), quoted: Some(quoted), ..shape });
         assert!(from_file.contains(&format!("The rules in effect are the file `~/code/team/RULES.md` (task.rules_skill), quoted below: check every commit against each of its rules.\n\n{quoted}")) && !from_file.contains("read it, and the files beside it"), "the reviewer gets the file's text: {from_file}");
-        assert!(text.contains("against each of its rules.\n\nThe task's `task.also_noticed` is `backlog`: the task files what it notices outside its task and changes none of it, so every change the task's intent does not need is a finding."), "{text}");
+        assert!(text.contains(&format!("against each of its rules.\n\n{}\n\nThe task's `task.also_noticed` is `backlog`: the task files what it notices outside its task and changes none of it, so every change the task's intent does not need is a finding.", linear_history("origin/main"))), "{text}");
         shape.also_noticed = config::AlsoNoticed::Ask;
         assert!(brief(&shape).contains("`ask`: the task changes something outside its task only when the user answered fix"));
         shape.also_noticed = config::AlsoNoticed::Fix;
@@ -1790,6 +1795,13 @@ mod tests {
         assert!(text.contains(&format!("{runs}\n\nThis repo runs its tests with `script/test` or `bin/rspec` (`task.test_commands`): a finding that asks for a test run names one of these")), "{text}");
         assert_eq!(with_test_commands("", &commands), "This repo runs its tests with `script/test` or `bin/rspec` (`task.test_commands`): a finding that asks for a test run names one of these, never another test setup.", "without a recorded run the commands stand alone");
         assert_eq!(with_test_commands(runs, &[]), runs, "a repo without task.test_commands adds nothing");
+    }
+
+    #[test]
+    fn the_brief_never_reads_linear_history_as_lying_on_the_latest_default_branch_whatever_the_rules_skill() {
+        let said = ["Add a --json flag to kebbie peers.".to_string()];
+        let shape = Brief { address: "peers@kebbie", worktree: Path::new("/src/wt1.kebbie"), upstream: "origin/main", sha: "abc123", commits: "abc123 Add --json", rules: "~/RULES.md", rules_file: None, quoted: None, said: &said, tests: "", also_noticed: config::AlsoNoticed::Backlog, docs: None, card: None, focus: None, settled: None };
+        assert!(brief(&shape).contains("as a rule on the branch's own commits, never as asking the branch to lie on the latest origin/main: a branch that is only behind origin/main breaks no rule"), "{}", brief(&shape));
     }
 
     #[test]
