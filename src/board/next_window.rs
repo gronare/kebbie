@@ -351,7 +351,7 @@ impl App {
         self.mode = Mode::Normal;
         let Some(row) = row else { return };
         let Some(index) = self.tasks.iter().position(|item| peers::address(&item.name, &item.place) == row.address) else { return };
-        (self.page, self.column, self.work_selected, self.filter, self.in_messages, self.offer_panel.focused, self.comment_panel.focused) = (Page::Work, Column::Work, index, None, false, false, false);
+        (self.page, self.column, self.work_selected, self.filter, self.in_messages, self.offer_panel.focused, self.comment_panel.focused, self.ask_focus) = (Page::Work, Column::Work, index, None, false, false, false, None);
         let item = self.tasks[index].clone();
         if super::note_window::reads_note(self, &item) {
             return self.open_task_note(&item);

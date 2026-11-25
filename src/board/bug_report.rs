@@ -219,6 +219,7 @@ impl App {
         }
         self.in_messages = false;
         self.comment_panel.focused = false;
+        self.ask_focus = None;
         self.column = super::Column::Work;
         (self.offer_panel.focused, self.offer_panel.on_fixed) = (true, true);
     }
@@ -303,6 +304,7 @@ impl App {
     pub(super) fn focus_offers(&mut self, index: usize) {
         self.in_messages = false;
         self.comment_panel.focused = false;
+        self.ask_focus = None;
         self.column = super::Column::Work;
         self.offer_panel.focused = !self.offers.is_empty();
         self.offer_panel.on_fixed = false;

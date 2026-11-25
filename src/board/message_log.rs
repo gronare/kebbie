@@ -61,6 +61,7 @@ impl App {
         self.in_messages = true;
         self.offer_panel.focused = false;
         self.comment_panel.focused = false;
+        self.ask_focus = None;
         self.message_back = 0;
     }
 

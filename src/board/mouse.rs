@@ -55,12 +55,13 @@ impl App {
                     return None;
                 }
                 match hit {
-                    Some(Hit::Task(_)) if normal => (self.column, self.in_messages, self.offer_panel.focused, self.comment_panel.focused) = (Column::Work, false, false, false),
-                    Some(Hit::Entry(_)) if normal => (self.column, self.in_messages, self.offer_panel.focused, self.comment_panel.focused) = (Column::Backlog, false, false, false),
+                    Some(Hit::Task(_)) if normal => (self.column, self.in_messages, self.offer_panel.focused, self.comment_panel.focused, self.ask_focus) = (Column::Work, false, false, false, None),
+                    Some(Hit::Entry(_)) if normal => (self.column, self.in_messages, self.offer_panel.focused, self.comment_panel.focused, self.ask_focus) = (Column::Backlog, false, false, false, None),
                     Some(Hit::Beside) if normal => self.focus_beside(),
                     Some(Hit::Offer(_)) if normal && (!self.offer_panel.focused || self.offer_panel.on_fixed) => self.focus_offers(self.offer_panel.selected),
                     Some(Hit::Fixed) if normal && !self.fixed_focused() => self.focus_fixed(),
                     Some(Hit::Comment(_)) if normal && !self.comment_panel.focused => self.focus_comments(self.comment_panel.selected),
+                    Some(Hit::Ask(index)) if normal && self.ask_focus.is_none() => self.focus_asks(index),
                     Some(Hit::Messages(_)) if normal && self.fold == Fold::Open => self.in_messages = true,
                     _ => {}
                 }
@@ -69,7 +70,7 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) => {
                 match (hit, &mut self.mode) {
                     (Some(Hit::Beside), Mode::Normal | Mode::Subtasks) => self.focus_beside(),
-                    (Some(Hit::Tasks), Mode::Normal) => (self.column, self.in_messages, self.offer_panel.focused, self.comment_panel.focused, self.beside.focused) = (Column::Work, false, false, false, false),
+                    (Some(Hit::Tasks), Mode::Normal) => (self.column, self.in_messages, self.offer_panel.focused, self.comment_panel.focused, self.beside.focused, self.ask_focus) = (Column::Work, false, false, false, false, None),
                     (Some(Hit::Tasks), Mode::Subtasks) => self.beside.focused = false,
                     (Some(Hit::Task(index)), Mode::Subtasks) if index == self.work_selected => self.beside.focused = false,
                     (Some(Hit::Task(index)), Mode::Subtasks) => {
@@ -77,9 +78,9 @@ impl App {
                         self.work_selected = index;
                     }
                     (Some(Hit::Task(index)), Mode::Normal) => {
-                        let again = self.column == Column::Work && self.work_selected == index && !self.in_messages && !self.offer_panel.focused && !self.comment_panel.focused && !self.beside.focused;
+                        let again = self.column == Column::Work && self.work_selected == index && !self.in_messages && !self.offer_panel.focused && !self.comment_panel.focused && self.ask_focus.is_none() && !self.beside.focused;
                         self.beside.focused = false;
-                        (self.column, self.work_selected, self.in_messages, self.offer_panel.focused, self.comment_panel.focused) = (Column::Work, index, false, false, false);
+                        (self.column, self.work_selected, self.in_messages, self.offer_panel.focused, self.comment_panel.focused, self.ask_focus) = (Column::Work, index, false, false, false, None);
                         if again && self.on_parked_line() {
                             self.show_parked(true);
                         } else if again {
@@ -88,7 +89,7 @@ impl App {
                     }
                     (Some(Hit::Entry(index)), Mode::Normal) => {
                         let again = self.column == Column::Backlog && self.backlog_selected == index && !self.in_messages;
-                        (self.column, self.backlog_selected, self.in_messages, self.offer_panel.focused, self.comment_panel.focused) = (Column::Backlog, index, false, false, false);
+                        (self.column, self.backlog_selected, self.in_messages, self.offer_panel.focused, self.comment_panel.focused, self.ask_focus) = (Column::Backlog, index, false, false, false, None);
                         if again {
                             self.open_options();
                         }
@@ -110,6 +111,13 @@ impl App {
                         self.focus_fixed();
                         if again {
                             self.mode = Mode::FixedOptions(0);
+                        }
+                    }
+                    (Some(Hit::Ask(index)), Mode::Normal) => {
+                        let again = self.ask_focus == Some(index);
+                        self.focus_asks(index);
+                        if again {
+                            self.open_ask();
                         }
                     }
                     (Some(Hit::Comment(index)), Mode::Normal) => {
@@ -136,6 +144,7 @@ impl App {
                         self.in_messages &= code == keys::map().code(Act::Messages);
                         self.offer_panel.focused = false;
                         self.comment_panel.focused = false;
+                        self.ask_focus = None;
                         return Some(KeyEvent::from(code));
                     }
                     (Some(Hit::Choice(index)), Mode::Options(_)) => {

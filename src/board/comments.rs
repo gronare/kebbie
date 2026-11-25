@@ -165,6 +165,7 @@ impl App {
     pub(super) fn focus_comments(&mut self, index: usize) {
         self.in_messages = false;
         self.offer_panel.focused = false;
+        self.ask_focus = None;
         self.column = Column::Work;
         self.comment_panel.focused = self.comments_shown();
         self.comment_panel.selected = if self.comments_open() { index.min(self.comments.len().saturating_sub(1)) } else { 0 };
@@ -196,11 +197,15 @@ impl App {
     }
 
     fn leave_comments(&mut self, down: bool) {
+        if self.asks_after_comments(down) {
+            return;
+        }
         let boundary = self.comment_boundary();
         let task = if down { self.shown_task(boundary..self.tasks.len(), false) } else { self.shown_task(0..boundary, true) };
         match task {
             Some(index) => {
                 self.comment_panel.focused = false;
+                self.ask_focus = None;
                 self.work_selected = index;
             }
             None if down && !self.offers.is_empty() => self.focus_offers(0),
@@ -235,6 +240,7 @@ impl App {
             Some(Act::Switch) => self.focus_beside(),
             Some(Act::Messages) => {
                 self.comment_panel.focused = false;
+                self.ask_focus = None;
                 self.press_m();
             }
             Some(Act::Help) => self.mode = Mode::Help(Default::default()),

@@ -1,3 +1,4 @@
+mod asks;
 mod background;
 mod beside;
 mod bug_report;
@@ -173,6 +174,7 @@ enum Hit {
     Offer(usize),
     Fixed,
     Comment(usize),
+    Ask(usize),
     Beside,
     Tasks,
     Key(KeyCode),
@@ -274,6 +276,7 @@ struct App {
     hub_banner: Option<String>,
     comments: Vec<crate::comments::Comment>,
     comment_panel: comments::CommentPanel,
+    ask_focus: Option<usize>,
     comment_dir: Option<PathBuf>,
     copier: comments::Copier,
     reopener: comments::Reopener,
@@ -467,7 +470,7 @@ impl App {
             Page::Work | Page::Backlog => {
                 (self.page, self.column) = (Page::Work, if page == Page::Backlog { Column::Backlog } else { Column::Work });
                 if page == Page::Backlog {
-                    (self.in_messages, self.offer_panel.focused, self.comment_panel.focused) = (false, false, false);
+                    (self.in_messages, self.offer_panel.focused, self.comment_panel.focused, self.ask_focus) = (false, false, false, None);
                 }
             }
             other => self.page = other,
@@ -914,6 +917,9 @@ impl App {
         if self.beside_key(&key) {
             return;
         }
+        if self.asks_focused().is_some() {
+            return self.handle_asks(key);
+        }
         if self.comment_panel.focused {
             return self.handle_comments(key);
         }
@@ -928,7 +934,7 @@ impl App {
             Act::Next => self.open_next(),
             Act::Move => {
                 let (down, before) = (!matches!(key.code, KeyCode::Up | KeyCode::Char('k')), self.work_selected);
-                if ctx == Ctx::Work && self.enter_comments(down) {
+                if ctx == Ctx::Work && (self.enter_asks(down) || self.enter_comments(down)) {
                     return;
                 }
                 self.move_selection(if down { 1 } else { -1 });
@@ -1316,7 +1322,7 @@ impl App {
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel).map(|outcome| outcome.details.join("\n"))), update: None, progress_file: None, recheck: None, stale: Vec::new(), stale_at: 0, restart_after_update: false,
             agent_offer: None, agent_mode: std::sync::Arc::new(|| config::agent_updates_in(&config::path())), installer: agent_updates::default_install(),
             filter: None, ctrl_c: None, go_again: None, notice: None, lead_chat: None, restart_auto: true, disk_line: None, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), lead_fresh_starter: std::sync::Arc::new(crate::lead_restart::fresh_now), lead_checker: std::sync::Arc::new(crate::lead::restart_refusal), lead_restarted: std::sync::Arc::default(), lead_context: None, lead_context_limit: crate::config::DEFAULT_LEAD_CONTEXT, restart_why: String::new(), devices: Vec::new(), subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
-            comments: Vec::new(), comment_panel: Default::default(), comment_dir: None, copier: comments::default_copier(), reopener: comments::default_reopener(), pusher: jobs::live_pusher(), jobs: Vec::new(), outcomes: Vec::new(), dropper: jobs::live_dropper(), lead_teller: std::sync::Arc::new(crate::backlog_file::tell_lead), telling_drafts: Default::default(),
+            comments: Vec::new(), comment_panel: Default::default(), ask_focus: None, comment_dir: None, copier: comments::default_copier(), reopener: comments::default_reopener(), pusher: jobs::live_pusher(), jobs: Vec::new(), outcomes: Vec::new(), dropper: jobs::live_dropper(), lead_teller: std::sync::Arc::new(crate::backlog_file::tell_lead), telling_drafts: Default::default(),
             subtask_row: None, subtask_io: Default::default(), reads: Default::default(), loads: Default::default(), space_repos: Default::default(), new_io: Default::default(), beside: Default::default(),
         }
     }

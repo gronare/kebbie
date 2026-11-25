@@ -223,8 +223,9 @@ fn without_spacers(lines: Vec<Line<'static>>, selected_line: usize, rows: Rows, 
 }
 
 pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usize) -> (Vec<Line<'static>>, usize, Rows) {
+    app.asks_focused();
     let open = app.column == Column::Work;
-    let off_tasks = open && (app.offer_panel.focused || app.comment_panel.focused);
+    let off_tasks = open && (app.offer_panel.focused || app.comment_panel.focused || app.ask_focus.is_some());
     let focused = open && !app.in_messages && !off_tasks;
     let boundary = app.comment_boundary();
     let put_comments = |app: &App, lines: &mut Vec<Line<'static>>, rows: &mut Rows, selected_line: &mut usize, after: bool| {
@@ -254,6 +255,7 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
     let groups = app.groups.clone();
     let rank = |group: Group| groups.iter().position(|shown| *shown == group).unwrap_or(usize::MAX);
     let mut disk = app.disk_line.clone();
+    let disk_waits = disk.is_some();
     let needs_count = tasks.iter().enumerate().filter(|(index, other)| other.parked.is_none() && other.group() == Group::NeedsYou && app.shown(Column::Work, *index)).count();
     let put_disk = |lines: &mut Vec<Line<'static>>, disk: &mut Option<String>, header: bool| {
         let Some(text) = disk.take() else { return };
@@ -266,8 +268,32 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
         lines.push(Line::default());
         lines.extend(wrap(&format!("! {text}"), width.saturating_sub(4), 8).into_iter().map(|text| Line::from(vec![Span::raw("   "), Span::styled(text, style(PEACH))])));
     };
+    let asks = app.asks_shown().len();
+    let ask_boundary = app.ask_boundary();
+    let focused_column = open && !app.in_messages;
+    let put_asks = |app: &App, lines: &mut Vec<Line<'static>>, rows: &mut Rows, selected_line: &mut usize, current: &mut Option<Group>| {
+        if asks == 0 {
+            return;
+        }
+        if *current != Some(Group::NeedsYou) {
+            if current.is_some() {
+                lines.push(Line::default());
+            }
+            lines.push(group_line(Group::NeedsYou.title(), asks + usize::from(disk_waits), group_color(Group::NeedsYou)));
+            *current = Some(Group::NeedsYou);
+        }
+        let (ask_lines, ask_rows, ask_selected) = super::asks::ask_lines(app, width, lines.len(), focused_column);
+        rows.extend(ask_rows);
+        if let Some(line) = ask_selected {
+            *selected_line = line;
+        }
+        lines.extend(ask_lines);
+    };
     for (index, item) in tasks.iter().enumerate() {
-        if disk.is_some() && needs_count == 0 && (item.parked.is_some() || rank(item.group()) > rank(Group::NeedsYou)) && app.shown(Column::Work, index) {
+        if index == ask_boundary {
+            put_asks(app, &mut lines, &mut rows, &mut selected_line, &mut current);
+        }
+        if disk.is_some() && needs_count == 0 && current != Some(Group::NeedsYou) && (item.parked.is_some() || rank(item.group()) > rank(Group::NeedsYou)) && app.shown(Column::Work, index) {
             put_disk(&mut lines, &mut disk, true);
             current = Some(Group::NeedsYou);
         }
@@ -304,7 +330,7 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
             if current.is_some() {
                 lines.push(Line::default());
             }
-            let count = tasks.iter().enumerate().filter(|(other_index, other)| other.group() == item.group() && app.shown(Column::Work, *other_index)).count() + usize::from(item.group() == Group::NeedsYou && disk.is_some());
+            let count = tasks.iter().enumerate().filter(|(other_index, other)| other.group() == item.group() && app.shown(Column::Work, *other_index)).count() + if item.group() == Group::NeedsYou { asks + usize::from(disk.is_some()) } else { 0 };
             lines.push(group_line(item.group().title(), count, group_color(item.group())));
             current = Some(item.group());
         }
@@ -372,6 +398,9 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
         let bar = if selected { Span::styled("▌", style(if focused { MAUVE } else { FAINT })) } else { Span::raw(" ") };
         hang(&mut lines[start + 1..], bar, selected && focused);
         rows.push((start, lines.len(), Hit::Task(index)));
+    }
+    if ask_boundary >= tasks.len() {
+        put_asks(app, &mut lines, &mut rows, &mut selected_line, &mut current);
     }
     put_disk(&mut lines, &mut disk, current != Some(Group::NeedsYou));
     if tasks.is_empty() {
@@ -616,6 +645,26 @@ mod tests {
         none.disk_line = None;
         let (rows, _) = render(&mut none, 140, 30);
         assert!(!rows.join("\n").contains("Disk:"));
+    }
+
+    #[test]
+    fn the_disk_line_follows_the_backlog_rows_under_one_needs_you_that_counts_both() {
+        let line = "Disk: 12.3 GB free of 242.0 GB, below 30 GB (disk.trim_below)";
+        let mut working = crate::status::tests::task(Some("working"), None, 0);
+        working.name = "working".to_string();
+        let mut asking = crate::status::tests::task(Some("blocked"), None, 0);
+        asking.name = "asking".to_string();
+        for (tasks, count) in [(vec![working.clone()], 3), (vec![asking, working], 4)] {
+            let mut app = test_app(tasks);
+            app.backlog.entries = vec![waiting_item("Rounding per invoice", "high", "5 d", 2), waiting_item("Links show used pages", "medium", "1 d", 1)];
+            app.disk_line = Some(line.to_string());
+            let (rows, _) = render(&mut app, 140, 30);
+            let screen = rows.join("\n");
+            let at = |text: &str| find(&rows, text).first().map(|found| found.1).unwrap_or_else(|| panic!("no {text}: {screen}"));
+            assert_eq!(find(&rows, "NEEDS YOU").len(), 1, "one heading: {screen}");
+            assert!(screen.contains(&format!("NEEDS YOU  {count}")), "the tasks, the items and the disk line: {screen}");
+            assert!(at("NEEDS YOU") < at("Rounding per invoice") && at("Rounding per invoice") < at("! Disk: 12.3 GB free") && at("! Disk: 12.3 GB free") < at("WORKING"), "the disk line closes the group after the items: {screen}");
+        }
     }
 
     #[test]

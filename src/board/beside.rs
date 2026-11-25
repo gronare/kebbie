@@ -147,7 +147,7 @@ impl App {
         if !self.beside.shown {
             return;
         }
-        (self.offer_panel.focused, self.offer_panel.on_fixed, self.comment_panel.focused, self.column, self.beside.focused) = (false, false, false, super::Column::Work, true);
+        (self.offer_panel.focused, self.offer_panel.on_fixed, self.comment_panel.focused, self.column, self.beside.focused, self.ask_focus) = (false, false, false, super::Column::Work, true, None);
     }
 
     // The keys the focused card takes: it scrolls, and ← → or esc hand the keys back to the tasks.
@@ -182,7 +182,7 @@ impl App {
         if !self.beside.shown || self.in_messages {
             return Vec::new();
         }
-        let on_row = matches!(self.mode, super::Mode::Normal) && self.column == super::Column::Work && !self.offer_panel.focused && !self.comment_panel.focused && !self.on_parked_line() && self.selected_task().is_some();
+        let on_row = matches!(self.mode, super::Mode::Normal) && self.column == super::Column::Work && !self.offer_panel.focused && !self.comment_panel.focused && self.ask_focus.is_none() && !self.on_parked_line() && self.selected_task().is_some();
         match (self.beside.focused, matches!(self.mode, super::Mode::Subtasks)) {
             (true, true) => vec![(keys::map().label(Act::StepSubtask), "subtask", KeyCode::Down), ("← esc".to_string(), "subtasks", KeyCode::Left)],
             (true, false) => vec![("← esc".to_string(), "tasks", KeyCode::Left)],
@@ -194,7 +194,7 @@ impl App {
     // The card for the task the cursor is on, its title line apart so it stays put while the rest scrolls.
     pub(super) fn beside_lines(&mut self, width: usize) -> (Vec<Line<'static>>, Vec<Line<'static>>, String) {
         let focused = self.beside.focused && !self.in_messages;
-        let off_tasks = self.offer_panel.focused || self.comment_panel.focused || self.on_parked_line();
+        let off_tasks = self.offer_panel.focused || self.comment_panel.focused || self.ask_focus.is_some() || self.on_parked_line();
         let Some(item) = self.selected_task().filter(|_| !off_tasks) else {
             let hint = "Not a task: move to one to see its card here.".to_string();
             return (heading(Vec::new(), focused, width), wrap(&hint, width, 3).into_iter().map(|text| Line::from(Span::styled(text, style(MUTED)))).collect(), "none".to_string());

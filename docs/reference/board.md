@@ -21,7 +21,7 @@ The status line shows:
 | Marker | Means |
 | --- | --- |
 | `⚠N` on Routines | N routine runs wait for you with findings. |
-| Counts | What needs you (tasks, and devices waiting for your approval), tasks that are working, are in review, are ready to push and wait for CI, and waiting questions. |
+| Counts | What needs you (tasks, backlog items whose questions wait on you, and devices waiting for your approval), tasks that are working, are in review, are ready to push and wait for CI, and waiting questions. |
 | `◆ N to accept`, yellow | N subtasks of tasks working in subtasks wait for you to accept them. |
 | `! N bugs to send` | Bugs and wishes about kebbie, saved here, wait for you to send them to its maintainers, on their row under Work, such as `! 1 bug and 2 wishes to send`; one alone is named, `! A wish to send: <title>`. |
 | Plan usage | How much of the plan is used. |
@@ -197,7 +197,7 @@ A listed test command inside a loop, a condition or `xargs` is not recorded eith
 
 | Group | Contains |
 | --- | --- |
-| Needs you | Tasks waiting on your answer or action, open questions first. |
+| Needs you | Tasks waiting on your answer or action, open questions first, then backlog items whose questions wait on you. |
 | Working | Tasks at work since their prompt, their last report or your answer. |
 | In review | Reported ready and sent to the reviewer, waiting for a pass on its current code. The row says `review running · waits on the reviewer` while the reviewer reads. Its findings go to the lead and the task, never onto the row; `v` withdraws it to push without a pass. |
 | Ready to push | Reported ready with its commits, for you to push. |
@@ -235,6 +235,8 @@ kebbie keeps one phase per task, and only what changes it writes it: its start, 
 - A pushed task whose CI gh has not been able to read for 15 minutes, marked `CI unknown`, its row marked `gh cannot read it: <error>` meanwhile. `C` dismisses it.
 - A task an API error stopped that kebbie will not resume, marked `stopped by <reason>: <Claude Code's words>`.
 - A task whose worktree git cannot read, such as one whose index names a missing object, marked `git cannot read its worktree: <git's error>`. The other tasks show as usual.
+
+After the tasks under Needs you, one row per backlog item whose questions block its start and wait on you, newest first, such as `? Links show used pages   1 question · answer on its card`. NEEDS YOU shows for them even when no task is there, and its count and the status line's `need you` count them. `↑` `↓` step onto them from the tasks, `⏎` opens the item's card, where you answer its questions, and `g` starts the item as on the Backlog page. A row leaves once its blocking questions are answered. A filter keeps the rows whose title or repo it matches.
 
 `N` puts what needs you in one numbered list, in the order to do it. See [The Next window](#the-next-window).
 
