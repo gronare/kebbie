@@ -422,7 +422,7 @@ pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {
     }
     let place = |slot: &Slot| Launch { repo: &repo, task: &task, mode, profile: &profile, setup_skill: &setup_skill, setup_command: setup_command.as_deref(), rules_skill: &rules_skill, worktree: slot.path.clone(), vault: vault.is_some(), note: None };
     let restarting = running.is_some();
-    claimed_while(vault.as_ref(), state_dir().ok().as_deref(), backlog, &task, &name_of(&repo), anyway, restarting, || {
+    claimed_while(vault.as_ref(), backlog, &task, &name_of(&repo), anyway, restarting, || {
         if let Some(existing) = &running {
             return restart(&place(existing), existing, focus, prompt).map(|begun| match &fell_back {
                 Some(why) => Begun { said: Notice::read(&begun.said, false).detail("careful", why).to_string(), ..begun },
@@ -451,11 +451,11 @@ pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {
 }
 
 // A restart claims the note as a new start does, since a queued start that lost its pane gave its note back before kebbie started it again; only a new start that fails gives it back.
-fn claimed_while(vault: Option<&crate::vault_cli::Cli>, state: Option<&Path>, backlog: Option<&str>, task: &str, repo: &str, anyway: bool, restarting: bool, go: impl FnOnce() -> Result<Begun>) -> Result<Begun> {
+fn claimed_while(vault: Option<&crate::vault_cli::Cli>, backlog: Option<&str>, task: &str, repo: &str, anyway: bool, restarting: bool, go: impl FnOnce() -> Result<Begun>) -> Result<Begun> {
     let claimed = claim_backlog(vault, backlog, task, repo, anyway)?;
     let begun = go();
     if begun.is_err() && !restarting {
-        give_back(vault, state, claimed.as_deref(), task);
+        give_back(vault, claimed.as_deref(), task);
     }
     begun
 }
@@ -479,9 +479,9 @@ pub(super) fn clear_left_space(mut find: impl FnMut() -> Option<String>, mut clo
 }
 
 // Any failure after the claim, from the fetch to the Claude launch, gives the note back to whoever starts it next.
-fn give_back(vault: Option<&crate::vault_cli::Cli>, state: Option<&Path>, claimed: Option<&str>, task: &str) {
-    if let (Some(cli), Some(note), Some(state)) = (vault, claimed, state) {
-        crate::task_note::release(cli, state, note, task);
+fn give_back(vault: Option<&crate::vault_cli::Cli>, claimed: Option<&str>, task: &str) {
+    if let (Some(cli), Some(note), Ok(state)) = (vault, claimed, state_dir()) {
+        crate::task_note::release(cli, &state, note, task);
     }
 }
 
@@ -1040,15 +1040,14 @@ mod tests {
     #[test]
     fn a_start_that_fails_gives_its_note_back_and_the_restart_after_it_claims_the_note_again() {
         let fake = crate::vault_cli::fake::Fake::new("give-back");
-        let state = std::env::temp_dir();
         let note = Some("Projects/web-search.md");
         fake.answer("task-claim", r#"{"path":"Projects/web-search.md","claimed":true,"claim":{"machine":"mac","task":"search","repo":"web","since":"2026-10-23T09:00:00Z"}}"#);
         fake.answer("task-release", r#"{"path":"Projects/web-search.md","released":true,"claim":null}"#);
-        let lost = claimed_while(Some(&fake.claiming()), Some(&state), note, "search", "web", false, false, || Err("herdr pane process-info refused: pane not found (pane_not_found)".to_string()));
+        let lost = claimed_while(Some(&fake.claiming()), note, "search", "web", false, false, || Err("herdr pane process-info refused: pane not found (pane_not_found)".to_string()));
         assert!(lost.is_err());
-        let again = claimed_while(Some(&fake.claiming()), Some(&state), note, "search", "web", false, true, || Ok(Begun { said: String::new(), started: Started::Ready }));
+        let again = claimed_while(Some(&fake.claiming()), note, "search", "web", false, true, || Ok(Begun { said: String::new(), started: Started::Ready }));
         assert!(again.is_ok());
-        let failed_restart = claimed_while(Some(&fake.claiming()), Some(&state), note, "search", "web", false, true, || Err("no Space".to_string()));
+        let failed_restart = claimed_while(Some(&fake.claiming()), note, "search", "web", false, true, || Err("no Space".to_string()));
         assert!(failed_restart.is_err());
         assert_eq!(fake.calls(), [
             "task claim Projects/web-search.md --machine mac --task search --repo web",
@@ -1056,7 +1055,7 @@ mod tests {
             "task claim Projects/web-search.md --machine mac --task search --repo web",
             "task claim Projects/web-search.md --machine mac --task search --repo web",
         ], "the new start that failed gives the note back, the restart claims it again, and a failed restart keeps it with the task that holds the worktree");
-        give_back(Some(&fake.claiming()), Some(&state), None, "search");
+        give_back(Some(&fake.claiming()), None, "search");
         assert_eq!(fake.calls().len(), 4, "nothing claimed, nothing given back");
     }
     use crate::agent::claude::{settings, start_args, transcripts_dir};
