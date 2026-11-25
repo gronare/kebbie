@@ -427,6 +427,9 @@ pub struct Shelf<'a> {
 
 // Files one item where new items go: an item file without the vault, the lead's to file with it. A quick one-liner goes to the lead to write out.
 pub fn file_item(sources: &[Source], filing: &Filing, from_lead: bool) -> Result<String> {
+    if !from_lead && let Some(sent) = crate::idea_mail::send(sources, filing) {
+        return sent;
+    }
     let (dir, state) = (dir(), crate::lead::state_dir()?);
     let caller = crate::permit::caller();
     let write = |text: &str| crate::backlog_writer::hand(&state, text, &caller, &tell_lead);

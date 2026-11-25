@@ -67,6 +67,8 @@ The note is the task's own memory: research, paths and decisions with their reas
 
 Two kebbies, say on a Mac and a work devbox, can share one vault. Each claims the notes it works on, so the other sees which machine and which task has a note.
 
+They also find each other through it: each lists its repos and whether it is the ideas machine in `Kebbie/machines.md`, and a backlog item added on one goes to the machine [`hub.ideas_machine`](../reference/configuration.md#machine) picks through that machine's `Kebbie/inbox-<name>.md`.
+
 A note gets a `kebbie` key in its frontmatter when a task is started from it, when kebbie opens it for a task, and when `kebbie link` ties it to a task. The key holds `machine` (this kebbie's [`machine.name`](../reference/configuration.md#keys)), `task`, `repo` and `since`. kebbie owns the key: the vault server keeps it as it is when a session rewrites the note, so never edit it by hand.
 
 Claims need a vault that states the `claims` capability. With an older vault kebbie claims nothing, everything else works as before, and `kebbie doctor` says once that the vault is too old for cross-machine claims.

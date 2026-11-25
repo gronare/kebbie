@@ -10,6 +10,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - n asks only what you want done: Claude picks the repo, writes the card and asks its questions, then starts it or files it.
 - The keeper trims build output from idle worktrees when the disk runs low, and says so under Needs you when that is not enough.
 - A task's build refuses to start when the disk is nearly full, and says how much is free.
+- A backlog item added on any machine is written out on the ideas machine, and the machine you added it on says where it went.
 
 ### Fixed
 - A task keeps its own name until it is released.

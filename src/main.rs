@@ -39,6 +39,7 @@ mod herdr;
 mod herdr_link;
 mod hooks;
 mod hub;
+mod idea_mail;
 mod inbox;
 mod install_signal;
 mod issue_recheck;

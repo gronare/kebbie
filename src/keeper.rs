@@ -69,6 +69,7 @@ pub fn routines() -> Vec<Routine> {
         Routine { name: "signals", every: crate::signals::EVERY, run: |ctx| { ctx.notes.extend(crate::signals::tick(&crate::lead::state_dir()?)?); Ok(()) } },
         Routine { name: "install", every: crate::signals::EVERY, run: |_| { crate::install_signal::tick(&crate::lead::state_dir()?); Ok(()) } },
         Routine { name: "machines", every: crate::vault_machines::EVERY, run: |ctx| { ctx.notes.extend(crate::vault_machines::tick(&crate::lead::state_dir()?)); Ok(()) } },
+        Routine { name: "inbox", every: crate::idea_mail::EVERY, run: |ctx| { ctx.notes.extend(crate::idea_mail::tick(&crate::lead::state_dir()?)); Ok(()) } },
         Routine { name: "cards", every: crate::vault_card::EVERY, run: |ctx| { ctx.notes.extend(crate::vault_card::tick(&crate::lead::state_dir()?)); Ok(()) } },
         Routine { name: "vault", every: crate::vault_snapshot::EVERY, run: |_| { crate::vault_snapshot::tick(&crate::lead::state_dir()?)?; crate::backlog::fetch_vault_bodies_if_listed(); Ok(()) } },
         Routine { name: "outbox", every: crate::hub::report::UNASKED_EVERY, run: |ctx| { ctx.notes.extend(crate::hub::report::send_unasked_tick(&crate::lead::state_dir()?)?); Ok(()) } },

@@ -194,7 +194,7 @@ profile = "quick-codex"
 | `machine.name` | the host's short name | config.toml only | The machine's one name, on your phone through the hub and on the vault notes it claims. |
 | `notify.command` | none | config.toml only | The shell command kebbie runs when something needs you. Unset sends nothing. See [Notify command](#notify-command). |
 | `lead.profile` | none | config.toml only | The Claude [profile](#profiles) whose model and effort the lead runs with. Unset, the lead runs on the model your Claude Code settings name. |
-| `hub.ideas_machine` | none | config.toml only | The `machine.name` of the machine new ideas from your phone go to. See below. |
+| `hub.ideas_machine` | none | config.toml only | The `machine.name` of the machine that writes out new backlog items, from your phone and from your other machines. See below. |
 | `vault.command` | none | config.toml only | The vault command kebbie runs for task notes, log lines and the board's snapshot, before its own arguments, such as `"uvx mindin"`. |
 | `hub.url` | the kebbie hub, `https://hub.kebbie.dev` | config.toml only | The [kebbie hub](../how-to/see-your-board-on-your-phone.md) `kebbie hub connect` and the board's `H` window connect this machine to. |
 | `hub.commands` | all eight kinds | config.toml only | What this machine takes from your devices through the hub: a list of `"answer"`, `"push"`, `"prompt"`, `"idea"`, `"start"`, `"edit"`, `"review"` and `"lead"`. See [Answer and push from your phone](../how-to/see-your-board-on-your-phone.md#answer-and-push-from-your-phone). |
@@ -210,11 +210,12 @@ profile = "quick-codex"
 - A task started from a vault note, or one kebbie opens a note for, writes this name and the task's into the note's `kebbie` frontmatter key. kebbie on another machine sharing the vault shows the note as `working on <name> · <task>` and asks before starting it.
 - Give each machine its own stable name, such as `"laptop"` and `"workstation"`.
 
-`hub.ideas_machine`: one machine takes the ideas you add on your phone.
+`hub.ideas_machine`: one machine writes out the backlog items you add, wherever you add them.
 
 - The machine it names says so on its board, and the phone's **New idea** picks it while it is awake, and an awake machine while it sleeps. The line under the machine says why: `ideas machine`, or `ideas machine is asleep, sent to workstation`.
-- Your own pick in the phone wins.
-- It changes nothing else: tasks, starts and items added on a machine stay there.
+- An item you add on another machine with `kebbie backlog add` or `n` goes to the same machine when the backlog is the vault. When its repo has a checkout on only one machine, it goes to that machine instead. The machine you added it on says where it went, such as `Sent to workstation, the ideas machine`, and the item shows on that machine's board.
+- Machines find each other through the vault: each one keeps its name, its repos and whether it is the ideas machine in the vault note `Kebbie/machines.md`, and items for a machine wait in its `Kebbie/inbox-<name>.md` until its keeper files them. A machine silent for a week drops out of the note.
+- An item you asked to start once it is written goes along and starts on that machine. A task already running stays on the machine where it started, and so does a local backlog without the vault.
 - Set it on the machine it names, or the same value on every machine.
 
 ```toml

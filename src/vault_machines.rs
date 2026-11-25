@@ -27,6 +27,10 @@ impl Machine {
         self.name.eq_ignore_ascii_case(name)
     }
 
+    pub fn has(&self, repo: &str) -> bool {
+        self.repos.iter().any(|one| one.eq_ignore_ascii_case(repo))
+    }
+
     fn same_facts(&self, other: &Machine) -> bool {
         self.name == other.name && self.ideas == other.ideas && self.repos == other.repos
     }
@@ -58,6 +62,12 @@ pub fn with(machines: &[Machine], me: &Machine, now: u64) -> Vec<Machine> {
     all.push(me.clone());
     all.sort_by_key(|one| one.name.to_lowercase());
     all
+}
+
+// The machines as the vault lists them, with this machine's own facts as they are now.
+pub fn read(store: &dyn Store, me: &Machine, now: u64) -> Vec<Machine> {
+    let listed = store.read(KEY).map(|(text, _)| parse(&text)).unwrap_or_default();
+    with(&listed, me, now)
 }
 
 // This machine's entry written when its facts changed or a day passed; a write that lost to another machine's is tried again next round.

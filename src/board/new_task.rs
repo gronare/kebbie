@@ -211,7 +211,7 @@ impl App {
         self.mode = Mode::NewTask(new);
     }
 
-    // With a backlog both choices file the text for the writer, which picks the repo; Start now also marks it to start once written. Without one, Start now starts it at once in the fallback repo.
+    // With a backlog both choices file the text for the writer, which picks the repo; Start now also marks it to start once written, on the machine the vault item is sent to, which may be another. Without one, Start now starts it at once in the fallback repo.
     fn do_new_task(&mut self, mut new: Box<NewTask>, choice: Choice) {
         let text = new.text.trim().to_string();
         let job = match choice {
