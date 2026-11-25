@@ -724,7 +724,7 @@ The answers sit on one row at the bottom under an `ANSWER` header, each as its k
 | `esc` | In the comment box, back to the answers. Otherwise, close. |
 | `q` | Close, outside the comment box. |
 
-Once an answer is sent, the window opens the next waiting question, or closes when none is left. With [`board.next_question`](configuration.md#board) set to `false`, it closes back to the board after every answer, with the answer's notice.
+Once an answer is sent, the window closes back to the board with the answer's notice, and the cursor stays on the row you answered from. With [`board.next_question`](configuration.md#board) set to `true`, it opens the next waiting question instead, and closes when none is left.
 
 ### Messages panel
 

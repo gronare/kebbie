@@ -1255,11 +1255,12 @@ mod tests {
     }
 
     #[test]
-    fn a_sent_answer_moves_on_to_the_next_question_unless_next_question_is_off() {
+    fn a_sent_answer_closes_the_window_on_its_row_unless_next_question_is_on() {
         for next_question in [true, false] {
             let mut app = test_app(vec![served("search-filters")]);
             app.next_question = next_question;
             app.questions = three_questions();
+            let row = app.selected_task().map(|item| item.name);
             app.open_questions(Some(0));
             let (sender, receiver) = mpsc::channel();
             app.answering = Some(("a".to_string(), receiver));
@@ -1270,6 +1271,7 @@ mod tests {
                 Mode::Questions(window) => assert!(next_question && window.id == "b" && shown.is_none(), "on: the window opens the next question"),
                 _ => assert!(!next_question && shown.as_deref() == Some("Answered."), "off: back on the board with the answer's notice, {shown:?}"),
             }
+            assert!(row.is_some() && app.selected_task().map(|item| item.name) == row, "the cursor stays on the row it answered from");
         }
     }
 

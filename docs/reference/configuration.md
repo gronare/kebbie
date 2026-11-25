@@ -39,7 +39,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 | `board.backlog.ongoing` | `"top"` | config.toml only | Where the Backlog page shows ONGOING, the vault notes in progress: `"top"`, `"bottom"` or `"hidden"`. |
 | `board.backlog.template` | none | config.toml only | A file with the sections kebbie drafts local backlog items in. See [Backlog sources](#backlog-sources). |
 | `board.groups` | the order below | config.toml only | The order of the Work column's groups. |
-| `board.next_question` | `true` | config.toml only | Whether the questions window opens the next waiting question after an answer is sent; `false` closes it back to the board with the answer's notice. See [The inbox](board.md#the-inbox). |
+| `board.next_question` | `false` | config.toml only | Whether the questions window opens the next waiting question after an answer is sent; `false` closes it back to the board with the answer's notice, the cursor on the row you answered from. See [The inbox](board.md#the-inbox). |
 | `[keys]` | the board's own | config.toml only | The board's keys by action, a table of strings, as `inbox = "I"`. See [Board](board.md#keys-in-configtoml). |
 
 - `board.backlog.sources`: new items are written to `"local"` or `"vault"`, so a list holds one of them; Linear is only read. A config that lists both reads as the vault alone, and `kebbie doctor` says so. `[]` turns the backlog off.

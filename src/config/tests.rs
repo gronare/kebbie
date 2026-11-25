@@ -440,13 +440,13 @@ fn board_groups_take_the_listed_order_and_the_rest_follow_by_default() {
 }
 
 #[test]
-fn next_question_is_on_unless_config_toml_turns_it_off() {
-    assert!(settings(&Worktree::default(), &Machine::default()).next_question.value, "unset keeps the window moving on");
-    let off = settings(&Worktree::default(), &machine("[board]\nnext_question = false\n"));
-    assert!(!off.next_question.value && off.next_question.layer == Layer::Machine);
+fn next_question_is_off_unless_config_toml_turns_it_on() {
+    assert!(!settings(&Worktree::default(), &Machine::default()).next_question.value, "unset closes the window after an answer");
+    let on = settings(&Worktree::default(), &machine("[board]\nnext_question = true\n"));
+    assert!(on.next_question.value && on.next_question.layer == Layer::Machine);
     assert!(parse_machine("[board]\nnext_question = \"no\"\n", "config.toml").unwrap_err().contains("board.next_question"));
-    let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: off });
-    assert!(shown.contains("board.next_question = false  (machine config)\n  Whether the questions window moves on"), "{shown}");
+    let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: on });
+    assert!(shown.contains("board.next_question = true  (machine config)\n  Whether the questions window moves on"), "{shown}");
 }
 
 #[test]

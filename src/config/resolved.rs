@@ -136,7 +136,7 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         groups: pick(None, machine.groups.as_ref()).map_or(Setting { value: Group::ALL.to_vec(), layer: Layer::Default }, |setting| Setting { value: group_order(&setting.value), layer: setting.layer }),
         ongoing: or_default(pick(None, machine.ongoing.as_ref()), OngoingAt::default()),
         backlog_template: optional(pick(None, machine.template.as_ref())),
-        next_question: or_default(pick(None, machine.next_question.as_ref()), true),
+        next_question: or_default(pick(None, machine.next_question.as_ref()), false),
         setup_skill: or_default(pick(repo.setup_skill.as_ref(), machine.worktree.setup_skill.as_ref()), DEFAULT_SETUP_SKILL.to_string()),
         setup_command: unset(pick(repo.setup_command.as_ref(), machine.worktree.setup_command.as_ref())),
         dev_server: unset(pick(repo.dev_server.as_ref(), machine.worktree.dev_server.as_ref())),
