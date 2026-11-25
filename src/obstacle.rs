@@ -796,6 +796,10 @@ pub fn carry_out(state: &Path, address: &str, obstacle: &Obstacle, answer: &Answ
         return Ok(said);
     }
     let said = match kind {
+        Kind::Workaround if answer.replaced_by.is_none() && own_call(&answer.reason) => {
+            let standing = answer.standing.as_ref().map(|standing| format!(" It applies the user's standing answer: {standing}.")).unwrap_or_default();
+            format!("{header}: the task's own call. Go on the way you proposed: it is how you build your own work, not a detour, so nothing is filed in the backlog. {}{standing}", answer.reason)
+        }
         Kind::Workaround => {
             let replaced = match &answer.replaced_by {
                 Some(by) => format!("What replaces it: {by}."),
@@ -856,6 +860,11 @@ fn record_and_tell(state: &Path, address: &str, obstacle: &Obstacle, decision: &
     tell_task(address, from, &format!("{said}{write}"))?;
     crate::phase::record(state, address, "obstacle", &crate::phase::Event::Resumed);
     Ok(())
+}
+
+// The investigator's word that a method question is the task's to settle in its own work, so there is no detour and no real fix to file.
+fn own_call(reason: &str) -> bool {
+    reason.trim_start().to_lowercase().replace('\u{2019}', "'").starts_with("the task's own call")
 }
 
 fn file_real_fix(address: &str, obstacle: &Obstacle) -> Result<String> {
@@ -1054,6 +1063,19 @@ mod tests {
         let said = carry_out(&state, address, &other.unwrap(), &pushed, 4).unwrap();
         assert!(said.contains(": subtask. Build \"Guard the retry\"") && said.contains("0000000 is no commit of yours that is still unpushed"), "a sha that is not unpushed gets the subtask: {said}");
         assert_eq!(fold_target(&[(sha.clone(), "Book refunds".to_string())], "abc"), None, "a prefix under four characters names nothing");
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_workaround_that_is_the_tasks_own_call_files_nothing_in_the_backlog() {
+        let state = crate::sh::test_dir("obstacle-own-call");
+        let address = "billing@app";
+        let (obstacle, _) = raised(&state, address, "the review asks about scope: src/next.rs:193 falls back to the lead's summary", "");
+        let answer = parse("decision: workaround\nreason: The task’s own call. The goal already covers the row, so the task fixes src/next.rs:193 in its own work.\nplan: unchanged in scope: the task fixes src/next.rs:193").unwrap();
+        let said = carry_out(&state, address, &obstacle.unwrap(), &answer, 2_000).unwrap();
+        assert!(said.contains(": the task's own call. Go on the way you proposed") && said.contains("nothing is filed in the backlog"), "{said}");
+        assert!(!said.contains("filed the real fix") && !said.contains("filing the real fix"), "no backlog item is attempted: {said}");
+        assert!(!own_call("Not the task's own call: the index is rebuilt next month."), "only a reason that opens with it");
         fs::remove_dir_all(state).unwrap();
     }
 

@@ -29,7 +29,7 @@ Prefer the way that leaves the code better for the task's goal: make the change 
 - **`task`**: the precondition is work of its own: another repo or area, its own review or rollout, a task already running that builds it, or an obstacle seen before in another task, whose root cause deserves one task rather than a detour in each. The blocked work waits for it.
 - **`ask`**: the trade-off is the user's (it changes what they get, what it costs or how long it takes) and no standing decision answers it, or you are still unsure after the steps. Write the question by the skill `kebbie:write-question`: the question first, at most three sentences of context in the user's words, two to four options each saying what the user gets, and the one you recommend.
 
-When what the task raised is a question of method and nothing stands in its way, say so as `workaround` with the reason "the task's own call".
+When what the task raised is a question of method and nothing stands in its way, or the task fixes it in its own work, say so as `workaround` with a reason that opens with "The task's own call" and no `replaced by:`: kebbie then files nothing in the backlog, since nothing was gone around.
 
 ## The answer
 
