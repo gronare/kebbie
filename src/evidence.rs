@@ -272,6 +272,14 @@ impl Exit {
 pub struct Found<'a> {
     pub runner: &'a str,
     pub exit: Exit,
+    pub echo: Option<Echo>,
+}
+
+// An echo of $? right after the test command: the text it prints before the code, and what that code says about the test command.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Echo {
+    pub label: String,
+    pub exit: Exit,
 }
 
 const PIPED: &str = "piped, so the exit is the pipe's";
@@ -280,16 +288,9 @@ const OTHER: &str = "the exit is another command's";
 // What the exit of the line says about the command at `at`: whole when nothing runs after it, only a zero after &&, nothing after a pipe without pipefail or after ; || &.
 fn exit_of(pieces: &[(&str, Option<shell::Op>)], at: usize, errexit: bool, pipefail: bool) -> Exit {
     use shell::Op;
-    let mut exit = Exit::Speaks;
-    for (text, op) in pieces[..at].iter().rev() {
-        match op {
-            Some(Op::Seq) if !errexit => break,
-            Some(Op::Background) => break,
-            Some(Op::Or) => return Exit::Silent(OTHER),
-            Some(Op::Pipe) if pipefail => exit = exit.least(Exit::ZeroOnly),
-            Some(Op::Seq | Op::And) if shell::piece(text) != shell::Piece::Setup => exit = exit.least(Exit::ZeroOnly),
-            _ => {}
-        }
+    let mut exit = exit_before(pieces, at, errexit, pipefail);
+    if exit == Exit::Silent(OTHER) {
+        return exit;
     }
     let mut after = pieces[at..].iter().map(|(_, op)| *op).skip_while(|op| *op == Some(Op::Pipe));
     if pieces[at].1 == Some(Op::Pipe) {
@@ -306,6 +307,57 @@ fn exit_of(pieces: &[(&str, Option<shell::Op>)], at: usize, errexit: bool, pipef
     exit
 }
 
+// What the exit of the command at `at`, read right after it, says about it: a command before it on && or a pipe with pipefail may have ended the line first, one before || may have run in its place.
+fn exit_before(pieces: &[(&str, Option<shell::Op>)], at: usize, errexit: bool, pipefail: bool) -> Exit {
+    use shell::Op;
+    let mut exit = Exit::Speaks;
+    for (text, op) in pieces[..at].iter().rev() {
+        match op {
+            Some(Op::Seq) if !errexit => break,
+            Some(Op::Background) => break,
+            Some(Op::Or) => return Exit::Silent(OTHER),
+            Some(Op::Pipe) if pipefail => exit = exit.least(Exit::ZeroOnly),
+            Some(Op::Seq | Op::And) if shell::piece(text) != shell::Piece::Setup => exit = exit.least(Exit::ZeroOnly),
+            _ => {}
+        }
+    }
+    exit
+}
+
+// The text an `echo … $?` right after the command at `at`, on ; or a newline, prints before the code; none when the echo goes to a file or quotes $? away.
+fn echo_after(pieces: &[(&str, Option<shell::Op>)], at: usize) -> Option<String> {
+    if pieces[at].1 != Some(shell::Op::Seq) {
+        return None;
+    }
+    let words = shell::split_words(shell::unwrap(pieces.get(at + 1)?.0));
+    let (first, rest) = words.split_first()?;
+    if *first != "echo" {
+        return None;
+    }
+    let flags: Vec<&&str> = rest.iter().take_while(|word| word.len() > 1 && word.starts_with('-') && word[1..].chars().all(|flag| "neE".contains(flag))).collect();
+    if flags.iter().any(|flag| flag.contains('n')) {
+        return None;
+    }
+    let mut printed = Vec::new();
+    for word in &rest[flags.len()..] {
+        if redirection(word) || word.starts_with('\'') && word.contains("$?") {
+            return None;
+        }
+        printed.push(word.trim_matches(|char| char == '"' || char == '\''));
+    }
+    let printed = printed.join(" ");
+    printed.find("$?").map(|at| printed[..at].to_string())
+}
+
+// The codes the output holds after `label`, in order.
+fn echoed(output: &str, label: &str) -> Vec<i64> {
+    output.lines().map(plain).filter_map(|line| {
+        let rest = line.trim_end().strip_prefix(label)?;
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        (!digits.is_empty() && (!label.is_empty() || digits == rest)).then(|| digits.parse().ok()).flatten()
+    }).collect()
+}
+
 fn sets(text: &str, flag: char, option: &str) -> bool {
     let words: Vec<&str> = text.split_whitespace().collect();
     words.first() == Some(&"set") && (words.contains(&option) || words.iter().any(|word| word.starts_with('-') && !word.starts_with("--") && word.contains(flag)))
@@ -317,7 +369,7 @@ pub fn find_all<'a>(command: &str, listed: &'a [String]) -> Vec<Found<'a>> {
     let (mut errexit, mut pipefail, mut all) = (false, false, Vec::new());
     for (at, (text, _)) in pieces.iter().enumerate() {
         let found = match shell::piece(text) {
-            shell::Piece::Simple(simple) => listed_start(simple, listed).map(|runner| Found { runner, exit: Exit::Speaks }).into_iter().collect(),
+            shell::Piece::Simple(simple) => listed_start(simple, listed).map(|runner| Found { runner, exit: Exit::Speaks, echo: echo_after(&pieces, at).map(|label| Echo { label, exit: exit_before(&pieces, at, errexit, pipefail) }) }).into_iter().collect(),
             shell::Piece::Nested(inner) => find_all(&inner, listed),
             shell::Piece::Setup => {
                 let text = shell::unwrap(text);
@@ -327,8 +379,8 @@ pub fn find_all<'a>(command: &str, listed: &'a [String]) -> Vec<Found<'a>> {
             }
             shell::Piece::Hidden(..) => Vec::new(),
         };
-        let line = exit_of(&pieces, at, errexit, pipefail);
-        all.extend(found.into_iter().map(|found| Found { exit: found.exit.least(line), ..found }));
+        let (line, before) = (exit_of(&pieces, at, errexit, pipefail), exit_before(&pieces, at, errexit, pipefail));
+        all.extend(found.into_iter().map(|found| Found { exit: found.exit.least(line), echo: found.echo.map(|echo| Echo { exit: echo.exit.least(before), ..echo }), ..found }));
     }
     all
 }
@@ -687,11 +739,28 @@ pub fn outcome(input: &Value, listed: &[String]) -> Vec<Ended> {
     }
     let Some((exit, finished, output, background)) = ending(input) else { return Vec::new() };
     let found_count = found.len();
-    let parts = if found_count > 1 { parts(&output, found_count).or_else(|| summary(&output).filter(|summary| summary.failed).map(|_| vec![output.clone(); found_count])) } else { Some(vec![output]) };
-    found.iter().enumerate().map(|(at, found)| Ended {
-        command: command.to_string(), runner: found.runner.to_string(), exit, finished, says: found.exit, background: background.clone(), in_line: found_count, queued: parts.as_ref().is_some_and(|parts| crate::builds::queued_in(&parts[at])),
-        output: parts.as_ref().map(|parts| parts[at].clone()).unwrap_or_default(),
+    let parts = if found_count > 1 { parts(&output, found_count).or_else(|| summary(&output).filter(|summary| summary.failed).map(|_| vec![output.clone(); found_count])) } else { Some(vec![output.clone()]) };
+    found.iter().enumerate().map(|(at, one)| {
+        let part = parts.as_ref().map(|parts| parts[at].clone()).unwrap_or_default();
+        let own = own_exit(&found, at, &output);
+        let queued = own.map_or_else(|| crate::builds::queued_in(&part), |(code, _)| code == i64::from(crate::builds::QUEUED_EXIT));
+        let (exit, finished, says) = match own {
+            Some((code, says)) => (Some(code), code == 0, says),
+            None => (exit, finished, one.exit),
+        };
+        Ended {
+            command: command.to_string(), runner: one.runner.to_string(), exit, finished, says, background: background.clone(), in_line: found_count, queued, output: part,
+        }
     }).collect()
+}
+
+// The exit the test command at `at` of the line printed with an echo of $? right after it, and what it says, the echoes of one label matched in order.
+fn own_exit(found: &[Found], at: usize, output: &str) -> Option<(i64, Exit)> {
+    let echo = found.get(at)?.echo.as_ref()?;
+    let same = |other: &Found| other.echo.as_ref().is_some_and(|other| other.label == echo.label);
+    let codes = echoed(output, &echo.label);
+    (codes.len() == found.iter().filter(|other| same(other)).count()).then_some(())?;
+    Some((codes[found[..at].iter().filter(|earlier| same(earlier)).count()], echo.exit))
 }
 
 // How the Bash call ended: its exit, whether it ran to a zero exit, its output and its background id.
@@ -769,14 +838,16 @@ fn tail_of(path: &Path) -> String {
 pub fn settled(run: &Run, end: &End, listed: &[String]) -> Run {
     let output = end.output.as_deref().map(tail_of).unwrap_or_default();
     let summary = (run.in_line <= 1).then(|| summary(&output)).flatten();
-    let says = run.says.or_else(|| find(&run.command, listed).map(|found| found.exit)).unwrap_or(Exit::Silent(OTHER));
-    let (result, why) = match (end.ended, end.exit) {
-        (true, _) if summary.as_ref().is_none_or(|summary| summary.ran_none) && run.in_line <= 1 && crate::builds::queued_in(&output) => (Outcome::Unknown, QUEUED),
+    let own = (run.in_line <= 1).then(|| own_exit(&find_all(&run.command, listed), 0, &output)).flatten();
+    let says = own.map(|(_, says)| says).or(run.says).or_else(|| find(&run.command, listed).map(|found| found.exit)).unwrap_or(Exit::Silent(OTHER));
+    let exit = own.map(|(code, _)| code).or(end.exit);
+    let (result, why) = match (end.ended, exit) {
+        (true, _) if summary.as_ref().is_none_or(|summary| summary.ran_none) && own.map_or(run.in_line <= 1 && crate::builds::queued_in(&output), |(code, _)| code == i64::from(crate::builds::QUEUED_EXIT)) => (Outcome::Unknown, QUEUED),
         (false, _) => match summary.as_ref() { Some(summary) if summary.failed => (Outcome::Failed, ""), _ => (Outcome::Unknown, "stopped before it ended") },
         (true, None) => judged(false, Exit::Silent("ended without an exit code"), summary.as_ref()),
         (true, Some(exit)) => judged(exit == 0, says, summary.as_ref()),
     };
-    Run { result, why: why.to_string(), exit: end.exit, summary: summary.map(|summary| summary.text).unwrap_or_default(), background: String::new(), transcript: String::new(), read_to: 0, ..run.clone() }
+    Run { result, why: why.to_string(), exit, summary: summary.map(|summary| summary.text).unwrap_or_default(), background: String::new(), transcript: String::new(), read_to: 0, ..run.clone() }
 }
 
 // The complete lines a transcript gained since byte `from`, and the byte after the last of them; a transcript shorter than `from` was replaced and is read from its start.
@@ -904,7 +975,7 @@ fn unknown_context(run: &Run) -> String {
     if run.why == QUEUED {
         return format!("kebbie recorded `{}` without a result: {QUEUED}. Run it again once kebbie tells you a build slot is free.", run.runner);
     }
-    format!("kebbie recorded `{}` without a result: {}. Run it again so its own exit ends the command (no pipe after it, or set -o pipefail first, and nothing after it), or say in your report how it ended.", run.runner, run.why)
+    format!("kebbie recorded `{}` without a result: {}. Run it again without a pipe after it, and with nothing after it or `; echo exit $?` right after it, or say in your report how it ended.", run.runner, run.why)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1187,7 +1258,7 @@ mod tests {
         assert_eq!(recognise("cd /src/wt1.app; true; bin/rspec spec/some_spec.rb", &list), Some("bin/rspec"), "the reported line");
         assert_eq!(recognise("cd w; spring stop >/dev/null; script/test spec/a_spec.rb 2>&1 | grep -E \"examples|Failure\"", &list), Some("script/test"));
         let found = find_all("bin/rspec spec/a_spec.rb; timeout 60 npm test && echo done", &list);
-        assert_eq!(found, [Found { runner: "bin/rspec", exit: Exit::Silent(OTHER) }, Found { runner: "npm test", exit: Exit::ZeroOnly }]);
+        assert_eq!(found, [Found { runner: "bin/rspec", exit: Exit::Silent(OTHER), echo: None }, Found { runner: "npm test", exit: Exit::ZeroOnly, echo: None }]);
         assert_eq!(find_all("(cd app; cargo test) && bash -c 'pytest -q'", &list).iter().map(|found| found.runner).collect::<Vec<_>>(), ["cargo test", "pytest"]);
         assert_eq!(find_all("for f in a b; do script/test $f; done; echo cargo test", &list), []);
     }
@@ -1423,6 +1494,73 @@ mod tests {
         broke["error"] = json!("Exit code 101");
         assert_eq!(record_in(&state, "billing@app", &dir, &list, &broke, 5).remove(0).result, Outcome::Failed, "nothing after it, so its exit is its own");
         assert_eq!(record_in(&state, "billing@app", &dir, &list, &failed("cargo build && cargo test"), 6).remove(0).result, Outcome::Unknown, "the build may have failed before the tests ran");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_echo_of_the_exit_right_after_the_test_command_is_its_own_exit() {
+        let list = listed(&[]);
+        let echo = |command: &str| find(command, &list).and_then(|found| found.echo);
+        for (command, label, exit) in [
+            ("cargo test > $TMPDIR/t.log 2>&1; echo exit $?; grep -E 'test result|panicked' $TMPDIR/t.log | head -30", "exit ", Exit::Speaks),
+            ("cargo test --quiet a_release; echo \"red exit $?\"; git checkout -- src", "red exit ", Exit::Speaks),
+            ("timeout 900 cargo test --quiet > $TMPDIR/r.log 2>&1; echo $?; tail -5 $TMPDIR/r.log", "", Exit::Speaks),
+            ("cargo test\necho \"exit=$?\"", "exit=", Exit::Speaks), ("cargo test; echo -e \"exit $?\"", "exit ", Exit::Speaks),
+            ("cargo build && cargo test; echo exit $?", "exit ", Exit::ZeroOnly),
+            ("bash -c 'cargo test; echo done $?'", "done ", Exit::Speaks),
+        ] {
+            assert_eq!(echo(command), Some(Echo { label: label.to_string(), exit }), "{command}");
+        }
+        for command in ["cargo test; echo 'exit $?'", "cargo test; echo $? > code", "cargo test && echo $?", "cargo test | tail -3; echo $?", "cargo test; ls; echo $?", "false || cargo test; echo $?", "cargo test; echo -n exit $?; ls", "cargo test; echo -ne \"exit $?\"; ls"] {
+            assert!(echo(command).is_none_or(|echo| echo.exit == Exit::Silent(OTHER)), "{command}");
+        }
+    }
+
+    #[test]
+    fn a_test_run_followed_by_an_echo_of_its_exit_is_judged_by_that_code() {
+        let dir = repo();
+        let state = dir.join("state");
+        let list = listed(&[]);
+        let record = |command: &str, stdout: &str, at: u64| {
+            let mut payload = passed(command);
+            payload["tool_response"]["stdout"] = json!(stdout);
+            record_in(&state, "billing@app", &dir, &list, &payload, at)
+        };
+        let run = record("cargo test --lib setup > $TMPDIR/t.log 2>&1; echo exit $?; grep -E 'FAILED|panicked' $TMPDIR/t.log | head -30", "exit 0", 1).remove(0);
+        assert_eq!((run.result, run.exit), (Outcome::Passed, Some(0)), "the echo prints the test's own exit, the line's is head's");
+        let run = record("cargo test --lib setup > $TMPDIR/t.log 2>&1; echo exit $?; grep -E 'FAILED|panicked' $TMPDIR/t.log", "exit 101\nthread 'setup::x' panicked at src/setup.rs:9", 2).remove(0);
+        assert_eq!((run.result, run.exit), (Outcome::Failed, Some(101)));
+        let run = record("cargo test --quiet a_release; echo \"red exit $?\"; git status --short", "error[E0425]: cannot find value\nred exit 101\n M src/pool.rs", 3).remove(0);
+        assert_eq!(run.result, Outcome::Failed, "a compile error is the test command's own red");
+        let both = record("cargo test --bin kebbie report:: > $TMPDIR/a.log 2>&1; echo unit $?; cargo test --test cli > $TMPDIR/b.log 2>&1; echo cli $?; grep -c ok $TMPDIR/a.log", "unit 0\ncli 101\n12", 4);
+        assert_eq!(both.iter().map(|run| (run.result, run.exit)).collect::<Vec<_>>(), [(Outcome::Passed, Some(0)), (Outcome::Failed, Some(101))], "each run reads its own echo");
+        let one_queued = record("cargo test a > a.log 2>&1; echo a $?; cargo test b; echo b $?", &format!("a 0\n{}\nb 75", crate::builds::queued_line(2, &crate::builds::Blocked::Full("alpha@app building".to_string()))), 14);
+        assert_eq!(one_queued.iter().map(|run| (run.result, run.why.as_str())).collect::<Vec<_>>(), [(Outcome::Passed, ""), (Outcome::Unknown, QUEUED)], "the queue line is the queued run's alone");
+        let twice = record("cargo test a; echo $?; cargo test b; echo $?", "test result: ok. 1 passed; 0 failed\n0\ntest result: ok. 2 passed; 0 failed\n0", 5);
+        assert!(twice.iter().all(|run| run.result == Outcome::Passed), "echoes of one label are matched in order");
+        let run = record("cargo test --locked --test release_notes > $TMPDIR/rn.log 2>&1; echo exit $?; grep -n FAILED $TMPDIR/rn.log | head -20", "exit 75", 9).remove(0);
+        assert_eq!((run.result, run.why.as_str()), (Outcome::Unknown, QUEUED), "the queue's exit 75 with its line in the log is no red test");
+        let run = record("cargo build && cargo test; echo exit $?", "exit 101", 6).remove(0);
+        assert_eq!(run.result, Outcome::Unknown, "after && a non-zero may be the build's");
+        let run = record("git status --short | wc -l; cargo test > t.log 2>&1; echo $?; tail -3 t.log", "0\n101\nerror: test failed", 10).remove(0);
+        assert_eq!(run.result, Outcome::Unknown, "two bare codes for one echo say nothing");
+        let role = "cargo test > $TMPDIR/t.log 2>&1; echo exit $?; grep -E \"test result|FAILED|panicked\" $TMPDIR/t.log";
+        let run = record(role, "exit 0\ntest result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out", 11).remove(0);
+        assert_eq!((run.result, run.summary.as_str()), (Outcome::Passed, "12 passed"), "the role's own example passes on a filtered run");
+        let mut grep_found_nothing = failed(role);
+        grep_found_nothing["error"] = json!("Exit code 1\nexit 0");
+        assert_eq!(record_in(&state, "billing@app", &dir, &list, &grep_found_nothing, 12).remove(0).result, Outcome::Passed, "grep's exit 1 is not the test's");
+        let run = record("cargo test; echo -n exit $?; echo 5", "exit 05", 13).remove(0);
+        assert_eq!(run.result, Outcome::Unknown, "without its newline the next output runs into the code");
+        let run = record("cargo test; echo exit $?", "nothing printed", 7).remove(0);
+        assert_eq!((run.result, run.why.as_str()), (Outcome::Unknown, OTHER), "without its echo in the output the line's exit is echo's");
+        let run = record("cargo test; echo exit $?", "test result: ok. 0 passed; 0 failed; 3 filtered out\nexit 0", 8).remove(0);
+        assert_eq!((run.result, run.why.as_str()), (Outcome::Unknown, RAN_NONE), "a zero for no test at all proves nothing");
+        let output = dir.join("bg.out");
+        fs::write(&output, "exit 1\n").unwrap();
+        let background = Run { command: "cargo test > t.log 2>&1; echo exit $?; tail -3 t.log".to_string(), background: "b1".to_string(), says: Some(Exit::Silent(OTHER)), ..run };
+        let settled = settled(&background, &End { ended: true, exit: Some(0), output: Some(output) }, &list);
+        assert_eq!((settled.result, settled.exit), (Outcome::Failed, Some(1)), "a background run settles by its echo too");
         fs::remove_dir_all(dir).unwrap();
     }
 
