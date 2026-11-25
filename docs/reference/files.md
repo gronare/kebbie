@@ -164,7 +164,7 @@ A `routines/` file holds when the scheduler first saw the routine, when its last
 
 | Entry | Holds |
 | --- | --- |
-| `issues/held` | The one line the lead holds to propose at a calm moment (`kebbie issue hold`), removed when it is taken or an issue is saved or reopened. |
+| `issues/held` | The one line held with `kebbie issue hold`, removed when it is taken or an issue is saved or reopened. |
 | `issues/recheck/` | The rechecks under way, per issue, by extension below, and `dismissed`, when you last cleared the board's line. |
 
 | `issues/recheck/` file | Holds |

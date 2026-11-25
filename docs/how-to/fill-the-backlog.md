@@ -23,7 +23,7 @@ If you want no backlog, set `sources = []`.
 
 ## Add an item
 
-Write what you want in a line. kebbie's writer writes it out in full at once from the code, the notes and the web, apart from the lead's chat; the lead reviews the draft, adds what it knows from your conversation, keeps only the open questions you must answer, and shows you the written item. [`writer.profile`](../reference/configuration.md#writer) picks the writer's agent and model; with `"none"` the lead writes it out itself.
+Write what you want in a line. kebbie's writer writes it out in full at once from the code, the notes and the web, apart from the lead's chat; the lead reviews the draft, adds what it knows from your conversation, keeps only the open questions you must answer, and tells you in a line that it is written; you read it on the board. [`writer.profile`](../reference/configuration.md#writer) picks the writer's agent and model; with `"none"` the lead writes it out itself.
 
 On the board, press `2` for the Backlog page and press `n`, then enter the line and a priority. Or from a shell:
 
@@ -61,7 +61,7 @@ To use your own, write `.vault/styles/backlog.override.md` in the vault, in Obsi
 
 ## Have an item written out
 
-Select an item marked to write on the Backlog page and press `⏎`: its options open with **Write it out** first and **Open the card** second. The lead writes it out in place by the skill and shows you the written item. From a shell:
+Select an item marked to write on the Backlog page and press `⏎`: its options open with **Write it out** first and **Open the card** second. The lead writes it out in place by the skill and tells you in a line that it is written. From a shell:
 
 ```bash
 kebbie backlog write Projects/fix-login.md

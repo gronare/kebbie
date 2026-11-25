@@ -162,7 +162,7 @@ Set the task aside until later, as `Z` on the board does. It keeps working, and 
 | What | While parked |
 | --- | --- |
 | The board | It leaves its group for the [parked line](board.md#parked), which counts its open question or red CI. |
-| The lead | Leaves it out of its summaries: Done, Going on and Needs you. Its reports, notices and question copies stay on the board. |
+| The lead | Leaves it out of its replies and briefings. Its reports, notices and question copies stay on the board. |
 | Notifications | None is sent for it. |
 | [`kebbie status --json`](#kebbie-status---json) | `parked_until` says when it comes back, and its `group` is `PARKED`. |
 
@@ -1144,8 +1144,8 @@ Problems and wishes about kebbie itself, saved on this machine, one file each un
 | Command | What it does |
 | --- | --- |
 | `kebbie issues [--json] [--all]` | The open issues (`open` and `retry`). `--all` lists every status. `kebbie issue list` is the same. |
-| `kebbie issue hold <line>` | Hold one line on what kebbie did, for the lead to propose saving it at a calm moment. Yours or the lead's. |
-| `kebbie issue hold --take` | Print the held line and clear it, or `Nothing held.` The lead runs it at a calm moment, just before it proposes. |
+| `kebbie issue hold <line>` | Hold one line on what kebbie did, as a note on this machine. The lead saves issues itself and holds nothing. |
+| `kebbie issue hold --take` | Print the held line and clear it, or `Nothing held.` |
 | `kebbie issue add --kind bug\|wish --title <title> [<text>\|-]` | Save an issue. Yours or the lead's. |
 | `kebbie issue show <id>` | Print one issue with its text. |
 | `kebbie issue close <id> fixed\|wontfix\|duplicate` | Close it. |

@@ -28,23 +28,15 @@ On the board, the bugs and wishes to send wait under Work in one row; `⏎` on i
 
 ## Save it
 
-When kebbie costs something in a session (an error, a workaround, a missing capability), the lead notes it in one line with `kebbie issue hold` and carries on with your work.
+When kebbie costs something in a session (an error, a workaround, a missing capability), the lead saves it as an issue with a text about kebbie alone, asks you nothing about it, and carries on with your work. It waits in the board's bugs to send until you send it.
 
-It asks about it later, at a calm moment:
-
-- what you asked for is done,
-- nothing on the board waits on you: no open question, nothing under Needs you, away mode off,
-- your latest message asks for nothing new.
-
-Then the question is the lead's whole reply, one yes/no line, and it saves the issue only when you say yes.
-
-One line is held at a time, so several things that went wrong come to you as one question. The held line stays on this machine and survives a restart of the lead. It is never an issue, offered on the board or sent anywhere.
+When you point out a fault in kebbie yourself and kebbie's repo is among your areas, the lead starts a task that fixes it in code instead.
 
 A task tells the lead instead of asking you. Once saved, an issue is the keeper's to look after: the lead leaves kebbie issues out of its briefings and of what it asks you to decide, and takes up closing or retrying one when you ask about it.
 
-### Stop the lead proposing them
+### Stop the lead saving them
 
-Set this in config.toml. It takes effect when the lead next restarts (`L` on the board), and the lead then holds nothing and saves one only when you ask it to.
+Set this in config.toml. It takes effect when the lead next restarts (`L` on the board), and the lead then saves one only when you ask it to.
 
 ```toml
 [issues]
@@ -96,7 +88,7 @@ Nobody asks you anything. The board shows one line under Work as soon as the fir
 
 ### When a fixed issue comes back
 
-Reopen it rather than filing a new one; the lead proposes this when what you hit matches a closed issue. A reopened issue is offered for sending again, even one sent or kept here before.
+Reopen it rather than filing a new one; the lead reopens it itself when what kebbie cost matches a closed issue. A reopened issue is offered for sending again, even one sent or kept here before.
 
 ```bash
 kebbie issue reopen <id>         # records "came back on <version>"

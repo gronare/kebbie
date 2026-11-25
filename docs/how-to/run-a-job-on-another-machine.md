@@ -49,7 +49,7 @@ Commands a task already ran with [`kebbie run --on`](run-a-command-on-another-ma
   xcodebuild -scheme App -derivedDataPath build/dd build
 ```
 
-Ask Claude to make jobs of them: the skill `kebbie:write-jobs` names each one, shows you the `[jobs]` tables, writes them on your yes and runs each once.
+Ask Claude to make jobs of them: the skill `kebbie:write-jobs` names each one, writes the `[jobs]` tables and runs each once.
 
 ## 3. Run a job from a worktree
 

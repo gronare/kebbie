@@ -17,8 +17,8 @@ The skills the Claude Code plugin `kebbie@kebbie` ships, and the hooks kebbie gi
 | `kebbie:write-push-summary` | A task's Claude, when it writes its sign-off card | The card's short headline, and a first Built line saying what changes for you when you push it and what proves it. |
 | `kebbie:write-decision-line` | A task's Claude, when it writes the card's Decisions | Each decision as one line: the choice as you meet it, its reason in one clause, and who took it. |
 | `kebbie:write-plan-brief` | A task's Claude, and the lead, when it asks you to approve a plan | Writes the plan's brief for you in the vault's language: one sentence on what you approve, then what you get, what it costs, what is left out and what is already decided. `kebbie ask --plan` refuses a plan without one. |
-| `kebbie:write-jobs` | The lead, after a task ran the same `kebbie run --on` commands more than once, or when you ask | Proposes the commands [`kebbie job suggest`](commands.md#jobs-on-another-machine) lists as named [jobs](configuration.md#jobs), writes them into the repo config on your yes, and runs each once with `kebbie job run`. |
-| `kebbie:propose-change` | The lead, when kebbie cost something; a task's Claude, to tell the lead | Proposes saving what kebbie cost as a [kebbie issue](commands.md#kebbie-issues), at a calm moment. |
+| `kebbie:write-jobs` | The lead, once you said yes on the board to making jobs of the `kebbie run --on` commands a task ran more than once, or when you ask | Proposes the commands [`kebbie job suggest`](commands.md#jobs-on-another-machine) lists as named [jobs](configuration.md#jobs), writes them into the repo config, and runs each once with `kebbie job run`. |
+| `kebbie:propose-change` | The lead, when kebbie cost something; a task's Claude, to tell the lead | Saves what kebbie cost as a [kebbie issue](commands.md#kebbie-issues), with no question to you. |
 | `kebbie:review-split` | `/kebbie:review-split [base or what to review]` | Opens the [review split](review-split.md). |
 | `kebbie:history-split` | `/kebbie:history-split` | Opens `tig` in a split next to the pane. |
 | `kebbie:move-to-worktree` | `/kebbie:move-to-worktree <task name>` | Moves this session's work in progress out of the main checkout into its own worktree and Space, and continues there. |
@@ -42,9 +42,9 @@ The skills the Claude Code plugin `kebbie@kebbie` ships, and the hooks kebbie gi
 
 `kebbie:propose-change`:
 
-- Unless `[issues] propose = false` keeps the lead to your own requests, it holds a line on what kebbie cost with `kebbie issue hold`.
-- It proposes saving it at a calm moment, in a reply of its own once your request is done and nothing waits on you.
-- It saves it on your yes, with a text about kebbie alone, and reopens a closed one that came back instead of filing it again.
+- Unless `[issues] propose = false` keeps the lead to your own requests, it saves what kebbie cost by itself, with a text about kebbie alone, and reopens a closed one that came back instead of filing it again.
+- It asks you nothing about it: what it saved waits in the board's bugs to send.
+- A fault you point out in kebbie, when kebbie's repo is among your areas, becomes a task that fixes it instead.
 - It never sends one anywhere or opens a GitHub issue for it. A bug or wish reaches kebbie's maintainers through the hub report you approve (the list to send on the board, or `kebbie issue report`). `kebbie issue send` is yours to run, suggested only when you ask for a GitHub issue.
 
 `kebbie:expose-dev-servers`:

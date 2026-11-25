@@ -14,12 +14,12 @@ With one Claude, you hold the picture. With five, you cannot: you would spend yo
 
 The lead:
 
-- **briefs you** when you arrive: what needs you first, then what is working, in review and ready to push, each with a recommendation,
-- **finds work** in your backlog sources and offers two or three candidates,
+- **briefs you** when you arrive: 1 to 3 lines on what needs you now, by title, in the order `kebbie next` gives,
+- **finds work** in your backlog sources and names the one it recommends,
 - **starts tasks** with informed prompts: the ticket, the notes and decisions that bear on it, what other tasks touch, and what done looks like, each by a [recipe](recipes.md) from its playbook; a task it starts leaves you where you are, unless you ask to go there,
 - **answers why** from the notes: a question about why something was built a way starts in the task's note and the vault, archive included, never in the board's tasks, which say only what is going on,
 - **holds tasks to your rules** when the reviewer's rules check gives no verdict: it checks a ready task's commits against the rules skill, and approves them or sends back what to fix,
-- **relays** interface and contract changes between tasks, and brings you what needs a decision,
+- **relays** interface and contract changes between tasks, and puts what needs your decision on the board,
 - **does small cross-cutting fixes** itself, such as a script or a rename across repos.
 
 It does not push, except tasks you gave it permission for.
@@ -47,13 +47,13 @@ In away mode nothing waits: the lead gets each message as it comes.
 
 ## It writes at the end of a turn
 
-The lead works without narrating its steps: Claude Code folds its tool calls, and ctrl+o shows all of it. It writes once, when the turn ends, in three short parts, leaving out an empty one:
+The lead works without narrating its steps: Claude Code folds its tool calls, and ctrl+o shows all of it. It writes once, when the turn ends, in 1 to 3 lines:
 
-- **Done**: what landed.
-- **Going on**: one line per task.
-- **Needs you**: last, each with the exact answer or action it wants from you.
+- Your question gets its answer and nothing else: no queue lists, recaps or internal ids unless you ask for them. The lead starts or changes nothing in that turn, since you decide from the answer.
+- A fault you point out in kebbie, or in another tool whose repo is among your areas, gets a task that fixes it in code, started by the lead in the same turn.
+- A turn kebbie's messages started says what landed and, by title, what waits for you on the board; with nothing for you it is one line, such as "Noted: 3 updates, nothing for you."
 
-A turn that kebbie's messages started and that needs nothing from you ends on one line, such as "Noted: 3 updates, nothing for you."
+The lead asks you nothing in its chat. A question waits on the board, as a task's question or under Open questions on a backlog item; the only exception is a prompt on a task's own screen. Tasks waiting for work, and tasks left behind, the lead sorts out itself: it drops dead work and sets the rest going again.
 
 ## Questions about what are yours, questions about how are not
 
@@ -107,7 +107,7 @@ Away mode lets the lead keep tasks moving while you are gone, without deciding t
 
 ## You come back to a summary
 
-When you switch away mode off, kebbie hands the lead what was pushed, what it decided and the questions it kept. The lead writes you a summary in its three parts: what landed and what it decided under Done, the kept questions under Needs you. With a `notify.command`, you hear about landings and kept questions while you are away.
+When you switch away mode off, kebbie hands the lead what was pushed, what it decided and the questions it kept. The lead tells you in 1 to 3 lines what landed and which calls it made for you; the kept questions wait for you on the board. With a `notify.command`, you hear about landings and kept questions while you are away.
 
 Only you can switch away mode. A task or a message cannot turn it on for you. See [The trust boundary](trust-boundary.md).
 
