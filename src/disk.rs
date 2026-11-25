@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -86,6 +86,29 @@ pub fn space(path: &Path) -> Option<Space> {
     Some(Space { free: (stat.f_bavail as u64).saturating_mul(unit), total: (stat.f_blocks as u64).saturating_mul(unit) })
 }
 
+// Where sccache keeps its cache: SCCACHE_DIR, else its default under the user's cache folder.
+pub fn build_cache() -> Option<PathBuf> {
+    build_cache_in(|name| std::env::var_os(name).filter(|value| !value.is_empty()).map(PathBuf::from))
+}
+
+fn build_cache_in(var: impl Fn(&str) -> Option<PathBuf>) -> Option<PathBuf> {
+    if let Some(dir) = var("SCCACHE_DIR") {
+        return Some(dir);
+    }
+    let home = var("HOME");
+    if cfg!(target_os = "macos") {
+        return home.map(|home| home.join("Library/Caches/Mozilla.sccache"));
+    }
+    var("XDG_CACHE_HOME").or_else(|| home.map(|home| home.join(".cache"))).map(|cache| cache.join("sccache"))
+}
+
+pub fn shown_path(path: &Path) -> String {
+    match std::env::var_os("HOME").map(PathBuf::from).and_then(|home| path.strip_prefix(home).ok().map(Path::to_path_buf)) {
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    }
+}
+
 pub fn gb(bytes: u64) -> String {
     format!("{:.1} GB", bytes as f64 / GB as f64)
 }
@@ -118,6 +141,17 @@ mod tests {
         assert!(ordered(Limit::Gb(10), Limit::Gb(10)).unwrap_err().contains("must be below disk.trim_below"));
         assert!(ordered(Limit::Percent(5), Limit::Percent(10)).is_err());
         assert!(ordered(Limit::Percent(15), Limit::Gb(10)).is_ok());
+    }
+
+    #[test]
+    fn the_build_cache_is_sccache_dir_or_its_default_under_the_cache_folder() {
+        let vars = |set: &'static [(&'static str, &'static str)]| move |name: &str| set.iter().find(|(key, _)| *key == name).map(|(_, value)| PathBuf::from(value));
+        assert_eq!(build_cache_in(vars(&[("SCCACHE_DIR", "/big/sccache"), ("HOME", "/home/u")])), Some(PathBuf::from("/big/sccache")));
+        if !cfg!(target_os = "macos") {
+            assert_eq!(build_cache_in(vars(&[("HOME", "/home/u")])), Some(PathBuf::from("/home/u/.cache/sccache")));
+            assert_eq!(build_cache_in(vars(&[("XDG_CACHE_HOME", "/c"), ("HOME", "/home/u")])), Some(PathBuf::from("/c/sccache")));
+        }
+        assert_eq!(build_cache_in(vars(&[])), None);
     }
 
     #[test]

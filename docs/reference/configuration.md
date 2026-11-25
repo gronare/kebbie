@@ -368,7 +368,7 @@ commands = ["cargo", "xcodebuild", "npm run build"]
 
 #### Disk space
 
-Each worktree builds into its own `target/`, a few GB each, so a machine with many tasks can fill its disk. kebbie watches the free space on the disks that hold the repos' worktrees.
+Each worktree builds into its own `target/`, a few GB each, so a machine with many tasks can fill its disk. kebbie watches the free space on the disks that hold the repos' worktrees and sccache's build cache (`SCCACHE_DIR`, or `~/.cache/sccache`). The cache itself is never trimmed: when its disk is low, the keeper trims the worktrees on that disk, and the line under Needs you names the disk that stays short.
 
 On Linux, every 2 minutes, when the free space is below `disk.trim_below`, the keeper removes the build output that `worktree.clean_on_release` names from worktrees nobody uses, in this order:
 

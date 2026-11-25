@@ -104,9 +104,9 @@ pub struct Record {
     pub line: Option<String>,
 }
 
-pub fn short_line(space: Space, limit: Limit, trims: bool) -> String {
+pub fn short_line(disk: &Path, space: Space, limit: Limit, trims: bool) -> String {
     let done = if trims { "after trimming the build output of every worktree nobody uses" } else { "and kebbie trims build output only on Linux" };
-    format!("Disk: {} free of {}, below {} (disk.trim_below), {done}; free space by hand", crate::disk::gb(space.free), crate::disk::gb(space.total), limit.shown())
+    format!("Disk under {}: {} free of {}, below {} (disk.trim_below), {done}; free space by hand", crate::disk::shown_path(disk), crate::disk::gb(space.free), crate::disk::gb(space.total), limit.shown())
 }
 
 // The line the board shows under Needs you, while a recent round left the disk short; an old record is a keeper that stopped, so it says nothing.
@@ -146,9 +146,9 @@ struct World<'a> {
     trim: &'a dyn Fn(&Seen) -> Vec<(String, u64)>,
 }
 
-// Below disk.trim_below it trims worktrees in order, checking each again just before, until the disk is above the limit; the line is what the board shows when that was not enough.
+// Below disk.trim_below on any watched disk, the build cache's among them, it trims the worktrees on a disk below the limit in order, checking each again just before, until the disk is above the limit; the line is what the board shows when that was not enough.
 fn round(limit: Limit, world: &World) -> (Vec<String>, Option<String>) {
-    let short = || world.disks.iter().filter_map(|path| (world.space)(path)).filter(|space| space.below(limit)).min_by_key(|space| space.free);
+    let short = || world.disks.iter().filter_map(|path| Some((path, (world.space)(path)?))).filter(|(_, space)| space.below(limit)).min_by_key(|(_, space)| space.free);
     let mut notes = Vec::new();
     if world.trims && short().is_some() {
         for seen in order((world.seen)(), world.building) {
@@ -166,7 +166,7 @@ fn round(limit: Limit, world: &World) -> (Vec<String>, Option<String>) {
             }
         }
     }
-    (notes, short().map(|space| short_line(space, limit, world.trims)))
+    (notes, short().map(|(disk, space)| short_line(disk, space, limit, world.trims)))
 }
 
 fn record_in(state: &Path, line: Option<String>, now: u64) {
@@ -187,7 +187,7 @@ pub fn tick(state: &Path) -> Vec<String> {
     let world = World {
         trims: Path::new("/proc").is_dir(),
         space: &crate::disk::space,
-        disks: repos.clone(),
+        disks: repos.iter().cloned().chain(crate::disk::build_cache()).collect(),
         seen: &|| seen_now(&repos),
         building: &building,
         in_use: &|seen: &Seen| in_use(&seen.path, seen.rank == Rank::Free, Path::new("/proc")),
@@ -300,14 +300,14 @@ mod tests {
 
     #[test]
     fn the_line_names_the_free_space_the_disk_and_the_limit() {
-        let line = short_line(Space { free: 12_300_000_000, total: 242_000_000_000 }, Limit::Gb(30), true);
-        assert_eq!(line, "Disk: 12.3 GB free of 242.0 GB, below 30 GB (disk.trim_below), after trimming the build output of every worktree nobody uses; free space by hand");
+        let line = short_line(Path::new("/p/app"), Space { free: 12_300_000_000, total: 242_000_000_000 }, Limit::Gb(30), true);
+        assert_eq!(line, "Disk under /p/app: 12.3 GB free of 242.0 GB, below 30 GB (disk.trim_below), after trimming the build output of every worktree nobody uses; free space by hand");
     }
 
     #[test]
     fn the_board_shows_the_line_only_while_the_round_that_wrote_it_is_recent() {
         let state = crate::sh::test_dir("disk-trim-record");
-        let line = short_line(Space { free: 12_300_000_000, total: 242_000_000_000 }, Limit::Gb(30), true);
+        let line = short_line(Path::new("/p/app"), Space { free: 12_300_000_000, total: 242_000_000_000 }, Limit::Gb(30), true);
         record_in(&state, Some(line.clone()), 1000);
         assert_eq!(board_line_in(&state, 1000 + SHOWN_FOR), Some(line));
         assert_eq!(board_line_in(&state, 1001 + SHOWN_FOR), None, "a stopped keeper's warning goes");
@@ -387,7 +387,23 @@ mod tests {
         let (notes, line) = run(&disk, &["wt3", "wt4"]);
         assert_eq!(*disk.trimmed.borrow(), ["wt1"]);
         assert_eq!(notes.len(), 1);
-        assert_eq!(line, Some(short_line(Space { free: 11 * GB, total: 200 * GB }, Limit::Gb(30), true)));
+        assert_eq!(line, Some(short_line(Path::new("/p/app"), Space { free: 11 * GB, total: 200 * GB }, Limit::Gb(30), true)));
+    }
+
+    #[test]
+    fn a_low_build_cache_disk_trims_no_worktree_on_another_disk_and_shows_its_line() {
+        let trimmed = std::cell::RefCell::new(Vec::new());
+        let space = |path: &Path| Some(Space { free: if path.starts_with("/cache") { 5 * GB } else { 100 * GB }, total: 200 * GB });
+        let seen = || vec![seen("wt1", None, Rank::Free), seen("wt2", Some("b@app"), Rank::Finished)];
+        let trim = |seen: &Seen| {
+            trimmed.borrow_mut().push(seen.label.clone());
+            Vec::new()
+        };
+        let world = World { trims: true, space: &space, disks: vec![PathBuf::from("/p/app"), PathBuf::from("/cache/sccache")], seen: &seen, building: &|_| false, in_use: &|_| false, trim: &trim };
+        let (notes, line) = round(Limit::Gb(30), &world);
+        assert!(trimmed.borrow().is_empty() && notes.is_empty(), "the worktrees' own disk has room");
+        assert_eq!(line, Some(short_line(Path::new("/cache/sccache"), Space { free: 5 * GB, total: 200 * GB }, Limit::Gb(30), true)));
+        assert!(line.unwrap().starts_with("Disk under /cache/sccache: 5.0 GB free"));
     }
 
     #[test]
@@ -402,7 +418,7 @@ mod tests {
         let world = World { trims: true, space: &space, disks: vec![PathBuf::from("/big/app"), PathBuf::from("/small/app")], seen: &seen, building: &|_| false, in_use: &|_| false, trim: &trim };
         let (_, line) = round(Limit::Percent(15), &world);
         assert_eq!(*trimmed.borrow(), ["wt1"], "10% free on the big disk is below 15%, though the small disk has fewer free bytes");
-        assert_eq!(line, Some(short_line(Space { free: 100 * GB, total: 1000 * GB }, Limit::Percent(15), true)));
+        assert_eq!(line, Some(short_line(Path::new("/big/app"), Space { free: 100 * GB, total: 1000 * GB }, Limit::Percent(15), true)));
         let (_, line) = round(Limit::Percent(5), &world);
         assert_eq!(line, None, "neither disk is below 5%");
     }
