@@ -406,6 +406,62 @@ fn cache_wrapper(path: &[PathBuf]) -> Option<PathBuf> {
     real_program("sccache", path)
 }
 
+// The sccache server makes its temp files under the TMPDIR it started with, so it starts under one no task owns and that a sandboxed task may write.
+fn server_tmpdir() -> PathBuf {
+    PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".cache/kebbie/sccache-tmp")
+}
+
+fn environ_tmpdir(environ: &[u8]) -> PathBuf {
+    environ.split(|byte| *byte == 0).find_map(|var| var.strip_prefix(b"TMPDIR=")).filter(|dir| !dir.is_empty()).map(|dir| PathBuf::from(String::from_utf8_lossy(dir).into_owned())).unwrap_or_else(|| PathBuf::from("/tmp"))
+}
+
+// The TMPDIR of each sccache server this user runs, or None where the processes' environments cannot be read.
+fn running_servers() -> Option<Vec<PathBuf>> {
+    let procs = fs::read_dir("/proc").ok()?;
+    let servers = procs.flatten().map(|entry| entry.path()).filter(|proc| fs::read_to_string(proc.join("comm")).is_ok_and(|comm| comm.trim() == "sccache"));
+    Some(servers.filter_map(|proc| fs::read(proc.join("environ")).ok()).filter(|environ| environ.split(|byte| *byte == 0).any(|var| var == b"SCCACHE_START_SERVER=1")).map(|environ| environ_tmpdir(&environ)).collect())
+}
+
+#[derive(Debug, PartialEq)]
+enum ServerStep {
+    Stop,
+    Start,
+}
+
+// A server whose TMPDIR is gone fails every compile, so it is stopped; a start where no server is known to run, which fails harmlessly when one does.
+fn server_steps(running: Option<&[PathBuf]>) -> Vec<ServerStep> {
+    let Some(running) = running else { return vec![ServerStep::Start] };
+    let stale = running.iter().any(|dir| !dir.is_dir());
+    let healthy = running.iter().any(|dir| dir.is_dir());
+    match (stale, healthy) {
+        (true, _) => vec![ServerStep::Stop, ServerStep::Start],
+        (false, true) => vec![],
+        (false, false) => vec![ServerStep::Start],
+    }
+}
+
+fn server_command(sccache: &Path, step: &ServerStep, tmpdir: &Path) -> Command {
+    let mut command = Command::new(sccache);
+    command.arg(if *step == ServerStep::Stop { "--stop-server" } else { "--start-server" }).env("TMPDIR", tmpdir).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    command
+}
+
+// Builds starting at once check and restart under one lock, so none stops the server another has just started.
+fn prepare_server(sccache: &Path, running: impl Fn() -> Option<Vec<PathBuf>>, tmpdir: &Path) {
+    if fs::create_dir_all(tmpdir).is_err() {
+        return;
+    }
+    let lock = tmpdir.with_file_name("sccache-server.lock");
+    let Ok(file) = OpenOptions::new().create(true).truncate(false).write(true).custom_flags(libc::O_NOFOLLOW).open(&lock) else { return };
+    // SAFETY: flock only reads the descriptor, which the File keeps open; the kernel drops the lock when it closes.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return;
+    }
+    for step in server_steps(running().as_deref()) {
+        let _ = server_command(sccache, &step, tmpdir).status();
+    }
+}
+
 extern "C" fn keep_running(_: libc::c_int) {}
 
 // The build's own Ctrl-C reaches it; the guard lives on to free its slot.
@@ -446,13 +502,20 @@ pub fn guard(argv: &[String]) -> ExitCode {
     };
     let mut command = Command::new(&real);
     command.args(args);
-    if program == "cargo" && let Some(sccache) = cache_wrapper(&path) {
+    let sccache = if program == "cargo" { cache_wrapper(&path) } else { None };
+    if let Some(sccache) = &sccache {
         command.env("RUSTC_WRAPPER", sccache);
     }
+    let run = |command: &mut Command| {
+        if let Some(sccache) = &sccache {
+            prepare_server(sccache, running_servers, &server_tmpdir());
+        }
+        command.status()
+    };
     let queue = dir();
     let gated = std::env::var_os(HELD_VAR).is_none() && queue.as_ref().is_ok_and(|dir| builds(program, args, &load(dir).commands()));
     let address = if gated { task_address() } else { None };
-    let (Ok(dir), Some(address)) = (queue, address) else { return exit_of(command.status(), program) };
+    let (Ok(dir), Some(address)) = (queue, address) else { return exit_of(run(&mut command), program) };
     let slot = match take_slot(&dir, &address, false, true) {
         Ok(Took::Slot(slot)) => slot,
         Ok(Took::Queued(place, holders)) => {
@@ -461,15 +524,15 @@ pub fn guard(argv: &[String]) -> ExitCode {
         }
         Ok(Took::NoKeeper) => {
             eprintln!("kebbie: no build slot is free for this task and no keeper runs to hand out turns; building without waiting.");
-            return exit_of(command.status(), program);
+            return exit_of(run(&mut command), program);
         }
         Err(error) => {
             eprintln!("kebbie: the build queue could not be used ({error}); building without waiting.");
-            return exit_of(command.status(), program);
+            return exit_of(run(&mut command), program);
         }
     };
     outlive_interrupts();
-    let status = command.env(HELD_VAR, &address).status();
+    let status = run(command.env(HELD_VAR, &address));
     drop(slot);
     exit_of(status, program)
 }
@@ -690,6 +753,88 @@ mod tests {
         fs::write(root.join("app/.cargo/config.toml"), "[build]\nrustc-wrapper = \"\"\n").unwrap();
         assert!(wrapper_set(none, &work, &home));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_sccache_server_starts_under_the_stable_tmpdir_and_one_under_a_vanished_tmpdir_is_restarted() {
+        let root = std::env::temp_dir().join(format!("kebbie-builds-sccache-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let log = root.join("calls");
+        let sccache = root.join("sccache");
+        crate::executable::write(&sccache, format!("#!/bin/sh\necho \"$1 $TMPDIR\" >> {}\n", crate::sh::quote(&log.to_string_lossy()))).unwrap();
+        let stable = root.join("cache/kebbie/sccache-tmp");
+        let calls = || fs::read_to_string(&log).unwrap_or_default();
+
+        prepare_server(&sccache, || Some(vec![]), &stable);
+        assert_eq!(calls(), format!("--start-server {}\n", stable.display()), "no server runs: kebbie starts one under the stable folder");
+        assert!(stable.is_dir());
+
+        fs::remove_file(&log).unwrap();
+        prepare_server(&sccache, || Some(vec![stable.clone()]), &stable);
+        assert_eq!(calls(), "", "a server whose TMPDIR exists is left running");
+
+        let gone = root.join("task-tmp-that-was-cleaned");
+        prepare_server(&sccache, || Some(vec![gone.clone()]), &stable);
+        assert_eq!(calls(), format!("--stop-server {0}\n--start-server {0}\n", stable.display()), "a server whose TMPDIR is gone is stopped and started again");
+
+        fs::remove_file(&log).unwrap();
+        prepare_server(&sccache, || None, &stable);
+        assert_eq!(calls(), format!("--start-server {}\n", stable.display()), "where no process can be read, a start is tried");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn builds_starting_at_once_restart_a_stale_server_once_and_never_stop_the_new_one() {
+        let root = std::env::temp_dir().join(format!("kebbie-builds-race-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let log = root.join("calls");
+        let started = root.join("started");
+        let sccache = root.join("sccache");
+        let (log_q, started_q) = (crate::sh::quote(&log.to_string_lossy()), crate::sh::quote(&started.to_string_lossy()));
+        crate::executable::write(&sccache, format!("#!/bin/sh\necho \"$1\" >> {log_q}\nsleep 0.2\n[ \"$1\" = --start-server ] && touch {started_q}\nexit 0\n")).unwrap();
+        let stable = root.join("cache/kebbie/sccache-tmp");
+        let gone = root.join("cleaned-task-tmp");
+        let running = || Some(vec![if started.exists() { stable.clone() } else { gone.clone() }]);
+        std::thread::scope(|scope| {
+            for _ in 0..3 {
+                scope.spawn(|| prepare_server(&sccache, running, &stable));
+            }
+        });
+        assert_eq!(fs::read_to_string(&log).unwrap(), "--stop-server\n--start-server\n", "the builds after the first find the server it started and leave it running");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_running_sccache_server_is_found_with_the_tmpdir_it_started_with() {
+        let root = std::env::temp_dir().join(format!("kebbie-builds-server-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let sccache = root.join("sccache");
+        crate::executable::write(&sccache, "#!/bin/sh\nread line\n").unwrap();
+        let gone = root.join("cleaned-task-tmp");
+        let mut server = Command::new(&sccache).stdin(std::process::Stdio::piped()).env("SCCACHE_START_SERVER", "1").env("TMPDIR", &gone).spawn().unwrap();
+        let found = (0..50).find_map(|_| {
+            let running = running_servers().unwrap();
+            running.contains(&gone).then_some(running).or_else(|| {
+                std::thread::sleep(Duration::from_millis(20));
+                None
+            })
+        });
+        let _ = server.kill();
+        let _ = server.wait();
+        assert!(found.is_some(), "the server's TMPDIR is read from its environment");
+        assert_eq!(server_steps(found.as_deref()).first(), Some(&ServerStep::Stop), "a server whose TMPDIR is gone is stopped");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_server_reads_its_tmpdir_from_its_environment_and_falls_back_to_tmp() {
+        assert_eq!(environ_tmpdir(b"HOME=/h\0TMPDIR=/tmp/kebbie-1001/wt1\0SCCACHE_START_SERVER=1\0"), PathBuf::from("/tmp/kebbie-1001/wt1"));
+        assert_eq!(environ_tmpdir(b"HOME=/h\0SCCACHE_START_SERVER=1\0"), PathBuf::from("/tmp"));
+        assert_eq!(environ_tmpdir(b"TMPDIR=\0"), PathBuf::from("/tmp"));
     }
 
     #[test]
