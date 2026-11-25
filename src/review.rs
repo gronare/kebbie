@@ -286,25 +286,64 @@ fn again(cwd: &Path, stale_too: bool) -> Result<Option<String>> {
         return Ok(None);
     }
     if !rerun_allowed(&state, &address)? {
-        stop_rerunning(&address, &slot.path);
+        stop_rerunning(&state, &address, &slot.path);
         return Ok(None);
     }
     want(&state, &address, &slot.path).map(|_| Some(format!("{address} goes back to the reviewer")))
 }
 
 pub const RERUNS: usize = 2;
-pub const LOOPED: &str = "the review keeps finding new points; read it yourself or push";
+pub const RERUNS_AT_MOST: usize = 4;
+const CEILING: &str = "ceiling";
+const NEW_EACH_TIME: &str = "new";
+pub const LOOPED: &str = "the review keeps coming back with findings; read it yourself or push";
 
-// kebbie sends a review back by itself RERUNS times in a row; the next time the task waits under Needs you instead, until you send it to review or it passes.
+// kebbie sends a review back by itself RERUNS times in a row when its verdict found something at a file:line no verdict since the count started named, and RERUNS_AT_MOST times in all; past either the task waits under Needs you instead, until you or the lead send it to review or it passes.
 pub fn rerun_allowed(state: &Path, address: &str) -> Result<bool> {
+    let rounds_file = marked(state, address, "rounds");
+    let rounds: usize = fs::read_to_string(&rounds_file).ok().and_then(|text| text.trim().parse().ok()).unwrap_or(0);
+    if rounds >= RERUNS_AT_MOST {
+        crate::state::write(&marked(state, address, "looped"), CEILING)?;
+        return Ok(false);
+    }
+    crate::state::write(&rounds_file, (rounds + 1).to_string())?;
+    if !new_findings(state, address)? {
+        return Ok(true);
+    }
     let file = marked(state, address, "reruns");
     let done: usize = fs::read_to_string(&file).ok().and_then(|text| text.trim().parse().ok()).unwrap_or(0);
     if done >= RERUNS {
-        crate::state::write(&marked(state, address, "looped"), "")?;
+        crate::state::write(&marked(state, address, "looped"), NEW_EACH_TIME)?;
         return Ok(false);
     }
     crate::state::write(&file, (done + 1).to_string())?;
     Ok(true)
+}
+
+// Whether the saved verdict names a place no earlier verdict in this count did, remembering its places; a finding without a file:line, or a verdict without findings, counts as new.
+fn new_findings(state: &Path, address: &str) -> Result<bool> {
+    let file = marked(state, address, "seen");
+    let mut seen: Vec<String> = fs::read_to_string(&file).unwrap_or_default().lines().map(str::to_string).collect();
+    let places: Vec<Option<String>> = findings_of(&fs::read_to_string(verdict_file(state, address)).unwrap_or_default()).iter().map(|finding| location(finding)).collect();
+    let new = places.is_empty() || places.iter().any(|place| place.as_ref().is_none_or(|place| !seen.contains(place)));
+    for place in places.into_iter().flatten() {
+        if !seen.contains(&place) {
+            seen.push(place);
+        }
+    }
+    crate::state::write(&file, seen.join("\n"))?;
+    Ok(new)
+}
+
+// A finding's file:line, its first word shaped path:line, with a line range cut to its first line.
+pub fn location(finding: &str) -> Option<String> {
+    let bare = confirmation(finding).unwrap_or(finding);
+    bare.split_whitespace().find_map(|word| {
+        let word = word.trim_matches(['`', '*', '(', ')', ',', ';', '.']);
+        let (path, line) = word.rsplit_once(':')?;
+        let line: String = line.chars().take_while(char::is_ascii_digit).collect();
+        (!path.is_empty() && !line.is_empty()).then(|| format!("{path}:{line}"))
+    })
 }
 
 pub fn looped_in(state: &Path, address: &str) -> bool {
@@ -312,16 +351,20 @@ pub fn looped_in(state: &Path, address: &str) -> bool {
 }
 
 fn forget_reruns(state: &Path, address: &str) {
-    for kind in ["reruns", "looped"] {
+    for kind in ["reruns", "looped", "seen", "rounds"] {
         let _ = fs::remove_file(marked(state, address, kind));
     }
 }
 
-fn stop_rerunning(address: &str, worktree: &Path) {
-    if let Err(error) = messages::to_lead(messages::ToLead::Findings, &format!("{address}'s review was sent back {RERUNS} times by itself and found new points each time, so kebbie stops sending it back: it waits under Needs you for the user to read it or push it. Send it to review again only on their word.")) {
+fn stop_rerunning(state: &Path, address: &str, worktree: &Path) {
+    if let Err(error) = messages::to_lead(messages::ToLead::Findings, &format!("{address}'s review {}, so kebbie stops sending it back: it waits under Needs you for the user to read it or push it. Send it to review again only on their word.", stopped_because(state, address))) {
         eprintln!("Could not tell the lead: {error}");
     }
     crate::notify::send(worktree, &crate::notify::Notice::from(crate::notify::Event::NeedsYou, address, format!("{address}: {LOOPED}")));
+}
+
+fn stopped_because(state: &Path, address: &str) -> String {
+    if fs::read_to_string(marked(state, address, "looped")).is_ok_and(|limit| limit.trim() == CEILING) { format!("was sent back {RERUNS_AT_MOST} times by itself and keeps repeating points it found before") } else { format!("was sent back {RERUNS} times by itself and found new points each time") }
 }
 
 pub fn again_if_stale(cwd: &Path) -> Result<Option<String>> {
@@ -461,8 +504,7 @@ fn request_as(state: &Path, caller: &crate::permit::Caller, cwd: &Path, name: Op
         let _ = fs::remove_file(marked(state, &address, "withdrawn"));
         let _ = fs::remove_file(marked(state, &address, "advised"));
         match caller {
-            crate::permit::Caller::User | crate::permit::Caller::Hub { .. } => forget_reruns(state, &address),
-            crate::permit::Caller::Lead => { let _ = fs::remove_file(marked(state, &address, "looped")); }
+            crate::permit::Caller::User | crate::permit::Caller::Hub { .. } | crate::permit::Caller::Lead => forget_reruns(state, &address),
             _ => {}
         }
     }
@@ -1605,6 +1647,38 @@ mod tests {
     }
 
     #[test]
+    fn the_lead_or_the_user_sending_a_task_to_review_starts_the_rerun_count_over_and_the_task_does_not() {
+        use crate::permit::Caller;
+        use crate::tasks::test_support::*;
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let address = peers::address("billing", &name_of(&dir));
+        let kebbie = fake_kebbie(&state);
+        let env = [("KEBBIE_CLAUDE_BIN".to_string(), "/opt/claude/bin/claude".to_string())];
+        fs::create_dir_all(super::dir(&state)).unwrap();
+        let counted = || {
+            for line in [41, 52, 63] {
+                fs::write(verdict_file(&state, &address), format!("verdict: changes\nreviewed: abc\n\n- src/pay.rs:{line} — books twice.\n")).unwrap();
+                let _ = rerun_allowed(&state, &address).unwrap();
+            }
+            assert!(["reruns", "looped", "seen"].iter().all(|kind| marked(&state, &address, kind).exists()), "the count has started and stopped");
+        };
+        let marks = || ["reruns", "looped", "seen", "rounds"].map(|kind| marked(&state, &address, kind).exists());
+        counted();
+        request_as(&state, &Caller::Task(address.clone()), &slot.path, None, &kebbie, &env, Request::Review, &config::Second::None, None).unwrap();
+        assert_eq!(marks(), [true, true, true, true], "the task's own request keeps the count");
+        forget_in(&state, &address);
+        for caller in [Caller::Lead, Caller::User] {
+            counted();
+            request_as(&state, &caller, &slot.path, None, &kebbie, &env, Request::Review, &config::Second::None, None).unwrap();
+            assert_eq!(marks(), [false, false, false, false], "{caller:?} sending it again starts the count over");
+            assert!(withdraw_in(&state, &address));
+        }
+        let _ = fs::remove_dir_all(&state);
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
     fn a_second_opinion_never_holds_the_push_and_its_points_go_to_the_lead_as_findings() {
         let state = crate::sh::test_dir("review-second");
         SECOND.want(&state, "billing@app", Path::new("/wt"), "codex-review").unwrap();
@@ -2167,6 +2241,7 @@ mod tests {
     fn kebbie_sends_a_review_back_by_itself_twice_and_then_stops_until_you_send_it() {
         let state = crate::sh::test_dir("review-reruns");
         let address = "refactor@mindin";
+        fs::create_dir_all(dir(&state)).unwrap();
         assert!(rerun_allowed(&state, address).unwrap() && rerun_allowed(&state, address).unwrap(), "two re-runs go");
         assert!(!looped_in(&state, address));
         assert!(!rerun_allowed(&state, address).unwrap(), "the third does not");
@@ -2176,6 +2251,49 @@ mod tests {
         assert!(gate(Some(&Shown { running: true, ..stopped.clone() }), |_| false).is_err(), "a review the user sent again holds it while it runs");
         forget_reruns(&state, address);
         assert!(!looped_in(&state, address) && rerun_allowed(&state, address).unwrap(), "sent again, it counts from nothing");
+        let _ = fs::remove_dir_all(state);
+    }
+
+    #[test]
+    fn a_rerun_counts_only_when_its_verdict_finds_something_at_a_new_file_and_line() {
+        let state = crate::sh::test_dir("review-new-findings");
+        let address = "refunds@app";
+        fs::create_dir_all(dir(&state)).unwrap();
+        let verdict = |findings: &str| fs::write(verdict_file(&state, address), format!("verdict: changes\nreviewed: abc\n\n{findings}")).unwrap();
+        let count = || fs::read_to_string(marked(&state, address, "reruns")).unwrap_or_default();
+        verdict("- src/pay.rs:41 — books twice.\n- scope: `src/view.rs:88` — renames the export.\n");
+        assert!(rerun_allowed(&state, address).unwrap());
+        assert_eq!(count(), "1", "the first findings are new");
+        verdict("- src/pay.rs:41 — still books twice.\n- **confirm:** src/view.rs:88-90 — the rename.\n");
+        assert!(rerun_allowed(&state, address).unwrap());
+        assert_eq!(count(), "1", "the same places again do not count");
+        verdict("- src/pay.rs:41 (now :44) — still books twice, moved by a change above it.\n");
+        assert!(rerun_allowed(&state, address).unwrap());
+        assert_eq!(count(), "1", "a finding that stands again under its earlier place does not count, wherever it sits now");
+        verdict("- src/pay.rs:52 — the retry guard reads the wrong flag.\n");
+        assert!(rerun_allowed(&state, address).unwrap());
+        assert_eq!(count(), "2", "a new line counts");
+        verdict("- the commit message says nothing of why.\n");
+        assert!(!rerun_allowed(&state, address).unwrap() && looped_in(&state, address), "a finding without a place counts as new, so the limit holds");
+        forget_reruns(&state, address);
+        assert!(!marked(&state, address, "seen").exists(), "sent again, the places start over too");
+        verdict("- src/pay.rs:41 — books twice.\n");
+        for round in 0..RERUNS_AT_MOST {
+            assert!(rerun_allowed(&state, address).unwrap(), "round {round} goes back");
+        }
+        assert_eq!(count(), "1", "repeating the same place counted once");
+        assert!(!rerun_allowed(&state, address).unwrap() && looped_in(&state, address), "reruns that only repeat seen places stop at the ceiling");
+        assert!(stopped_because(&state, address).contains("keeps repeating points it found before"), "{}", stopped_because(&state, address));
+        forget_reruns(&state, address);
+        assert!(!marked(&state, address, "rounds").exists());
+        for (round, line) in [(1, 41), (2, 41), (3, 52), (4, 63)] {
+            verdict(&format!("- src/pay.rs:{line} — books twice.\n"));
+            assert_eq!(rerun_allowed(&state, address).unwrap(), round < 4, "round {round}");
+        }
+        assert!(stopped_because(&state, address).contains("found new points each time"), "new, a repeat, new, new stops on the count of new findings, though it is the fourth round: {}", stopped_because(&state, address));
+        assert_eq!(location("scope: src/a.rs:12 — x"), Some("src/a.rs:12".to_string()));
+        assert_eq!(location("(src/a.rs:12-20), the guard"), Some("src/a.rs:12".to_string()));
+        assert_eq!(location("rule 2: one change per commit"), None);
         let _ = fs::remove_dir_all(state);
     }
 
