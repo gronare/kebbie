@@ -25,5 +25,5 @@ Push a change that must reach production in steps, such as a column rename, one 
 - If you answer Something is wrong, the stage fails with what you wrote, every later stage stays locked, and the task fixes it in a subtask of that stage; its push asks you again.
 - If CI fails on a stage's push or its check does not hold, the stage fails the same way, and the task gets what failed.
 - If kebbie cannot see a stage deploy, because CI is not watched or no CI ran, it asks you whether it deployed.
-- If the lead pushes for you, it pushes a stage only with the task's own push permission, never one after your verification.
+- If kebbie or the lead pushes for you, it pushes a stage only with the task's own push permission, never one after your verification.
 - If the task moves to another machine, its stages start over there from its subtasks and commits: a stage's state lives with the task on its machine.

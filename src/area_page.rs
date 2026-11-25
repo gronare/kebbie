@@ -363,9 +363,9 @@ impl Page {
             choices.push(choice(Act::Go, "Open its Space", "the main checkout's Space, opened if needed"));
             choices.push(choice(Act::New, "Start a task here", "a worktree, a Space and Claude, told the area's notes"));
             choices.push(if area.repo_name().is_some_and(|repo| permit::repo_permitted(&repo)) {
-                choice(Act::Permit, "Take back the lead's push permission", "the lead pushes only tasks you gave their own permission")
+                choice(Act::Permit, "Take back the repo's push permission", "kebbie pushes only tasks you gave their own permission")
             } else {
-                choice(Act::Permit, "Let the lead push ready tasks", "the lead may push any ready task here once its rules check passed; a review is optional")
+                choice(Act::Permit, "Let kebbie push ready tasks", "kebbie pushes any ready task here once its rules check passed; a review is optional")
             });
         }
         let refresh = backlog::refresh_label(&self.sources);
@@ -813,7 +813,7 @@ impl Page {
         }
         lines.push(kv("backlog", plural(area.backlog.len(), "item"), TEXT));
         if let Some(repo) = area.repo_name() {
-            let (text, color) = if permit::repo_permitted(&repo) { ("the lead may push reviewed and no-review tasks", GREEN) } else { ("you, and the lead for tasks you permit", TEXT) };
+            let (text, color) = if permit::repo_permitted(&repo) { ("kebbie pushes its ready tasks", GREEN) } else { ("you, and kebbie for tasks you permit", TEXT) };
             lines.push(kv("pushes", text.to_string(), color));
         }
         if !area.sandbox {

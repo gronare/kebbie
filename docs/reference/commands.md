@@ -556,7 +556,7 @@ A stage is `locked` until every stage before it is met, then `open`, `pushed` on
 - A commit that sits after a later stage's commits ends the pushable run until the task moves it up with `kebbie order move`.
 - When kebbie cannot see a stage deploy (CI not watched, or no CI ran), it asks you whether it deployed instead.
 - The task closes once its last stage is met and nothing is left to push.
-- The lead pushes a stage only with the task's own push permission, and never one after your verification; a repo's push permission covers no stages.
+- kebbie and the lead push a stage only with the task's own push permission, and never one after your verification; a repo's push permission covers no stages.
 - A stage's state lives with the task on its machine, in kebbie's state there. Another machine taking the task over starts from its subtasks and commits, not from where its stages stood.
 
 ### `kebbie order [name]`
@@ -696,7 +696,7 @@ kebbie routine add --title <name> --repo <repo> --at <time> | --every <interval>
 | `--every` | `30m`, `6h` or `1d`. |
 | `--mode` | `report` (the default), `plan` or `fix`. |
 | `--id` | The id. Without it, the id comes from the title, with `-2` added when it is taken. |
-| `--push` | Lets the lead push a fix routine's fix. |
+| `--push` | Lets kebbie push a fix routine's fix. |
 | `--paused` | Adds it with `enabled = false`. |
 | `--profile` | The [profile](configuration.md#profiles) its task starts with, such as one with a kubeconfig for cluster work. |
 

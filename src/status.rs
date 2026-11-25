@@ -118,7 +118,7 @@ pub const FIXING_FINDINGS: &str = "fixing what its review asks";
 
 pub const NO_VERDICT: &str = "its review gave no verdict: send it again with v, or withdraw it to push without a pass";
 
-pub const LEAD_PUSHES: &str = "the lead pushes it";
+pub const PERMIT_PUSHES: &str = "kebbie pushes it under your permission";
 
 pub fn breaks(count: usize) -> String {
     format!("breaks {}", plural(count, "project rule"))
@@ -712,7 +712,7 @@ impl Item {
             Some(why) => format!("out of the push line: {why}"),
             None => "out of the push line before it went out; push it again when it is ready".to_string(),
         };
-        if self.permit.is_some() && self.left_times > tasks::REPUSHES { format!("{note} · it left {} times, so the lead pushes it no more", self.left_times) } else { note }
+        if self.permit.is_some() && self.left_times > tasks::REPUSHES { format!("{note} · it left {} times, so kebbie pushes it no more", self.left_times) } else { note }
     }
 
     pub fn landed_note(&self) -> Option<String> {
@@ -780,7 +780,7 @@ impl Item {
 
     fn work(&self, git: &Git, surface: Surface) -> String {
         if self.group() == Group::GoingOut {
-            let note = self.push_note().unwrap_or_else(|| self.phase_note().map_or_else(|| LEAD_PUSHES.to_string(), |why| format!("{why} · {LEAD_PUSHES}")));
+            let note = self.push_note().unwrap_or_else(|| self.phase_note().map_or_else(|| PERMIT_PUSHES.to_string(), |why| format!("{why} · {PERMIT_PUSHES}")));
             return if git.ahead == 0 { note } else { format!("{} · {note}", plural(git.ahead, "commit")) };
         }
         if self.group() == Group::ReadyToPush && self.staged {
@@ -1658,7 +1658,7 @@ pub(crate) mod tests {
         for permit in [crate::permit::Permit::Task, crate::permit::Permit::Repo] {
             let mut item = task(Some("idle"), Some("ready"), 2);
             item.permit = Some(permit);
-            assert!(item.group() == Group::GoingOut && item.summary().ends_with(LEAD_PUSHES), "{permit:?}: no review needed");
+            assert!(item.group() == Group::GoingOut && item.summary().ends_with(PERMIT_PUSHES), "{permit:?}: no review needed");
             item.verdict = Some(in_review(true, 0, true, false));
             assert!(item.group() == Group::ReadyToPush, "{permit:?}: the gate refuses a held review on older code, so the lead does not push it");
             item.verdict = Some(in_review(true, 0, false, false));
@@ -1980,7 +1980,7 @@ pub(crate) mod tests {
         assert_eq!((item.group(), item.summary_on(Surface::User).contains("ready to push")), (Group::ReadyToPush, true), "the user pushes it");
         for permit in [crate::permit::Permit::Repo, crate::permit::Permit::Task] {
             item.permit = Some(permit);
-            assert_eq!((item.group(), item.summary_on(Surface::User)), (Group::GoingOut, format!("2 commits · {LEAD_PUSHES}")), "{permit:?}: the lead pushes it");
+            assert_eq!((item.group(), item.summary_on(Surface::User)), (Group::GoingOut, format!("2 commits · {PERMIT_PUSHES}")), "{permit:?}: the lead pushes it");
         }
         item.to_accept = Some(waiting_to_accept(1, 1));
         assert_eq!(item.group(), Group::NeedsYou, "with task.require_accept accepting stays the user's, so it waits on him");
@@ -2007,14 +2007,14 @@ pub(crate) mod tests {
             item.permit = Some(crate::permit::Permit::Repo);
             let summary = item.summary_on(Surface::User);
             assert_eq!(item.group(), Group::GoingOut, "{why:?}: the lead pushes it again, so it never needs the user: {summary}");
-            assert!(summary.ends_with(LEAD_PUSHES) && (why != Why::LeftLine || summary.contains("out of the push line: it reported needs-you")), "{summary}");
+            assert!(summary.ends_with(PERMIT_PUSHES) && (why != Why::LeftLine || summary.contains("out of the push line: it reported needs-you")), "{summary}");
         }
         in_phase(&mut item, Phase::NeedsYou(Why::LeftLine));
         item.left_times = tasks::REPUSHES;
         assert_eq!(item.group(), Group::GoingOut, "the third time out the lead still pushes it again");
         item.left_times = tasks::REPUSHES + 1;
         assert_eq!(item.group(), Group::NeedsYou, "after that it waits for the user");
-        assert_eq!(item.wanted("enter").as_deref(), Some("out of the push line: it reported needs-you · it left 4 times, so the lead pushes it no more"));
+        assert_eq!(item.wanted("enter").as_deref(), Some("out of the push line: it reported needs-you · it left 4 times, so kebbie pushes it no more"));
         item.left_times = 0;
         assert_eq!(Group::GoingOut.title(), "GOING OUT");
         assert_eq!(Group::ALL.iter().position(|group| *group == Group::GoingOut), Group::ALL.iter().position(|group| *group == Group::ReadyToPush).map(|at| at + 1), "it follows Ready to push");

@@ -58,12 +58,12 @@ A run with findings sends `notify.command` a `routine-findings` event in place o
 
 ## The push exception
 
-A task never pushes, and the lead pushes a task only under a permission you gave. A fix routine with `push = true` is that permission given in advance: when the run starts, kebbie gives its task the same push permission as the board's `a` key.
+A task never pushes, and the lead or kebbie pushes a task only under a permission you gave. A fix routine with `push = true` is that permission given in advance: when the run starts, kebbie gives its task the same push permission as the board's `a` key.
 
-Once the task reports ready and the reviewer's rules check passes its commits, the lead lands and pushes the fix without waiting for you, as it would any task you let it push. Use it for fixes you would accept unseen, such as an incident runbook step or a routine bump. Without `push = true` you push a routine's fix yourself.
+Once the task reports ready and the reviewer's rules check passes its commits, kebbie puts the fix in its repo's push line and pushes it without waiting for you, as it does any task under your push permission. Use it for fixes you would accept unseen, such as an incident runbook step or a routine bump. Without `push = true` you push a routine's fix yourself.
 
 ## Related
 
 - [Add a routine](../how-to/add-a-routine.md)
-- [Let the lead push](../how-to/let-the-lead-push.md)
+- [Let kebbie and the lead push](../how-to/let-the-lead-push.md)
 - [The trust boundary](trust-boundary.md)

@@ -29,7 +29,7 @@ Only the head is fetched and rebased, onto origin's default branch, never the lo
 
 - When the head rebases cleanly and the overlap rules pass, kebbie pushes it and takes the next.
 - When its rebase goes over the task's own files or conflicts, the head goes to its Claude and keeps its place while the line waits for it. The pushes behind it would otherwise rebase onto a default branch that is about to move again.
-- At once on a needs-you report, or after 30 minutes without a ready report while another push waits behind it, the head leaves the line with the reason, and the next push goes on. It waits for you under Needs you, or, under the lead's push permission, under Going out for the lead to push again, up to 3 times; the fourth time it waits for you. Alone in the line, it keeps its place while its Claude works, and leaves after 30 minutes only when its Claude stopped without a ready report.
+- At once on a needs-you report, or after 30 minutes without a ready report while another push waits behind it, the head leaves the line with the reason, and the next push goes on. It waits for you under Needs you, or, under your push permission, under Going out for kebbie to push again on its next ready report, up to 3 times; the fourth time it waits for you. Alone in the line, it keeps its place while its Claude works, and leaves after 30 minutes only when its Claude stopped without a ready report.
 - While the head's build waits in the machine's [build queue](../reference/configuration.md#builds), it keeps its place, and its 30 minutes count from when that wait ended. It goes before other tasks in the build queue.
 
 ## A long task can follow main
@@ -52,7 +52,7 @@ A pull request does three jobs: it shows you the change, it gets a second opinio
 | --- | --- |
 | Seeing the change | The review split shows the task's diff next to its Claude, and your comments go straight into Claude's input. The push window shows the sign-off card and every commit message before anything is pushed. |
 | A second opinion | A read-only reviewer checks every ready task's commits against your rules skill. An assessor judges whether the work needs the reviewer gate too, where an independent, read-only Claude must pass the current code. See [The review gate](review-gate.md). |
-| The gate | Tasks cannot push. You push, or the lead pushes a task you gave it permission for. See [The trust boundary](trust-boundary.md). |
+| The gate | Tasks cannot push. You push, or kebbie or the lead pushes a task you gave push permission for. See [The trust boundary](trust-boundary.md). |
 
 The gate is the push itself, so nothing waits on a web page.
 

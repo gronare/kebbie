@@ -138,7 +138,7 @@ const WORK: Sheet = Sheet {
             bind(&[Act::Push], "push, or take it out of the line", "push"),
             bind(&[Act::SendReview], "send to review, or withdraw it", "to review"),
             bind(&[Act::Review], "open its review", "open review"),
-            bind(&[Act::Permit], "let the lead push it", "lead may push"),
+            bind(&[Act::Permit], "let kebbie push it", "kebbie pushes"),
             bind(&[Act::Rebase], "rebase onto main now", "rebase now"),
             bind(&[Act::Follow], "keep it rebased on main, or stop", "follow main"),
             bind(&[Act::Tidy], "tidy its commits", "tidy commits"),
@@ -205,7 +205,7 @@ const AREAS: Sheet = Sheet {
             Item { on: On::Own("A–Z"), wide: "the repo's own actions", narrow: "repo's own" },
         ]),
         group("PUSH", &[
-            bind(&[Act::Permit], "let the lead push its ready tasks", "lead may push"),
+            bind(&[Act::Permit], "let kebbie push its ready tasks", "kebbie pushes"),
             bind(&[Act::Push], "push main when it is ahead", "push main"),
         ]),
     ],

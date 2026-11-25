@@ -224,7 +224,7 @@ fn left_count_file(state: &Path, address: &str) -> PathBuf {
     state.join("push-left-count").join(address)
 }
 
-// The lead pushes a task that left its line again at most this many times; after that it is the user's.
+// kebbie and the lead push a task that left its line again at most this many times; after that it is the user's.
 pub(crate) const REPUSHES: usize = 3;
 
 // Why a push left its line before it went out, for the board's Needs you row until the task is pushed again or ends, and how many times it left since the user last pushed it.
@@ -237,7 +237,7 @@ pub(crate) fn left_count(state: &Path, address: &str) -> usize {
     std::fs::read_to_string(left_count_file(state, address)).ok().and_then(|count| count.trim().parse().ok()).unwrap_or(0)
 }
 
-// The lead may push it again while it left the line no more than REPUSHES times.
+// kebbie and the lead may push it again while it left the line no more than REPUSHES times.
 pub(crate) fn lead_may_repush(state: &Path, address: &str) -> bool {
     left_count(state, address) <= REPUSHES
 }

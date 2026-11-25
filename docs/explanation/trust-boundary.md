@@ -25,16 +25,16 @@ A shell that rewrites the URL on its own command line and skips the hook gets pa
 
 A task rebases onto the default branch kebbie already fetched, so nothing kebbie runs in a task needs ssh or `gh`; only the ssh a profile names for its own work gets the agent. With the sandbox off, the shell still runs as you and reads your key files, so there the block holds against a mistake, not a determined push.
 
-## Only you and the lead push
+## Only you, the lead and kebbie under your permission push
 
-`kebbie push` reads who runs it from the process tree, not from the folder. The lead pushes only tasks you gave it permission for, and only while the reviewer's passed rules check, or its own `kebbie approve`, matches the commits.
+`kebbie push` reads who runs it from the process tree, not from the folder. The lead pushes only tasks you gave it permission for, and only while the reviewer's passed rules check, or its own `kebbie approve`, matches the commits. kebbie itself pushes a task under that same permission once it reports ready and such a rules check matches its commits, through the same push line; a review asked for holds it at the review gate.
 
 A push that waits for the task's Claude to run tests:
 
-- is recorded only after those checks pass, and names you or the lead,
+- is recorded only after those checks pass, and names you, the lead or kebbie under your permission,
 - completes only for the exact commits it was recorded for, with the same checks run again for whoever asked.
 
-A task's report can end the wait, never start a push.
+A task's report can end the wait, and under your push permission a ready report with a matching rules check starts kebbie's own push; without a permission, a report never starts one.
 
 ## Only you and the lead decide
 

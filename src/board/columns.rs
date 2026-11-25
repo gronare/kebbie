@@ -105,7 +105,7 @@ pub(super) fn row_facts(item: &Item, pushing: Option<String>) -> String {
         parts.push(format!("blocks {}", tasks::and_list(&item.blocks)));
     }
     if item.permit == Some(Permit::Task) {
-        parts.push("lead may push".to_string());
+        parts.push("kebbie pushes".to_string());
     }
     if parts.len() == usize::from(absence(item).is_some()) {
         parts.push("nothing yet".to_string());

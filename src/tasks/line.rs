@@ -286,9 +286,9 @@ fn open_before(head: &Intent, log: &[Message]) -> Vec<String> {
     }).collect()
 }
 
-const AGAIN: &str = "Your push permission covers it, so it stays yours under Going out, off the user's Needs you: push it again once it is ready, at the end of the line.";
+const AGAIN: &str = "The user's push permission covers it, so it stays under Going out, off the user's Needs you: kebbie puts it in the line again, at its end, on its next ready report.";
 
-// A task under the lead's push permission is the lead's to push again once it leaves the line, up to REPUSHES times.
+// A task under the user's push permission is kebbie's to push again on its next ready report once it leaves the line, up to REPUSHES times.
 fn lead_pushes_again(state: &Path, head: &Intent) -> bool {
     crate::permit::in_state(state, &head.address, &name_of(&head.repo)).is_some() && intent::lead_may_repush(state, &head.address)
 }
@@ -346,10 +346,10 @@ mod tests {
         crate::permit::set_repo_in(&state, "web", true).unwrap();
         assert!(lead_pushes_again(&state, &head), "the repo's permission covers it");
         let leads = left_text(&head.address, "it reported needs-you", true);
-        assert!(leads.contains("stays yours under Going out") && !leads.contains("waits for the user"), "{leads}");
+        assert!(leads.contains("stays under Going out") && !leads.contains("waits for the user"), "{leads}");
         let failed = "kebbie could not finish the push of billing@web that the lead asked for: remote hung up";
         assert_eq!(failed_text(failed, false), failed, "without the permission the push is the user's again");
-        assert_eq!(failed_text(failed, true), format!("{failed}. {AGAIN}"), "under the permission the lead hears it is its to push again");
+        assert_eq!(failed_text(failed, true), format!("{failed}. {AGAIN}"), "under the permission the lead hears kebbie pushes it again");
         std::fs::remove_dir_all(state).unwrap();
     }
 

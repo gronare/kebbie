@@ -97,7 +97,7 @@ Away mode lets the lead keep tasks moving while you are gone, without deciding t
 
 - A question about method, such as which library, which structure or what order, the lead settles as it does while you are here: with `kebbie decide` when it is on the board. kebbie passes the answer to the task as the lead's call and records it for your summary.
 - A question about intent, such as scope, behaviour, a trade-off that is yours or a plan to approve, the lead keeps for you with `kebbie defer`.
-- The lead pushes only what your push permissions allow.
+- kebbie and the lead push only what your push permissions allow.
 
 ## You come back to a summary
 
@@ -209,4 +209,4 @@ A lead whose Claude runs outside that folder counts as stale, so the keeper rest
 ## Related
 
 - [Work while you are away](../how-to/work-while-away.md)
-- [Let the lead push](../how-to/let-the-lead-push.md)
+- [Let kebbie and the lead push](../how-to/let-the-lead-push.md)

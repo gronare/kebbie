@@ -4,7 +4,7 @@ Let the lead keep tasks moving while you are gone, and get a summary when you ar
 
 ![Away mode: the lead settles a how-question, then writes the summary](../assets/clips/away-mode.webp)
 
-1. Before you leave, give push permission where you want work to land without you: `a` on a task, or `a` on a repo in the Areas page. See [Let the lead push](let-the-lead-push.md).
+1. Before you leave, give push permission where you want work to land without you: `a` on a task, or `a` on a repo in the Areas page. See [Let kebbie and the lead push](let-the-lead-push.md).
 
 2. Optional: set a [notify command](get-notifications.md) so you hear about landings and kept questions.
 

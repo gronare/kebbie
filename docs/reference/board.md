@@ -143,8 +143,8 @@ With [`task.steps`](configuration.md) on and subtasks listed, the task's subtask
 | `↑ N pushed`, muted | N subtasks are on the default branch already. |
 | `○`, muted | Planned. |
 | `◐ … in progress`, blue | Its Claude is at work on it. Only the last subtask with commits is in progress, and only until the task reports ready. |
-| `N/M read` | N of the subtask's M files are marked read in the review; it stands in place of the state word once the subtask has commits, and the mark's colour keeps the state. Only on a task you push: under the lead's [push permission](../how-to/let-the-lead-push.md) the subtask shows its state word. |
-| `● … ready`, yellow | Its agent ran `kebbie subtasks done` on it, or a later subtask holds commits, or it is the last and the task reported ready: finished, waiting for you to accept it. In teal on a task the lead pushes, where accepting and pushing are the lead's. |
+| `N/M read` | N of the subtask's M files are marked read in the review; it stands in place of the state word once the subtask has commits, and the mark's colour keeps the state. Only on a task you push: under your [push permission](../how-to/let-the-lead-push.md), where kebbie pushes it, the subtask shows its state word. |
+| `● … ready`, yellow | Its agent ran `kebbie subtasks done` on it, or a later subtask holds commits, or it is the last and the task reported ready: finished, waiting for you to accept it. In teal on a task kebbie pushes under your permission, where accepting is the lead's and pushing kebbie's. |
 | `✓ … accepted`, green | You accepted every commit in it. `waits for N · …` when a commit of subtask N, which you have not accepted, lies above one of its own in the push order. |
 | `accept “<title>” · r review` | Under the subtasks: the first ready subtask whose accepting matters, because `task.require_accept` is on or a later subtask is still being built on a task you push, and no review's findings hold the task. `r` opens the review, and [`kebbie accept`](commands.md#kebbie-accept-name-sha) accepts it. |
 | `accept “<title>” · r review`, under Needs you | With [`task.require_accept`](configuration.md) on, a ready task with a subtask to accept waits under Needs you with this line: it cannot be pushed until that subtask is accepted. |
@@ -157,7 +157,7 @@ With [`task.steps`](configuration.md) on and subtasks listed, the task's subtask
 | `⏎` | The subtask's options: show its card, open the review, message its Claude, and accept it when that matters. |
 | `s` | Open the [subtask's card](#a-subtasks-card). |
 | `pgup` `pgdn` `space` | Scroll the subtask's card beside the tasks. |
-| `a` | Accept that subtask, as [`kebbie accept <name> --subtask <id>`](commands.md#kebbie-accept-name-sha) does. On the task's own row, `a` stays [let the lead push it](#on-a-task). |
+| `a` | Accept that subtask, as [`kebbie accept <name> --subtask <id>`](commands.md#kebbie-accept-name-sha) does. On the task's own row, `a` stays [let kebbie push it](#on-a-task). |
 | `r` | Open the review on that subtask. A review already open in its Space moves to it. |
 | `→` | Onto the subtask's card beside the tasks, to scroll it; `←` or `esc` there come back to the subtask rows. |
 | `shift` `↑` `↓` | On the subtask's focused card: the previous or next subtask of the same task, its card from the top, with the keys staying on the card and the subtask row following, so `←` or `esc` land on it. At the first or last subtask nothing happens. |
@@ -261,7 +261,7 @@ How far it is behind the default branch does not matter. A task on local main st
 
 ### Going out
 
-A task leaves Ready to push once it is on its way out, and nothing here waits on you. A ready task the lead holds push permission for says `the lead pushes it`, and so does one whose push left the line, which the lead pushes again up to 3 times; the fourth time it waits for you under Needs you, marked `it left 4 times, so the lead pushes it no more`, until you push it. A push under way says `pushing for you · <what it waits for>`, or `pushing for the lead`:
+A task leaves Ready to push once it is on its way out, and nothing here waits on you. A ready task under your push permission says `kebbie pushes it under your permission`: kebbie puts it in the push line itself once its rules check passed. So does one whose push left the line, which kebbie puts back on its next ready report up to 3 times; the fourth time it waits for you under Needs you, marked `it left 4 times, so kebbie pushes it no more`, until you push it. A push under way says `pushing for you · <what it waits for>`, `pushing under your permission`, or `pushing for the lead`:
 
 - its turn, as `2nd in line after <title>` while other pushes of its repo go first, and `kebbie pushes it now` at the head;
 - a fix for CI that failed after the push. A push that waits on its tests or a conflict stands under Working meanwhile.
@@ -431,7 +431,7 @@ A question that asks first, as reset, drop and done do, takes `y` to go ahead an
 | `C` | Dismiss the CI of a pushed task: a red one whose failure is not the code's, a cancelled one you leave cancelled, one gh could not read, or a red one it inherited and waits on another push's fix for. Asks first. Yours alone. | The task's CI failed, was cancelled, is unknown or inherited a red. |
 | `G` | Re-run CI: gh runs the pushed commit's failed and cancelled runs again, and kebbie watches them as after a push, closing the task once they are green. | Every commit is on the default branch and its CI failed or was cancelled. |
 | `d` | Done: close a task you already pushed elsewhere and free its worktree. Asks first. | Claude is not mid-turn. |
-| `a` | Let the lead push it, or take that back. `done`, `drop` and `reset` take it back too. | It is a task, not pushed. |
+| `a` | Let kebbie push it under your permission, or take that back. `done`, `drop` and `reset` take it back too. | It is a task, not pushed. |
 | `u` | Keep it rebased on main, or switch that off; `●` marks it on. | It is a task, not pushed. |
 | `Z` | Park it until later; on a parked task, bring it back now. | It is a task. |
 | `z` | Reset: its work goes, its backlog item returns. Asks first. | Always. |
@@ -891,7 +891,7 @@ It reads a snapshot of the vault where the vault server answers one, which works
 | --- | --- | --- |
 | `g` | Open the main checkout's Space. | The repo is on this machine. |
 | `n` | New task in this repo, told the area's notes. | The repo is on this machine. |
-| `a` | Let the lead push every task here whose reviewer passed its current code, or whose assessor said it needs no review, or take that back. | The repo is on this machine. |
+| `a` | Let kebbie push every ready task here, reviewed or not, or take that back. | The repo is on this machine. |
 | `b` | Ask the lead to refresh this area's backlog. | Always. |
 | `l` | Show the area's vault log, newest first. | Always. |
 | `p` | Push main as you, after showing the commits, on `y`. | Main is ahead of origin. |
@@ -932,7 +932,7 @@ A run is an ordinary task. It shows on the Work page like any other, marked `rou
 1. What it should do, in your words: this is its prompt. `ctrl-e` opens it in your editor.
 2. Which repo it runs in, from the checkouts under your repo folders; type to filter.
 3. When: `07:00` every day, `mon 08:00` every week, or `every 6h`.
-4. What it may do: Report, Plan, Fix, or Fix and push (the lead pushes the fix once reviewed).
+4. What it may do: Report, Plan, Fix, or Fix and push (kebbie pushes the fix once its rules are checked).
 5. Its name. The id comes from the name.
 
 Each step takes the mouse too: a click selects a repo or what it may do, a second click on it goes on, the hints under a step (`⏎ next`, `esc cancel`, and `y`, `g` and `←` on the table) work as keys, and the wheel moves through the list.

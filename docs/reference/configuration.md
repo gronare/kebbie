@@ -574,7 +574,7 @@ Machine config or repo config. Each table is a check kebbie runs on a schedule a
 - `repo` is a checkout's folder name, as `kebbie start --repo` takes it, or its path (`~/code/infra`).
 - With `at`, a run is due once that time has come since the last run started. Give `every` or `at`, not both.
 - `mode`: `"report"` reports it, `"plan"` proposes a plan for your approval, `"fix"` fixes it in commits.
-- With `push`, the lead pushes the fix once its commits hold to the rules.
+- With `push`, kebbie pushes the fix once its commits hold to the rules.
 - A routine's task runs in `auto` mode whatever the profile's `permission_mode` says.
 - The board's [Routines page](board.md#routines-page) and `kebbie routine add` write new ones into config.toml, and edit, pause and delete them in the file they are in.
 - A routine that is not valid is an error that names its file, its index and the key, as for every other key. `kebbie config` lists the routines it found.

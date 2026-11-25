@@ -714,7 +714,7 @@ pub(crate) mod tests {
         crate::status::tests::in_phase(&mut item, crate::phase::Phase::Ready { head: None });
         item.permit = Some(crate::permit::Permit::Repo);
         let shown = &build(&[item.clone()], &[], Vec::new(), None, &Seen::default()).items[0];
-        assert_eq!((shown.group, shown.summary.as_str()), (Group::Working, "2 commits · the lead pushes it"));
+        assert_eq!((shown.group, shown.summary.as_str()), (Group::Working, "2 commits · kebbie pushes it under your permission"));
         item.permit = None;
         item.push_waits = Some(crate::tasks::PendingPush { by: crate::tasks::PushBy::Lead, work: crate::tasks::PushWork::Turn, at: 5, ahead: 1, after: None });
         crate::status::tests::in_phase(&mut item, crate::phase::Phase::Pushing { ahead: 1 });

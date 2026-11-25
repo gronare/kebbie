@@ -27,7 +27,7 @@ Tasks
 
 The lead
 
-- [Let the lead push](how-to/let-the-lead-push.md): per task, or every reviewed task in a repo.
+- [Let kebbie and the lead push](how-to/let-the-lead-push.md): per task, or every ready task in a repo.
 - [Work while you are away](how-to/work-while-away.md): away mode and the summary when you are back.
 - [Get notifications](how-to/get-notifications.md): ntfy, macOS or any shell command.
 - [Fill the backlog](how-to/fill-the-backlog.md): a local folder or the vault, Linear beside either, and items the lead writes out.

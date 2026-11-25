@@ -247,7 +247,7 @@ fn may(routine: &Routine) -> &'static str {
         (routines::Mode::Report, _) => "reads and reports, changes nothing",
         (routines::Mode::Plan, _) => "proposes a fix and changes nothing until you answer",
         (routines::Mode::Fix, false) => "commits a fix for you to push",
-        (routines::Mode::Fix, true) => "commits a fix the lead pushes once reviewed",
+        (routines::Mode::Fix, true) => "commits a fix kebbie pushes once its rules are checked",
     }
 }
 

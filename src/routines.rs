@@ -338,7 +338,7 @@ pub fn prompt(routine: &Routine, kebbie: &str) -> String {
         ),
         Mode::Fix => {
             let push = if routine.push {
-                "kebbie gave the lead push permission for this task: once you report ready and your commits hold to the rules, the lead pushes them without waiting for the user."
+                "This task carries the user's push permission: once you report ready and your commits hold to the rules, kebbie pushes them without waiting for the user."
             } else {
                 "The user pushes your fix, as with any task."
             };
@@ -933,7 +933,7 @@ pub(crate) mod tests {
         let fix = prompt(&routine, "/bin/kebbie");
         assert!(fix.contains("fix it in commits") && fix.contains("--state ready") && fix.contains("The user pushes your fix"), "{fix}");
         routine.push = true;
-        assert!(prompt(&routine, "/bin/kebbie").contains("the lead pushes them without waiting for the user"));
+        assert!(prompt(&routine, "/bin/kebbie").contains("kebbie pushes them without waiting for the user"));
     }
 
     #[test]

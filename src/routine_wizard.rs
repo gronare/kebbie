@@ -12,7 +12,7 @@ use crate::routines::{Mode, Routine, Schedule, State};
 
 pub const STEPS: usize = 5;
 
-pub const MODES: [(&str, &str); 4] = [("Report", "read and tell me"), ("Plan", "propose a fix, I answer"), ("Fix", "commit a fix, lead reviews"), ("Fix and push", "lead pushes once reviewed")];
+pub const MODES: [(&str, &str); 4] = [("Report", "read and tell me"), ("Plan", "propose a fix, I answer"), ("Fix", "commit a fix, lead reviews"), ("Fix and push", "kebbie pushes once checked")];
 
 pub fn mode_of(index: usize) -> (Mode, bool) {
     match index {

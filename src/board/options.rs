@@ -85,9 +85,9 @@ pub(super) fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_wo
     }
     if item.is_some_and(Item::is_task) && !out {
         choices.push(if item.is_some_and(|item| item.permit == Some(Permit::Task)) {
-            choice(Act::Permit, "Take back push permission", "the lead no longer pushes it; it waits for you under Ready to push")
+            choice(Act::Permit, "Take back push permission", "kebbie no longer pushes it; it waits for you under Ready to push")
         } else {
-            choice(Act::Permit, "Let the lead push it", "the lead may push this task itself once its commits are approved; done, drop and reset take it back")
+            choice(Act::Permit, "Let kebbie push it", "kebbie pushes this task under your permission once it is ready and its commits are approved; done, drop and reset take it back")
         });
     }
     if let Some(git) = item.filter(|_| !out).and_then(|item| item.git.as_ref()) {
@@ -536,15 +536,15 @@ mod tests {
     fn the_user_gives_and_takes_back_the_leads_push_permission_per_task_and_the_card_shows_it() {
         let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 1);
         let permission = |item: &Item| task_choices(Some(item), None, None).into_iter().find(|choice| choice.key == 'a').map(|choice| choice.label);
-        assert_eq!(permission(&item).as_deref(), Some("Let the lead push it"));
-        assert!(!row_facts(&item, None).contains("lead may push"));
+        assert_eq!(permission(&item).as_deref(), Some("Let kebbie push it"));
+        assert!(!row_facts(&item, None).contains("kebbie pushes"));
         item.permit = Some(Permit::Task);
         assert_eq!(permission(&item).as_deref(), Some("Take back push permission"));
-        assert!(row_facts(&item, None).ends_with("lead may push"), "{}", row_facts(&item, None));
-        assert_eq!(permit_chip(item.permit), Some(("lead may push".to_string(), GREEN)));
+        assert!(row_facts(&item, None).ends_with("kebbie pushes"), "{}", row_facts(&item, None));
+        assert_eq!(permit_chip(item.permit), Some(("kebbie pushes".to_string(), GREEN)));
         item.permit = Some(Permit::Repo);
-        assert_eq!(permission(&item).as_deref(), Some("Let the lead push it"), "the repo's permission is switched on the Areas page");
-        assert_eq!(permit_chip(item.permit), Some(("lead may push (repo)".to_string(), TEAL)));
+        assert_eq!(permission(&item).as_deref(), Some("Let kebbie push it"), "the repo's permission is switched on the Areas page");
+        assert_eq!(permit_chip(item.permit), Some(("kebbie pushes (repo)".to_string(), TEAL)));
         assert_eq!(permit_chip(None), None);
         let mut session = item.clone();
         session.git = None;

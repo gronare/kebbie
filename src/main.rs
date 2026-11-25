@@ -405,7 +405,7 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
   kebbie routine add --title <name> --repo <repo> --at <time> | --every <interval> [--mode report|plan|fix]
                   [--push] [--paused] [--id <id>] [--profile <name>] <prompt>
                                   add a routine to config.toml, as the board's Routines page does (n); the id comes
-                                  from the title unless --id names one; --push lets the lead push a fix routine's fix;
+                                  from the title unless --id names one; --push lets kebbie push a fix routine's fix;
                                   --profile names the profile its task starts with
   kebbie routine run <id>         start a routine's run now, by the same rules
   kebbie routine ok <summary>     run by a routine's task when all is well: records the run as ok and closes the task,

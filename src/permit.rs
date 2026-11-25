@@ -5,7 +5,7 @@ use crate::lead::state_dir;
 use crate::messages::{self, Message};
 use crate::sh::Result;
 
-// The user's word that the lead may push: one task, or every ready task in a repo.
+// The user's word that kebbie and the lead may push: one task, or every ready task in a repo.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Permit {
     Task,
@@ -67,27 +67,27 @@ pub fn forget(address: &str) {
     }
 }
 
-// The board's key: the user gives or takes back the lead's push permission for one task, and the lead hears of it.
+// The board's key: the user gives or takes back the push permission kebbie pushes one task under, and the lead hears of it.
 pub fn toggle_task(address: &str) -> Result<String> {
     let state = state_dir()?;
     let on = !task_file(&state, address).exists();
     set_task_in(&state, address, on)?;
     let (told, shown) = if on {
-        (format!("The user gave you push permission for {address}: you may push it with kebbie push once its rules check passed, the reviewer's or your own kebbie approve, and it is through any review it is in."), crate::notice::Notice::new(crate::notice::Tone::Done, "The lead may push it now").next("Done, drop and reset take the permission back.").detail("task", address).to_string())
+        (format!("The user gave push permission for {address}: kebbie pushes it itself once it reports ready and its rules check passed, the reviewer's or your own kebbie approve, and it is through any review it is in; you hear what went out."), crate::notice::Notice::new(crate::notice::Tone::Done, "kebbie pushes it once it is ready").next("Done, drop and reset take the permission back.").detail("task", address).to_string())
     } else {
-        (format!("The user took back push permission for {address}: route it to them again."), crate::notice::Notice::new(crate::notice::Tone::Done, "Only you push it now").detail("task", address).to_string())
+        (format!("The user took back push permission for {address}: it waits for them again."), crate::notice::Notice::new(crate::notice::Tone::Done, "Only you push it now").detail("task", address).to_string())
     };
     tell_lead(messages::ToLead::Permission, &told);
     Ok(shown)
 }
 
-// The Areas page's key: the lead may push any ready task in the repo.
+// The Areas page's key: kebbie and the lead may push any ready task in the repo.
 pub fn toggle_repo(repo: &str) -> Result<String> {
     let state = state_dir()?;
     let on = !repo_file(&state, repo).exists();
     set_repo_in(&state, repo, on)?;
     let (told, shown) = if on {
-        (format!("The user gave you push permission for the repo {repo}: you may push any ready task in it once a rules approval matches its commits and it is through any review it is in; a review is not required."), format!("The lead may push ready tasks in {repo}."))
+        (format!("The user gave you push permission for the repo {repo}: you may push any ready task in it once a rules approval matches its commits and it is through any review it is in; a review is not required."), format!("kebbie pushes ready tasks in {repo} now."))
     } else {
         (format!("The user took back push permission for the repo {repo}; tasks with their own permission keep it."), format!("Only you push {repo}'s tasks now, but those you gave their own permission."))
     };

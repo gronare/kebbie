@@ -123,4 +123,4 @@ Sometimes the code is right if you meant it, and the reviewer cannot tell from t
 
 You can take a task back out with `v` and then `v`, Withdraw from review, or `kebbie review --withdraw`. Only you can withdraw: neither the lead nor a task can talk its way past the gate. The assessor leaves a task you withdrew out until you send it again.
 
-The gate also carries push permission. On the Areas page, `a` lets the lead push every task in a repo once its reviewer has passed the current code, or the assessor has said the current code needs no review. See [Let the lead push](../how-to/let-the-lead-push.md).
+The gate also carries push permission. On the Areas page, `a` lets kebbie push every ready task in a repo, reviewed or not; a review you asked for holds its task until it passes. See [Let kebbie and the lead push](../how-to/let-the-lead-push.md).
