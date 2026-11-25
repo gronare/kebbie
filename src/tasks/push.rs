@@ -758,7 +758,8 @@ fn went_out(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Ou
 pub(super) fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out, pusher: &str, state: &Path, watch: Watch) -> Result<String> {
     let task = task_of(slot).to_string();
     let address = peers::address(&task, &name_of(repo));
-    let went = went_out(repo, slot, upstream, through, out)?;
+    let mut went = went_out(repo, slot, upstream, through, out)?;
+    went.keep_open &= !(went.rest == 0 && crate::verify_after::load(state, &address).is_some());
     super::push_steps::step(&task, &format!("pushing to {}", main_of(upstream)));
     let (count, watch, staged) = send(state, repo, slot, upstream, &address, &task, pusher, &went, watch)?;
     let (vault, log) = after_push(state, repo, slot, &address, &task, &went, &crate::vault_cli::detect);
@@ -815,6 +816,10 @@ pub(super) fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through
                 }
                 Err(error) => eprintln!("kebbie could not ask {address} to run its check after the push, so it closes the task without it: {error}"),
             }
+        }
+        if let Some(waits) = crate::verify_after::hold(state, &address, Some(&pushed)) {
+            tell_lead_pushed(&told);
+            return Ok(said(Notice::new(Tone::Done, headline(false)).next(waits)).detail("checkout", follow_upstream(repo, upstream, &super::stage::load(state, repo))?).to_string());
         }
         return Ok(match close_pushed(state, "push", told, |commits| close_task(repo, Some(&task), vault.as_ref(), Some(commits))) {
             Ok(closed) => {
@@ -938,6 +943,10 @@ pub fn after_ci(repo: &Path, task: &str, address: &str, told: &crate::ci::Pushed
     let state = state_dir()?;
     let vault = crate::vault_cli::detect();
     let landed = Landed { pusher: &told.pusher, address, target: &told.target, commits: &told.commits, closed: false, note: told.note.as_deref(), logged: told.logged };
+    if let Some(waits) = crate::verify_after::hold(&state, address, Some(&told.commits)) {
+        tell_lead_pushed(&landed);
+        return Ok(waits);
+    }
     close_pushed(&state, "ci", landed, |commits| close_task(repo, Some(task), vault.as_ref(), Some(commits))).map(|closed| closed.detail("task", task).to_string())
 }
 
@@ -1268,6 +1277,45 @@ mod tests {
         assert!(watch.checking().is_some_and(|check| check.what == "the rates page shows 2027" && !check.passed) && watch.close, "{watch:?}");
         assert_eq!(crate::phase::load(&state, &address).map(|record| record.phase), Some(crate::phase::Phase::CiRunning { sha: head }));
         assert!(messages::load().iter().any(|message| message.to == address && message.text.contains("Run the check you named for after the push now: the rates page shows 2027")));
+        crate::ci::forget(&state, &address);
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_push_with_a_check_for_the_user_asks_it_rather_than_closing_without_ci_and_through_its_last_commit_kept_open() {
+        let solved = |state: &Path, address: &str| crate::kebbie_questions::load(state).into_iter().filter(|asked| asked.address == address && asked.kind == crate::kebbie_questions::Kind::Solved).count();
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let address = crate::peers::address("billing", &name_of(&dir));
+        crate::verify_after::name(&state, &address, "the refunds page loads").unwrap();
+        let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        let unwatched = |_: &Path, _: &Path, _: &str, _: &str, _: bool, _: crate::ci::Pushed| crate::ci::Begin::Off;
+        let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head, rebased: false }, "the user", &state, &unwatched).unwrap();
+        assert!(said.contains("waits on your verification"), "{said}");
+        assert!(find_task(&dir, Some("billing"), &dir).is_ok(), "with no CI, the push asks the user and the task stays open");
+        assert_eq!(solved(&state, &address), 1);
+        assert!(crate::verify_after::load(&state, &address).and_then(|held| held.landed).is_some_and(|landed| landed.ends_with("fourth")), "the done record keeps the pushed commits");
+        cleanup(dir, origin, &slot);
+        let (dir, origin, slot, upstream) = task_in_another_repo("rates");
+        commit(&slot.path, "e", "fifth");
+        let state = state_of(&dir);
+        let address = crate::peers::address("rates", &name_of(&dir));
+        crate::verify_after::name(&state, &address, "the rates page shows 2027").unwrap();
+        deliver(&dir, &slot, &upstream, Through::First { count: 2, of: 2 }, &Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false }, "the user", &state, &unwatched).unwrap();
+        assert_eq!(solved(&state, &address), 1, "kept open with everything on main and no CI, kebbie asks the user's check");
+        assert!(crate::kebbie_questions::load(&state).iter().all(|asked| asked.address != address || asked.kind != crate::kebbie_questions::Kind::Close), "and not whether to close it");
+        cleanup(dir, origin, &slot);
+        let (dir, origin, slot, upstream) = task_with_a_commit("refunds");
+        commit(&slot.path, "e", "fifth");
+        let state = state_of(&dir);
+        let address = crate::peers::address("refunds", &name_of(&dir));
+        crate::verify_after::name(&state, &address, "the refunds page loads").unwrap();
+        crate::report::save_check(&state, &address, "the old key gets 401").unwrap();
+        let said = deliver(&dir, &slot, &upstream, Through::First { count: 2, of: 2 }, &Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false }, "the user", &state, &watching).unwrap();
+        assert!(!said.contains("asks you whether to close it"), "{said}");
+        assert_eq!(solved(&state, &address), 0, "with CI to watch, nothing is asked before it is green");
+        let watch = crate::ci::load(&state, &address).unwrap();
+        assert!(watch.close && watch.pushed.check == Some(crate::ci::Check::new("the old key gets 401")), "followed as a whole push, the task's own check first: {watch:?}");
         crate::ci::forget(&state, &address);
         cleanup(dir, origin, &slot);
     }

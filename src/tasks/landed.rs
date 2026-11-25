@@ -89,6 +89,12 @@ fn in_upstream(path: &Path, sha: &str, upstream: &str) -> bool {
     ancestor(path, sha, upstream) || git(path, &["cherry", upstream, sha, &format!("{sha}^")]).is_ok_and(|line| line.starts_with('-'))
 }
 
+// A rebase onto a main that moved on brings other tasks' commits and none of this one's, so only a commit the task made after the user saw it fail counts as the fix.
+fn fix_on_main(path: &Path, upstream: &str, (since, failed): (u64, Vec<String>)) -> Option<String> {
+    let (sha, _, _) = reflog(path, "HEAD").into_iter().find(|(sha, at, subject)| *at >= since && made_here(subject) && !failed.iter().any(|short| sha.starts_with(short.as_str())) && in_upstream(path, sha, upstream))?;
+    git(path, &["log", "-1", "--format=%h %s", &sha]).ok().filter(|line| !line.is_empty())
+}
+
 struct Made {
     start: String,
     commits: Vec<String>,
@@ -152,6 +158,9 @@ pub(super) fn verdict(state: &Path, slot: &Slot, address: &str, upstream: &str, 
     }
     if crate::ci::pushing(state, address, messages::now()) {
         return Ok(Verdict::Later);
+    }
+    if crate::verify_after::holds_open(state, address) && crate::verify_after::fixing(state, address).is_none_or(|since| fix_on_main(&slot.path, upstream, since).is_none()) {
+        return Ok(Verdict::Open);
     }
     let red_settled = match crate::ci::load(state, address) {
         Some(watch) if watch.running() || !superseded(&watch) => return Ok(Verdict::Later),
@@ -377,7 +386,7 @@ pub(super) fn pass(state: &Path, world: &World, close: Close, tell: &mut dyn FnM
             match verdict {
                 Ok(Verdict::Unsure(why)) => {
                     if let Some(head) = head(&slot.path) {
-                        if matches!(why, Unsure::Prompt | Unsure::Question) && read_mark(state, &address).is_none_or(|(was, seen, _)| was != why || seen != head) {
+                        if matches!(why, Unsure::Prompt | Unsure::Question) && crate::verify_after::load(state, &address).is_none() && read_mark(state, &address).is_none_or(|(was, seen, _)| was != why || seen != head) {
                             let _ = crate::kebbie_questions::ask_close(state, &address, &format!("{task} landed on {main}, but it still waits on {} of its own. Close it?", if why == Unsure::Prompt { "a prompt" } else { "a question" }));
                         }
                         save_mark(state, &address, why, &head);
@@ -386,6 +395,9 @@ pub(super) fn pass(state: &Path, world: &World, close: Close, tell: &mut dyn FnM
                 Ok(Verdict::Close) => {
                     let now = world.fresh.map_or_else(|| status_of(&slot.path, world.workspaces, world.agents), |fresh| fresh(&slot.path));
                     if !matches!(now.as_deref(), Some("idle" | "done")) || crate::report::turn_started(&address).is_some_and(|at| at >= world.began) {
+                        continue;
+                    }
+                    if crate::verify_after::hold(state, &address, crate::verify_after::fixing(state, &address).and_then(|since| fix_on_main(&slot.path, &upstream, since)).or_else(|| crate::verify_after::head_line(&slot.path)).as_deref()).is_some() {
                         continue;
                     }
                     let kebbie_pushed = crate::phase::load(state, &address).is_some_and(|record| record.phase == crate::phase::Phase::Closing);
@@ -725,6 +737,42 @@ mod tests {
         pass(&state, &world(&repos, &herdr(&slot, "idle"), &[], "false"), &mut closing_by_finish(&state, &upstream), &mut |_| *told.borrow_mut() += 1);
         assert!(!branch_exists(&dir, "billing") && *told.borrow() == 1, "the turn over, it closes");
         assert_eq!(mark(&state, &address, &slot.path), None);
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_landed_task_with_a_check_for_the_user_is_asked_once_and_stays_open_until_verified() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        on_main(&dir, &slot, &upstream);
+        let address = peers::address("billing", &name_of(&dir));
+        crate::verify_after::name(&state, &address, "the refunds page loads").unwrap();
+        let repos = [dir.clone()];
+        let asked = || crate::kebbie_questions::load(&state).into_iter().filter(|asked| asked.address == address).map(|asked| asked.kind).collect::<Vec<_>>();
+        let mut never_closed = |_: &Path, _: &str| -> Result<Notice> { panic!("only the user's Verified closes it") };
+        pass(&state, &world(&repos, &herdr(&slot, "idle"), &[], "false"), &mut never_closed, &mut |_| ());
+        assert_eq!(asked(), [crate::kebbie_questions::Kind::Solved], "landed on main, kebbie asks the user instead of closing");
+        let question = Seen { status: Some("done".to_string()), question: true };
+        assert_eq!(verdict(&state, &slot, &address, &upstream, &question, &mut never).unwrap(), Verdict::Open, "nor asks whether to close it beside the task's own question");
+        pass(&state, &world(&repos, &herdr(&slot, "idle"), &[], "false"), &mut never_closed, &mut |_| ());
+        assert_eq!(asked().len(), 1, "asked once");
+        let waiting = crate::kebbie_questions::load(&state).into_iter().find(|asked| asked.address == address).unwrap();
+        crate::kebbie_questions::answer_in(&state, &crate::permit::Caller::User, &waiting.id, Some(2), "the totals are off", &|_| panic!("Something is wrong never closes")).unwrap();
+        assert!(asked().is_empty());
+        pass(&state, &world(&repos, &herdr(&slot, "idle"), &[], "false"), &mut never_closed, &mut |_| ());
+        assert_eq!(verdict(&state, &slot, &address, &upstream, &question, &mut never).unwrap(), Verdict::Open);
+        assert!(asked().is_empty(), "after Something is wrong nothing is asked again before the fix is pushed");
+        git(&dir, &["merge", "--quiet", "--ff-only", &upstream]).unwrap();
+        upstream_commit(&dir, "other", "another task's work", "Another task lands");
+        git(&slot.path, &["rebase", "--quiet", &upstream]).unwrap();
+        pass(&state, &world(&repos, &herdr(&slot, "idle"), &[], "false"), &mut never_closed, &mut |_| ());
+        assert!(asked().is_empty(), "rebased onto a main that moved on, the head is another task's commit and no fix");
+        commit(&slot.path, "d", "Fix the totals");
+        on_main(&dir, &slot, &upstream);
+        pass(&state, &world(&repos, &herdr(&slot, "idle"), &[], "false"), &mut never_closed, &mut |_| ());
+        assert_eq!(asked(), [crate::kebbie_questions::Kind::Solved], "the fix on main, however it got there, asks again");
+        assert!(crate::verify_after::load(&state, &address).and_then(|held| held.landed).is_some_and(|landed| landed.ends_with("Fix the totals")));
+        crate::verify_after::forget(&state, &address);
         cleanup(dir, origin, &slot);
     }
 

@@ -615,12 +615,19 @@ pub fn verified(state: &Path, address: &str, id: &str, now: u64) -> Result<Strin
 
 // The last stage met with nothing left to push: the task is done, as a push whose CI went green is.
 fn close_when_done(state: &Path, address: &str) -> String {
+    close_when_done_in(state, address, &crate::repo::pooled_checkouts())
+}
+
+fn close_when_done_in(state: &Path, address: &str, repos: &[std::path::PathBuf]) -> String {
     let (task, place) = address.split_once('@').unwrap_or((address, ""));
-    let Some(repo) = crate::repo::pooled_checkouts().into_iter().find(|repo| name_of(repo) == place) else { return String::new() };
+    let Some(repo) = repos.iter().find(|repo| name_of(repo) == place).cloned() else { return String::new() };
     let Ok(slot) = super::pool::find_task(&repo, Some(task), &repo) else { return String::new() };
     let Ok(upstream) = default_branch(&repo) else { return String::new() };
     if !plan::read_now(state, &slot.path, &upstream, address).order.is_empty() || super::open_commits_of(&slot.path, &upstream).is_ok_and(|open| !open.is_empty()) {
         return "It stays open with commits left to push.".to_string();
+    }
+    if let Some(waits) = crate::verify_after::hold(state, address, None) {
+        return waits;
     }
     match super::done(&repo, Some(task)) {
         Ok(_) => "kebbie closed it as done.".to_string(),

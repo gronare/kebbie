@@ -373,6 +373,10 @@ impl Item {
             Phase::NeedsYou(Why::Failed) => Some("kebbie could not finish its push or close it; the lead has why".to_string()),
             Phase::NeedsYou(Why::LeftLine) => Some(self.left_note()),
             Phase::NeedsYou(Why::Unseen) => self.ci.as_ref().map(crate::ci::Watch::note),
+            Phase::NeedsYou(Why::Verify) => crate::lead::state_dir().ok().and_then(|state| {
+                let address = crate::peers::address(&self.name, &self.place);
+                crate::verify_after::waiting(&state, &address).then(|| crate::verify_after::load(&state, &address)).flatten()
+            }).map(|held| format!("check: {} · answer Verified to close it", held.what)),
             Phase::NeedsYou(Why::NotStaged) => Some(format!("kebbie could not put it on local main again within {} minutes; stage it once the main checkout is clear", tasks::STAGE_WAIT / 60)),
             _ => None,
         }

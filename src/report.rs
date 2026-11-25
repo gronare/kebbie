@@ -13,7 +13,7 @@ use crate::tasks;
 
 pub const STATES: [&str; 4] = ["needs-you", "ready", "working", "blocked"];
 
-const USAGE: &str = "kebbie report --state needs-you|ready|working|blocked --next \"<what the user should do next, or nothing>\" [--card <file>, with ready] [--after <task[@repo]>, with ready] [--after-push \"<what you verify once the push lands>\", with ready] [--red-cause \"<the line that fails and why>\", with ready] \"<where the task stands>\"";
+const USAGE: &str = "kebbie report --state needs-you|ready|working|blocked --next \"<what the user should do next, or nothing>\" [--card <file>, with ready] [--after <task[@repo]>, with ready] [--after-push \"<what you verify once the push lands>\", with ready] [--verify-after-push \"<what the user checks once the change is out, and where>\", with ready] [--red-cause \"<the line that fails and why>\", with ready] \"<where the task stands>\"";
 const CHECK_LIMIT: usize = 300;
 
 pub fn parse(state: Option<&str>, next: Option<&str>, card: bool, summary: &str) -> Result<(Report, String)> {
@@ -33,9 +33,10 @@ pub fn parse(state: Option<&str>, next: Option<&str>, card: bool, summary: &str)
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<&str>, after: &[&str], after_push: Option<&str>, red_cause: Option<&str>, summary: &str) -> Result<String> {
+pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<&str>, after: &[&str], after_push: Option<&str>, verify_after_push: Option<&str>, red_cause: Option<&str>, summary: &str) -> Result<String> {
     let (mut report, summary) = parse(state, next, card.is_some(), summary)?;
     let check = check_goes_with(&report.state, after_push)?;
+    let verify = crate::verify_after::goes_with(&report.state, verify_after_push, USAGE, CHECK_LIMIT)?;
     if red_cause.is_some() && report.state != "ready" {
         return Err(format!("--red-cause goes with --state ready: it names the cause of a red test you leave red. {USAGE}"));
     }
@@ -82,6 +83,10 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
     if let Some(check) = &check {
         save_check(&state, &me, check)?;
         kept.push_str(" kebbie asks you to run your check once the push lands, and closes the task when it holds.");
+    }
+    if let Some(verify) = &verify {
+        crate::verify_after::name(&state, &me, verify)?;
+        kept.push_str(" kebbie asks the user to verify it once the push is out and CI is green, and closes the task on Verified.");
     }
     settle_open_check(cwd, &state, &me, &report.state);
     show_in_sidebar(&report);
@@ -166,6 +171,9 @@ fn ask_to_close(cwd: &Path, state: &Path, me: &str, report: &Report, summary: &s
     let nothing = main_checkout(cwd).and_then(|repo| default_branch(&repo)).and_then(|upstream| crate::repo::ahead_behind(cwd, &upstream)).is_ok_and(|(ahead, _)| ahead == 0) && crate::repo::is_clean(cwd).unwrap_or(false);
     let staged = crate::tasks::rollout::all_met(state, me);
     if !nothing || !staged {
+        return;
+    }
+    if crate::verify_after::hold(state, me, None).is_some() {
         return;
     }
     let task = me.split_once('@').map_or(me, |(task, _)| task);

@@ -313,3 +313,18 @@ fn the_commits_still_to_push_are_unknown_when_git_cannot_read_them() {
     assert_eq!(unpushed_on(&state, &address, &slot.path, "no-such-branch"), None, "git could not read the tips: unknown, never nothing left");
     cleanup(dir, origin, &slot);
 }
+
+#[test]
+fn a_task_whose_last_stage_is_met_waits_on_the_users_verification_rather_than_closing() {
+    let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+    let state = state_of(&dir);
+    let address = crate::peers::address("billing", &name_of(&dir));
+    git(&slot.path, &["push", "--quiet", "origin", &format!("HEAD:{}", upstream.trim_start_matches("origin/"))]).unwrap();
+    git(&dir, &["fetch", "--quiet", "origin"]).unwrap();
+    crate::verify_after::name(&state, &address, "the refunds page loads").unwrap();
+    let said = close_when_done_in(&state, &address, std::slice::from_ref(&dir));
+    assert!(said.contains("waits on your verification"), "{said}");
+    assert!(super::super::pool::find_task(&dir, Some("billing"), &dir).is_ok(), "the task stays open for the user's Verified");
+    assert!(crate::kebbie_questions::load(&state).iter().any(|asked| asked.address == address && asked.kind == crate::kebbie_questions::Kind::Solved));
+    cleanup(dir, origin, &slot);
+}

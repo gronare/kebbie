@@ -9,7 +9,7 @@ use crate::messages::{self, Message, Question, USER_LABEL};
 use crate::permit::Caller;
 use crate::sh::Result;
 
-// kebbie's own questions: a stage's verification, a check only the user can make, and whether to close a task kebbie would otherwise leave to be closed by hand. They sit beside the task's own question and never hold it or its messages.
+// kebbie's own questions: a stage's verification, a check only the user can make, whether a pushed task's change works once out, and whether to close a task kebbie would otherwise leave to be closed by hand. They sit beside the task's own question and never hold it or its messages.
 pub const ID_PREFIX: &str = "kq-";
 pub const VERIFY_KIND: &str = "kebbie-verify";
 pub const CLOSE_KIND: &str = "kebbie-close";
@@ -17,6 +17,7 @@ pub const CLOSE_KIND: &str = "kebbie-close";
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Kind {
     Verify,
+    Solved,
     Close,
 }
 
@@ -24,13 +25,18 @@ impl Kind {
     fn word(self) -> &'static str {
         match self {
             Kind::Verify => "verify",
+            Kind::Solved => "solved",
             Kind::Close => "close",
         }
     }
 
+    fn verifies(self) -> bool {
+        matches!(self, Kind::Verify | Kind::Solved)
+    }
+
     fn labels(self) -> &'static [&'static str] {
         match self {
-            Kind::Verify => &VERIFY_OPTIONS,
+            Kind::Verify | Kind::Solved => &VERIFY_OPTIONS,
             Kind::Close => &CLOSE_OPTIONS,
         }
     }
@@ -57,6 +63,7 @@ fn lock(state: &Path) -> PathBuf {
 fn of_json(value: &Value) -> Option<Asked> {
     let kind = match value["kind"].as_str()? {
         "verify" => Kind::Verify,
+        "solved" => Kind::Solved,
         "close" => Kind::Close,
         _ => return None,
     };
@@ -101,7 +108,7 @@ fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_KEBBIE_QUESTION_CHARS).collect()
 }
 
-// A question of the same kind about the same stage takes the place of the earlier one; a task holds the protocol's four at most, the oldest giving way.
+// A question of the same kind about the same stage takes the place of the earlier one, as a task's close or check after its push does; a task holds the protocol's four at most, the oldest giving way.
 fn put(state: &Path, address: &str, kind: Kind, text: &str, stage: Option<&str>) -> Result<Asked> {
     let at = messages::now();
     let text = one_line(text);
@@ -110,7 +117,7 @@ fn put(state: &Path, address: &str, kind: Kind, text: &str, stage: Option<&str>)
     }
     let asked = Asked { id: new_id(address, kind, &text, at), address: address.to_string(), kind, text, stage: stage.map(str::to_string), at };
     changed(state, |all| {
-        all.retain(|one| !(one.address == asked.address && one.kind == asked.kind && one.stage == asked.stage && (asked.stage.is_some() || one.kind == Kind::Close || one.text == asked.text)));
+        all.retain(|one| !(one.address == asked.address && one.kind == asked.kind && one.stage == asked.stage && (asked.stage.is_some() || matches!(one.kind, Kind::Close | Kind::Solved) || one.text == asked.text)));
         while all.iter().filter(|one| one.address == asked.address).count() >= MAX_KEBBIE_QUESTIONS {
             let Some(at) = all.iter().position(|one| one.address == asked.address) else { break };
             all.remove(at);
@@ -129,6 +136,11 @@ pub fn ask_verify(state: &Path, address: &str, text: &str, stage: Option<&str>) 
     put(state, address, Kind::Verify, text, stage)
 }
 
+// The change of a pushed task is out: Verified closes the task, Something is wrong goes to it.
+pub fn ask_solved(state: &Path, address: &str, text: &str) -> Result<Asked> {
+    put(state, address, Kind::Solved, text, None)
+}
+
 pub fn ask_close(state: &Path, address: &str, text: &str) -> Result<Asked> {
     put(state, address, Kind::Close, text, None)
 }
@@ -144,6 +156,10 @@ pub fn ask_from_task(cwd: &Path, text: &str) -> Result<String> {
     Ok(format!(
         "Asked the user to verify: {text}\nThey answer Verified, Not yet or Something is wrong; the answer reaches you as a message from kebbie. This question holds nothing: go on with the work it does not decide, or report blocked when everything left waits on it."
     ))
+}
+
+pub fn withdraw(state: &Path, id: &str) {
+    let _ = changed(state, |all| all.retain(|one| one.id != id));
 }
 
 pub fn settle_stages(state: &Path, address: &str, stages: &[String]) {
@@ -171,25 +187,26 @@ fn meanings(asked: &Asked, stages: &[Stage]) -> Vec<String> {
             format!("Tell the task what you see; the stages after {} stay locked", stage.title),
         ],
         (Kind::Verify, None) => vec!["The task hears that it holds".to_string(), "Nothing changes; this question waits".to_string(), "Tell the task what you see".to_string()],
+        (Kind::Solved, _) => vec!["kebbie closes the task as done".to_string(), "Nothing changes; this question waits".to_string(), "Tell the task what you see; it stays open to fix it".to_string()],
     }
 }
 
 // The question as the phone gets it; a stage it names goes along only when the stage waits on the user's verification, as the protocol takes.
 pub fn wire(asked: &Asked, stages: &[Stage]) -> KebbieQuestion {
-    let options = asked.kind.labels().iter().zip(meanings(asked, stages)).enumerate().map(|(at, (label, meaning))| QuestionOption { label: label.to_string(), meaning, comment: asked.kind == Kind::Verify && at == 2 }).collect();
+    let options = asked.kind.labels().iter().zip(meanings(asked, stages)).enumerate().map(|(at, (label, meaning))| QuestionOption { label: label.to_string(), meaning, comment: asked.kind.verifies() && at == 2 }).collect();
     let stage = asked.stage.clone().filter(|id| stages.iter().any(|stage| stage.id == *id && stage.requirement.kind == RequirementKind::Verified && stage.state == kebbie_hub_protocol::StageState::Waiting));
-    KebbieQuestion { id: asked.id.clone(), kind: match asked.kind { Kind::Verify => KebbieQuestionKind::Verify, Kind::Close => KebbieQuestionKind::Close }, text: asked.text.clone(), options, stage, at: asked.at }
+    KebbieQuestion { id: asked.id.clone(), kind: match asked.kind { Kind::Verify | Kind::Solved => KebbieQuestionKind::Verify, Kind::Close => KebbieQuestionKind::Close }, text: asked.text.clone(), options, stage, at: asked.at }
 }
 
 // The questions as the board's inbox reads them, beside the tasks' own.
 pub fn as_messages(state: &Path) -> Vec<Message> {
     load(state).into_iter().map(|asked| {
         let options = asked.kind.labels().iter().zip(meanings(&asked, &[])).map(|(label, meaning)| (label.to_string(), meaning)).collect();
-        let comment = if asked.kind == Kind::Verify { vec![2] } else { Vec::new() };
+        let comment = if asked.kind.verifies() { vec![2] } else { Vec::new() };
         Message {
             id: asked.id.clone(), at: asked.at, from: asked.address.clone(), to: USER_LABEL.to_string(), text: asked.text.clone(), held: false, report: None, ended: false,
             question: Some(Question { options, recommend: 0, plan: None, plan_at: None, comment, answered: false, waits: false, relayed: None }),
-            about: asked.stage.clone(), kind: Some(match asked.kind { Kind::Verify => VERIFY_KIND, Kind::Close => CLOSE_KIND }.to_string()), landed: None, why: None, forced: false, fyi: false,
+            about: asked.stage.clone(), kind: Some(match asked.kind { Kind::Verify | Kind::Solved => VERIFY_KIND, Kind::Close => CLOSE_KIND }.to_string()), landed: None, why: None, forced: false, fyi: false,
         }
     }).collect()
 }
@@ -219,14 +236,14 @@ pub fn answer_in(state: &Path, caller: &Caller, id: &str, choice: Option<usize>,
     if choice.is_none() && comment.is_empty() {
         return Err("Write your answer in the comment field first.".to_string());
     }
-    let keeps = choice == Some(1) && asked.kind == Kind::Verify;
+    let keeps = choice == Some(1) && asked.kind.verifies();
     // Taken off before its action so a second answer finds nothing, and put back when the action is refused so it can be answered again.
     if !keeps {
         changed(state, |all| all.retain(|one| one.id != id))?;
         crate::hub::notices::settle(crate::hub::notices::Subject::Question, &asked.address);
     }
     let acted = (|| -> std::result::Result<String, String> { Ok(match (asked.kind, choice) {
-        (Kind::Verify, Some(1)) => format!("Nothing changes; the question waits for {}.", asked.address),
+        (Kind::Verify | Kind::Solved, Some(1)) => format!("Nothing changes; the question waits for {}.", asked.address),
         (Kind::Verify, Some(0)) => match &asked.stage {
             Some(stage) => crate::tasks::rollout::verified(state, &asked.address, stage, messages::now())?,
             None => {
@@ -246,6 +263,17 @@ pub fn answer_in(state: &Path, caller: &Caller, id: &str, choice: Option<usize>,
                     format!("Told {} what you saw.", asked.address)
                 }
             }
+        }
+        (Kind::Solved, Some(0)) => close(&asked.address)?,
+        (Kind::Solved, _) => {
+            let what = if comment.is_empty() { "something is wrong".to_string() } else { comment.clone() };
+            crate::verify_after::reopen(state, &asked.address);
+            crate::phase::record(state, &asked.address, "verify", &crate::phase::Event::Answered);
+            tell(&asked.address, &format!(
+                "The user checked your change once it was out ({}) and it does not hold: {what}\nRebase onto the default branch first (already fetched, no -i), which drops the commits already out; then find the cause, fix it with a new commit and report ready with {} again. kebbie asks the user once that fix is out.",
+                asked.text, crate::verify_after::FLAG
+            ));
+            format!("Told {} what you saw; it stays open to fix it.", asked.address)
         }
         (Kind::Close, Some(0)) => close(&asked.address)?,
         (Kind::Close, Some(_)) => format!("{} stays open.", asked.address),
@@ -278,7 +306,8 @@ fn tell(address: &str, text: &str) {
 pub fn close(address: &str) -> std::result::Result<String, String> {
     let (task, place) = address.split_once('@').unwrap_or((address, ""));
     let repo = crate::repo::pooled_checkouts().into_iter().find(|repo| crate::repo::name_of(repo) == place).ok_or_else(|| format!("No repo {place} on this machine"))?;
-    crate::tasks::done(&repo, Some(task))
+    let landed = state_dir().ok().and_then(|state| crate::verify_after::load(&state, address)).and_then(|held| held.landed);
+    crate::tasks::done_landed(&repo, Some(task), landed.as_deref())
 }
 
 #[cfg(test)]

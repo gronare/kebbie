@@ -64,12 +64,17 @@ fn close_space(workspace: Option<String>) -> Option<String> {
 }
 
 pub fn done(cwd: &Path, name: Option<&str>) -> Result<String> {
+    done_landed(cwd, name, None)
+}
+
+// landed: the commits a push already out named, which the branch no longer holds.
+pub fn done_landed(cwd: &Path, name: Option<&str>, landed: Option<&str>) -> Result<String> {
     let repo = main_checkout(cwd)?;
     let task = task_of(&find_task(&repo, name, cwd)?).to_string();
     let state = state_dir()?;
     let address = peers::address(&task, &name_of(&repo));
     let vault = crate::task_note::linked(&state, &address).and_then(|_| crate::vault_cli::detect());
-    close_task(cwd, name, vault.as_ref(), None).map(|closed| closed.to_string())
+    close_task(cwd, name, vault.as_ref(), landed).map(|closed| closed.to_string())
 }
 
 pub(super) fn close_task(cwd: &Path, name: Option<&str>, vault: Option<&crate::vault_cli::Cli>, landed: Option<&str>) -> Result<Notice> {
@@ -365,6 +370,7 @@ pub(super) fn forget_address(state: &Path, address: &str) {
     super::landed::forget(state, address);
     super::stage::forget(state, address);
     crate::report::forget_check_in(state, address);
+    crate::verify_after::forget(state, address);
     crate::status::forget_title(state, address);
     crate::builds::forget(address);
 }
@@ -463,7 +469,7 @@ mod tests {
     fn done_drop_and_reset_forget_the_approval() {
         let source = include_str!("finish.rs");
         let body = |name: &str| { let start = source.find(&format!("\nfn {name}(")).or_else(|| source.find(&format!("\npub fn {name}("))).or_else(|| source.find(&format!("\npub(super) fn {name}("))).unwrap(); &source[start..start + source[start..].find("\n}\n").unwrap()] };
-        assert!(body("done").contains("close_task(") && body("close_task").contains("forget_approval("));
+        assert!(body("done").contains("done_landed(") && body("done_landed").contains("close_task(") && body("close_task").contains("forget_approval("));
         assert!(body("discard").contains("forget_approval("));
         assert!(body("reset").contains("discard("));
         assert!(body("close_task").contains("review::forget(") && body("discard").contains("review::forget("), "a later task by the same name must not show this one's review");
