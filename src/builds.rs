@@ -165,9 +165,47 @@ pub const TURN: &str = "kebbie: a build slot is free for you; run your build wit
 pub const OUTHELD: &str = "kebbie: your build held its build slot 30 minutes while other tasks waited, so the slot passed to the next in line; the build runs on outside the queue.";
 pub const MISSED: &str = "kebbie: your build turn passed unused to the next in line; run the build again to queue.";
 
-pub fn queued_line(place: usize, holders: &[Holder]) -> String {
+#[derive(Clone, Debug, PartialEq)]
+pub enum Blocked {
+    Full(String),
+    Ahead(String),
+    Next,
+}
+
+impl Blocked {
+    fn of(queue: &Queue, address: &str) -> Blocked {
+        if queue.used() >= queue.slots() {
+            return Blocked::Full(holding(&queue.holders, &queue.turns));
+        }
+        let ahead: Vec<&str> = queue.line.iter().take_while(|queued| *queued != address).map(String::as_str).collect();
+        if ahead.is_empty() { Blocked::Next } else { Blocked::Ahead(ahead.join(", ")) }
+    }
+
+    pub fn who(&self) -> String {
+        match self {
+            Blocked::Full(holding) => holding.clone(),
+            Blocked::Ahead(ahead) => format!("{ahead} ahead in line"),
+            Blocked::Next => "one is free and kebbie hands it here next".to_string(),
+        }
+    }
+}
+
+pub fn queued_line(place: usize, blocked: &Blocked) -> String {
+    let place = crate::tasks::ordinal(place);
+    match blocked {
+        Blocked::Full(holding) => format!("kebbie: no build slot is free for this task ({holding}); it is {place} in line, and kebbie tells it when its turn comes."),
+        Blocked::Ahead(ahead) => format!("kebbie: a build slot is free, but it goes first to the tasks ahead of this one ({ahead}); it is {place} in line, and kebbie tells it when its turn comes."),
+        Blocked::Next => format!("kebbie: a build slot is free and kebbie hands it to this task next; it is {place} in line, and kebbie tells it when its turn comes."),
+    }
+}
+
+pub fn holding(holders: &[Holder], turns: &[Turn]) -> String {
     let building: Vec<&str> = holders.iter().map(|holder| holder.address.as_str()).collect();
-    format!("kebbie: no build slot is free for this task ({} building); it is {} in line, and kebbie tells it when its turn comes.", building.join(", "), crate::tasks::ordinal(place))
+    let mut parts: Vec<String> = turns.iter().map(|turn| format!("{} has its turn", turn.address)).collect();
+    if !building.is_empty() {
+        parts.insert(0, format!("{} building", building.join(", ")));
+    }
+    parts.join("; ")
 }
 
 pub fn board_note(place: usize) -> String {
@@ -262,7 +300,7 @@ impl Drop for Slot {
 
 pub enum Took {
     Slot(Slot),
-    Queued(usize, Vec<Holder>),
+    Queued(usize, Blocked),
     NoKeeper,
 }
 
@@ -274,15 +312,16 @@ pub fn take_slot(dir: &Path, address: &str, front: bool, needs_keeper: bool) -> 
     if !try_flock(&file) {
         return Err(format!("{}: could not be locked", path.display()));
     }
-    let (took, holders) = with_queue(dir, |queue| {
+    let (took, held) = with_queue(dir, |queue| {
         queue.holders.retain(|holder| alive_in(dir, &holder.id));
-        (queue.take(address, &id, front, needs_keeper, crate::messages::now()), queue.holders.clone())
+        let took = queue.take(address, &id, front, needs_keeper, crate::messages::now());
+        (took, Blocked::of(queue, address))
     })?;
     match took {
         Take::Taken => Ok(Took::Slot(Slot { _file: file, dir: dir.to_path_buf(), id })),
         Take::Queued(place) => {
             let _ = fs::remove_file(&path);
-            Ok(Took::Queued(place, holders))
+            Ok(Took::Queued(place, held))
         }
         Take::NoKeeper => {
             let _ = fs::remove_file(&path);
@@ -306,10 +345,9 @@ fn wait_in(dir: &Path, limit: Duration, pause: Duration) -> Option<Slot> {
         }
         match take_slot(dir, UPDATE, true, false) {
             Ok(Took::Slot(slot)) => return Some(slot),
-            Ok(Took::Queued(_, holders)) => {
+            Ok(Took::Queued(_, held)) => {
                 if !said {
-                    let building: Vec<&str> = holders.iter().map(|holder| holder.address.as_str()).collect();
-                    eprintln!("waiting for a build slot: {} builds now", building.join(", "));
+                    eprintln!("waiting for a build slot: {}", held.who());
                     said = true;
                 }
                 std::thread::sleep(pause);
@@ -518,8 +556,8 @@ pub fn guard(argv: &[String]) -> ExitCode {
     let (Ok(dir), Some(address)) = (queue, address) else { return exit_of(run(&mut command), program) };
     let slot = match take_slot(&dir, &address, false, true) {
         Ok(Took::Slot(slot)) => slot,
-        Ok(Took::Queued(place, holders)) => {
-            eprintln!("{}", queued_line(place, &holders));
+        Ok(Took::Queued(place, held)) => {
+            eprintln!("{}", queued_line(place, &held));
             return ExitCode::from(QUEUED_EXIT);
         }
         Ok(Took::NoKeeper) => {
@@ -891,5 +929,50 @@ mod tests {
         drop(slot);
         assert!(load(&dir).holders.is_empty() && !alive_in(&dir, &id));
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_waiting_line_names_a_task_that_holds_only_a_turn() {
+        let dir = crate::lead::state_location().unwrap().join(format!("builds-turn-line-{}", std::process::id()));
+        crate::state::private_dir(&dir).unwrap();
+        let now = crate::messages::now();
+        let turned = Queue { turns: vec![Turn { address: "alpha@app".into(), until: now + HOLD, told: true }], ..queue(1, now) };
+        crate::state::write(&dir.join(QUEUE), serde_json::to_string(&turned).unwrap()).unwrap();
+        let Ok(Took::Queued(place, held)) = take_slot(&dir, "b@app", false, false) else { panic!("a slot held by a turn queues the next build") };
+        assert_eq!(queued_line(place, &held), "kebbie: no build slot is free for this task (alpha@app has its turn); it is 1st in line, and kebbie tells it when its turn comes.");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_build_queued_behind_a_task_ahead_while_a_slot_is_free_names_that_task() {
+        let dir = crate::lead::state_location().unwrap().join(format!("builds-ahead-line-{}", std::process::id()));
+        crate::state::private_dir(&dir).unwrap();
+        let ahead = Queue { line: strings(&["alpha@app"]), ..queue(1, crate::messages::now()) };
+        crate::state::write(&dir.join(QUEUE), serde_json::to_string(&ahead).unwrap()).unwrap();
+        let Ok(Took::Queued(place, held)) = take_slot(&dir, "b@app", false, false) else { panic!("a task ahead in line keeps the free slot from the next build") };
+        assert_eq!(queued_line(place, &held), "kebbie: a build slot is free, but it goes first to the tasks ahead of this one (alpha@app); it is 2nd in line, and kebbie tells it when its turn comes.");
+        assert_eq!(held.who(), "alpha@app ahead in line");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn kebbie_update_put_first_in_line_while_a_slot_is_free_hears_it_comes_next() {
+        let dir = crate::lead::state_location().unwrap().join(format!("builds-update-next-{}", std::process::id()));
+        crate::state::private_dir(&dir).unwrap();
+        let ahead = Queue { line: strings(&["alpha@app"]), ..queue(1, crate::messages::now()) };
+        crate::state::write(&dir.join(QUEUE), serde_json::to_string(&ahead).unwrap()).unwrap();
+        let Ok(Took::Queued(place, held)) = take_slot(&dir, UPDATE, true, false) else { panic!("kebbie update waits for the keeper to hand it the free slot") };
+        assert_eq!((place, held.clone()), (1, Blocked::Next));
+        assert_eq!(held.who(), "one is free and kebbie hands it here next");
+        assert_eq!(queued_line(place, &held), "kebbie: a build slot is free and kebbie hands it to this task next; it is 1st in line, and kebbie tells it when its turn comes.");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_waiting_line_names_builds_before_turns() {
+        let holders = [Holder { address: "a@app".into(), id: "1".into(), at: 1 }, Holder { address: "b@app".into(), id: "2".into(), at: 1 }];
+        let turns = [Turn { address: "c@app".into(), until: 1, told: true }];
+        assert_eq!(holding(&holders, &turns), "a@app, b@app building; c@app has its turn");
+        assert_eq!(holding(&holders[..1], &[]), "a@app building");
     }
 }
