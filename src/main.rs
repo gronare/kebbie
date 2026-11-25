@@ -20,6 +20,7 @@ mod card_images;
 mod changes;
 mod board;
 mod ci;
+mod clock;
 mod comments;
 mod commit_tests;
 mod config;

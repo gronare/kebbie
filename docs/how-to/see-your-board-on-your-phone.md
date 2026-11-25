@@ -240,6 +240,14 @@ A hub can leave answering off for an account. It still takes the machine's board
 
 A hub that refuses the board answers so, and kebbie then says `This hub has not enabled answering for your account:` with the hub's link: in a line on the board, in the `H` window, in `kebbie hub status` and in `kebbie doctor`. Everything on the machine keeps working, and the board goes out again with the next post once the hub enables answering for the account.
 
+## When the machine's clock is wrong
+
+Every command from your phone carries the time it was sent and how long it holds, so a machine whose clock runs hours behind reads it as sent from the future and refuses it as expired. The phone then says how far behind, as in `Not done: the machine's clock runs 6h 28m behind, so this looked expired. Set its clock, for example with sudo chronyc makestep, then send it again.`
+
+Set the clock: `sudo chronyc makestep` on Linux, `sudo sntp -sS time.apple.com` on macOS.
+
+The usual cause is chrony: past its first updates after a start it only slews the clock, a little at a time, so a clock that drifted hours off stays wrong for days until `makestep` steps it.
+
 ## Scripts: join with a code
 
 For a setup without a browser, a hub you run yourself mints a join code for a machine with `kebbie-hub admin join-code`. Then, on the machine:

@@ -293,7 +293,8 @@ pub fn handle(dir: &Path, identity: &Identity, account: &AccountKey, accepts: &[
         }
         Err(Refusal::Answer(reason)) => {
             let reason = if reason == Reason::Expired && ledger.held.contains_key(&held_key(&header.from, &header.id)) { Reason::NotApproved } else { reason };
-            Handled::Refused(result(header, (Outcome::Refused { reason }, refusal_text(reason, header.kind, &identity.name, accepts)), None))
+            let text = (reason == Reason::Expired).then(|| crate::clock::refused(header.at, now)).flatten().unwrap_or_else(|| refusal_text(reason, header.kind, &identity.name, accepts));
+            Handled::Refused(result(header, (Outcome::Refused { reason }, text), None))
         }
         Ok(_) if ledger.started.get(&header.id).is_some_and(|started| started.from == header.from) => Handled::Refused(result(header, (Outcome::Failed, STOPPED.to_string()), None)),
         Ok(verified) => {
@@ -1142,6 +1143,19 @@ mod tests {
         with_hands(&seen, |hands| round(&account.dir, 0, &accepts(word("answer-and-push")), ACCOUNT, hands, &|| now() + 120)).unwrap();
         assert_eq!(account.result(&soon).outcome, Outcome::Refused { reason: Reason::Expired });
         assert!(seen.applied() == 0 && seen.relays.get() == 0, "nothing was applied");
+        assert_eq!(account.result(&soon).text, "It expired before this machine read it; send it again", "a command that really expired is not the clock's fault");
+    }
+
+    #[test]
+    fn a_command_refused_because_the_machines_clock_is_hours_behind_says_so_and_how_much() {
+        let mut account = Account::connected();
+        let seen = Seen::new();
+        let sent = account.send(&answer());
+        with_hands(&seen, |hands| round(&account.dir, 0, &accepts(word("answer")), ACCOUNT, hands, &|| now() - 23_316)).unwrap();
+        let refused = account.result(&sent);
+        assert_eq!(refused.outcome, Outcome::Refused { reason: Reason::Expired });
+        assert!(refused.text.starts_with("Not done: the machine's clock runs 6h 28m behind") && refused.text.contains(crate::clock::fix()), "{}", refused.text);
+        assert_eq!(seen.applied(), 0);
     }
 
     #[test]
