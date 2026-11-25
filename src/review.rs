@@ -660,7 +660,7 @@ fn review(repo: &Path, slot: &Slot, address: &str, state: &Path, which: Which, s
     let rules = &settings.rules_skill.value;
     let rules_file = self::rules_file(rules, &slot.path, &kebbie);
     let quoted = quoted_rules(rules);
-    let tests = with_test_commands(&crate::evidence::brief_for(state, address, &slot.path, &upstream, &sha), &settings.test_commands.value);
+    let tests = with_test_commands(&crate::evidence::brief_for(state, address, &slot.path, &upstream, &sha), &settings.test_commands.value, settings.tests_lint_command.value.as_deref());
     let docs = if settings.docs_required.value { Some(docs_brief(&slot.path, &upstream, &sha, &kebbie.join(KEEP_DOCS))?) } else { None };
     let card = crate::report::card_in(state, address).map(|card| card.text);
     let focus = subtask.and_then(|id| subtask_focus(&slot.path, id));
@@ -1226,11 +1226,11 @@ fn rereview_brief(saved: &str, before: &str, sha: &str, delta: &str) -> String {
     )
 }
 
-// The recorded test runs, then the repo's own test commands, so a finding that asks for a run names one of them.
-fn with_test_commands(tests: &str, commands: &[String]) -> String {
-    let Some(line) = crate::peers::test_commands_line(commands) else { return tests.to_string() };
-    let line = format!("{line}: a finding that asks for a test run names one of these, never another test setup.");
-    if tests.is_empty() { line } else { format!("{tests}\n\n{line}") }
+// The recorded test runs, then the repo's own test commands and its lint, so a finding that asks for a run names one of them.
+fn with_test_commands(tests: &str, commands: &[String], lint: Option<&str>) -> String {
+    let own = crate::peers::test_commands_line(commands).map(|line| format!("{line}: a finding that asks for a test run names one of these, never another test setup."));
+    let lint = lint.map(|lint| format!("This repo lints with `{lint}` (tests.lint_command), as CI does, and kebbie takes a ready report and pushes only on a green run of exactly that command on HEAD, kept apart from the test runs above: a finding about lint names this command."));
+    [Some(tests.to_string()).filter(|tests| !tests.is_empty()), own, lint].into_iter().flatten().collect::<Vec<_>>().join("\n\n")
 }
 
 // The user sent one subtask to review from the phone: its commits are the ones to review, the rest of the branch the context they sit in.
@@ -1901,11 +1901,13 @@ mod tests {
         let said = vec!["Add refunds.".to_string()];
         let runs = "- ✓ script/test · 3 passed · at abc123 · `script/test spec/refunds_spec.rb`";
         let commands = ["script/test".to_string(), "bin/rspec".to_string()];
-        let tests = with_test_commands(runs, &commands);
+        let tests = with_test_commands(runs, &commands, None);
         let text = brief(&Brief { address: "billing@app", worktree: Path::new("/src/wt1.app"), upstream: "origin/main", sha: "abc123", commits: "abc123 Add refunds", rules: "kebbie:work-rules", rules_file: None, quoted: None, said: &said, tests: &tests, also_noticed: config::AlsoNoticed::Backlog, docs: None, card: None, focus: None, settled: None, previous: None });
         assert!(text.contains(&format!("{runs}\n\nThis repo runs its tests with `script/test` or `bin/rspec` (`task.test_commands`): a finding that asks for a test run names one of these")), "{text}");
-        assert_eq!(with_test_commands("", &commands), "This repo runs its tests with `script/test` or `bin/rspec` (`task.test_commands`): a finding that asks for a test run names one of these, never another test setup.", "without a recorded run the commands stand alone");
-        assert_eq!(with_test_commands(runs, &[]), runs, "a repo without task.test_commands adds nothing");
+        assert_eq!(with_test_commands("", &commands, None), "This repo runs its tests with `script/test` or `bin/rspec` (`task.test_commands`): a finding that asks for a test run names one of these, never another test setup.", "without a recorded run the commands stand alone");
+        assert_eq!(with_test_commands(runs, &[], None), runs, "a repo without task.test_commands adds nothing");
+        let lint = with_test_commands(runs, &commands, Some("cargo clippy --locked --all-targets -- -D warnings"));
+        assert!(lint.starts_with(runs) && lint.ends_with("This repo lints with `cargo clippy --locked --all-targets -- -D warnings` (tests.lint_command), as CI does, and kebbie takes a ready report and pushes only on a green run of exactly that command on HEAD, kept apart from the test runs above: a finding about lint names this command."), "{lint}");
     }
 
     #[test]

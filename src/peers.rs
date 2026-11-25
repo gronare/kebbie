@@ -261,11 +261,12 @@ pub fn test_commands_line(commands: &[String]) -> Option<String> {
     Some(format!("This repo runs its tests with {named} (`task.test_commands`)"))
 }
 
-// A repo on tests.before_push = "full" has its tasks run the whole suite after their last commit, since ready and every push wait on it.
-pub fn tests_line(commands: &[String], full: Option<&str>) -> String {
+// A repo on tests.before_push = "full" has its tasks run the whole suite, and one with tests.lint_command its lint, after their last commit, since ready and every push wait on them.
+pub fn tests_line(commands: &[String], full: Option<&str>, lint: Option<&str>) -> String {
     let own = test_commands_line(commands).map_or(String::new(), |line| format!(" {line}: run your tests through it, with the files or test names your change touches as its arguments, and start no other test setup, such as the bare test runner it wraps, which can boot another environment and reset its data."));
     let full = full.map_or(String::new(), |full| format!(" This repo pushes only on a green run of its full suite on HEAD (`tests.before_push = \"full\"`): once your last commit is made, run `{full}` as a command of its own, with nothing after it in the line, before you report ready. kebbie refuses the ready report, and every push, until that run passed on HEAD."));
-    own + &full
+    let lint = lint.map_or(String::new(), |lint| format!(" This repo lints with `{lint}` (`tests.lint_command`), as CI does: once your last commit is made, run it word for word as a command of its own, with nothing after it in the line, before you report ready. kebbie refuses the ready report, and every push, until that run passed on HEAD; fix what it finds, as --red-cause excuses no lint."));
+    own + &full + &lint
 }
 
 pub struct PlanAt<'a> {
@@ -410,7 +411,7 @@ fn role_values(task: &str, place: &Place, peers: &str) -> Result<Vec<(&'static s
     let in_vault = crate::config::filing(&settings.sources.value) == Some(crate::config::Source::Vault);
     let noticed = noticed_section(settings.also_noticed.value, in_vault && tools && crate::vault_cli::detect().is_some(), &kebbie);
     let docs = docs_line(place.agent, settings.docs_required.value);
-    let tests = tests_line(&settings.test_commands.value, crate::required_runs::full(&settings).as_deref());
+    let tests = tests_line(&settings.test_commands.value, crate::required_runs::full(&settings).as_deref(), settings.tests_lint_command.value.as_deref());
     let steps = steps_section(settings.steps.value, &kebbie);
     let mut values = vec![("address", me.clone()), ("task", task.to_string()), ("repo", repo), ("noticed", noticed), ("steps", steps), ("kebbie", kebbie), ("peers", peers), ("plan", plan), ("vault", vault), ("docs", docs), ("tests", tests), ("language", crate::item_template::content_language())];
     values.extend(worktree_values(place)?);
@@ -594,7 +595,7 @@ mod tests {
         let template = include_str!("../roles/task.md");
         let role = |repo: &str, machine: &str| {
             let settings = settings(&parse_repo(repo, "app.toml").unwrap(), &parse_machine(machine, "config.toml").unwrap());
-            fill(template, &[("tests", &tests_line(&settings.test_commands.value, crate::required_runs::full(&settings).as_deref()))])
+            fill(template, &[("tests", &tests_line(&settings.test_commands.value, crate::required_runs::full(&settings).as_deref(), settings.tests_lint_command.value.as_deref()))])
         };
         let full = role("[tests]\nfull_command = \"uv run pytest -q\"\n", "[tests]\nbefore_push = \"full\"\n");
         assert!(full.contains("a commit after the run makes it stale. This repo pushes only on a green run of its full suite on HEAD") && full.contains("run `uv run pytest -q` as a command of its own"), "{full}");
@@ -604,6 +605,9 @@ mod tests {
         assert!(own.contains("a commit after the run makes it stale. This repo runs its tests with `script/test` or `bin/rspec` (`task.test_commands`): run your tests through it") && own.contains("start no other test setup"), "{own}");
         let both = role("[task]\ntest_commands = [\"script/test\"]\n[tests]\nfull_command = \"script/test --all\"\n", "[tests]\nbefore_push = \"full\"\n");
         assert!(both.contains("This repo runs its tests with `script/test` (`task.test_commands`)") && both.contains("run `script/test --all` as a command of its own"), "{both}");
+        let lint = role("[tests]\nlint_command = \"cargo clippy --locked --all-targets -- -D warnings\"\n", "");
+        assert!(lint.contains("This repo lints with `cargo clippy --locked --all-targets -- -D warnings` (`tests.lint_command`)") && lint.contains("until that run passed on HEAD") && !lint.contains("full suite on HEAD"), "{lint}");
+        assert!(!related.contains("tests.lint_command"), "a repo without a lint names none: {related}");
     }
 
     #[test]
