@@ -267,6 +267,8 @@ A report its Claude writes meanwhile keeps it here unless it says needs-you or b
 
 A task that named a check for after its push (`kebbie report --after-push`) adds `then checks: <check>`, muted, while CI runs. Once CI is green its Claude runs the check, marked `checking after push: <check>`; the task closes as done when it reports the check held, and moves to Needs you with what failed when it did not. A task that named a check for you (`kebbie report --verify-after-push`) then waits under Needs you, marked `check: <check> · answer Verified to close it`, until you answer kebbie's question. See [`kebbie ci`](commands.md#kebbie-ci---json).
 
+A push whose CI failed on a job the branch was already red on stays here, marked `CI red since <sha> (<task>): <workflow> · <job>; waits for the fix there`. The task that first made the job red fixes it; this one closes as done once a later push that holds its commits is green. `C` dismisses it.
+
 ### Waiting for work
 
 - Started without a prompt, or its start never reached its Claude.
@@ -419,7 +421,7 @@ A question that asks first, as reset, drop and done do, takes `y` to go ahead an
 | `t` | Ask its Claude to tidy its commits by the rules skill. | Claude is not mid-turn, and it is not pushed. |
 | `p` | Push: open the push window. On a task already in the line, take it out again, unpushed. | Claude is not mid-turn, it is not waiting for the reviewer, and it is not pushed. |
 | `M` | Put on local main to try it; on a staged task, take it off again. | See below. |
-| `C` | Dismiss the CI of a pushed task: a red one whose failure is not the code's, a cancelled one you leave cancelled, or one gh could not read. Asks first. Yours alone. | The task's CI failed, was cancelled or is unknown. |
+| `C` | Dismiss the CI of a pushed task: a red one whose failure is not the code's, a cancelled one you leave cancelled, one gh could not read, or a red one it inherited and waits on another push's fix for. Asks first. Yours alone. | The task's CI failed, was cancelled, is unknown or inherited a red. |
 | `G` | Re-run CI: gh runs the pushed commit's failed and cancelled runs again, and kebbie watches them as after a push, closing the task once they are green. | Every commit is on the default branch and its CI failed or was cancelled. |
 | `d` | Done: close a task you already pushed elsewhere and free its worktree. Asks first. | Claude is not mid-turn. |
 | `a` | Let the lead push it, or take that back. `done`, `drop` and `reset` take it back too. | It is a task, not pushed. |

@@ -329,13 +329,20 @@ Every 30 seconds the keeper (or an open board, with `keeper.enabled = false`) as
 | Every run done and one cancelled while the repo's [`ci.deploy_window`](configuration.md#ci-updates-and-the-keeper) was shut, nothing newer going | The task stays under CI running with `<workflow> cancelled while the deploy window (<window>) was shut; kebbie re-runs it once the window opens`, and kebbie asks every 5 minutes. In the window's next opening kebbie re-runs it (`gh run rerun`), watches the new runs as after a push, and closes the task as `done` once they are green. |
 | Every run done and one cancelled, nothing newer going | The watch stops. A cancel says nothing about the code, so its Claude is sent nothing. The task moves to Needs you with `CI cancelled: <workflow> · <job>; G re-runs it (gh run rerun), C dismisses it`. A later run of that workflow on the branch that passes, on a commit holding the pushed one, still closes the task as `done`. |
 | A run failed or timed out | The watch stops, and the failure is named by workflow, job and step: `CI failed: <workflow> · <job> · <step>`. `success`, `skipped` and `neutral` pass, `cancelled` is above, and every other conclusion fails. |
+| A run failed on a job the branch was already red on | GitHub runs only the head of a push, so kebbie reads the branch's runs of that workflow and takes the nearest earlier commit with a finished run that was not cancelled. When that run failed every job that failed in the push, and every other workflow of the push is done, the red is inherited: the task stays under CI running with `CI red since <sha> (<task>): <workflow> · <job>; waits for the fix there`, naming the commit the red began on and the task whose push made it, and its Claude is told to change nothing for it. While the run on that earlier commit still runs, the verdict waits, for at most 30 minutes after the push; after that the red counts as the push's own. |
 | gh cannot read the runs | The row says `gh cannot read it: <error>`. A commit whose runs gh no longer lists counts the same. After 15 minutes the watch stops and the task moves to Needs you with `CI unknown: gh could not read the runs of <sha> for 15 min (<error>); C dismisses it`. |
 
-When a run failed:
+When a run failed and the red is the push's own:
 
 - Its Claude gets the failure and the last 60 lines of its log, and the lead gets a line.
 - After a push of the whole task, the fix is part of that push. The task stays under Ready to push as `pushing for you · its Claude fixes the red CI`. Once its Claude reports ready and the reviewer passes the fix against the rules, kebbie pushes it for whoever gave the push, and watches it the same way. It moves to Needs you only when its Claude reports needs-you.
 - After a push with `--through`, the task moves to Needs you with `CI failed: <workflow> · <job> · <step>`. When it fixes the failure it pushes again as usual, and the new push is watched.
+
+When the red is inherited:
+
+- Only the task whose push first made the job red gets the log, so one fix lands instead of one per task on top. It hears which pushes wait on its fix.
+- The waiting task's Claude gets a short note to leave it, and no fix is pushed for it. Every 5 minutes kebbie checks for a later push on the branch that holds its commits and passed the workflow; then the task closes as `done`.
+- When no task kebbie watches made the red (a hand push, or a task already gone), the row says `no task kebbie watches` and the lead is asked to see to it.
 
 A push with `--through` is watched too and leaves the task where it is. `done` closes a task whatever CI says.
 
