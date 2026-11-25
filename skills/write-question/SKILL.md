@@ -1,6 +1,6 @@
 ---
 name: write-question
-description: Write a question to the user, a choice or a check only he can make, so he can answer it on the first read. Use when you run `kebbie ask` or `kebbie ask --verify`, when the investigator writes an `ask`, and when the lead sends a question back to be asked again.
+description: Write a question to the user, a choice or a check only he can make, so he can answer it on the first read. Use when you run `kebbie ask` or `kebbie ask --verify`, or name a check with `kebbie report --verify-after-push`, when the investigator writes an `ask`, and when the lead sends a question back to be asked again.
 ---
 
 # Write a question
@@ -23,7 +23,7 @@ Keep the text under 300 characters where you can; the phone then shows it whole 
 - What he gets is one sentence: what he will see or be able to do with that choice, and what it costs him, such as a later delivery.
 - `--recommend` names the option you would pick; its reason is the option's own sentence, so the context needs none.
 
-**A check** (`kebbie ask --verify`) is one sentence: what to check and where, as a step he can follow ("Open the board on your phone and pull to refresh: the note line stays."), with the page's address after it.
+**A check** (`kebbie ask --verify`, `kebbie report --verify-after-push`) is one sentence: what to check and where, as a step he can follow ("Open the board on your phone and pull to refresh: the note line stays."), with the page's address after it.
 
 An example, in an English vault:
 
