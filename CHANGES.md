@@ -12,6 +12,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task's build refuses to start when the disk is nearly full, and says how much is free.
 - A backlog item added on any machine is written out on the ideas machine, and the machine you added it on says where it went.
 - The lead asks only on the board, answers in a few lines and starts a fix for each fault you point out.
+- A repo can name its lint command (tests.lint_command): kebbie records its runs, and a task reports ready and pushes only once that lint passed on its latest code, also after the push line rebased it.
 
 ### Fixed
 - A task keeps its own name until it is released.

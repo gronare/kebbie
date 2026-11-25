@@ -65,3 +65,32 @@ fn a_repo_on_related_tests_pushes_as_before_whatever_its_full_command() {
     let went = lab.run_as_user(&["-C", lab.app(), "push", "billing"]);
     assert!(went.status.success(), "{}\n{}", stdout(&went), stderr(&went));
 }
+
+#[test]
+fn a_repo_with_a_lint_command_takes_a_ready_report_and_a_push_only_after_a_green_lint_on_head() {
+    let lab = Lab::new("lint");
+    let repos = lab.home.join(".config/kebbie/repos");
+    fs::create_dir_all(&repos).unwrap();
+    fs::write(repos.join("app.toml"), "[tests]\nlint_command = \"scripts/lint.sh --strict\"\n").unwrap();
+    let billing = lab.start("billing", "Add refunds", &[]);
+    let slot = billing.to_str().unwrap();
+    lab.work(&billing, "refunds.rb", "Add refunds");
+
+    let refused = lab.run_as("billing@app", &["-C", slot, "report", "--state", "ready", "--next", "push", "refunds done"]);
+    assert!(!refused.status.success() && stderr(&refused).contains("Run `scripts/lint.sh --strict` in your worktree") && stderr(&refused).contains("tests.lint_command"), "{}", stderr(&refused));
+    let pushed = lab.run_as_user(&["-C", lab.app(), "push", "billing"]);
+    assert!(!pushed.status.success() && stderr(&pushed).contains("its lint has no green run on HEAD"), "{}\n{}", stdout(&pushed), stderr(&pushed));
+
+    ran(&lab, &billing, "scripts/lint.sh --strict", Some(1));
+    let red = lab.run_as("billing@app", &["-C", slot, "report", "--state", "ready", "--next", "push", "refunds done", "--red-cause", "lint fails on main too"]);
+    assert!(!red.status.success() && stderr(&red).contains("--red-cause names why the latest test run is red, and it is not red"), "a red lint is no red test to excuse: {}", stderr(&red));
+    ran(&lab, &billing, "scripts/lint.sh --strict --allow-all", None);
+    let loose = lab.run_as("billing@app", &["-C", slot, "report", "--state", "ready", "--next", "push", "refunds done"]);
+    assert!(!loose.status.success() && stderr(&loose).contains("its latest run failed at"), "a lint with another flag is not the repo's lint: {}", stderr(&loose));
+
+    ran(&lab, &billing, "scripts/lint.sh --strict", None);
+    let ready = lab.run_as("billing@app", &["-C", slot, "report", "--state", "ready", "--next", "push", "refunds done"]);
+    assert!(ready.status.success(), "{}", stderr(&ready));
+    let went = lab.run_as_user(&["-C", lab.app(), "push", "billing"]);
+    assert!(went.status.success(), "{}\n{}", stdout(&went), stderr(&went));
+}

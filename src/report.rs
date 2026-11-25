@@ -52,8 +52,8 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
     let red = if report.state == "ready" {
         crate::rules_check::refuse_unformed(cwd)?;
         let red = red_gate(&crate::evidence::runs_in(&state_dir()?, &me), red_cause)?;
-        if to_push(cwd) && let Some(gap) = crate::full_tests::owed(cwd, &me) {
-            return Err(crate::full_tests::report_refusal(&gap));
+        if to_push(cwd) && let Some(gap) = crate::required_runs::owed(cwd, &me) {
+            return Err(crate::required_runs::report_refusal(&gap));
         }
         red
     } else {

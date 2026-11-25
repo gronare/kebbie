@@ -292,7 +292,7 @@ commands = ["answer", "prompt", "idea"]
 | `tests.per_commit` | `true` in a repo with a worktree setup, else `false` | either | Whether the keeper tests each of a ready task's unpushed commits on its own and marks the push order with the results. |
 | `tests.before_push` | `"related"` | either | Which tests a ready report and a push wait on: `"related"`, the tests the task runs for its change, or `"full"`, a green run of `tests.full_command` on the task's HEAD. |
 | `tests.full_command` | none | repo only | The command that runs the repo's whole test suite, such as `"cargo test --locked"` or `"uv run pytest -q"`. |
-| `tests.lint_command` | none | repo only | The command that lints the repo as CI does, such as `"cargo clippy --locked --all-targets -- -D warnings"`. kebbie records its runs beside the test runs; a red lint run never counts as a red test run. |
+| `tests.lint_command` | none | repo only | The command that lints the repo as CI does, such as `"cargo clippy --locked --all-targets -- -D warnings"`. A ready report and every push wait for a green run of exactly this command on the task's HEAD, whatever `tests.before_push` says. |
 | `comments.watch` | `true` | either | Whether kebbie reads the comments colleagues leave on the commits it pushed, on your own commits and wherever they mention you, and shows each under COMMENTS on the board. |
 | `comments.watch_days` | `7` | either | How many days after a push kebbie checks its commits for new comments, a whole number from 1 to 90. |
 | `update.channel` | `"release"` | config.toml only | What `kebbie update` installs: `"release"`, the highest `vX.Y.Z` tag on origin, or `"main"`, origin's default branch. |
@@ -315,11 +315,14 @@ commands = ["answer", "prompt", "idea"]
 
 `tests.before_push = "full"` refuses a task's ready report and every push of it, from the board, the lead or your phone, until kebbie recorded a green run of `tests.full_command` on the task's HEAD; a push of only its first commits needs that green run on the commit the push ends at. The refusal names the command to run, and the task's role tells its Claude to run it after its last commit. A run counts when the line runs the command with flags of its own at most (`cargo test --locked -q` counts, `cargo test --locked billing` does not), on the same tree as HEAD. When a push rebases the task onto a moved default branch, its Claude runs the full suite again and kebbie pushes once it reports ready. A repo without `tests.full_command` stays on related tests, and [`kebbie doctor`](requirements.md#what-kebbie-doctor-checks) says so; it also suggests `"full"` with the command for a repo whose recorded whole-suite runs take five minutes or less.
 
+`tests.lint_command` refuses a task's ready report and every push of it in the same way until kebbie recorded a green run of the lint on the task's HEAD, on related tests as on `"full"`. A run counts only when the line runs the command word for word, after `cd`, assignments and redirections at most: `cargo clippy --locked --all-targets -- -D warnings -A clippy::all` is another lint. kebbie records the lint's runs beside the test runs, but a lint run never counts as a test run: a green lint does not hide a red test run, and a red lint is not a red test to excuse with `--red-cause`. When a push rebases the task onto a moved default branch, its Claude runs the lint again, with the full suite when that is owed too, and kebbie pushes once it reports ready.
+
 ```toml
 # ~/.config/kebbie/repos/app.toml
 [tests]
 before_push = "full"
 full_command = "cargo test --locked"
+lint_command = "cargo clippy --locked --all-targets -- -D warnings"
 ```
 
 `comments.watch` needs what `ci.watch` needs, origin on GitHub and `gh` logged in, and [`kebbie doctor`](requirements.md#what-kebbie-doctor-checks) says when a repo misses either. Your own comments are skipped, and so are a bot's. kebbie asks `gh` for a repo's new commit comments every 12 minutes while any of its pushed commits is watched, in one call however many are, and less often while `gh` fails. In a repo with a kebbie worktree pool it asks every 12 minutes regardless, with two more calls for the pull request and issue comments that mention you. A comment already on the board stays there after the days run out. See [Act on comments on pushed commits](../how-to/act-on-comments-on-pushed-commits.md).

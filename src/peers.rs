@@ -410,7 +410,7 @@ fn role_values(task: &str, place: &Place, peers: &str) -> Result<Vec<(&'static s
     let in_vault = crate::config::filing(&settings.sources.value) == Some(crate::config::Source::Vault);
     let noticed = noticed_section(settings.also_noticed.value, in_vault && tools && crate::vault_cli::detect().is_some(), &kebbie);
     let docs = docs_line(place.agent, settings.docs_required.value);
-    let tests = tests_line(&settings.test_commands.value, crate::full_tests::required(&settings).as_deref());
+    let tests = tests_line(&settings.test_commands.value, crate::required_runs::full(&settings).as_deref());
     let steps = steps_section(settings.steps.value, &kebbie);
     let mut values = vec![("address", me.clone()), ("task", task.to_string()), ("repo", repo), ("noticed", noticed), ("steps", steps), ("kebbie", kebbie), ("peers", peers), ("plan", plan), ("vault", vault), ("docs", docs), ("tests", tests), ("language", crate::item_template::content_language())];
     values.extend(worktree_values(place)?);
@@ -594,7 +594,7 @@ mod tests {
         let template = include_str!("../roles/task.md");
         let role = |repo: &str, machine: &str| {
             let settings = settings(&parse_repo(repo, "app.toml").unwrap(), &parse_machine(machine, "config.toml").unwrap());
-            fill(template, &[("tests", &tests_line(&settings.test_commands.value, crate::full_tests::required(&settings).as_deref()))])
+            fill(template, &[("tests", &tests_line(&settings.test_commands.value, crate::required_runs::full(&settings).as_deref()))])
         };
         let full = role("[tests]\nfull_command = \"uv run pytest -q\"\n", "[tests]\nbefore_push = \"full\"\n");
         assert!(full.contains("a commit after the run makes it stale. This repo pushes only on a green run of its full suite on HEAD") && full.contains("run `uv run pytest -q` as a command of its own"), "{full}");

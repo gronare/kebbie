@@ -239,12 +239,11 @@ fn overlap_prompt(by: &By, upstream: &str, touched: &[Touched], through: Through
     )
 }
 
-fn full_prompt(by: &By, upstream: &str, full: &str) -> String {
+fn required_prompt(by: &By, upstream: &str, gap: &crate::required_runs::Gap) -> String {
     format!(
-        "{} asked kebbie to push this task. kebbie fetched and rebased it onto {upstream} without conflicts, and this repo pushes only on a green run of its \
-         full suite on HEAD (tests.before_push = \"full\"). Run `{full}` in this worktree as a command of its own and fix what broke with a new commit. Do not push. \
-         When it passes, report ready: kebbie pushes the task for {} then. Report needs-you only when a test stays red. {WAITING_BEHIND}",
-        capitalized(by.word()), by.word()
+        "{} asked kebbie to push this task. kebbie fetched and rebased it onto {upstream} without conflicts, and {} \
+         When they pass, report ready: kebbie pushes the task for {} then. Report needs-you only when one stays red. {WAITING_BEHIND}",
+        capitalized(by.word()), crate::required_runs::rebased_prompt(gap), by.word()
     )
 }
 
@@ -543,8 +542,8 @@ pub(super) fn join(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, thro
         return Notice::new(Tone::NotNow, "Not pushed: a rebase is under way in its worktree").next("Push it once the rebase is finished.").detail("task", &task).err();
     }
     authorize(caller, repo, slot, &upstream, through)?;
-    if let Some(gap) = crate::full_tests::owed_at(&slot.path, &address, pushed_end(&slot.path, &upstream, through)?.as_deref()) {
-        return Err(crate::full_tests::push_refusal(&gap, "Not pushed", &task));
+    if let Some(gap) = crate::required_runs::owed_at(&slot.path, &address, pushed_end(&slot.path, &upstream, through)?.as_deref()) {
+        return Err(crate::required_runs::push_refusal(&gap, "Not pushed", &task));
     }
     let by = By::of(caller).ok_or_else(|| Notice::new(Tone::Failed, format!("Not pushed: {} may not push it", crate::permit::describe(caller))).detail("task", &task).to_string())?;
     let waiting = intent::load(state, &address);
@@ -711,19 +710,19 @@ fn prepare(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Thr
     }
     intent::forget(state, &address);
     let pusher = authorize(caller, repo, slot, &upstream, through)?;
-    if let Some(gap) = crate::full_tests::owed_at(&slot.path, &address, pushed_end(&slot.path, &upstream, through)?.as_deref()) {
+    if let Some(gap) = crate::required_runs::owed_at(&slot.path, &address, pushed_end(&slot.path, &upstream, through)?.as_deref()) {
         if through != Through::All || git(&slot.path, &["rev-parse", "HEAD"])? == before {
-            return Err(crate::full_tests::push_refusal(&gap, "Not pushed", &task));
+            return Err(crate::required_runs::push_refusal(&gap, "Not pushed", &task));
         }
         record(Work::Tests, pushed_fingerprint(&slot.path, &upstream, through)?)?;
-        if let Err(cannot) = hand_over(slot, &full_prompt(&by, &upstream, &gap.full)).and_then(|_| intent::note_hand_over(state, &address)) {
+        if let Err(cannot) = hand_over(slot, &required_prompt(&by, &upstream, &gap)).and_then(|_| intent::note_hand_over(state, &address)) {
             intent::forget(state, &address);
-            return Notice::new(Tone::Failed, format!("Not pushed: {} moved under it, and kebbie could not pass its full suite to its Claude", main_of(&upstream)))
-                .you(format!("Run `{}` in its worktree, then push again.", gap.full)).detail("task", &task).detail("folder", slot.path.display().to_string()).detail("error", cannot).err();
+            return Notice::new(Tone::Failed, format!("Not pushed: {} moved under it, and kebbie could not pass {} to its Claude", main_of(&upstream), gap.names()))
+                .you(format!("Run {} in its worktree, then push again.", gap.commands())).detail("task", &task).detail("folder", slot.path.display().to_string()).detail("error", cannot).err();
         }
         crate::phase::record(state, &address, by.key(), &crate::phase::Event::PushHanded);
-        return Ok(Prepared::Handed(Notice::new(Tone::Moving, format!("Not pushed yet: {} moved under it, so its full suite runs first", main_of(&upstream)))
-            .next(format!("Its Claude runs `{}` now; kebbie pushes it{} as soon as it reports ready.", gap.full, for_whom(&pusher))).detail("task", &task).to_string()));
+        return Ok(Prepared::Handed(Notice::new(Tone::Moving, format!("Not pushed yet: {} moved under it, so {} {} first", main_of(&upstream), gap.names(), gap.runs()))
+            .next(format!("Its Claude runs {} now; kebbie pushes it{} as soon as it reports ready.", gap.commands(), for_whom(&pusher))).detail("task", &task).to_string()));
     }
     let out = match out {
         Some(out) => out,
@@ -1504,6 +1503,30 @@ mod tests {
         assert_eq!(intent::load(&pushing.state, &pushing.address).map(|waiting| waiting.work), Some(Work::Tests));
         green(&git(&slot.path, &["rev-parse", "HEAD"]).unwrap());
         assert!(matches!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap(), Prepared::Push(..)), "the full run on the rebased HEAD lets it go");
+        let _ = std::fs::remove_file(file);
+        let _ = std::fs::remove_file(crate::evidence::file(&pushing.state, &pushing.address));
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_push_whose_rebase_moved_head_in_a_linted_repo_hands_the_lint_to_its_claude_first() {
+        use crate::evidence::{Outcome, Run};
+        use crate::permit::Caller;
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        let pushing = Pushing::new(&dir);
+        let file = crate::config::repo_file(&dir);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "[tests]\nlint_command = \"cargo clippy --locked --all-targets -- -D warnings\"\n").unwrap();
+        let lint = "cargo clippy --locked --all-targets -- -D warnings";
+        let green = |head: &str| crate::evidence::save(&pushing.state, &pushing.address, &Run { command: lint.to_string(), runner: lint.to_string(), result: Outcome::Passed, sha: head.to_string(), code: head.to_string(), lint: true, ..Run::default() }).unwrap();
+        green(&git(&slot.path, &["rev-parse", "HEAD"]).unwrap());
+        upstream_commit(&dir, "elsewhere", "x", "someone else's work");
+        let (texts, hand) = handed();
+        let handed = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap();
+        assert!(matches!(&handed, Prepared::Handed(said) if said.contains("moved under it, so its lint runs first")), "a lint green before the rebase does not stand for the rebased code: {handed:?}");
+        assert!(texts.borrow()[0].contains(&format!("Run `{lint}` in this worktree")) && texts.borrow()[0].contains("tests.lint_command") && texts.borrow()[0].contains("Do not push"), "{}", texts.borrow()[0]);
+        green(&git(&slot.path, &["rev-parse", "HEAD"]).unwrap());
+        assert!(matches!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap(), Prepared::Push(..)), "the lint on the rebased HEAD lets it go");
         let _ = std::fs::remove_file(file);
         let _ = std::fs::remove_file(crate::evidence::file(&pushing.state, &pushing.address));
         cleanup(dir, origin, &slot);

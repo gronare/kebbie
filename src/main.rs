@@ -34,7 +34,7 @@ mod evidence;
 mod executable;
 mod fetch;
 mod found;
-mod full_tests;
+mod required_runs;
 mod herdr;
 mod herdr_link;
 mod hooks;
