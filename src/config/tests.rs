@@ -102,7 +102,7 @@ fn tests_per_commit_is_on_by_default_and_a_repo_can_turn_it_off() {
     let off = settings(&repo("[tests]\nper_commit = false\n"), &machine("[tests]\nper_commit = true\n"));
     assert_eq!(off.tests_per_commit, Setting { value: false, layer: Layer::Repo });
     assert!(parse_machine("[tests]\nper_commit = 1\n", "config.toml").unwrap_err().contains("tests.per_commit: must be true or false"));
-    assert!(unknown_repo("[tests]\neach = true\n").contains("tests.each: unknown key; known keys here: per_commit, before_push, full_command"));
+    assert!(unknown_repo("[tests]\neach = true\n").contains("tests.each: unknown key; known keys here: per_commit, before_push, full_command, lint_command"));
     let shown = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: off });
     assert!(shown.contains("tests.per_commit = false  (repo config)"), "{shown}");
 }
@@ -740,7 +740,7 @@ fn sample(entry: &Entry) -> String {
 fn each_keys_scope_is_the_files_that_take_it_and_what_its_text_says() {
     let loaded = Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
     let all = entries(&loaded);
-    assert_eq!(all.len(), 66);
+    assert_eq!(all.len(), 67);
     for entry in all {
         let (section, field) = entry.key.rsplit_once('.').unwrap();
         let text = format!("[{section}]\n{field} = {}\n", sample(&entry));
@@ -861,6 +861,18 @@ fn the_full_suite_before_push_is_set_anywhere_and_its_command_only_per_repo() {
     assert!(parse_repo("[tests]\nfull_command = \" \"\n", "app.toml").unwrap_err().contains("tests.full_command: must not be empty"));
     let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: full });
     assert!(shown.contains("tests.before_push = \"full\"  (machine config)") && shown.contains("tests.full_command = \"uv run pytest -q\"  (repo config)"), "{shown}");
+}
+
+#[test]
+fn the_lint_command_is_set_per_repo_only() {
+    assert_eq!(settings(&Worktree::default(), &Machine::default()).tests_lint_command.value, None, "no lint is required by default");
+    let lint = settings(&repo("[tests]\nlint_command = \" cargo clippy --locked --all-targets -- -D warnings \"\n"), &Machine::default());
+    assert_eq!(lint.tests_lint_command, Setting { value: Some("cargo clippy --locked --all-targets -- -D warnings".to_string()), layer: Layer::Repo });
+    let refused = parse_machine("[tests]\nlint_command = \"cargo clippy\"\n", "config.toml").unwrap_err();
+    assert!(refused.starts_with("config.toml: tests.lint_command: each repo has its own lint, so it lives in its repo config"), "{refused}");
+    assert!(parse_repo("[tests]\nlint_command = \" \"\n", "app.toml").unwrap_err().contains("tests.lint_command: must not be empty"));
+    let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: lint });
+    assert!(shown.contains("tests.lint_command = \"cargo clippy --locked --all-targets -- -D warnings\"  (repo config)"), "{shown}");
 }
 
 #[test]

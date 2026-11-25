@@ -65,6 +65,7 @@ pub struct Run {
     pub read_to: u64,
     pub sandboxed: bool,
     pub in_line: usize,
+    pub lint: bool,
 }
 
 impl Run {
@@ -72,7 +73,7 @@ impl Run {
         json!({
             "command": self.command, "runner": self.runner, "result": self.result.name(), "ok": self.result == Outcome::Passed, "why": self.why, "exit": self.exit, "duration_ms": self.duration_ms,
             "summary": self.summary, "sha": self.sha, "dirty": self.dirty, "code": self.code, "at": self.at,
-            "background": self.background, "transcript": self.transcript, "says": self.says.map(Exit::key), "worktree": self.worktree, "read_to": self.read_to, "sandboxed": self.sandboxed, "in_line": self.in_line,
+            "background": self.background, "transcript": self.transcript, "says": self.says.map(Exit::key), "worktree": self.worktree, "read_to": self.read_to, "sandboxed": self.sandboxed, "in_line": self.in_line, "lint": self.lint,
         })
     }
 
@@ -102,6 +103,7 @@ impl Run {
             read_to: value["read_to"].as_u64().unwrap_or(0),
             in_line: value["in_line"].as_u64().map_or(1, |count| count as usize),
             sandboxed: value["sandboxed"].as_bool().unwrap_or(true),
+            lint: value["lint"].as_bool().unwrap_or(false),
         })
     }
 
@@ -114,9 +116,13 @@ pub fn commands(configured: &[String]) -> Vec<String> {
     DEFAULT_COMMANDS.iter().map(|command| command.to_string()).chain(configured.iter().cloned()).collect()
 }
 
-// What kebbie records in a repo: the built-in list, task.test_commands and tests.full_command.
+// What kebbie records in a repo: the built-in list, task.test_commands, tests.full_command and tests.lint_command.
 pub fn listed_for(settings: &crate::config::Settings) -> Vec<String> {
-    commands(&settings.test_commands.value.iter().cloned().chain(settings.tests_full_command.value.clone()).collect::<Vec<_>>())
+    commands(&settings.test_commands.value.iter().cloned().chain(settings.tests_full_command.value.clone()).chain(settings.tests_lint_command.value.clone()).collect::<Vec<_>>())
+}
+
+fn is_lint(runner: &str, lint: Option<&str>) -> bool {
+    lint.is_some_and(|lint| runner.trim_start_matches("./") == lint.trim().trim_start_matches("./"))
 }
 
 fn listed_in(repo: &Path) -> Vec<String> {
@@ -125,15 +131,30 @@ fn listed_in(repo: &Path) -> Vec<String> {
 
 // The first command in the line that starts with `full` is it, with flags of its own and their values at most, so a run narrowed to some tests never counts as the whole suite.
 pub fn whole_run(command: &str, full: &str) -> bool {
-    let listed = [full.to_string()];
+    first_run(command, full, whole_in)
+}
+
+// The first command in the line that starts with `wanted` is it, word for word, so a lint run with a warning allowed never counts as the repo's lint.
+pub fn exact_run(command: &str, wanted: &str) -> bool {
+    first_run(command, wanted, exact_in)
+}
+
+fn first_run(command: &str, wanted: &str, judge: fn(&str, &str) -> bool) -> bool {
+    let listed = [wanted.to_string()];
     for (text, _) in shell::pieces(command) {
         match shell::piece(text) {
-            shell::Piece::Simple(simple) if listed_start(simple, &listed).is_some() => return whole_in(simple, full),
-            shell::Piece::Nested(inner) if find(&inner, &listed).is_some() => return whole_run(&inner, full),
+            shell::Piece::Simple(simple) if listed_start(simple, &listed).is_some() => return judge(simple, wanted),
+            shell::Piece::Nested(inner) if find(&inner, &listed).is_some() => return first_run(&inner, wanted, judge),
             _ => {}
         }
     }
     false
+}
+
+fn exact_in(simple: &str, wanted: &str) -> bool {
+    let bare = |word: &str| word.trim_start_matches("./").to_string();
+    let words: Vec<String> = shell::split_words(simple).into_iter().take_while(|word| !redirection(word)).map(bare).collect();
+    words == shell::split_words(wanted).into_iter().map(bare).collect::<Vec<_>>()
 }
 
 fn whole_in(simple: &str, full: &str) -> bool {
@@ -637,7 +658,16 @@ pub fn latest(runs: &[Run]) -> Option<&Run> {
     runs.iter().rev().take(last.in_line.max(1)).find(|run| run.result == Outcome::Failed).or(Some(last))
 }
 
+// The task's test runs; its runs of the repo's lint are a kind of their own, read only through lint_runs_in, so no reader of test runs ever takes a lint run for one.
 pub fn runs_in(state: &Path, address: &str) -> Vec<Run> {
+    all_runs_in(state, address).into_iter().filter(|run| !run.lint).collect()
+}
+
+pub fn lint_runs_in(state: &Path, address: &str) -> Vec<Run> {
+    all_runs_in(state, address).into_iter().filter(|run| run.lint).collect()
+}
+
+fn all_runs_in(state: &Path, address: &str) -> Vec<Run> {
     fs::read_to_string(file(state, address)).unwrap_or_default().lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok()).filter_map(|value| Run::from_json(&value)).collect()
 }
@@ -672,7 +702,7 @@ impl Drop for Lock {
 
 pub fn save(state: &Path, address: &str, run: &Run) -> Result<()> {
     let _lock = Lock::take(state, address)?;
-    let mut runs = runs_in(state, address);
+    let mut runs = all_runs_in(state, address);
     runs.push(run.clone());
     let start = runs.len().saturating_sub(KEPT);
     let text: String = runs[start..].iter().map(|run| format!("{}\n", run.to_json())).collect();
@@ -866,7 +896,7 @@ fn transcript_since(path: &Path, from: u64) -> Option<(String, u64)> {
 // Settles every run still in the background whose end the session's transcript now holds, reading only what it gained since the last look, and gives up on one that has not ended in a day; gives the runs it settled.
 pub fn settle(state: &Path, address: &str, listed: &[String], now: u64) -> Vec<Run> {
     let Ok(_lock) = Lock::take(state, address) else { return Vec::new() };
-    let mut runs = runs_in(state, address);
+    let mut runs = all_runs_in(state, address);
     let (mut changed, mut moved) = (Vec::new(), false);
     for run in runs.iter_mut().filter(|run| !run.background.is_empty() && !run.transcript.is_empty()) {
         if let Some((transcript, read_to)) = transcript_since(Path::new(&run.transcript), run.read_to) {
@@ -904,18 +934,29 @@ fn judged(finished: bool, says: Exit, summary: Option<&Summary>) -> (Outcome, &'
 }
 
 // The run a hook payload describes, with the worktree's state at that moment.
-pub fn record_in(state: &Path, address: &str, worktree: &Path, listed: &[String], input: &Value, at: u64) -> Vec<Run> {
-    outcome(input, listed).into_iter().filter_map(|ended| record_one(state, address, worktree, input, ended, at)).collect()
+#[cfg(test)]
+fn record_in(state: &Path, address: &str, worktree: &Path, listed: &[String], input: &Value, at: u64) -> Vec<Run> {
+    record_with_lint(state, address, worktree, listed, None, input, at)
 }
 
-fn record_one(state: &Path, address: &str, worktree: &Path, input: &Value, ended: Ended, at: u64) -> Option<Run> {
+// The same, with the repo's lint command, whose runs are recorded as lint runs.
+pub fn record_with_lint(state: &Path, address: &str, worktree: &Path, listed: &[String], lint: Option<&str>, input: &Value, at: u64) -> Vec<Run> {
+    let ended = outcome(input, listed);
+    let lints = ended.iter().filter(|ended| is_lint(&ended.runner, lint)).count();
+    let tests = ended.len() - lints;
+    ended.into_iter().map(|ended| { let in_line = if is_lint(&ended.runner, lint) { lints } else { tests }; Ended { in_line, ..ended } })
+        .filter_map(|ended| record_one(state, address, worktree, input, ended, at, lint)).collect()
+}
+
+fn record_one(state: &Path, address: &str, worktree: &Path, input: &Value, ended: Ended, at: u64, lint: Option<&str>) -> Option<Run> {
     let Ended { command, runner, exit, finished, output, says, background, in_line, queued } = ended;
+    let lint = is_lint(&runner, lint);
     let summary = if background.is_some() { None } else { summary(&output) };
     let (result, why) = if background.is_some() { (Outcome::Unknown, IN_BACKGROUND) } else if queued && summary.as_ref().is_none_or(|summary| summary.ran_none) { (Outcome::Unknown, QUEUED) } else { judged(finished, says, summary.as_ref()) };
     let (sha, dirty, code) = snapshot(worktree).ok()?;
     let command = if command.chars().count() > COMMAND_LIMIT { format!("{}…", command.chars().take(COMMAND_LIMIT).collect::<String>()) } else { command };
     let transcript = if background.as_deref().is_some_and(|id| !id.is_empty()) { input["transcript_path"].as_str().unwrap_or_default().to_string() } else { String::new() };
-    let run = Run { command, runner, result, why: why.to_string(), exit, duration_ms: input["duration_ms"].as_u64(), summary: summary.map(|summary| summary.text).unwrap_or_default(), sha, dirty, code, at, background: background.unwrap_or_default(), transcript, says: Some(says), worktree: worktree.to_string_lossy().into_owned(), read_to: 0, sandboxed: crate::sandbox::marked(state, worktree), in_line };
+    let run = Run { command, runner, result, why: why.to_string(), exit, duration_ms: input["duration_ms"].as_u64(), summary: summary.map(|summary| summary.text).unwrap_or_default(), sha, dirty, code, at, background: background.unwrap_or_default(), transcript, says: Some(says), worktree: worktree.to_string_lossy().into_owned(), read_to: 0, sandboxed: crate::sandbox::marked(state, worktree), in_line, lint };
     save(state, address, &run).ok()?;
     Some(run)
 }
@@ -929,6 +970,7 @@ pub fn hook(address: &str, input: &str) -> String {
     if settings.as_ref().is_ok_and(|settings| settings.steps.value) && let Ok(state) = state_dir() {
         tasks::subtasks_noted_after(&state, address, input);
     }
+    let lint = settings.as_ref().ok().and_then(|settings| settings.tests_lint_command.value.clone());
     let listed = settings.map(|settings| listed_for(&settings)).unwrap_or_else(|_| commands(&[]));
     let mut said = Vec::new();
     if payload.tool_name() == Some("Bash") && let Ok(state) = state_dir() {
@@ -936,9 +978,11 @@ pub fn hook(address: &str, input: &str) -> String {
         said.extend(missed.as_deref().map(unrecorded_context));
         note_seen(&state, address, missed, crate::messages::now());
     }
-    let mut passed = passed_in(address, &state_dir().map(|state| settle(&state, address, &listed, crate::messages::now())).unwrap_or_default());
-    for run in recorded(address, &cwd, &listed, input) {
+    let settled: Vec<Run> = state_dir().map(|state| settle(&state, address, &listed, crate::messages::now())).unwrap_or_default().into_iter().filter(|run| !run.lint).collect();
+    let mut passed = passed_in(address, &settled);
+    for run in recorded(address, &cwd, &listed, lint.as_deref(), input) {
         match run.result {
+            Outcome::Passed if run.lint => {}
             Outcome::Passed => passed = passed.or_else(|| passed_in(address, std::slice::from_ref(&run))),
             Outcome::Unknown => said.push(unknown_context(&run)),
             Outcome::Failed => {}
@@ -956,7 +1000,7 @@ fn passed_in(address: &str, runs: &[Run]) -> Option<PathBuf> {
         .find(|worktree| peers::me(worktree).as_deref() == Some(address))
 }
 
-fn recorded(address: &str, cwd: &Path, listed: &[String], input: &Value) -> Vec<Run> {
+fn recorded(address: &str, cwd: &Path, listed: &[String], lint: Option<&str>, input: &Value) -> Vec<Run> {
     if outcome(input, listed).is_empty() {
         return Vec::new();
     }
@@ -964,16 +1008,19 @@ fn recorded(address: &str, cwd: &Path, listed: &[String], input: &Value) -> Vec<
     if peers::me(Path::new(&top)).as_deref() != Some(address) {
         return Vec::new();
     }
-    record_in(&state, address, Path::new(&top), listed, input, crate::messages::now())
+    record_with_lint(&state, address, Path::new(&top), listed, lint, input, crate::messages::now())
 }
 
 fn unknown_context(run: &Run) -> String {
+    if run.why == QUEUED {
+        return format!("kebbie recorded `{}` without a result: {QUEUED}. Run it again once kebbie tells you a build slot is free.", run.runner);
+    }
+    if run.lint {
+        return format!("kebbie recorded `{}` without a result: {}. A ready report and every push wait for a green run of the repo's lint, and only a run whose result kebbie read counts, so saying in your report how it ended does not stand in for it: run it again in the foreground, as a command of its own, with no pipe and nothing after it.", run.runner, run.why);
+    }
     if run.why == IN_BACKGROUND {
         let settles = if run.background.is_empty() { "kebbie cannot see how it ends" } else { "kebbie reads its result from the notice of its end at your next shell command" };
         return format!("kebbie recorded `{}` without a result: it is {IN_BACKGROUND}, and {settles}. Until then it counts as no test run: before you report, run it in the foreground, or say in your report how it ended.", run.runner);
-    }
-    if run.why == QUEUED {
-        return format!("kebbie recorded `{}` without a result: {QUEUED}. Run it again once kebbie tells you a build slot is free.", run.runner);
     }
     format!("kebbie recorded `{}` without a result: {}. Run it again without a pipe after it, and with nothing after it or `; echo exit $?` right after it, or say in your report how it ended.", run.runner, run.why)
 }
@@ -1229,6 +1276,43 @@ mod tests {
     }
 
     #[test]
+    fn the_repos_lint_is_recorded_and_counts_only_word_for_word() {
+        let lint = "cargo clippy --locked --all-targets -- -D warnings";
+        let mut settings = crate::config::settings(&crate::config::Worktree::default(), &crate::config::Machine::default());
+        settings.tests_lint_command.value = Some(lint.to_string());
+        assert_eq!(recognise(lint, &listed_for(&settings)), Some(lint), "the lint is recorded without being in task.test_commands");
+        assert!(exact_run(lint, lint));
+        assert!(exact_run(&format!("cd w && CARGO_TERM_COLOR=never {lint} 2>&1"), lint), "cd, assignments and a redirection keep it the same run");
+        assert!(!exact_run(&format!("{lint} -A clippy::too_many_arguments"), lint), "a warning allowed after it is another lint");
+        assert!(!exact_run("cargo clippy --locked -- -D warnings", lint), "a run without all targets is another lint");
+        assert!(is_lint(lint, Some(lint)) && is_lint(&format!("./{lint}"), Some(lint)) && !is_lint("cargo test", Some(lint)) && !is_lint(lint, None));
+    }
+
+    #[test]
+    fn lint_runs_are_a_kind_of_their_own_that_no_reader_of_test_runs_sees() {
+        let dir = repo();
+        let state = dir.join("state");
+        let lint = "cargo clippy --locked --all-targets -- -D warnings";
+        let list = listed(&[lint]);
+        let red_tests = json!({ "hook_event_name": "PostToolUseFailure", "tool_name": "Bash", "tool_input": { "command": "cargo test --locked" }, "error": "Exit code 101\ntest result: FAILED. 1 passed; 1 failed" });
+        record_with_lint(&state, "billing@app", &dir, &list, Some(lint), &red_tests, 1);
+        let green_lint = record_with_lint(&state, "billing@app", &dir, &list, Some(lint), &passed(lint), 2);
+        assert!(green_lint[0].lint && green_lint[0].result == Outcome::Passed);
+        let tests = runs_in(&state, "billing@app");
+        assert_eq!(tests.iter().map(|run| run.runner.as_str()).collect::<Vec<_>>(), ["cargo test"], "the board, the push dialog, the commit tests and the reviewer read test runs only");
+        assert_eq!(latest(&tests).map(|run| run.result), Some(Outcome::Failed), "a green lint after a red test run leaves the tests red");
+        assert_eq!(lint_runs_in(&state, "billing@app").iter().map(|run| run.runner.as_str()).collect::<Vec<_>>(), [lint]);
+        settle(&state, "billing@app", &list, 3);
+        assert_eq!((runs_in(&state, "billing@app").len(), lint_runs_in(&state, "billing@app").len()), (1, 1), "settling keeps both kinds");
+        let both = record_with_lint(&state, "billing@app", &dir, &list, Some(lint), &passed(&format!("{lint} && cargo test --locked -q")), 4);
+        assert_eq!(both.iter().map(|run| (run.lint, run.in_line)).collect::<Vec<_>>(), [(true, 1), (false, 1)], "a line's runs are counted per kind");
+        assert_eq!(latest(&runs_in(&state, "billing@app")).map(|run| (run.result, run.at)), Some((Outcome::Passed, 4)), "green tests in a line with the lint end the earlier red run");
+        let without = record_in(&state, "billing@app", &dir, &list, &passed(lint), 5);
+        assert!(!without[0].lint, "a repo that names no lint records every listed run as a test run");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn a_test_command_after_a_separate_statement_or_a_wrapper_is_recorded() {
         let list = listed(&["script/test"]);
         for (command, runner) in [
@@ -1435,7 +1519,7 @@ mod tests {
         let list = listed(&[]);
         let run = record_in(&state, "billing@app", &dir, &list, &passed("cargo test"), 100).remove(0);
         let head = git(&dir, &["rev-parse", "HEAD"]).unwrap();
-        assert_eq!(run, Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result: Outcome::Passed, why: String::new(), exit: Some(0), duration_ms: Some(4187), summary: "2 passed".to_string(), sha: head.clone(), dirty: false, code: head, at: 100, background: String::new(), transcript: String::new(), says: Some(Exit::Speaks), worktree: dir.to_string_lossy().into_owned(), read_to: 0, sandboxed: false, in_line: 1 });
+        assert_eq!(run, Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result: Outcome::Passed, why: String::new(), exit: Some(0), duration_ms: Some(4187), summary: "2 passed".to_string(), sha: head.clone(), dirty: false, code: head, at: 100, background: String::new(), transcript: String::new(), says: Some(Exit::Speaks), worktree: dir.to_string_lossy().into_owned(), read_to: 0, sandboxed: false, in_line: 1, lint: false });
         assert_eq!(runs_in(&state, "billing@app"), [run]);
         let broke = record_in(&state, "billing@app", &dir, &list, &failed("npm test"), 200).remove(0);
         assert!(broke.result == Outcome::Failed && broke.exit == Some(1) && broke.runner == "npm test");
@@ -1684,6 +1768,8 @@ mod tests {
         let run = record_in(&state, "billing@app", &dir, &list, &timed_out, 1).remove(0);
         assert_eq!((run.result, run.why.as_str(), run.exit, run.background.as_str()), (Outcome::Unknown, IN_BACKGROUND, None, "bx1"), "moved to the background at its timeout, it has not ended");
         assert!(unknown_context(&run).contains("run it in the foreground, or say in your report how it ended"));
+        let lint = unknown_context(&Run { lint: true, ..run.clone() });
+        assert!(lint.contains("does not stand in for it: run it again in the foreground, as a command of its own, with no pipe") && !lint.contains("or say in your report"), "a lint run is owed a green result, never an account of one: {lint}");
         assert!(settle(&state, "billing@app", &list, 10).is_empty(), "no notice of its end yet");
         let output = dir.join("bx1.output");
         fs::write(&output, "Test Case '-[AppUITests testCheckout]' failed\n\t Executed 40 tests, with 1 failure (0 unexpected) in 700.1 (700.2) seconds\n** TEST FAILED **\n").unwrap();
@@ -1774,7 +1860,7 @@ mod tests {
 
     #[test]
     fn the_reviewer_reads_every_run_on_the_reviewed_code_one_line_per_command_and_older_ones_only_without_them() {
-        let run = |at: u64, command: &str, ok: bool, code: &str| Run { command: command.to_string(), runner: "cargo test".to_string(), result: if ok { Outcome::Passed } else { Outcome::Failed }, why: String::new(), exit: Some(0), duration_ms: None, summary: "3 passed".to_string(), sha: format!("{at}abcdef0123"), dirty: at == 9, code: code.to_string(), at, background: String::new(), transcript: String::new(), says: None, worktree: String::new(), read_to: 0, sandboxed: true, in_line: 1 };
+        let run = |at: u64, command: &str, ok: bool, code: &str| Run { command: command.to_string(), runner: "cargo test".to_string(), result: if ok { Outcome::Passed } else { Outcome::Failed }, why: String::new(), exit: Some(0), duration_ms: None, summary: "3 passed".to_string(), sha: format!("{at}abcdef0123"), dirty: at == 9, code: code.to_string(), at, background: String::new(), transcript: String::new(), says: None, worktree: String::new(), read_to: 0, sandboxed: true, in_line: 1, lint: false };
         let mut runs = vec![run(1, "cargo test", false, "old")];
         for at in 2..9 {
             runs.push(run(at, "cargo test --lib evidence", at != 4, "reviewed"));
@@ -1799,7 +1885,7 @@ mod tests {
 
     #[test]
     fn a_run_without_a_result_reads_as_unknown_and_counts_as_no_run_for_the_reviewer() {
-        let run = Run { command: "cargo test | tail -3".to_string(), runner: "cargo test".to_string(), result: Outcome::Unknown, why: "piped".to_string(), exit: Some(0), duration_ms: None, summary: String::new(), sha: "abcdef0123".to_string(), dirty: false, code: "reviewed".to_string(), at: 1, background: String::new(), transcript: String::new(), says: Some(Exit::Silent(PIPED)), worktree: String::new(), read_to: 0, sandboxed: true, in_line: 1 };
+        let run = Run { command: "cargo test | tail -3".to_string(), runner: "cargo test".to_string(), result: Outcome::Unknown, why: "piped".to_string(), exit: Some(0), duration_ms: None, summary: String::new(), sha: "abcdef0123".to_string(), dirty: false, code: "reviewed".to_string(), at: 1, background: String::new(), transcript: String::new(), says: Some(Exit::Silent(PIPED)), worktree: String::new(), read_to: 0, sandboxed: true, in_line: 1, lint: false };
         let judge = |run: &Run| shown(run, |code| code == "reviewed", true);
         assert_eq!(judge(&run).line(), "? cargo test result unknown, piped · at abcdef0", "not a pass even on the code as it is");
         assert_eq!(Run::from_json(&run.to_json()), Some(run.clone()));

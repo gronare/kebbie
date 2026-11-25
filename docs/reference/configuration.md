@@ -292,6 +292,7 @@ commands = ["answer", "prompt", "idea"]
 | `tests.per_commit` | `true` in a repo with a worktree setup, else `false` | either | Whether the keeper tests each of a ready task's unpushed commits on its own and marks the push order with the results. |
 | `tests.before_push` | `"related"` | either | Which tests a ready report and a push wait on: `"related"`, the tests the task runs for its change, or `"full"`, a green run of `tests.full_command` on the task's HEAD. |
 | `tests.full_command` | none | repo only | The command that runs the repo's whole test suite, such as `"cargo test --locked"` or `"uv run pytest -q"`. |
+| `tests.lint_command` | none | repo only | The command that lints the repo as CI does, such as `"cargo clippy --locked --all-targets -- -D warnings"`. kebbie records its runs beside the test runs; a red lint run never counts as a red test run. |
 | `comments.watch` | `true` | either | Whether kebbie reads the comments colleagues leave on the commits it pushed, on your own commits and wherever they mention you, and shows each under COMMENTS on the board. |
 | `comments.watch_days` | `7` | either | How many days after a push kebbie checks its commits for new comments, a whole number from 1 to 90. |
 | `update.channel` | `"release"` | config.toml only | What `kebbie update` installs: `"release"`, the highest `vX.Y.Z` tag on origin, or `"main"`, origin's default branch. |

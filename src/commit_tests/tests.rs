@@ -15,8 +15,9 @@ fn each_unpushed_commit_is_tested_once_by_its_sha_and_a_commit_the_tasks_own_run
     let fifth = commit(&slot.path, "e", "fifth");
     let sixth = commit(&slot.path, "f", "sixth");
     crate::evidence::save(&state, "billing@app", &run_of("cargo test", &fourth, true)).unwrap();
+    crate::evidence::save(&state, "billing@app", &crate::evidence::Run { lint: true, ..run_of("cargo clippy --all-targets -- -D warnings", &fifth, false) }).unwrap();
     let commands = commands_for(&state, "billing@app", &slot.path, &["bin/test".to_string()]);
-    assert_eq!(commands, ["cargo test"], "the command the task's own runs used comes before the configured one");
+    assert_eq!(commands, ["cargo test"], "the command the task's own runs used comes before the configured one, and a lint run is no test command");
     let seen: RefCell<Vec<String>> = RefCell::new(Vec::new());
     let runner = |command: &str, tree: &Path| {
         let head = git(tree, &["rev-parse", "HEAD"]).unwrap();

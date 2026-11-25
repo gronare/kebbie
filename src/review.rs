@@ -1833,6 +1833,8 @@ mod tests {
         assert!(!tests_answered_in(&state, "billing@app", current), "a run without a result answers nothing");
         crate::evidence::save(&state, "billing@app", &run(given + 6, true, "other")).unwrap();
         assert!(!tests_answered_in(&state, "billing@app", current), "a pass on other code is not on the reviewed code");
+        crate::evidence::save(&state, "billing@app", &crate::evidence::Run { lint: true, ..run(given + 6, true, "abc") }).unwrap();
+        assert!(!tests_answered_in(&state, "billing@app", current), "a green lint is no test run");
         crate::evidence::save(&state, "billing@app", &run(given + 7, true, "abc")).unwrap();
         assert!(tests_answered_in(&state, "billing@app", current));
         assert!(!tests_answered_in(&state, "billing@app", |_| false), "a verdict on older code goes the stale way");

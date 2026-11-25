@@ -37,6 +37,7 @@ pub struct Worktree {
     pub tests_per_commit: Option<bool>,
     pub tests_before_push: Option<BeforePush>,
     pub tests_full_command: Option<String>,
+    pub tests_lint_command: Option<String>,
     pub comments_watch: Option<bool>,
     pub comments_days: Option<u64>,
     pub clean_on_release: Option<Vec<String>>,
@@ -77,6 +78,7 @@ fn worktree(table: &Table) -> Result<Worktree> {
         tests_per_commit: None,
         tests_before_push: None,
         tests_full_command: None,
+        tests_lint_command: None,
         comments_watch: None,
         comments_days: None,
         clean_on_release: worktree.get("clean_on_release").map(clean_on_release).transpose()?,
@@ -180,6 +182,7 @@ fn with_ci(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
         worktree.tests_per_commit = flag(tests, "per_commit", "tests.per_commit")?;
         worktree.tests_before_push = before_push(tests)?;
         worktree.tests_full_command = text(tests, "full_command", "tests.full_command")?;
+        worktree.tests_lint_command = text(tests, "lint_command", "tests.lint_command")?;
     }
     Ok(worktree)
 }
