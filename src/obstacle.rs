@@ -135,13 +135,23 @@ pub struct Decision {
     pub task: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub standing: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fold: Option<String>,
 }
 
 impl Decision {
+    // The investigator's one preparatory subtask without asking; a fold into an unpushed commit adds none.
+    pub fn added_subtask(&self) -> bool {
+        self.kind == Kind::Subtask && self.by == By::Investigator && self.fold.is_none()
+    }
+
     pub fn line(&self) -> String {
         let what = match self.kind {
             Kind::Workaround => format!("workaround{}", self.replaced_by.as_ref().map(|by| format!(", replaced by {by}")).unwrap_or_default()),
-            Kind::Subtask => format!("subtask first: {}", self.subtask.as_deref().unwrap_or(&self.plan)),
+            Kind::Subtask => match &self.fold {
+                Some(sha) => format!("fold into {sha}: {}", self.subtask.as_deref().unwrap_or(&self.plan)),
+                None => format!("subtask first: {}", self.subtask.as_deref().unwrap_or(&self.plan)),
+            },
             Kind::Task => format!("a task first: {}", self.task.as_deref().unwrap_or(&self.plan)),
             Kind::Ask => "asked the user".to_string(),
             Kind::Said => self.reason.clone(),
@@ -193,7 +203,7 @@ impl Obstacle {
     fn to_json(&self, address: &str) -> serde_json::Value {
         json!({
             "task": address, "id": self.id, "at": self.at, "source": self.source, "text": self.text, "on": self.on, "state": self.state,
-            "decision": self.decision.as_ref().map(|decision| json!({ "kind": decision.kind.word(), "by": decision.by.word(), "at": decision.at, "reason": decision.reason, "plan": decision.plan, "replaced_by": decision.replaced_by, "subtask": decision.subtask, "task": decision.task, "standing": decision.standing, "line": decision.line() })),
+            "decision": self.decision.as_ref().map(|decision| json!({ "kind": decision.kind.word(), "by": decision.by.word(), "at": decision.at, "reason": decision.reason, "plan": decision.plan, "replaced_by": decision.replaced_by, "subtask": decision.subtask, "task": decision.task, "standing": decision.standing, "fold": decision.fold, "line": decision.line() })),
         })
     }
 }
@@ -576,6 +586,7 @@ pub struct Answer {
     pub options: Vec<String>,
     pub recommend: Option<String>,
     pub standing: Option<String>,
+    pub fold: Option<String>,
 }
 
 fn absent(value: &str) -> bool {
@@ -603,6 +614,7 @@ pub fn parse(answer: &str) -> Option<Answer> {
             "option" => parsed.options.push(value),
             "recommend" => parsed.recommend = given,
             "standing" => parsed.standing = given,
+            "fold" | "fold into" => parsed.fold = given,
             _ => {}
         }
     }
@@ -662,7 +674,7 @@ pub fn brief(state: &Path, address: &str, worktree: &Path, obstacle: &Obstacle, 
     let task = address.split_once('@').map_or(address, |(task, _)| task);
     let earlier: Vec<String> = load(state, address).into_iter().filter(|other| other.id != obstacle.id).map(|other| format!("- {}: {} → {}", other.id, other.short(), other.decision.as_ref().map_or_else(|| other.state.word().to_string(), Decision::line))).collect();
     let earlier = if earlier.is_empty() { "none".to_string() } else { earlier.join("\n") };
-    let used = load(state, address).iter().any(|other| other.decision.as_ref().is_some_and(|decision| decision.kind == Kind::Subtask && decision.by == By::Investigator));
+    let used = load(state, address).iter().any(|other| other.decision.as_ref().is_some_and(Decision::added_subtask));
     let what = match obstacle.source {
         Source::Task => format!("the task {address} raised obstacle {}", obstacle.id),
         Source::Review => format!("a review of the task {address} raised findings the task cannot settle itself (scope, intent, a test or docs gap), as obstacle {}", obstacle.id),
@@ -672,6 +684,7 @@ pub fn brief(state: &Path, address: &str, worktree: &Path, obstacle: &Obstacle, 
     let subtask = if used { "This task already got its one preparatory subtask without asking: another is the user's, so answer ask unless one of the user's standing decisions covers it." } else { "You may add one preparatory subtask to this task without asking the user." };
     let standing = standing_decisions(state, address);
     let standing = if standing.is_empty() { "none".to_string() } else { standing.join("\n") };
+    let fold = fold_brief(&unpushed(worktree));
     format!(
         "Decide what happens to an obstacle, by the instructions in your system prompt: {what}.\n\n\
          The task's worktree is {worktree} (your working directory). kebbie is {kebbie}: `{kebbie} status --json` has every task with its prompt, plan and changed files, `{kebbie} messages --print` its messages, `{kebbie} obstacles {task} --json` its obstacles and decisions, and `{kebbie} found` what tasks noticed outside their work. A task without a vault note keeps its decisions in {notes}.\n\n\
@@ -680,9 +693,36 @@ pub fn brief(state: &Path, address: &str, worktree: &Path, obstacle: &Obstacle, 
          Earlier obstacles in this task and their decisions:\n{earlier}\n\n\
          The user's standing decisions in this task, their own words on the plan, its questions and its obstacles:\n{standing}\n\n\
          {subtask}\n\n\
+         {fold}\n\n\
          Your last message is the answer block from your instructions.",
         worktree = worktree.display(), notes = crate::decisions::local_file(state, address).display(), text = obstacle.text,
     )
+}
+
+// The task's commits not on its default branch yet, newest first, as full sha and subject; empty when git cannot tell.
+fn unpushed(worktree: &Path) -> Vec<(String, String)> {
+    let Ok(upstream) = crate::repo::main_checkout(worktree).and_then(|repo| crate::repo::default_branch(&repo)) else { return Vec::new() };
+    let log = crate::repo::git(worktree, &["log", "--format=%H %s", &format!("{}..HEAD", crate::repo::tracking(&upstream))]).unwrap_or_default();
+    log.lines().filter_map(|line| line.split_once(' ').map(|(sha, subject)| (sha.to_string(), subject.to_string()))).collect()
+}
+
+fn fold_brief(unpushed: &[(String, String)]) -> String {
+    let rule = "When what the obstacle needs is a fix to a commit the task has not pushed yet, answer subtask with `fold: <sha>` naming that commit: the task folds the fix into it, as its rules ask of a fix to an unpushed commit, and no subtask with commits of its own is added.";
+    if unpushed.is_empty() {
+        return format!("{rule} kebbie found no unpushed commits in this task, so a `fold:` here adds the subtask instead.");
+    }
+    let commits: Vec<String> = unpushed.iter().map(|(sha, subject)| format!("- {} {subject}", &sha[..7.min(sha.len())])).collect();
+    format!("{rule} The task's unpushed commits, newest first:\n{}", commits.join("\n"))
+}
+
+// The unpushed commit a fold names, by any prefix of its sha of four characters or more, as its short sha and subject.
+fn fold_target<'a>(unpushed: &'a [(String, String)], named: &str) -> Option<(&'a str, &'a str)> {
+    let named = named.trim().trim_matches('`').to_lowercase();
+    let named = named.split_whitespace().next()?;
+    if named.len() < 4 {
+        return None;
+    }
+    unpushed.iter().find(|(sha, _)| sha.starts_with(named)).map(|(sha, subject)| (&sha[..7.min(sha.len())], subject.as_str()))
 }
 
 // An investigator that runs a test to check a claim runs it the repo's way.
@@ -730,9 +770,11 @@ fn second_subtask_question(address: &str, obstacle: &Obstacle, answer: &Answer) 
 // The investigator's decision, carried out: a workaround with what replaces it, a preparatory subtask first in the plan, a task of its own first, or a question to the user.
 pub fn carry_out(state: &Path, address: &str, obstacle: &Obstacle, answer: &Answer, now: u64) -> Result<String> {
     let kind = answer.kind.ok_or("the answer names no decision")?;
-    let decision = |kind: Kind| Decision { kind, by: By::Investigator, at: now, reason: answer.reason.clone(), plan: answer.plan.clone(), replaced_by: answer.replaced_by.clone(), subtask: answer.subtask.clone(), task: answer.task.clone(), standing: (kind != Kind::Ask).then(|| answer.standing.clone()).flatten() };
+    let commits = if kind == Kind::Subtask && answer.fold.is_some() { unpushed(&obstacle.worktree) } else { Vec::new() };
+    let fold = answer.fold.as_deref().and_then(|named| fold_target(&commits, named));
+    let decision = |kind: Kind| Decision { kind, by: By::Investigator, at: now, reason: answer.reason.clone(), plan: answer.plan.clone(), replaced_by: answer.replaced_by.clone(), subtask: answer.subtask.clone(), task: answer.task.clone(), standing: (kind != Kind::Ask).then(|| answer.standing.clone()).flatten(), fold: fold.filter(|_| kind == Kind::Subtask).map(|(sha, _)| sha.to_string()) };
     let header = format!("Decision on your obstacle {} ({}), by kebbie's investigator", obstacle.id, obstacle.short());
-    let second = kind == Kind::Subtask && answer.standing.is_none() && (crate::tasks::investigator_added(state, address) || load(state, address).iter().any(|other| other.id != obstacle.id && other.decision.as_ref().is_some_and(|decision| decision.kind == Kind::Subtask && decision.by == By::Investigator)));
+    let second = kind == Kind::Subtask && fold.is_none() && answer.standing.is_none() && (crate::tasks::investigator_added(state, address) || load(state, address).iter().any(|other| other.id != obstacle.id && other.decision.as_ref().is_some_and(Decision::added_subtask)));
     let asked = match kind {
         Kind::Ask => Some(ask_from(answer).unwrap_or_else(|| replan_question(address, obstacle))),
         Kind::Subtask if second => Some(second_subtask_question(address, obstacle, answer)),
@@ -762,8 +804,13 @@ pub fn carry_out(state: &Path, address: &str, obstacle: &Obstacle, answer: &Answ
             let standing = answer.standing.as_ref().map(|standing| format!(" It applies the user's standing answer: {standing}.")).unwrap_or_default();
             format!("{header}: workaround. Go on the way you proposed, and write one line at the workaround in the code that names the trap. {} {replaced}{standing}", answer.reason)
         }
+        Kind::Subtask if let Some((sha, subject)) = fold => {
+            let title = answer.subtask.clone().unwrap_or_else(|| answer.plan.clone());
+            format!("{header}: fold into {sha}. Make \"{title}\" part of your unpushed commit {sha} ({subject}), the way your rules fold a fix into a commit not yet pushed. No subtask is added. {}", answer.reason)
+        }
         Kind::Subtask => {
             let title = answer.subtask.clone().unwrap_or_else(|| answer.plan.clone());
+            let unfolded = answer.fold.as_ref().map(|named| format!(" {named} is no commit of yours that is still unpushed, so it is a subtask of its own.")).unwrap_or_default();
             let placed = match crate::tasks::add_preparatory(state, &obstacle.worktree, address, &title, &answer.reason, now) {
                 Ok(Some(id)) => format!(" kebbie added \"{title}\" to your subtasks as {id}, ahead of the subtask it prepares, and your next commits go to it; mark it done with kebbie subtasks done {id}."),
                 Ok(None) => String::new(),
@@ -773,7 +820,7 @@ pub fn carry_out(state: &Path, address: &str, obstacle: &Obstacle, answer: &Answ
                 Some(standing) => format!("the user already decided this kind of choice in this task ({standing}), so no question"),
                 None => "a preparatory part changes nothing the user gets, so no question".to_string(),
             };
-            format!("{header}: subtask. Build \"{title}\" next, before more of the work it prepares ({}); {why}.{placed} {}", answer.plan, answer.reason)
+            format!("{header}: subtask. Build \"{title}\" next, before more of the work it prepares ({}); {why}.{placed}{unfolded} {}", answer.plan, answer.reason)
         }
         Kind::Task => {
             let running: Vec<String> = peers::sessions().unwrap_or_default().into_iter().map(|session| session.address).collect();
@@ -839,7 +886,7 @@ fn start_task(state: &Path, address: &str, answer: &Answer, running: &[String]) 
 
 // The user's answer on the board or the phone, or the lead's or the user's word with kebbie obstacles decide, is the decision.
 fn decided_by(state: &Path, address: &str, obstacle: &Obstacle, by: By, said: &str) -> Result<String> {
-    let decision = Decision { kind: Kind::Said, by, at: crate::messages::now(), reason: said.to_string(), plan: String::new(), replaced_by: None, subtask: None, task: None, standing: None };
+    let decision = Decision { kind: Kind::Said, by, at: crate::messages::now(), reason: said.to_string(), plan: String::new(), replaced_by: None, subtask: None, task: None, standing: None, fold: None };
     update(state, address, &obstacle.id, |found| {
         found.state = State::Decided;
         found.decision = Some(decision.clone());
@@ -970,13 +1017,44 @@ mod tests {
 
     #[test]
     fn a_long_reason_keeps_its_first_two_sentences_on_the_decision_line() {
-        let decision = Decision { kind: Kind::Workaround, by: By::Investigator, at: 0, reason: "The index stores titles (index.py:9). It is rebuilt next month. Opening notes duplicates parsing. A fourth.".to_string(), plan: String::new(), replaced_by: None, subtask: None, task: None, standing: None };
+        let decision = Decision { kind: Kind::Workaround, by: By::Investigator, at: 0, reason: "The index stores titles (index.py:9). It is rebuilt next month. Opening notes duplicates parsing. A fourth.".to_string(), plan: String::new(), replaced_by: None, subtask: None, task: None, standing: None, fold: None };
         assert_eq!(decision.line(), "workaround, because the index stores titles (index.py:9). It is rebuilt next month (investigator)");
         assert_eq!(first_sentences("`build()` stores only the path."), "`build()` stores only the path");
     }
 
     fn raised(state: &Path, address: &str, text: &str, on: &str) -> (Option<Obstacle>, Route) {
         raise_in(state, address, Path::new("/src/wt1.app"), Source::Task, text, on, true, 1_000).unwrap()
+    }
+
+    #[test]
+    fn a_fix_to_an_unpushed_commit_is_folded_into_it_rather_than_given_a_subtask() {
+        let state = crate::sh::test_dir("obstacle-fold");
+        let repo = state.join("app");
+        fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str]| crate::repo::git(&repo, &[&["-c", "user.name=t", "-c", "user.email=t@t"][..], args].concat()).unwrap();
+        git(&["init", "--quiet", "--initial-branch=main"]);
+        git(&["commit", "--quiet", "--allow-empty", "-m", "base"]);
+        git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        git(&["commit", "--quiet", "--allow-empty", "-m", "Book refunds"]);
+        let sha = git(&["rev-parse", "HEAD"]);
+        let address = "billing@app";
+        let (obstacle, _) = raise_in(&state, address, &repo, Source::Task, "the retry books the refund twice", "", true, 1).unwrap();
+        let obstacle = obstacle.unwrap();
+        let told = brief(&state, address, &repo, &obstacle, "/bin/kebbie");
+        assert!(told.contains("answer subtask with `fold: <sha>`") && told.contains(&format!("- {} Book refunds", &sha[..7])), "the investigator sees the unpushed commits: {told}");
+        let answer = parse(&format!("decision: subtask\nreason: the double booking is in the refund commit itself\nplan: guard the retry\nsubtask: Book a refund once on retry\nfold: {}", &sha[..9])).unwrap();
+        assert_eq!(answer.fold.as_deref(), Some(&sha[..9]));
+        let said = carry_out(&state, address, &obstacle, &answer, 2).unwrap();
+        assert!(said.contains(&format!("fold into {}", &sha[..7])) && said.contains("(Book refunds)") && said.contains("No subtask is added"), "{said}");
+        let decided = load(&state, address).into_iter().find(|kept| kept.id == obstacle.id).unwrap().decision.unwrap();
+        assert_eq!(decided.fold.as_deref(), Some(&sha[..7]));
+        assert!(decided.line().starts_with(&format!("fold into {}: Book a refund once on retry", &sha[..7])) && !decided.added_subtask(), "{}", decided.line());
+        let pushed = parse("decision: subtask\nreason: the guard is missing\nplan: guard the retry\nsubtask: Guard the retry\nfold: 0000000").unwrap();
+        let (other, _) = raise_in(&state, address, &repo, Source::Task, "another", "", true, 3).unwrap();
+        let said = carry_out(&state, address, &other.unwrap(), &pushed, 4).unwrap();
+        assert!(said.contains(": subtask. Build \"Guard the retry\"") && said.contains("0000000 is no commit of yours that is still unpushed"), "a sha that is not unpushed gets the subtask: {said}");
+        assert_eq!(fold_target(&[(sha.clone(), "Book refunds".to_string())], "abc"), None, "a prefix under four characters names nothing");
+        fs::remove_dir_all(state).unwrap();
     }
 
     #[test]
@@ -1007,7 +1085,7 @@ mod tests {
         }
         update(&state, "billing@app", "o1", |found| {
             found.state = State::Decided;
-            found.decision = Some(Decision { kind: Kind::Workaround, by: By::Investigator, at: 2_000, reason: "the index is rewritten next month".to_string(), plan: String::new(), replaced_by: Some("the index rewrite".to_string()), subtask: None, task: None, standing: None });
+            found.decision = Some(Decision { kind: Kind::Workaround, by: By::Investigator, at: 2_000, reason: "the index is rewritten next month".to_string(), plan: String::new(), replaced_by: Some("the index rewrite".to_string()), subtask: None, task: None, standing: None, fold: None });
         }).unwrap();
         match raised(&state, "billing@app", "the lint needs each note's frontmatter; the index stores titles (src/index.py:88)", "") {
             (None, Route::Known(said)) => assert!(said.contains("decided: workaround, replaced by the index rewrite, because the index is rewritten next month (investigator)") && said.contains("only with facts it did not have"), "{said}"),
@@ -1229,7 +1307,7 @@ mod tests {
     fn decide(state: &Path, address: &str, id: &str, replaced_by: Option<&str>) {
         update(state, address, id, |found| {
             found.state = State::Decided;
-            found.decision = Some(Decision { kind: Kind::Workaround, by: By::Investigator, at: 2, reason: "The task's own call.".to_string(), plan: String::new(), replaced_by: replaced_by.map(str::to_string), subtask: None, task: None, standing: None });
+            found.decision = Some(Decision { kind: Kind::Workaround, by: By::Investigator, at: 2, reason: "The task's own call.".to_string(), plan: String::new(), replaced_by: replaced_by.map(str::to_string), subtask: None, task: None, standing: None, fold: None });
         }).unwrap();
     }
 
