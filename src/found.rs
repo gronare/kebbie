@@ -149,6 +149,11 @@ fn label(line: &str) -> Option<&str> {
     (rest.trim().is_empty() && !head.is_empty() && head.chars().all(|character| character.is_alphabetic() || character == ' ')).then_some(head)
 }
 
+fn says_nothing(item: &str) -> bool {
+    let bare = item.chars().filter(|character| character.is_alphanumeric() || character.is_whitespace()).collect::<String>().trim().to_lowercase();
+    ["", "nothing", "none", "na", "ingenting", "inget"].contains(&bare.as_str())
+}
+
 // The card as filed, and each item it made recurring: found by a second task, and not yet raised as a problem of its own.
 pub struct Filed {
     pub text: String,
@@ -167,7 +172,7 @@ pub fn file_card(state: &Path, address: &str, card: &str, now: u64) -> Result<Fi
             return line.to_string();
         }
         let Some(item) = line.trim_start().strip_prefix("- ").filter(|_| inside) else { return line.to_string() };
-        if item.trim().is_empty() {
+        if says_nothing(item) {
             return line.to_string();
         }
         let id = file_line(&mut items, address, item, now);
@@ -305,6 +310,15 @@ mod tests {
         assert!(filing.join().unwrap().contains("(found:f2)"));
         assert_eq!(load(&state).iter().map(|item| item.id.as_str()).collect::<Vec<_>>(), ["f1", "f2"]);
         std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn an_also_noticed_line_that_says_nothing_files_nothing() {
+        let state = crate::sh::test_dir("found-nothing");
+        let card = "**X.**\n\nAlso noticed:\n- nothing\n- None.\n- n/a\n- *Ingenting*\n- inget\n- \n";
+        assert_eq!(file_card(&state, "billing@app", card, 100).unwrap().text, card.strip_suffix('\n').unwrap(), "no line gets a found mark");
+        assert!(load(&state).is_empty(), "{:?}", load(&state));
+        let _ = fs::remove_dir_all(state);
     }
 
     #[test]

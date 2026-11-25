@@ -9,6 +9,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - n asks only what you want done: Claude picks the repo, writes the card and asks its questions, then starts it or files it.
 
 ### Fixed
+- An Also noticed line that says nothing, such as nothing or none, files no found item.
 - A deploy cancelled outside the repo's ci.deploy_window stays under CI running and is re-run when it opens.
 - A blocked task shows under Working again once its obstacle is decided or the lead answers it.
 - A task leaves Needs you for Working once the lead settles its question with kebbie decide.
