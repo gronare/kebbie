@@ -195,6 +195,9 @@ pub(super) fn spawn_routine_runner(overlay: bool) {
                     crate::tasks::follow_tick(&state);
                     crate::tasks::landed_tick(&state);
                     let _ = crate::hub::tick();
+                    for note in crate::clock::tick(&state).unwrap_or_default() {
+                        crate::keeper::log_line(&state, &note);
+                    }
                     let _ = crate::signals::tick(&state);
                     crate::install_signal::tick(&state);
                     let _ = crate::hub::report::send_unasked_tick(&state);

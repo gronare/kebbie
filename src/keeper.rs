@@ -64,6 +64,7 @@ pub fn routines() -> Vec<Routine> {
         Routine { name: "tests", every: crate::commit_tests::EVERY, run: |ctx| { ctx.notes.extend(crate::commit_tests::tick(&crate::lead::state_dir()?)); Ok(()) } },
         Routine { name: "assess", every: crate::rules_check::EVERY, run: |ctx| { ctx.notes.extend(crate::assessment::tick(&crate::lead::state_dir()?)); Ok(()) } },
         Routine { name: "routines", every: crate::routines::EVERY, run: |ctx| { ctx.notes.extend(crate::routines::tick(&crate::lead::state_dir()?)); Ok(()) } },
+        Routine { name: "clock", every: crate::clock::EVERY, run: |ctx| { ctx.notes.extend(crate::clock::tick(&crate::lead::state_dir()?)?); Ok(()) } },
         Routine { name: "hub", every: crate::hub::EVERY, run: |_| crate::hub::tick() },
         Routine { name: "reports", every: crate::hub::inbox::EVERY, run: |ctx| { ctx.notes.extend(crate::hub::inbox::tick(&crate::lead::state_dir()?)?); Ok(()) } },
         Routine { name: "signals", every: crate::signals::EVERY, run: |ctx| { ctx.notes.extend(crate::signals::tick(&crate::lead::state_dir()?)?); Ok(()) } },

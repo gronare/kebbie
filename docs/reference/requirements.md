@@ -83,7 +83,7 @@ kebbie doctor                                                       45 ok · 2 t
 | Tools | `git`, `jq`, `curl`, `nvim`, `tig`, `cargo` |
 | Files | `config`, `repo config`, `state dir`, `task hooks`, `setup skill` |
 | Tasks | `sandbox`, `push block`, `setup command`, `task profile`, `profile`, `reviewer`, `docs`, `tests`, `comments`, `backlog`, `backlog local`, `backlog linear` |
-| Signals | `maintainers`, `reports`, `hub`, `notify` |
+| Signals | `maintainers`, `reports`, `hub`, `clock`, `notify` |
 
 With `--plain`, without a terminal or with `NO_COLOR` set, each line is `ok`, `skip`, `warn` or `fail`, the check's name and its text; `skip` is a check that got no answer, counted apart as not checked. Every `warn` and `fail` carries a `fix:` line for macOS and Linux. `kebbie doctor` exits non-zero when any check fails.
 
@@ -112,6 +112,7 @@ With `--plain`, without a terminal or with `NO_COLOR` set, each line is `ok`, `s
 | `comments` | Inside a repo: whether kebbie reads comments on the commits it pushes there, and for how many days, and those on your own commits and that mention you, or why not. |
 | `setup skill` | The setup skill's plugin is installed and enabled. |
 | `hub` | Whether the machine joined a kebbie hub, and how its board posts go. |
+| `clock` | With a hub joined only: this machine's clock against the hub's. |
 | `maintainers` | Where error signals and kebbie's own bug reports go. |
 | `reports` | With `report.inbox_token` set only: the reports endpoint and the reports and signals it filed here. |
 | `machine` | With the vault on or a hub connected only: the name the phone and the other machines on the vault see. |
@@ -126,6 +127,7 @@ With `--plain`, without a terminal or with `NO_COLOR` set, each line is `ok`, `s
 - `docs` suggests turning `docs.required` on when `gh` says the repo is public on GitHub. Without `gh` or a GitHub remote the line is left out.
 - `tests` suggests `tests.before_push = "full"`, with the command, when the repo's tasks ran a whole suite green in five minutes or less (the median of kebbie's recorded runs). It warns when `"full"` is set without `tests.full_command`. A repo on related tests with no short run recorded has no line.
 - `hub`: when the machine has joined, it shows the hub's address and the machine's name, whether it pinned an account key and when the board last went out. It warns when the hub does not answer, the machine holds no account key (so no browser can read its board) or the last post failed. It fails, naming the file, when the machine's hub identity cannot be read.
+- `clock` reads the time in the hub's `Date` header and warns when this machine's clock is more than a minute off, behind or ahead, and says what that risks: more than 5 minutes behind, the phone's commands are refused as expired; less, they are refused once it drifts that far; ahead, they expire early by as much. When the hub does not answer, the line reads `skip`, not compared. Its fix sets the clock: `sudo chronyc makestep` on Linux, `sudo sntp -sS time.apple.com` on macOS.
 - `maintainers`: whether error signals go to kebbie's maintainers (`report.signals`, `not asked` until it is set), when they last went and whether that failed, and what happens to the bugs and wishes about kebbie saved here (`report.text`). It warns while `"always"` is set but not armed.
 - `reports`: how many reports were filed here, the last fetch and its error, and how many reports wait in quarantine on the issues endpoint.
 - `comments` warns when `comments.watch` is on but origin is not on GitHub or `gh` is missing or logged out, with the same reason `kebbie ci` gives. With `comments.watch = false` it says it is off.

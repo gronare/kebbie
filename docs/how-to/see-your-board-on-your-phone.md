@@ -244,7 +244,7 @@ A hub that refuses the board answers so, and kebbie then says `This hub has not 
 
 Every command from your phone carries the time it was sent and how long it holds, so a machine whose clock runs hours behind reads it as sent from the future and refuses it as expired. The phone then says how far behind, as in `Not done: the machine's clock runs 6h 28m behind, so this looked expired. Set its clock, for example with sudo chronyc makestep, then send it again.`
 
-Set the clock: `sudo chronyc makestep` on Linux, `sudo sntp -sS time.apple.com` on macOS.
+The keeper compares the machine's clock with the time the hub answers with every five minutes. When they are more than a minute apart, the keeper's log says `Clock: this machine runs 6h 28m behind the hub, so the phone's commands are refused as expired; set the clock, for example with sudo chronyc makestep`. A clock less than 5 minutes behind still takes the phone's commands, and the line says they are refused once it drifts that far; a clock ahead says how much earlier they expire, and `kebbie doctor` warns on its `clock` line. Set the clock: `sudo chronyc makestep` on Linux, `sudo sntp -sS time.apple.com` on macOS.
 
 The usual cause is chrony: past its first updates after a start it only slews the clock, a little at a time, so a clock that drifted hours off stays wrong for days until `makestep` steps it.
 

@@ -28,7 +28,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task is never restarted onto an older kebbie.
 - A push whose rebase went over another task's CHANGES.md line or docs page asks no test run for them.
 - A push whose rebase stops only on CHANGES.md keeps both sides' lines and goes on.
-- When the machine's clock runs behind, a command from your phone says so and by how much instead of "send it again".
+- When the machine's clock runs behind, a command from your phone says so and by how much instead of "send it again", and kebbie doctor warns when the clock is more than a minute off the hub's.
 - The line under a task's row on the board says only what you do next, on one line; review findings, rule breaks and review suggestions go to the lead.
 - The lead never compacts its conversation, so it keeps its rules: near restart.lead_context it writes a handover and starts fresh on it.
 - kebbie setup run outside herdr ends with how to start herdr instead of opening the board on its error page.

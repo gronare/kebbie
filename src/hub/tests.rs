@@ -1337,3 +1337,12 @@ fn a_ready_card_reaches_the_board_as_a_blob_marked_current_while_head_is_the_car
     plain.name = "search".to_string();
     assert!(super::board::attachments(&[plain], &state).is_empty(), "a task without a card or plan has nothing to attach");
 }
+
+#[test]
+fn the_hubs_date_measures_this_machines_clock_against_it() {
+    let hub = TestHub::start();
+    let offset = crate::clock::measure(&hub.url, now).unwrap();
+    assert!(offset.abs() <= 2, "the same machine's clock reads in step: {offset}");
+    let behind = crate::clock::measure(&hub.url, || now() - 23_316).unwrap();
+    assert!((23_314..=23_318).contains(&behind), "{behind}");
+}

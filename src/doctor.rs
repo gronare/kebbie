@@ -1002,6 +1002,8 @@ pub fn checks(env: &Env) -> Vec<Check> {
     let keeper_on = config::check_machine(&env.config).ok().and_then(|(machine, _)| machine.keeper).unwrap_or(true);
     checks.push(keeper(keeper_on, crate::keeper::holder(&env.kebbie_state).as_ref(), crate::messages::now()));
     checks.push(crate::hub::doctor(&env.kebbie_state, crate::hub::configured_name(&env.config).as_deref(), crate::messages::now(), crate::hub::reach));
+    let hub_url = crate::hub::identity::load(&env.kebbie_state).ok().flatten().map(|identity| identity.url);
+    checks.extend(crate::clock::doctor(hub_url.as_deref(), |url| crate::clock::measure(url, crate::messages::now)));
     if let Ok((machine, _)) = config::check_machine(&env.config) {
         checks.push(crate::signals::doctor(&env.kebbie_state, &machine.report, crate::messages::now()));
         checks.extend(crate::hub::inbox::doctor(&env.kebbie_state, &machine.report, crate::messages::now()));

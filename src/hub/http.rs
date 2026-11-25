@@ -123,6 +123,12 @@ impl Client {
         self.send(Method::Get, "/healthz", None, JSON).map(|_| ())
     }
 
+    pub fn date(&self) -> Result<Option<String>, HubError> {
+        let base = self.moved().unwrap_or_else(|| self.base.clone());
+        let response = self.once(Method::Get, &format!("{base}/healthz"), None, JSON)?;
+        Ok(response.headers().get("date").and_then(|value| value.to_str().ok()).map(str::to_string))
+    }
+
     // 307 and 308 keep the method, the body and the token; nothing else is followed.
     fn send(&self, method: Method, path: &str, body: Option<Vec<u8>>, content_type: &str) -> Result<Vec<u8>, HubError> {
         let base = self.moved().unwrap_or_else(|| self.base.clone());
