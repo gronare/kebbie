@@ -120,11 +120,18 @@ pub fn commands(configured: &[String]) -> Vec<String> {
 
 // What kebbie records in a repo: the built-in list, task.test_commands, tests.full_command and tests.lint_command.
 pub fn listed_for(settings: &crate::config::Settings) -> Vec<String> {
-    commands(&settings.test_commands.value.iter().cloned().chain(settings.tests_full_command.value.clone()).chain(settings.tests_lint_command.value.clone()).collect::<Vec<_>>())
+    commands(&settings.test_commands.value.iter().cloned().chain(settings.tests_full_command.value.clone()).chain(settings.tests_lint_command.value.iter().flat_map(|lint| lint_parts(lint))).collect::<Vec<_>>())
+}
+
+// The commands a tests.lint_command of commands joined by && runs, each one a lint of its own, since kebbie records each command of a line apart; any other line stays one command.
+pub fn lint_parts(lint: &str) -> Vec<String> {
+    let pieces = shell::pieces(lint);
+    let joined = pieces.len() > 1 && pieces.iter().all(|(text, op)| matches!(op, None | Some(shell::Op::And)) && matches!(shell::piece(text), shell::Piece::Simple(_)));
+    if joined { pieces.iter().map(|(text, _)| text.trim().to_string()).collect() } else { vec![lint.trim().to_string()] }
 }
 
 fn is_lint(runner: &str, lint: Option<&str>) -> bool {
-    lint.is_some_and(|lint| runner.trim_start_matches("./") == lint.trim().trim_start_matches("./"))
+    lint.is_some_and(|lint| lint_parts(lint).iter().any(|part| runner.trim_start_matches("./") == part.trim_start_matches("./")))
 }
 
 fn listed_in(repo: &Path) -> Vec<String> {
@@ -1818,6 +1825,21 @@ mod tests {
         assert_eq!(runs_in(&state, "billing@app").len(), KEPT);
         assert_eq!(runs_in(&state, "billing@app")[0].at, 5, "the oldest test runs go");
         fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn each_command_of_a_lint_joined_by_and_is_a_lint_run() {
+        assert_eq!(lint_parts("cargo fmt --check && cargo clippy -- -D warnings"), ["cargo fmt --check", "cargo clippy -- -D warnings"]);
+        assert_eq!(lint_parts("cargo clippy -- -D warnings"), ["cargo clippy -- -D warnings"]);
+        assert_eq!(lint_parts("ruff check; mypy ."), ["ruff check; mypy ."], "only && joins lints kebbie can tell apart");
+        let dir = repo();
+        let state = dir.join("state");
+        let lint = "cargo fmt --check && cargo clippy -- -D warnings";
+        let mut settings = crate::config::settings(&crate::config::Worktree::default(), &crate::config::Machine::default());
+        settings.tests_lint_command.value = Some(lint.to_string());
+        let runs = record_with_lint(&state, "billing@app", &dir, &listed_for(&settings), Some(lint), &passed(lint), 1);
+        assert_eq!(runs.iter().map(|run| (run.runner.as_str(), run.lint)).collect::<Vec<_>>(), [("cargo fmt --check", true), ("cargo clippy -- -D warnings", true)]);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

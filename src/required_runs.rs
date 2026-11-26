@@ -48,10 +48,10 @@ pub fn full(settings: &Settings) -> Option<String> {
     settings.tests_full_command.value.clone().filter(|_| settings.tests_before_push.value == BeforePush::Full)
 }
 
-// Every run a repo's tasks must have green on HEAD before ready and push: the full suite under tests.before_push = "full", and the lint whenever the repo names one.
+// Every run a repo's tasks must have green on HEAD before ready and push: the full suite under tests.before_push = "full", and the lint whenever the repo names one, each command of a lint joined by && on its own.
 pub fn required(settings: &Settings) -> Vec<Required> {
     let full = full(settings).map(|command| Required { kind: Kind::Full, command });
-    let lint = settings.tests_lint_command.value.clone().map(|command| Required { kind: Kind::Lint, command });
+    let lint = settings.tests_lint_command.value.iter().flat_map(|lint| crate::evidence::lint_parts(lint)).map(|command| Required { kind: Kind::Lint, command });
     full.into_iter().chain(lint).collect()
 }
 
@@ -110,7 +110,7 @@ pub struct FromMain {
 impl Gap {
     // "its full suite", "its lint", or both, as the subject of a sentence.
     pub fn names(&self) -> String {
-        self.joined(|owed| owed.required.kind.name().to_string())
+        self.distinct(|owed| owed.required.kind.name()).join(" and ")
     }
 
     pub fn commands(&self) -> String {
@@ -126,11 +126,21 @@ impl Gap {
     }
 
     fn plural(&self) -> bool {
-        self.owed.len() > 1 || self.owed.iter().any(|owed| matches!(owed.required.kind, Kind::Tests(_)))
+        self.distinct(|owed| owed.required.kind.name()).len() > 1 || self.owed.iter().any(|owed| matches!(owed.required.kind, Kind::Tests(_)))
     }
 
     fn settings(&self) -> String {
-        self.owed.iter().map(|owed| owed.required.kind.setting()).collect::<Vec<_>>().join(", ")
+        self.distinct(|owed| owed.required.kind.setting()).join(", ")
+    }
+
+    fn distinct(&self, each: impl Fn(&Owed) -> &'static str) -> Vec<&'static str> {
+        let mut seen: Vec<&'static str> = Vec::new();
+        for owed in &self.owed {
+            if !seen.contains(&each(owed)) {
+                seen.push(each(owed));
+            }
+        }
+        seen
     }
 
     fn whys(&self) -> String {
@@ -227,8 +237,8 @@ fn owed_in(state: &Path, worktree: &Path, address: &str, end: Option<&str>, find
     // Only the whole task, on its own HEAD: once the push rebases it, its base is the tip and the lint is owed on the rebased code again.
     let from_main = end.is_none().then(|| owed.iter().find(|owed| owed.required.kind == Kind::Lint).and_then(|owed| from_main(worktree, &head, &lints, &owed.required))).flatten();
     let shown = from_main.clone().filter(|from_main| from_main.shown);
-    if shown.is_some() {
-        owed.retain(|owed| owed.required.kind != Kind::Lint);
+    if let Some(shown) = &shown {
+        owed.retain(|owed| !(owed.required.kind == Kind::Lint && owed.required.command == shown.lint));
     }
     let gap = (!owed.is_empty()).then(|| Gap { owed, end: end.map(|end| end[..7.min(end.len())].to_string()), from_main: from_main.filter(|from_main| !from_main.shown) });
     Ok(Owing { gap, from_main: shown })
@@ -365,6 +375,14 @@ mod tests {
         assert_eq!(required(&settings), [full("uv run pytest -q"), lint("ruff check")]);
         settings.tests_full_command.value = None;
         assert_eq!(required(&settings), [lint("ruff check")], "full without a command stays on related, and doctor says so");
+        settings.tests_lint_command.value = Some("cargo fmt --check && cargo clippy -- -D warnings".to_string());
+        let both = required(&settings);
+        assert_eq!(both, [lint("cargo fmt --check"), lint("cargo clippy -- -D warnings")], "each command of a lint joined by && is owed on its own");
+        let line = "cargo fmt --check && cargo clippy -- -D warnings";
+        let on = |run: &Run| run.code == "head";
+        assert!(both.iter().all(|required| missing(&[run(line, "cargo fmt --check", Outcome::Passed, "head"), run(line, "cargo clippy -- -D warnings", Outcome::Passed, "head")], required, on).is_none()), "the line run word for word answers both");
+        let gap = Gap { owed: both.into_iter().map(|required| Owed { required, why: "no run".to_string() }).collect(), end: None, from_main: None };
+        assert!(report_refusal(&gap).contains("green run of its lint on HEAD (tests.lint_command)"), "{}", report_refusal(&gap));
     }
 
     #[test]
