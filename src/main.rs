@@ -953,7 +953,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("issues") => Ok(issues::list_in(&issues::dir(&lead::state_dir()?), arguments.flag("--all"), arguments.flag("--json"))),
         Some("faults") if arguments.flag("--watch") => faults::watch::run(),
         Some("faults") if name == Some("show") => faults::show_in(&lead::state_dir()?, arguments.positional(2).ok_or("kebbie faults show needs the issue's id; kebbie faults lists them")?),
-        Some("faults") => Ok(faults::list_in(&lead::state_dir()?, arguments.flag("--json"))),
+        Some("faults") => Ok(faults::list_in(&lead::state_dir()?, arguments.flag("--json"), faults::watch::on())),
         Some("issue") => issue(arguments, name),
         Some("setup") if matches!(name, Some("mindin" | "vault")) => setup::vault(),
         Some("setup") if name == Some("codex") => setup::codex(arguments.flag("--uninstall"), arguments.flag("--yes")),

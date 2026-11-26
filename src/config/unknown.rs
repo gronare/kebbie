@@ -68,6 +68,13 @@ fn unknown_settings(table: &Table, top: &[&str]) -> Vec<String> {
     unknown_in(table, "", top).into_iter().chain(sections.flatten()).collect()
 }
 
+// The section that turns on what only kebbie's own development uses is read but never named in the known keys a typo is shown.
+pub(super) fn unknown_in_machine_file(text: &str, source: &str) -> Vec<String> {
+    let Ok(mut table) = text.parse::<Table>() else { return Vec::new() };
+    table.remove(super::DEV_SECTION);
+    unknown_settings(&table, &MACHINE_KEYS).into_iter().map(|line| format!("{source}: {line}")).collect()
+}
+
 pub(super) fn unknown_in_file(text: &str, source: &str, top: &[&str]) -> Vec<String> {
     text.parse::<Table>().map(|table| unknown_settings(&table, top).into_iter().map(|line| format!("{source}: {line}")).collect()).unwrap_or_default()
 }

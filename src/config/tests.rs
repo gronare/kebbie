@@ -1065,3 +1065,19 @@ fn ideas_machine_names_a_machine_and_writer_profile_a_profile_or_none() {
     let unset = settings(&Worktree::default(), &Machine::default());
     assert_eq!((unset.ideas_machine.value, unset.writer_profile.value.as_str()), (None, crate::backlog_writer::WRITER));
 }
+
+#[test]
+fn the_fault_watcher_is_on_only_where_kebbie_dev_turns_it_on() {
+    let dir = crate::sh::test_dir("fault-watcher-key");
+    let file = dir.join("config.toml");
+    assert!(!fault_watcher_in(&file).unwrap(), "no config file, no watcher");
+    std::fs::write(&file, "[issues]\npropose = true\n").unwrap();
+    assert!(!fault_watcher_in(&file).unwrap(), "proposing kebbie issues does not turn the watcher on");
+    std::fs::write(&file, "[kebbie_dev]\nfault_watcher = true\n").unwrap();
+    assert!(fault_watcher_in(&file).unwrap());
+    assert!(parse_machine("[kebbie_dev]\nfault_watcher = \"yes\"\n", "config.toml").unwrap_err().contains("kebbie_dev.fault_watcher: must be true or false"));
+    assert!(unknown_in_machine_file("[kebbie_dev]\nfault_watcher = true\n", "config.toml").is_empty(), "the key is read without a warning");
+    assert!(unknown_in_machine_file("colour = 1\n", "config.toml").iter().all(|line| !line.contains("kebbie_dev")), "a typo's known keys never name it");
+    assert!(!describe(&Loaded { machine: file, repo: None, settings: settings(&Worktree::default(), &Machine::default()) }).contains("kebbie_dev"), "kebbie config never shows it");
+    std::fs::remove_dir_all(dir).unwrap();
+}

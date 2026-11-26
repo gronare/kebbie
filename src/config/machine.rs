@@ -28,6 +28,7 @@ pub struct Machine {
     pub hub_approve_from: Option<ApproveFrom>,
     pub report: Report,
     pub propose_issues: Option<bool>,
+    pub fault_watcher: Option<bool>,
     pub lead_profile: Option<String>,
     pub builds: Builds,
     pub disk: Disk,
@@ -55,6 +56,7 @@ pub const DEFAULT_HUB_URL: &str = "https://hub.kebbie.dev";
 pub(super) const DEFAULT_KEEPER: bool = true;
 pub(super) const DEFAULT_RECOVER: bool = true;
 pub(super) const DEFAULT_PROPOSE_ISSUES: bool = true;
+pub const DEV_SECTION: &str = "kebbie_dev";
 pub(super) const REPORT_URL: &str = "https://issues.kebbie.dev";
 pub(super) const UNSENT_REPORT_URL: &str = "http://127.0.0.1:9";
 pub const INBOX_TOKEN_PREFIX: &str = "kha_";
@@ -242,6 +244,11 @@ fn propose_issues(table: &Table) -> Result<Option<bool>> {
     flag(section, "propose", "issues.propose")
 }
 
+fn fault_watcher(table: &Table) -> Result<Option<bool>> {
+    let Some(section) = subtable(table, DEV_SECTION, DEV_SECTION)? else { return Ok(None) };
+    flag(section, "fault_watcher", "kebbie_dev.fault_watcher")
+}
+
 fn lead_profile(table: &Table) -> Result<Option<String>> {
     let Some(lead) = subtable(table, "lead", "lead")? else { return Ok(None) };
     let Some(name) = text(lead, "profile", "lead.profile")? else { return Ok(None) };
@@ -374,5 +381,5 @@ pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     }
     crate::routines::parse_list(&table, None, source).map_err(fail)?;
     let Board { sources, groups, ongoing, template, next_question, tab_questions } = board(&table).map_err(fail)?;
-    Ok(Machine { keys: keys(&table).map_err(fail)?, sources, groups, ongoing, template, next_question, tab_questions, channel: update(&table).map_err(fail)?, agent_updates: agent_updates(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, keeper: enabled_in(&table, "keeper").map_err(fail)?, worker: enabled_in(&table, "worker").map_err(fail)?, link_networks: link_networks(&table).map_err(fail)?, recover: enabled_in(&table, "recover").map_err(fail)?, machine_name: machine_name(&table).map_err(fail)?, hub_url: hub_url(&table).map_err(fail)?, hub_commands: hub_commands(&table).map_err(fail)?, hub_trust: hub_choice(&table, "trust", &HubTrust::ALL.map(|trust| (trust.key(), trust))).map_err(fail)?, hub_auto_approve: hub_choice(&table, "auto_approve", &AutoApprove::ALL.map(|auto| (auto.key(), auto))).map_err(fail)?, hub_approve_from: hub_choice(&table, "approve_from", &ApproveFrom::ALL.map(|from| (from.key(), from))).map_err(fail)?, report: report(&table).map_err(fail)?, propose_issues: propose_issues(&table).map_err(fail)?, lead_profile: lead_profile(&table).map_err(fail)?, writer_profile: writer_profile(&table).map_err(fail)?, ideas_machine: ideas_machine(&table).map_err(fail)?, builds: builds(&table).map_err(fail)?, disk: disk(&table).map_err(fail)?, worktree })
+    Ok(Machine { keys: keys(&table).map_err(fail)?, sources, groups, ongoing, template, next_question, tab_questions, channel: update(&table).map_err(fail)?, agent_updates: agent_updates(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, keeper: enabled_in(&table, "keeper").map_err(fail)?, worker: enabled_in(&table, "worker").map_err(fail)?, link_networks: link_networks(&table).map_err(fail)?, recover: enabled_in(&table, "recover").map_err(fail)?, machine_name: machine_name(&table).map_err(fail)?, hub_url: hub_url(&table).map_err(fail)?, hub_commands: hub_commands(&table).map_err(fail)?, hub_trust: hub_choice(&table, "trust", &HubTrust::ALL.map(|trust| (trust.key(), trust))).map_err(fail)?, hub_auto_approve: hub_choice(&table, "auto_approve", &AutoApprove::ALL.map(|auto| (auto.key(), auto))).map_err(fail)?, hub_approve_from: hub_choice(&table, "approve_from", &ApproveFrom::ALL.map(|from| (from.key(), from))).map_err(fail)?, report: report(&table).map_err(fail)?, propose_issues: propose_issues(&table).map_err(fail)?, fault_watcher: fault_watcher(&table).map_err(fail)?, lead_profile: lead_profile(&table).map_err(fail)?, writer_profile: writer_profile(&table).map_err(fail)?, ideas_machine: ideas_machine(&table).map_err(fail)?, builds: builds(&table).map_err(fail)?, disk: disk(&table).map_err(fail)?, worktree })
 }

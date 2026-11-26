@@ -256,14 +256,14 @@ fn kebbie_command<'a>(argv: &[&'a str]) -> Option<&'a str> {
     argv.first().filter(|program| program.ends_with("kebbie")).and(argv.get(1).copied())
 }
 
-pub fn role_text(template: &str, kebbie: &str, sources: &[Source], vault: bool, propose: bool, language: &str) -> String {
+pub fn role_text_with(template: &str, kebbie: &str, sources: &[Source], vault: bool, propose: bool, watcher: bool, language: &str) -> String {
     let backlog::Role { finding, backlog, intake, vault_work, after_push } = backlog::role_texts(sources, vault);
-    template.replace("{kebbie}", kebbie).replace("{language}", language).replace("{finding}", &finding).replace("{backlog}", &backlog).replace("{intake}", &intake).replace("{vault_work}", &vault_work).replace("{after_push}", &after_push).replace("{issues}", issues_role(propose)).replace("{faults}", faults_role(propose)).replace("{task_commands}", &crate::sandbox::TASK_COMMANDS.join("`, `kebbie "))
+    template.replace("{kebbie}", kebbie).replace("{language}", language).replace("{finding}", &finding).replace("{backlog}", &backlog).replace("{intake}", &intake).replace("{vault_work}", &vault_work).replace("{after_push}", &after_push).replace("{issues}", issues_role(propose)).replace("{faults}", faults_role(watcher)).replace("{task_commands}", &crate::sandbox::TASK_COMMANDS.join("`, `kebbie "))
 }
 
-// The {faults} part of roles/lead.md: with proposing off the fault watcher is off too, so the lead starts the fix task itself.
-fn faults_role(propose: bool) -> &'static str {
-    if propose {
+// The {faults} part of roles/lead.md: with the fault watcher off the lead starts the fix task itself.
+fn faults_role(watcher: bool) -> &'static str {
+    if watcher {
         "when the user says something is wrong in kebbie, set the one case right and leave the cause to kebbie's fault watcher. It reads the user's own words in your chat, in the tasks' chats and on the board, and incidents kebbie meets twice; it files each fault as a kebbie issue with its root cause and queues the task that fixes it, and `The fault watcher queued <task>` tells you so: give that task its recipe. Start no fix task of your own for a fault in kebbie, so no fault gets two. `The fault watcher could not weigh case` hands you the user's words it settled without a verdict: weigh them yourself, and when they point at a fault in kebbie, save it as a kebbie issue by the skill `kebbie:propose-change`. When the user says something is wrong in another tool whose repo `kebbie areas` lists, start a task that fixes it in code by the playbook, in the same turn and on your own initiative, besides setting the one case right; tell them in one line which task you started, and ask nothing first, so they never have to ask twice."
     } else {
         "when the user says something is wrong in kebbie, or in another tool whose repo `kebbie areas` lists, start a task that fixes it in code by the playbook, in the same turn and on your own initiative, besides setting the one case right. Tell them in one line which task you started; ask nothing first, so they never have to ask twice. A fault in kebbie when its repo is not among the areas is saved with `kebbie issue add` by the skill `kebbie:propose-change`."
@@ -282,7 +282,7 @@ fn issues_role(propose: bool) -> &'static str {
 // roles/lead.md filled in for the configured backlog sources, written to the state dir for --append-system-prompt-file; returns the file and its text.
 pub fn role_file() -> Result<(PathBuf, String)> {
     let template = fs::read_to_string(install_root()?.join("roles/lead.md")).map_err(|error| format!("roles/lead.md: {error}"))?;
-    let role = role_text(&template, &peers::kebbie_command()?, &config::sources()?, crate::vault_cli::detect().is_some(), config::propose_issues_enabled()?, &crate::item_template::content_language());
+    let role = role_text_with(&template, &peers::kebbie_command()?, &config::sources()?, crate::vault_cli::detect().is_some(), config::propose_issues_enabled()?, crate::faults::watch::on(), &crate::item_template::content_language());
     let file = roles_dir()?.join("lead.md");
     crate::state::write(&file, &role)?;
     Ok((file, role))
@@ -930,6 +930,10 @@ pub fn chat_hidden(board_pane: &str) -> Option<bool> {
 mod tests {
     use super::*;
 
+    fn role_text(template: &str, kebbie: &str, sources: &[Source], vault: bool, propose: bool, language: &str) -> String {
+        role_text_with(template, kebbie, sources, vault, propose, false, language)
+    }
+
     #[test]
     fn the_lead_cannot_write_claude_codes_memory_for_itself() {
         let denied = |path: &str| memory_answer(Some(Path::new("/home/ada/.claude")), &serde_json::json!({ "hook_event_name": "PreToolUse", "tool_name": "Write", "tool_input": { "file_path": path, "content": "x" } }).to_string());
@@ -1100,13 +1104,13 @@ mod tests {
     #[test]
     fn the_lead_asks_only_on_the_board_answers_short_and_fixes_the_faults_the_user_points_out() {
         let skill = include_str!("../skills/propose-change/SKILL.md");
-        for (sources, vault, propose) in [(vec![], false, true), (vec![Source::Local], false, true), (vec![Source::Vault], true, false), (vec![Source::Linear, Source::Local], true, true)] {
-            let role = role_text(include_str!("../roles/lead.md"), "/opt/kebbie/kebbie", &sources, vault, propose, "English");
+        for (sources, vault, propose, watcher) in [(vec![], false, true, false), (vec![Source::Local], false, true, true), (vec![Source::Vault], true, false, true), (vec![Source::Linear, Source::Local], true, true, false)] {
+            let role = role_text_with(include_str!("../roles/lead.md"), "/opt/kebbie/kebbie", &sources, vault, propose, watcher, "English");
             for needed in ["**Ask on the board**: every question to the user goes on the board, as a task's question (the task asks with `kebbie ask`) or under Open questions on a backlog item", "The one exception is a task's own prompt, under Claude's own prompts in a task", "**Answer first**: a turn the user's question started is the answer. Start, queue, drop or change nothing in it", "**Answer short**: the answer to what the user asked, in 1 to 3 lines", "leave out queue lists, recaps, file lines and internal ids (backlog refs, task names) unless the user asks for them", "## Leftover work", "keeping no archive tag or branch of it", "- **Faults the user points out**: when the user says something is wrong in", "A lesson about how kebbie or a lead works never goes into your own memory, which kebbie refuses you", "ask nothing first, so they never have to ask twice", "- **Closing your own work**: work you carry outside a kebbie task (a machine, keys, config, triage) has its vault note closed by you in the same turn it is done, and what is left of it becomes a new backlog item", "- **Messages for you**: what is for you reaches you as messages", "run `kebbie next` and answer from it in 1 to 3 lines", "never as text on the board", "Pass each finding on as the reviewer wrote it, adding no design of your own, and only to the repo half it is about (`kebbie tell <task>@<repo>`)", "How the fix is committed is the rules skill's call: ask for no commit shape it does not"] {
                 assert!(role.contains(needed), "{sources:?} vault {vault} propose {propose}: {needed}");
             }
-            assert_eq!(role.contains("leave the cause to kebbie's fault watcher") && role.contains("Start no fix task of your own for a fault in kebbie") && role.contains("`The fault watcher could not weigh case` hands you the user's words"), propose, "the fault watcher is off with proposing off: {sources:?}");
-            assert_eq!(role.contains("when the user says something is wrong in kebbie, or in another tool whose repo `kebbie areas` lists, start a task that fixes it in code"), !propose, "with the watcher off the lead fixes a kebbie fault itself: {sources:?}");
+            assert_eq!(role.contains("leave the cause to kebbie's fault watcher") && role.contains("Start no fix task of your own for a fault in kebbie") && role.contains("`The fault watcher could not weigh case` hands you the user's words"), watcher, "the fault watcher's rule stands only with the watcher on: {sources:?}");
+            assert_eq!(role.contains("when the user says something is wrong in kebbie, or in another tool whose repo `kebbie areas` lists, start a task that fixes it in code"), !watcher, "with the watcher off the lead fixes a kebbie fault itself: {sources:?}");
             assert!(!role.contains("{faults}"));
             for gone in ["AskUserQuestion", "yes/no", "**Needs you**", "**Going on**", "exact answer", "three parts", "offer two or three candidates", "bring the user your recommendation", "no dropping a task with work in it", "show the user the item", "only on their yes", "answer with its list", "bring the user", "bring them", "recommendations and decisions", "what needs a decision", "ask the user what to work on", "ask the user before", "offer the user", "show them its", "help them decide:"] {
                 assert!(!role.contains(gone), "{sources:?} vault {vault} propose {propose}: {gone}");

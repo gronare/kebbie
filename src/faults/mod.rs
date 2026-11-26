@@ -225,14 +225,20 @@ fn state_word(state: &Path, issue: &Issue) -> String {
     format!("{word}{}", if back { ", came back" } else { "" })
 }
 
-pub fn list_in(state: &Path, as_json: bool) -> String {
+pub const OFF: &str = "The fault watcher is off on this machine: it weighs nothing and files no faults.";
+
+pub fn list_in(state: &Path, as_json: bool, on: bool) -> String {
     let tracked = tracked(state);
     if as_json {
         let rows: Vec<_> = tracked.iter().map(|issue| {
             let seen = occurrences(state, &issue.id);
             json!({ "id": issue.id, "title": issue.title, "status": issue.status, "in_use": in_use(issue), "fix": issue.fix, "cause": issue.cause, "barrier": issue.barrier, "seen": seen.len(), "came_back": seen.iter().filter(|occurrence| occurrence.came_back).count() })
         }).collect();
-        return serde_json::to_string_pretty(&json!({ "faults": rows, "pending": pending(state).len() })).unwrap_or_default();
+        return serde_json::to_string_pretty(&json!({ "on": on, "faults": rows, "pending": pending(state).len() })).unwrap_or_default();
+    }
+    if !on {
+        let lines: Vec<String> = tracked.iter().map(|issue| format!("{}  {:<24}  {}", issue.id, state_word(state, issue), issue.title)).collect();
+        return std::iter::once(OFF.to_string()).chain(lines).collect::<Vec<_>>().join("\n");
     }
     let waiting = pending(state).len();
     let waiting = if waiting > 0 { format!("\n{waiting} {} for the fault watcher to weigh.", if waiting == 1 { "case waits" } else { "cases wait" }) } else { String::new() };

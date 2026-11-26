@@ -2,7 +2,7 @@ use std::path::Path;
 
 use toml::Table;
 
-use super::{parse_machine, parse_repo, path, read, short_hostname, unknown_in_file, update, warn_once, AgentUpdates, ApproveFrom, AutoApprove, Channel, HubCommands, HubTrust, LinkNetwork, Machine, Report, Worktree, DEFAULT_KEEPER, DEFAULT_PROPOSE_ISSUES, DEFAULT_RECOVER, MACHINE_KEYS, REPO_KEYS};
+use super::{parse_machine, parse_repo, path, read, short_hostname, unknown_in_file, unknown_in_machine_file, update, warn_once, AgentUpdates, ApproveFrom, AutoApprove, Channel, HubCommands, HubTrust, LinkNetwork, Machine, Report, Worktree, DEFAULT_KEEPER, DEFAULT_PROPOSE_ISSUES, DEFAULT_RECOVER, REPO_KEYS};
 use crate::sh::Result;
 
 pub fn load_machine(path: &Path) -> Result<Machine> {
@@ -15,7 +15,7 @@ pub fn load_repo(path: &Path) -> Result<Worktree> {
 
 pub fn check_machine(path: &Path) -> Result<(Machine, Vec<String>)> {
     let source = path.display().to_string();
-    read(path)?.map_or(Ok((Machine::default(), Vec::new())), |text| Ok((parse_machine(&text, &source)?, unknown_in_file(&text, &source, &MACHINE_KEYS))))
+    read(path)?.map_or(Ok((Machine::default(), Vec::new())), |text| Ok((parse_machine(&text, &source)?, unknown_in_machine_file(&text, &source))))
 }
 
 pub fn check_repo(path: &Path) -> Result<(Worktree, Vec<String>)> {
@@ -29,6 +29,14 @@ pub(super) fn table(text: &str, source: &str) -> Result<Table> {
 
 pub fn propose_issues_enabled() -> Result<bool> {
     Ok(load_machine(&path())?.propose_issues.unwrap_or(DEFAULT_PROPOSE_ISSUES))
+}
+
+pub fn fault_watcher_enabled() -> Result<bool> {
+    fault_watcher_in(&path())
+}
+
+pub fn fault_watcher_in(file: &Path) -> Result<bool> {
+    Ok(load_machine(file)?.fault_watcher.unwrap_or(false))
 }
 
 pub fn lead_profile() -> Result<Option<String>> {

@@ -60,7 +60,7 @@ fn a_fault_without_a_kebbie_checkout_is_filed_and_waits_for_the_maintainers() {
     assert!(outcome.contains("waits for kebbie's maintainers"), "{outcome}");
     let issue = issues::find(&issues::dir(&state), &issue.unwrap()).unwrap();
     assert_eq!(issue.fix, None);
-    assert_eq!(list_in(&state, false).lines().next().unwrap().split_whitespace().nth(1), Some("open"));
+    assert_eq!(list_in(&state, false, true).lines().next().unwrap().split_whitespace().nth(1), Some("open"));
     fs::remove_dir_all(state).unwrap();
 }
 
@@ -323,4 +323,15 @@ fn a_fix_task_reset_before_it_landed_lets_go_of_its_issue() {
     assert_eq!((fix("aa0001"), fix("aa0002").as_deref(), fix("aa0003").as_deref()), (None, Some("fault-aa0002"), Some("fault-aa0003")), "a landed fix waits for the recheck and a running one keeps its issue");
     assert_eq!(watch::step(&issues::find(&dir, "aa0001").unwrap(), None), watch::Step::Queue { came_back: false }, "its next occurrence queues a new fix");
     fs::remove_dir_all(state).unwrap();
+}
+
+#[test]
+fn the_fault_watcher_is_off_without_its_key_and_kebbie_faults_says_so() {
+    assert!(!watch::on(), "a machine whose config sets no kebbie_dev.fault_watcher runs no watcher");
+    let state = state("off");
+    assert!(capture::tick(&state).is_empty() && watch::tick(&state).is_empty() && pending(&state).is_empty());
+    assert!(!dir(&state).join("read.json").exists(), "the watcher reads no chat while off");
+    assert_eq!(list_in(&state, false, false), OFF);
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&list_in(&state, true, false)).unwrap()["on"], false);
+    let _ = fs::remove_dir_all(state);
 }
