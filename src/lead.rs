@@ -171,11 +171,17 @@ fn settings(kebbie: &str) -> String {
     crate::inbox::with_inbox(&settings.to_string(), kebbie, LEAD_LABEL)
 }
 
-const MEMORY_TOOLS: &str = "Write|Edit|MultiEdit|NotebookEdit";
+const MEMORY_TOOLS: &str = "Write|Edit|MultiEdit|NotebookEdit|Bash";
 
 pub fn in_claude_memory(home: &Path, file: &Path) -> bool {
     let mut parts = file.strip_prefix(home.join("projects")).ok().into_iter().flat_map(Path::components);
     parts.next().is_some() && parts.next().is_some_and(|part| part.as_os_str() == "memory")
+}
+
+// The files a shell command writes, with $HOME read as the home folder, which the write check leaves unresolved.
+fn shell_written(command: &str, cwd: &Path) -> Vec<PathBuf> {
+    let command = std::env::var("HOME").map_or_else(|_| command.to_string(), |home| command.replace("${HOME}", &home).replace("$HOME", &home));
+    crate::shell_write::written(&command, cwd)
 }
 
 pub fn memory_hook(input: &str) -> String {
@@ -185,7 +191,9 @@ pub fn memory_hook(input: &str) -> String {
 pub fn memory_answer(home: Option<&Path>, input: &str) -> String {
     let payload = crate::hooks::Payload::parse(input);
     let file = payload.tool_input()["file_path"].as_str().or_else(|| payload.tool_input()["notebook_path"].as_str()).map(Path::new);
-    let refused = file.zip(home).filter(|(file, home)| in_claude_memory(home, file)).map(|_| "The lead keeps no memory of its own: a lesson about how kebbie or a lead works belongs in kebbie, so every lead after you has it. Save it as a kebbie issue with kebbie issue add by the skill kebbie:propose-change, and a fact about the user's machines or setup goes into the vault.".to_string());
+    let written = payload.command().map(|command| shell_written(command, payload.cwd().unwrap_or(Path::new("/")))).unwrap_or_default();
+    let into_memory = home.is_some_and(|home| file.is_some_and(|file| in_claude_memory(home, file)) || written.iter().any(|file| in_claude_memory(home, file)));
+    let refused = into_memory.then(|| "The lead keeps no memory of its own: a lesson about how kebbie or a lead works belongs in kebbie, so every lead after you has it. Save it as a kebbie issue with kebbie issue add by the skill kebbie:propose-change, and a fact about the user's machines or setup goes into the vault.".to_string());
     crate::hooks::Answer::deny_if(refused).render()
 }
 
@@ -930,6 +938,23 @@ mod tests {
         assert_eq!(denied("/home/ada/projects/app/memory/cache.rs"), "", "a repo's own memory folder is no Claude memory");
         assert_eq!(denied("/home/ada/.claude/projects/-home-ada--local-state-kebbie-lead/notes.md"), "");
         assert_eq!(denied("/home/ada/notes.md"), "");
+    }
+
+    #[test]
+    fn the_lead_cannot_write_claude_codes_memory_through_the_shell_either() {
+        let home = PathBuf::from(std::env::var("HOME").unwrap());
+        let claude = home.join(".claude");
+        let ran = |command: &str| memory_answer(Some(&claude), &serde_json::json!({ "hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": "/tmp", "tool_input": { "command": command } }).to_string());
+        let folder = format!("{}/projects/-lead/memory", claude.display());
+        for command in [format!("echo 'short replies' > {folder}/short.md"), "printf x >> ~/.claude/projects/-lead/memory/MEMORY.md".to_string(), "echo x | tee $HOME/.claude/projects/-lead/memory/a.md".to_string(), format!("cp notes.md {folder}/"), "sed -i 's/a/b/' \"${HOME}/.claude/projects/-lead/memory/a.md\"".to_string()] {
+            assert!(ran(&command).contains("\"deny\""), "{command}");
+        }
+        assert_eq!(ran(&format!("cat {folder}/MEMORY.md")), "", "reading is no write");
+        assert_eq!(ran("echo x > /tmp/notes.md"), "");
+        assert_eq!(ran("kebbie issue add --kind bug 'The lead asks in its chat'"), "");
+        let wired: serde_json::Value = serde_json::from_str(&settings("/k/kebbie")).unwrap();
+        let matcher = wired["hooks"]["PreToolUse"].as_array().unwrap().iter().find(|hook| hook["hooks"][0]["command"].as_str().is_some_and(|command| command.ends_with("hook lead-memory"))).unwrap()["matcher"].as_str().unwrap();
+        assert!(matcher.split('|').any(|tool| tool == "Bash"), "the hook runs for the lead's shell commands: {matcher}");
     }
 
     #[test]
