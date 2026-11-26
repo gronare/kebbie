@@ -187,6 +187,11 @@ impl Watch {
         self.state == State::Running
     }
 
+    // A cancelled watch is still read, so a re-run of its commit started on GitHub or elsewhere is watched as after a push.
+    fn read_on(&self) -> bool {
+        self.running() || matches!(self.state, State::Cancelled { .. })
+    }
+
     // What the user may dismiss: a watch that ended, or one waiting on another push's fix for a red it inherited.
     pub fn dismissable(&self) -> bool {
         !self.running() || self.pushed.inherited.is_some()
@@ -667,7 +672,7 @@ pub fn all(state: &Path) -> Vec<Watch> {
 
 // Cheap enough for the board to ask every round: no gh call unless a watch is running.
 pub fn active(state: &Path) -> bool {
-    all(state).iter().any(Watch::running)
+    all(state).iter().any(Watch::read_on)
 }
 
 pub enum Begin {
@@ -764,7 +769,10 @@ pub fn tick(state: &Path) -> Vec<Event> {
 pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
     let Some(_lock) = Lock::take(state) else { return Vec::new() };
     let mut events = Vec::new();
-    for mut watch in all(state).into_iter().filter(|watch| watch.running() && !pushing(state, &watch.address, now)) {
+    for mut watch in all(state).into_iter().filter(|watch| watch.read_on() && !pushing(state, &watch.address, now)) {
+        if !watch.running() && !re_run(state, gh, &mut watch, now) {
+            continue;
+        }
         if let Some(check) = watch.checking() {
             if !watch.close && watch.pushed.stages.is_empty() {
                 forget(state, &watch.address);
@@ -891,6 +899,31 @@ fn cancelled_run(state: &Path, gh: &str, watch: &mut Watch, now: u64) -> Event {
         eprintln!("Could not tell the lead: {error}");
     }
     Event { address: watch.address.clone(), kind: Kind::Cancelled, text }
+}
+
+// Every CANCELLED_POLL a cancelled watch reads its commit's runs again, and one that is running or passed since takes the watch back to CI running; the watch of a closed task is left to the landed pass.
+fn re_run(state: &Path, gh: &str, watch: &mut Watch, now: u64) -> bool {
+    if watch.checked_at.is_some_and(|at| now.saturating_sub(at) < CANCELLED_POLL) || (watch.close && crate::tasks::find_task(&watch.repo, Some(watch.task()), &watch.repo).is_err()) {
+        return false;
+    }
+    watch.checked_at = Some(now);
+    let was = cancelled_workflows(&watch.runs);
+    let listed = crate::sh::run(gh, &["run", "list", "-R", &watch.slug, "--commit", &watch.sha, "--limit", "50", "--json", "databaseId,name,status,conclusion,workflowName,url"], Some(&watch.repo)).and_then(|text| parse_runs(&text));
+    let again = |runs: &Vec<Run>| was.iter().any(|workflow| runs.iter().any(|run| run.title() == workflow && !run.cancelled()));
+    let Some(runs) = listed.ok().filter(again) else {
+        let _ = save(state, watch);
+        return false;
+    };
+    if crate::phase::load(state, &watch.address).is_some_and(|record| record.phase == crate::phase::Phase::NeedsYou(crate::phase::Why::Cancelled)) {
+        let moved = if watch.close { crate::phase::Event::PushOut { sha: &watch.sha } } else { crate::phase::Event::Dismissed { kept_open: true } };
+        crate::phase::record(state, &watch.address, "ci", &moved);
+    }
+    *watch = Watch { state: State::Running, started_at: now, runs, error: None, erring_since: None, following: None, ..watch.clone() };
+    let _ = save(state, watch);
+    if let Err(error) = messages::to_lead(messages::ToLead::CiGreen, &format!("{} runs again on {} ({}) after its cancel, so kebbie watches it as after a push.", was.join(", "), watch.address, watch.short())) {
+        eprintln!("Could not tell the lead: {error}");
+    }
+    true
 }
 
 // Trap: GitHub cannot say when a deploy window opens, so ci.deploy_window is the only source, and a run GitHub cancelled while it was open is a person's and never re-run.
@@ -1475,11 +1508,71 @@ mod tests {
         assert_eq!(events.len(), 1, "a completed run ends the round's watch: {events:?}");
         let ended = load(&state, "billing@app").unwrap();
         assert!(!ended.running(), "a cancelled run is not CI running");
-        assert!(!active(&state), "and gh is asked nothing more");
+        assert!(active(&state), "gh is still asked, every CANCELLED_POLL, for a re-run");
         assert_eq!(ended.note(), "CI cancelled: ci · test (3.11); G re-runs it (gh run rerun), C dismisses it");
         assert_eq!(crate::phase::load(&state, "billing@app").map(|record| record.phase), Some(crate::phase::Phase::NeedsYou(crate::phase::Why::Cancelled)), "neither CI running nor red CI");
         assert!(matches!(ended.state, State::Cancelled { ref url, .. } if url == "https://github.com/acme/app/actions/runs/2"));
-        assert!(tick_with(&state, &gh, 100 + CANCELLED_POLL * 10).is_empty(), "an ended watch is never read again");
+        assert!(tick_with(&state, &gh, 100 + CANCELLED_POLL * 10).is_empty(), "still cancelled, so nothing happens");
+        assert!(matches!(load(&state, "billing@app").unwrap().state, State::Cancelled { .. }));
+        fs::remove_dir_all(state).unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    // The watched commit's runs are what the file on-commit holds, so a test re-runs them by writing it; every call is logged.
+    fn rerun_gh(state: &Path, branch: &str) -> String {
+        let path = state.join("rerun-gh");
+        let (calls, on_commit) = (state.join("calls").display().to_string(), state.join("on-commit").display().to_string());
+        fs::write(&on_commit, CANCELLED_ON_COMMIT).unwrap();
+        crate::executable::write(&path, format!("#!/bin/sh\necho \"$*\" >> '{calls}'\ncase \"$*\" in\n*--commit*) cat '{on_commit}';;\n*--branch*) echo '[{branch}]';;\n*jobs*) echo '{{\"jobs\":[]}}';;\nesac\n")).unwrap();
+        path.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn a_cancelled_run_re_run_on_its_own_commit_takes_the_task_back_to_ci_running() {
+        let (dir, origin, slot, _) = crate::tasks::test_support::task_with_a_commit("billing");
+        let state = crate::sh::test_dir("ci-cancelled-re-run");
+        let address = crate::peers::address("billing", &crate::repo::name_of(&dir));
+        let branch = crate::repo::git(&dir, &["branch", "--show-current"]).unwrap();
+        let watched = crate::repo::git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        save(&state, &Watch { address: address.clone(), close: true, ..cancel_watch(&dir, &watched, &branch) }).unwrap();
+        crate::phase::record(&state, &address, "push", &crate::phase::Event::PushOut { sha: &watched });
+        let gh = rerun_gh(&state, &branch_run(&watched, "completed", "cancelled"));
+        assert!(tick_with(&state, &gh, 100).iter().any(|event| event.kind == Kind::Cancelled));
+        let phase = || crate::phase::load(&state, &address).map(|record| record.phase);
+        assert_eq!(phase(), Some(crate::phase::Phase::NeedsYou(crate::phase::Why::Cancelled)));
+        let calls = || fs::read_to_string(state.join("calls")).unwrap().matches("--commit").count();
+        let unrelated = CANCELLED_ON_COMMIT.replace("}]", r#"},{"databaseId":5,"name":"nightly","workflowName":"nightly","status":"in_progress","conclusion":"","url":"u"}]"#);
+        fs::write(state.join("on-commit"), unrelated).unwrap();
+        assert!(tick_with(&state, &gh, 100 + CANCELLED_POLL).is_empty());
+        assert!(!load(&state, &address).unwrap().running(), "a run of another workflow on the commit re-runs nothing that was cancelled");
+        assert_eq!(phase(), Some(crate::phase::Phase::NeedsYou(crate::phase::Why::Cancelled)));
+        let before = calls();
+        fs::write(state.join("on-commit"), CANCELLED_ON_COMMIT.replace(r#""status":"completed","conclusion":"cancelled""#, r#""status":"in_progress","conclusion":"""#)).unwrap();
+        assert!(tick_with(&state, &gh, 100 + 2 * CANCELLED_POLL - 1).is_empty());
+        assert_eq!(calls(), before, "gh is asked again only after CANCELLED_POLL");
+        assert!(tick_with(&state, &gh, 100 + 2 * CANCELLED_POLL).is_empty());
+        let again = load(&state, &address).unwrap();
+        assert!(again.running() && again.started_at == 100 + 2 * CANCELLED_POLL, "gh run rerun runs the same run again, in progress on the commit, watched as after a push");
+        assert_eq!(phase(), Some(crate::phase::Phase::CiRunning { sha: watched.clone() }), "back under CI running");
+        fs::remove_dir_all(state).unwrap();
+        crate::tasks::test_support::cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_kept_open_cancel_whose_workflow_passed_on_its_commit_since_leaves_needs_you_and_ends_green() {
+        let dir = crate::tasks::test_support::repo();
+        let state = crate::sh::test_dir("ci-cancelled-passed-since");
+        let branch = crate::repo::git(&dir, &["branch", "--show-current"]).unwrap();
+        let watched = crate::repo::git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        save(&state, &cancel_watch(&dir, &watched, &branch)).unwrap();
+        crate::phase::record(&state, "billing@app", "push", &crate::phase::Event::PushOut { sha: &watched });
+        let gh = rerun_gh(&state, &branch_run(&watched, "completed", "cancelled"));
+        tick_with(&state, &gh, 100);
+        let passed = CANCELLED_ON_COMMIT.replace("}]", r#"},{"databaseId":9,"name":"ci","workflowName":"ci","status":"completed","conclusion":"success","url":"u"}]"#);
+        fs::write(state.join("on-commit"), passed).unwrap();
+        assert!(tick_with(&state, &gh, 100 + CANCELLED_POLL).is_empty(), "green waits SETTLE_SECONDS as after a push");
+        assert_eq!(crate::phase::load(&state, "billing@app").map(|record| record.phase), Some(crate::phase::Phase::Idle), "a kept-open task leaves Needs you as when its cancel is dismissed");
+        assert!(tick_with(&state, &gh, 100 + CANCELLED_POLL + SETTLE_SECONDS).iter().any(|event| event.kind == Kind::Green), "the workflow ran again on the commit and passed");
         fs::remove_dir_all(state).unwrap();
         fs::remove_dir_all(dir).unwrap();
     }
