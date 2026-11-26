@@ -260,6 +260,20 @@ pub(crate) fn overdue(promise: &Promise, now: u64) -> bool {
     promise.due.is_some_and(|due| now.saturating_sub(due) >= OVERDUE)
 }
 
+// What the board shows of the lead's promises: only those overdue, as text and since when, never a task or a question for the user.
+pub(crate) fn overdue_now(state: &Path, now: u64) -> Vec<(String, u64)> {
+    all(state).into_iter().filter(|promise| overdue(promise, now)).filter_map(|promise| Some((promise.text, promise.due?))).collect()
+}
+
+pub(crate) fn overdue_line(overdue: &[(String, u64)], now: u64, width: usize) -> Option<String> {
+    let fits = |line: String| (crate::board::widgets::text_width(&line) <= width).then_some(line);
+    match overdue {
+        [] => None,
+        [(text, due)] => fits(format!("The lead's promise is overdue since {}: {text}", crate::when::shown(*due, now, &crate::recover::local_offset))).or_else(|| Some("The lead's promise is overdue · kebbie promises".to_string())),
+        many => Some(format!("The lead has {} overdue promises · kebbie promises lists them", many.len())),
+    }
+}
+
 pub(crate) fn tick_in(state: &Path, facts: &Facts, log: &[Message], now: u64, tell: &mut dyn FnMut(&str)) -> Vec<String> {
     let Some(_lock) = Lock::in_dir(&dir(state), false) else { return Vec::new() };
     let mut notes = Vec::new();
@@ -584,6 +598,23 @@ mod tests {
         assert_eq!(first_prompt_line(&state).unwrap(), "You have 1 open promise that kebbie keeps for you: kebbie promises lists them, and kebbie reminds you when each is due.");
         save(&state, &promise(2, &[], Some(900), None)).unwrap();
         assert!(first_prompt_line(&state).unwrap().starts_with("You have 2 open promises"));
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn the_board_shows_a_line_only_for_overdue_promises() {
+        let state = crate::sh::test_dir("promise-board");
+        save(&state, &promise(1, &[], Some(900), None)).unwrap();
+        save(&state, &Promise { due: Some(1_000), ..promise(2, &[], Some(900), None) }).unwrap();
+        save(&state, &Promise { broken: Some("lint@kebbie was dropped".to_string()), ..promise(3, &[], Some(900), None) }).unwrap();
+        assert!(overdue_now(&state, 1_000 + OVERDUE - 1).is_empty(), "waiting and newly due promises stay off the board");
+        let shown = overdue_now(&state, 1_000 + OVERDUE);
+        assert_eq!(shown, vec![("promise 2".to_string(), 1_000)]);
+        let line = overdue_line(&shown, 1_000 + OVERDUE, 200).unwrap();
+        assert!(line.starts_with("The lead's promise is overdue since ") && line.ends_with(": promise 2"), "{line}");
+        assert_eq!(overdue_line(&shown, 1_000 + OVERDUE, 20).unwrap(), "The lead's promise is overdue · kebbie promises");
+        assert_eq!(overdue_line(&[("a".to_string(), 1), ("b".to_string(), 2)], 1_000, 200).unwrap(), "The lead has 2 overdue promises · kebbie promises lists them");
+        assert_eq!(overdue_line(&[], 1_000, 200), None);
         fs::remove_dir_all(state).unwrap();
     }
 

@@ -24,7 +24,7 @@ use super::options::draw_options;
 use super::push::draw_push;
 use super::keys_window;
 use super::status_bar::{hint_hits, hint_lines, status_lines};
-use super::widgets::{MAUVE, MUTED, PEACH, RED, TEXT, YELLOW, modal, render_column, style};
+use super::widgets::{MAUVE, MUTED, PEACH, RED, SUBTEXT, TEXT, YELLOW, modal, render_column, style};
 
 pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     app.hits.clear();
@@ -36,7 +36,8 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     let lead_line = app.lead_line_for(area.width as usize).filter(|_| app.page == Page::Work);
     let hub_line = app.hub_banner.clone().filter(|_| app.page == Page::Work).map(|refusal| format!("{refusal} · {} hub", keys::map().label(keys::Act::Hub)));
     let context_line = app.context_line_for(area.width as usize).filter(|_| app.page == Page::Work);
-    let banners = [lead_line.map(|line| (line, MAUVE, keys::Act::RestartLead)), context_line.map(|line| (line, PEACH, keys::Act::RestartLead)), hub_line.map(|line| (line, YELLOW, keys::Act::Hub))].into_iter().flatten().collect::<Vec<_>>();
+    let promises_line = app.promises_line_for(area.width as usize).filter(|_| app.page == Page::Work);
+    let banners = [lead_line.map(|line| (line, MAUVE, Some(keys::Act::RestartLead))), context_line.map(|line| (line, PEACH, Some(keys::Act::RestartLead))), hub_line.map(|line| (line, YELLOW, Some(keys::Act::Hub))), promises_line.map(|line| (line, SUBTEXT, None))].into_iter().flatten().collect::<Vec<_>>();
     app.beside.shown = matches!(app.page, Page::Work | Page::Backlog) && app.error.is_none() && app.loaded && app.column != Column::Backlog && area.width >= 86;
     let (full_hints, short_hints) = match app.page {
         Page::Work | Page::Backlog => hint_lines(app.ctx(), app.selected_s_opens(), app.lead_chat.is_some(), app.selected_steps(), &app.pane_hints()),
@@ -92,7 +93,9 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     for (index, (line, color, act)) in banners.into_iter().enumerate() {
         let row = Rect { y: lead_area.y + index as u16, height: 1, ..lead_area };
         frame.render_widget(Paragraph::new(Span::styled(line, style(color))), row);
-        tab_hits.push((row, Hit::Key(keys::map().code(act))));
+        if let Some(act) = act {
+            tab_hits.push((row, Hit::Key(keys::map().code(act))));
+        }
     }
     let panes = if matches!(app.page, Page::Work | Page::Backlog) { app.pane_hints() } else { Vec::new() };
     tab_hits.extend(hint_hits(&status, bottom, app.ctx(), app.selected_s_opens(), app.lead_chat.is_some(), app.selected_steps(), &panes));
