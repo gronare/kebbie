@@ -23,6 +23,8 @@ When several tasks of one repo touch the same files, every landing changes what 
 
 So each repo has one push line, kept by the keeper. A push you or the lead asks for joins the end of it, and the board says its place: `pushing for you · 2nd in line after Billing totals`. Repos have lines of their own and never wait for each other.
 
+One push goes ahead of the rest: the fix of a red default branch. When CI blames a task's own push for turning main red, kebbie hands that task the failing log, and once its fix is in the line it goes first, before a head that is already waiting. Every push behind a red main waits on that fix anyway, since its lint and tests go green only with it. A red the task only inherited from another push, a red on another branch, or one you dismissed changes nothing in the order.
+
 Only the head is fetched and rebased, onto origin's default branch, never the local one, and only when its turn comes. Tasks not in the line are left alone.
 
 ## The line waits for its head, up to a point
@@ -30,6 +32,7 @@ Only the head is fetched and rebased, onto origin's default branch, never the lo
 - When the head rebases cleanly and the overlap rules pass, kebbie pushes it and takes the next.
 - When its rebase goes over the task's own files or conflicts, the head goes to its Claude and keeps its place while the line waits for it. The pushes behind it would otherwise rebase onto a default branch that is about to move again.
 - At once on a needs-you report, or after 30 minutes without a ready report while another push waits behind it, the head leaves the line with the reason, and the next push goes on. It waits for you under Needs you, or, under your push permission, under Going out for kebbie to push again on its next ready report, up to 3 times; the fourth time it waits for you. Alone in the line, it keeps its place while its Claude works, and leaves after 30 minutes only when its Claude stopped without a ready report.
+- A head that the fix of a red main went ahead of keeps its place, second now. Once the fix is out, kebbie tells its Claude to rebase onto it and check again, and its 30 minutes count from then.
 - While the head's build waits in the machine's [build queue](../reference/configuration.md#builds), it keeps its place, and its 30 minutes count from when that wait ended. It goes before other tasks in the build queue.
 
 ## A long task can follow main

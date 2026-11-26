@@ -202,11 +202,17 @@ pub(crate) fn pending(state: &Path, address: &str) -> Option<Pending> {
     Some(Pending { by: intent.by, work: intent.work, at: intent.at, ahead, after })
 }
 
-// A repo's pushes in the order they go out: first queued first; a red CI's push waiting for its fix is not in it.
+// A repo's pushes in the order they go out: the fix of a red default branch first, then first queued first; a red CI's push waiting for its fix is not in it.
 pub(super) fn line(state: &Path, repo: &Path) -> Vec<Intent> {
-    let mut line: Vec<Intent> = all(state).into_iter().filter(|intent| intent.repo == repo && intent.queued.is_some()).collect();
-    line.sort_by(|one, other| (one.queued, &one.address).cmp(&(other.queued, &other.address)));
-    line
+    let mut line: Vec<(bool, Intent)> = all(state).into_iter().filter(|intent| intent.repo == repo && intent.queued.is_some()).map(|intent| (!fixes_red_main(state, &intent), intent)).collect();
+    line.sort_by(|(one_waits, one), (other_waits, other)| (one_waits, one.queued, &one.address).cmp(&(other_waits, other.queued, &other.address)));
+    line.into_iter().map(|(_, intent)| intent).collect()
+}
+
+// The push of the task whose own push turned its repo's default branch red, as CI blamed it; a red it inherited, a dismissed one or one on another branch is no fix of main.
+pub(super) fn fixes_red_main(state: &Path, intent: &Intent) -> bool {
+    let Some(watch) = crate::ci::load(state, &intent.address).filter(|watch| matches!(watch.state, crate::ci::State::Failed { .. }) && watch.pushed.inherited.is_none()) else { return false };
+    watch.pushed.target.is_empty() || crate::repo::default_branch(&intent.repo).is_ok_and(|main| main.strip_prefix("origin/").unwrap_or(&main) == watch.pushed.target)
 }
 
 pub(super) fn repos(state: &Path) -> Vec<PathBuf> {

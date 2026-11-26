@@ -99,7 +99,7 @@ pub(super) fn complete_in(state: &Path, log: &[Message], now: u64, read: Read, w
     notes
 }
 
-// A red CI's push waits outside the line for its fix; a fix the lead approved joins the line at its end.
+// A red CI's push waits outside the line for its fix; a fix the lead approved joins the line, where it goes first.
 fn fixes(state: &Path, log: &[Message], now: u64, read: Read) -> Vec<String> {
     let reports = messages::latest_reports(log);
     let mut notes = Vec::new();
@@ -164,8 +164,13 @@ pub(super) fn drive(state: &Path, repo: &Path, mine: Option<&str>, log: &[Messag
             break;
         }
         seen.push(head.address.clone());
-        let behind = intent::line(state, repo).len() > 1;
+        let line_now = intent::line(state, repo);
+        let behind = line_now.len() > 1;
+        let fixing = intent::fixes_red_main(state, &head);
         let turn = turn(state, &head, log, now, read, working(&head), behind, push);
+        if fixing && matches!(turn, Turn::Pushed(_)) {
+            driven.notes.extend(fix_landed(state, &head, &line_now, now));
+        }
         let goes_on = matches!(turn, Turn::Pushed(_) | Turn::Out(_));
         let (note, said) = match turn {
             Turn::Waits => break,
@@ -183,6 +188,27 @@ pub(super) fn drive(state: &Path, repo: &Path, mine: Option<&str>, log: &[Messag
     }
     restamp(state, repo);
     driven
+}
+
+// The pushes a fix of the red default branch went ahead of: a head whose Claude checks its commits against the red branch hears to rebase onto the fix, and its ceiling counts from now.
+fn fix_landed(state: &Path, fix: &Intent, line: &[Intent], now: u64) -> Vec<String> {
+    let upstream = default_branch(&fix.repo).unwrap_or_else(|_| "origin/main".to_string());
+    let main = upstream.strip_prefix("origin/").unwrap_or(&upstream);
+    let mut notes = Vec::new();
+    for passed in line.iter().filter(|queued| queued.address != fix.address && matches!(queued.work, Work::Tests | Work::Conflict)) {
+        let text = format!(
+            "The fix of the red CI on {main}, from {}, went out ahead of your push, which keeps its place in the push line. Rebase onto it (git fetch origin, then git rebase {upstream}), run the lint and the tests again, and report ready.",
+            crate::status::with_titles(&fix.address)
+        );
+        if let Err(error) = messages::hand_to(&passed.address, &text) {
+            eprintln!("Could not tell {} that the fix of the red CI went out: {error}", passed.address);
+        }
+        let _ = intent::note_hand_over(state, &passed.address);
+        if intent::stamp_waited(state, &passed.address, now).is_some() {
+            notes.push(format!("push: {}: the fix of the red CI on {main} went out ahead of it; it rebases onto the fix and keeps its place", passed.address));
+        }
+    }
+    notes
 }
 
 // A repo whose worktrees git cannot list right now says nothing about whether the task is gone.
@@ -843,7 +869,7 @@ mod tests {
     }
 
     #[test]
-    fn a_red_cis_fix_waits_outside_the_line_and_joins_its_end_once_the_lead_approved_it() {
+    fn a_red_cis_fix_waits_outside_the_line_until_the_lead_approved_it() {
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         let state = state_of(&dir);
         let address = crate::peers::address("billing", &name_of(&dir));
@@ -858,6 +884,57 @@ mod tests {
         complete_in(&state, &[ready], 1000, &|_, _| None, &|_| false, &mut |intent, _| { assert_eq!((intent.work, intent.queued), (Work::Turn, Some(1000))); pushed += 1; Ok(Sent::Pushed(String::new())) });
         assert!(pushed == 1 && load(&state, &address).is_none());
         cleanup(dir, origin, &slot);
+    }
+
+    fn red_on(dir: &Path, address: &str, target: &str, inherited: bool) -> crate::ci::Watch {
+        let inherited = inherited.then(|| crate::ci::Inherited { from: "abc".to_string(), since: "abc".to_string(), what: "ci · clippy".to_string(), url: String::new(), culprit: None });
+        crate::ci::Watch {
+            address: address.to_string(), repo: dir.to_path_buf(), slug: "acme/app".to_string(), sha: "abcdef0123".to_string(), started_at: 1, checked_at: None, close: true, runs: Vec::new(),
+            state: crate::ci::State::Failed { at: 2, what: "ci · clippy".to_string(), url: "https://ci/1".to_string() }, error: None, erring_since: None, following: None,
+            pushed: crate::ci::Pushed { target: target.to_string(), inherited, ..crate::ci::Pushed::default() },
+        }
+    }
+
+    #[test]
+    fn the_fix_of_a_red_main_goes_first_in_its_line_and_the_head_it_passed_keeps_its_place_with_a_fresh_ceiling() {
+        let (dir, origin, alpha, upstream) = task_with_a_commit("alpha");
+        let beta = another_task(&dir, "beta", "e");
+        let state = crate::lead::state_dir().unwrap();
+        let (first, second) = (crate::peers::address("alpha", &name_of(&dir)), crate::peers::address("beta", &name_of(&dir)));
+        let _line = Line { state: state.clone(), addresses: vec![first.clone(), second.clone()] };
+        upstream_commit(&dir, "d", "theirs", "d on main");
+        super::super::push::join(&state, &Caller::User, &dir, &alpha, Through::All).unwrap();
+        super::super::push::join(&state, &Caller::User, &dir, &beta, Through::All).unwrap();
+        let (typed, mut push) = real_push(&state);
+        drive(&state, &dir, None, &[], 1000, &|_, _| None, &|_| false, &mut push);
+        assert_eq!((typed.borrow().len(), load(&state, &first).unwrap().work), (1, Work::Conflict), "alpha's Claude resolves its conflict at the head");
+        let order = || intent::line(&state, &dir).iter().map(|queued| queued.task.clone()).collect::<Vec<_>>();
+        let main = upstream.trim_start_matches("origin/");
+        for (watch, why) in [(red_on(&dir, &second, "staging", false), "a red on another branch"), (red_on(&dir, &second, main, true), "a red beta inherited from another push")] {
+            crate::ci::save(&state, &watch).unwrap();
+            assert_eq!(order(), ["alpha", "beta"], "{why} is no fix of main");
+        }
+        crate::ci::save(&state, &red_on(&dir, &second, main, false)).unwrap();
+        assert_eq!(order(), ["beta", "alpha"], "beta's own push turned main red, so its fix goes first");
+        assert_eq!(intent::pending(&state, &first).map(|waiting| (waiting.ahead, waiting.after)), Some((1, Some("beta".to_string()))), "the board says alpha is 2nd, after the fix");
+        crate::ci::forget(&state, &second);
+        assert_eq!(order(), ["alpha", "beta"], "a dismissed red puts the line back in the order asked");
+        crate::ci::save(&state, &red_on(&dir, &second, main, false)).unwrap();
+        let handed = load(&state, &first).unwrap().at;
+        let driven = drive(&state, &dir, None, &[], handed + CEILING + 5, &|_, _| None, &|_| false, &mut push);
+        assert!(landed(&origin, &upstream).starts_with("beta\n"), "the fix went out though alpha's Claude still works: {driven:?}");
+        assert!(driven.notes.iter().any(|note| note.contains(&first) && note.contains("went out ahead of it")), "{driven:?}");
+        let waiting = load(&state, &first).unwrap();
+        assert_eq!((waiting.work, waiting.waited), (Work::Conflict, Some(handed + CEILING + 5)), "alpha keeps its place, past its old ceiling, its clock started again");
+        let told = messages::load().into_iter().rev().find(|message| message.to == first && message.kind.as_deref() == Some(messages::HAND_KIND)).unwrap();
+        assert!(told.text.contains("went out ahead of your push") && told.text.contains(&format!("git rebase {upstream}")), "{}", told.text);
+        assert_eq!(waiting.hand.as_deref(), Some(told.id.as_str()), "only a ready report after this message counts");
+        let driven = drive(&state, &dir, None, &[], handed + CEILING + 6, &|_, _| None, &|_| false, &mut push);
+        assert!(driven.notes.is_empty() && load(&state, &first).is_some(), "alpha waits for its Claude: {driven:?}");
+        crate::ci::forget(&state, &second);
+        drop(push);
+        drop_worktree(&dir, &beta);
+        cleanup(dir, origin, &alpha);
     }
 
     #[test]

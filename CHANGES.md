@@ -5,6 +5,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- The fix of a red main goes first in its repo's push line, so a push that waits for main to go green no longer holds that fix up behind it.
 - kebbie pushes a ready task under your push permission itself once its rules check passed, through the same push line, so it goes out without the lead awake.
 - After an answer the questions window closes back to the board on the row you answered from; board.next_question = true opens the next question instead.
 - Tab stays on the question you opened in the questions window; board.tab_questions = true moves between questions as before.
