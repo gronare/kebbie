@@ -245,3 +245,23 @@ fn a_task_the_watcher_names_is_kept_by_its_bare_name() {
     let [known] = watch::parse("case: c6\nverdict: known 6f6168\nreason: same\ntask: Start köar en task (start-queues-overlap@kebbie) (queued)\n").try_into().unwrap();
     assert_eq!(known.task.as_deref(), Some("start-queues-overlap"), "the brief shows a task's title beside its address");
 }
+
+#[test]
+fn the_watchers_question_reaches_a_vault_backlog_and_a_local_one() {
+    use crate::backlog_file::{Shelf, file_item_on};
+    use crate::config::Source as Backlog;
+    for source in [Backlog::Vault, Backlog::Local] {
+        let (state, dir) = (state("ask-state"), state("ask-dir"));
+        let told = std::cell::RefCell::new(Vec::new());
+        let tell = |text: &str| -> Result<()> { told.borrow_mut().push(text.to_string()); Ok(()) };
+        let shelf = Shelf { dir: &dir, state: &state, tell: &tell, write: &tell };
+        let said = case(&state, Source::Chat, "lead", "the board should not do that, or should it?", 10);
+        let verdict = Verdict { kind: Some(Kind::Ask), title: Some("The board hides a parked task".to_string()), reason: "two readings".to_string(), ..Verdict::default() };
+        let question = "Do you want parked tasks shown on the board?";
+        let filed = watch::ask_with(&said, &verdict, question, |filing, from_lead| file_item_on(&shelf, &[source], filing, from_lead));
+        assert!(filed.is_ok(), "{source:?}: {filed:?}");
+        let held = told.borrow().join("\n") + &fs::read_dir(&dir).map(|entries| entries.filter_map(|entry| fs::read_to_string(entry.ok()?.path()).ok()).collect::<String>()).unwrap_or_default();
+        assert!(held.contains(&format!("- [ ] {question}")), "{source:?}: the question waits as the item's open question: {held}");
+        let _ = (fs::remove_dir_all(state), fs::remove_dir_all(dir));
+    }
+}

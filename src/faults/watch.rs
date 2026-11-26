@@ -438,10 +438,15 @@ pub fn queue_fix(state: &Path, issue: &Issue, came_back: bool, checkout: Option<
 }
 
 fn ask_user(case: &Case, verdict: &Verdict, question: &str) -> Result<String> {
+    let sources = crate::config::sources()?;
+    ask_with(case, verdict, question, |filing, from_lead| crate::backlog_file::file_item(&sources, filing, from_lead))
+}
+
+// The watcher files its question as any agent but the lead does, so a vault backlog takes it through the lead.
+pub fn ask_with(case: &Case, verdict: &Verdict, question: &str, file: impl FnOnce(&crate::backlog_file::Filing, bool) -> Result<String>) -> Result<String> {
     let title = verdict.title.clone().unwrap_or_else(|| super::clipped(question, 80));
     let body = format!("## Background\n{}\n\n## Goal\n{}\n\n## Open questions\n- [ ] {question}\n\n## Source\nkebbie's fault watcher, case {} from {}.\n", verdict.happened.clone().unwrap_or_else(|| verdict.reason.clone()), verdict.expected.clone().unwrap_or_else(|| title.clone()), case.id, case.from);
-    let sources = crate::config::sources()?;
-    crate::backlog_file::file_item(&sources, &crate::backlog_file::Filing { priority: "medium", repo: "kebbie", line: &title, words: None, body: Some(&body), by: "kebbie's fault watcher", start: false, repos: &[] }, true)
+    file(&crate::backlog_file::Filing { priority: "medium", repo: "kebbie", line: &title, words: None, body: Some(&body), by: "kebbie's fault watcher", start: false, repos: &[] }, false)
 }
 
 #[cfg(test)]
