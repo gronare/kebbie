@@ -220,6 +220,7 @@ pub fn next(current: Option<&Phase>, event: &Event) -> Option<Phase> {
             ("working", _) => Phase::Working,
             ("ready", Some(Phase::Staged { .. })) => return None,
             ("ready", _) if *committed => Phase::Ready { head: head.map(str::to_string) },
+            ("ready", Some(Phase::NeedsYou(Why::Verify))) => return None,
             ("ready", _) => Phase::NeedsYou(Why::NothingToPush),
             _ => return None,
         },
@@ -444,6 +445,8 @@ mod tests {
         assert_eq!(reported(Phase::Pushing { ahead: 0 }, "needs-you", true, true), Some(Phase::NeedsYou(Why::Report)));
         assert_eq!(reported(Phase::Working, "ready", true, false), Some(Phase::Ready { head: Some("abc".to_string()) }));
         assert_eq!(reported(Phase::Working, "ready", false, false), Some(Phase::NeedsYou(Why::NothingToPush)));
+        assert_eq!(reported(Phase::NeedsYou(Why::Verify), "ready", false, false), None, "the user's verification still waits, and its row keeps saying Verified closes it");
+        assert_eq!(reported(Phase::NeedsYou(Why::Verify), "ready", true, false), Some(Phase::Ready { head: Some("abc".to_string()) }), "a fix to push is ready");
         assert_eq!(reported(Phase::CiRed { sha: "abc".to_string() }, "ready", true, false), Some(Phase::Ready { head: Some("abc".to_string()) }), "the fix, after the red run");
         assert_eq!(next(Some(&Phase::Ready { head: None }), &Event::TurnEndedUnreported), None, "a turn on a ready task owes no report of its own");
         assert_eq!(next(Some(&Phase::Working), &Event::TurnEndedUnreported), Some(Phase::NeedsYou(Why::Unreported)));
