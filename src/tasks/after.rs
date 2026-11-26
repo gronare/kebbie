@@ -41,6 +41,7 @@ pub(crate) struct Wait {
     pub gone_since: Option<u64>,
     pub why: Option<String>,
     pub starts_at: Option<u64>,
+    pub for_files: Vec<String>,
 }
 
 impl Wait {
@@ -53,7 +54,7 @@ impl Wait {
             "task": self.task, "repo": self.repo,
             "after": self.after.iter().map(|dep| json!({ "address": dep.address, "repo": dep.repo })).collect::<Vec<_>>(),
             "prompt": self.prompt, "mode": self.mode, "profile": self.profile, "backlog": self.backlog, "by": self.by.key(), "at": self.at,
-            "blocked": self.blocked, "gone_since": self.gone_since, "why": self.why, "starts_at": self.starts_at,
+            "blocked": self.blocked, "gone_since": self.gone_since, "why": self.why, "starts_at": self.starts_at, "for_files": self.for_files,
         })
     }
 
@@ -72,6 +73,7 @@ impl Wait {
             after: Some(after).filter(|after| !after.is_empty() || starts_at.is_some())?,
             prompt: text("prompt").filter(|prompt| !prompt.trim().is_empty())?,
             mode: text("mode"), profile: text("profile"), backlog: text("backlog"), by, at: value["at"].as_u64()?, blocked: text("blocked"), gone_since: value["gone_since"].as_u64(), why: text("why"), starts_at,
+            for_files: value["for_files"].as_array().into_iter().flatten().filter_map(|address| address.as_str().map(str::to_string)).collect(),
         })
     }
 }
@@ -321,26 +323,36 @@ pub(crate) enum Next {
     Blocked(String),
 }
 
+// A task waited for only because both change the same files is out of the way once it ends, however it ends.
+fn released(wait: &Wait, address: &str, state: DepState) -> DepState {
+    match state {
+        DepState::Ended(_) | DepState::CiFailed | DepState::CiPending if wait.for_files.iter().any(|soft| soft == address) => DepState::Done,
+        state => state,
+    }
+}
+
 // A blocked wait is the user's: it never starts by itself, whatever happens to the tasks it names afterwards.
 pub(crate) fn next(wait: &Wait, facts: &Facts, now: u64) -> Next {
     if wait.blocked.is_some() {
         return Next::Wait;
     }
-    let states: Vec<(&str, DepState)> = wait.after.iter().map(|dep| (dep.address.as_str(), facts.state(&dep.address, wait.at))).collect();
+    let states: Vec<(&str, DepState)> = wait.after.iter().map(|dep| (dep.address.as_str(), released(wait, &dep.address, facts.state(&dep.address, wait.at)))).collect();
     if let Some((address, DepState::Ended(how))) = states.iter().find(|(_, state)| matches!(state, DepState::Ended(_))) {
         return Next::Blocked(format!("{address} was {how}, so {} did not start", wait.task));
     }
     if let Some((address, _)) = states.iter().find(|(_, state)| *state == DepState::CiFailed) {
         return Next::Blocked(red_ci(address, &wait.task));
     }
-    if let Some((address, _)) = states.iter().find(|(_, state)| *state == DepState::Gone) {
-        return match wait.gone_since {
-            Some(since) if now.saturating_sub(since) >= GRACE => Next::Blocked(format!("{address} is gone without being done, so {} did not start", wait.task)),
-            _ => Next::Missing,
-        };
+    let soft = |address: &str| wait.for_files.iter().any(|soft| soft == address);
+    let graced = wait.gone_since.is_some_and(|since| now.saturating_sub(since) >= GRACE);
+    if states.iter().any(|(_, state)| *state == DepState::Gone) && !graced {
+        return Next::Missing;
+    }
+    if let Some((address, _)) = states.iter().find(|(address, state)| *state == DepState::Gone && !soft(address)) {
+        return Next::Blocked(format!("{address} is gone without being done, so {} did not start", wait.task));
     }
     let due = wait.starts_at.is_none_or(|at| now >= at);
-    if due && states.iter().all(|(_, state)| *state == DepState::Done) { Next::Start } else { Next::Wait }
+    if due && states.iter().all(|(address, state)| *state == DepState::Done || (*state == DepState::Gone && soft(address))) { Next::Start } else { Next::Wait }
 }
 
 fn red_ci(address: &str, task: &str) -> String {
@@ -646,6 +658,7 @@ pub(crate) fn queue_in(state: &Path, caller: &Caller, repos: &[PathBuf], asked: 
     let mut planned = Vec::new();
     for repo in repos {
         let me = peers::address(&task, &name_of(repo));
+        let mut for_files = Vec::new();
         let plan = if asked.after.is_empty() && asked.starts_at.is_none() && behind.is_empty() { Plan::Now } else {
             let mut deps = match plan(&me, asked.prompt, asked.after, known)? {
                 Plan::Now => Vec::new(),
@@ -654,13 +667,14 @@ pub(crate) fn queue_in(state: &Path, caller: &Caller, repos: &[PathBuf], asked: 
             for dep in behind.iter().map(|behind| &behind.dep) {
                 if !deps.iter().any(|known| known.address == dep.address) {
                     deps.push(dep.clone());
+                    for_files.push(dep.address.clone());
                 }
             }
             if deps.is_empty() { Plan::Now } else { Plan::Queue(deps) }
         };
-        planned.push((repo, plan));
+        planned.push((repo, plan, for_files));
     }
-    if asked.starts_at.is_none() && planned.iter().all(|(_, plan)| *plan == Plan::Now) {
+    if asked.starts_at.is_none() && planned.iter().all(|(_, plan, _)| *plan == Plan::Now) {
         return Ok(None);
     }
     let by = match queuer(caller) {
@@ -676,13 +690,13 @@ pub(crate) fn queue_in(state: &Path, caller: &Caller, repos: &[PathBuf], asked: 
     };
     let _lock = Lock::take(state, true);
     let mut said = Vec::new();
-    for (repo, plan) in planned {
+    for (repo, plan, for_files) in planned {
         let after = match plan {
             Plan::Queue(after) => after,
             Plan::Now if asked.starts_at.is_some() => Vec::new(),
             Plan::Now => continue,
         };
-        let wait = Wait { task: task.clone(), repo: repo.clone(), after, prompt: asked.prompt.to_string(), mode: asked.mode.map(str::to_string), profile: asked.profile.map(str::to_string), backlog: asked.backlog.map(str::to_string), by: by.clone(), at: now, blocked: None, gone_since: None, why: why.clone(), starts_at: asked.starts_at };
+        let wait = Wait { task: task.clone(), repo: repo.clone(), after, prompt: asked.prompt.to_string(), mode: asked.mode.map(str::to_string), profile: asked.profile.map(str::to_string), backlog: asked.backlog.map(str::to_string), by: by.clone(), at: now, blocked: None, gone_since: None, why: why.clone(), starts_at: asked.starts_at, for_files };
         save(state, &wait)?;
         if let Some(title) = asked.title.map(str::to_string).or_else(|| prompt_title(asked.prompt)) {
             crate::status::keep_title(state, &wait.address(), &crate::title::readable(&title, &name_of(repo)));
@@ -982,7 +996,7 @@ mod tests {
     }
 
     fn wait_for(task: &str, repo: &str, after: &[&str]) -> Wait {
-        Wait { task: task.to_string(), repo: PathBuf::from(format!("/repos/{repo}")), after: after.iter().map(|address| dep(address)).collect(), prompt: "Use the rounding field".to_string(), mode: None, profile: None, backlog: None, by: By::Lead, at: 100, blocked: None, gone_since: None, why: None, starts_at: None }
+        Wait { task: task.to_string(), repo: PathBuf::from(format!("/repos/{repo}")), after: after.iter().map(|address| dep(address)).collect(), prompt: "Use the rounding field".to_string(), mode: None, profile: None, backlog: None, by: By::Lead, at: 100, blocked: None, gone_since: None, why: None, starts_at: None, for_files: Vec::new() }
     }
 
     fn end(address: &str, at: u64, how: &str, landed: Option<&str>) -> Message {
@@ -1060,7 +1074,29 @@ mod tests {
         let wait = load(&state, "faults@kebbie").unwrap();
         assert_eq!(wait.after.iter().map(|dep| dep.address.as_str()).collect::<Vec<_>>(), ["docs@kebbie", "board@kebbie"], "the asked wait and the overlap both hold");
         assert_eq!(wait.why.as_deref(), Some("it builds on the docs; both change src/status.rs"));
+        assert_eq!((wait.for_files.as_slice(), load(&state, "faults@kebbie").unwrap().for_files), (["board@kebbie".to_string()].as_slice(), vec!["board@kebbie".to_string()]), "only the overlap is soft, and it is kept on disk");
         fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_wait_only_for_shared_files_starts_once_that_task_ends_however_it_ends() {
+        let soft = Wait { for_files: vec!["board@kebbie".into()], ..wait_for("faults", "kebbie", &["board@kebbie"]) };
+        let hard = wait_for("faults", "kebbie", &["board@kebbie"]);
+        let mut red = facts(&[end("board@kebbie", 200, "done", None)], &[]);
+        red.ci.insert("board@kebbie".into(), false);
+        let mut pending = facts(&[end("board@kebbie", 200, "done", None)], &[]);
+        pending.ci.insert("board@kebbie".into(), true);
+        for (how, facts) in [("dropped", facts(&[end("board@kebbie", 200, "dropped", None)], &[])), ("reset", facts(&[end("board@kebbie", 200, "reset", None)], &[])), ("red CI", red), ("CI running", pending)] {
+            assert_eq!(next(&soft, &facts, 300), Next::Start, "{how}");
+            assert!(matches!(next(&hard, &facts, 300), Next::Blocked(_) | Next::Wait), "{how}: a wait the user asked for still holds");
+        }
+        let gone = facts(&[], &[]);
+        assert_eq!(next(&soft, &gone, 300), Next::Missing, "a task missing for a moment gets its grace");
+        assert_eq!(next(&Wait { gone_since: Some(100), ..soft.clone() }, &gone, 100 + GRACE), Next::Start);
+        assert!(matches!(next(&Wait { gone_since: Some(100), ..hard }, &gone, 100 + GRACE), Next::Blocked(_)));
+        assert_eq!(next(&soft, &facts(&[], &["board@kebbie"]), 300), Next::Wait, "it waits while that task runs");
+        let both = Wait { after: vec![dep("board@kebbie"), dep("docs@kebbie")], ..soft };
+        assert!(matches!(next(&both, &facts(&[end("board@kebbie", 200, "dropped", None), end("docs@kebbie", 200, "dropped", None)], &[]), 300), Next::Blocked(why) if why.starts_with("docs@kebbie")), "the asked wait beside it still blocks");
     }
 
     #[test]
@@ -1173,7 +1209,7 @@ mod tests {
         assert_ne!(git(&dir, &["rev-parse", &upstream]).unwrap(), landed, "the main checkout has not fetched what billing landed");
         let state = state_of(&dir);
         let address = peers::address("billing", &name_of(&dir));
-        let wait = Wait { task: "search".to_string(), repo: dir.clone(), after: vec![Dep { address: address.clone(), repo: dir.clone() }], prompt: "Search the invoices".to_string(), mode: None, profile: None, backlog: None, by: By::User, at: 100, blocked: None, gone_since: None, why: None, starts_at: None };
+        let wait = Wait { task: "search".to_string(), repo: dir.clone(), after: vec![Dep { address: address.clone(), repo: dir.clone() }], prompt: "Search the invoices".to_string(), mode: None, profile: None, backlog: None, by: By::User, at: 100, blocked: None, gone_since: None, why: None, starts_at: None, for_files: Vec::new() };
         save(&state, &wait).unwrap();
         let mut told = Vec::new();
         tick_in(&state, &[end(&address, 200, "done", Some("abc fourth"))], 210, &mut super::super::launch::begin, &mut |said| told.push(said));
@@ -1352,7 +1388,7 @@ mod tests {
     fn waiting_on(dir: &Path, task: &str) -> (PathBuf, Wait) {
         let state = state_of(dir);
         let address = peers::address(task, &name_of(dir));
-        let wait = Wait { task: "search".to_string(), repo: dir.to_path_buf(), after: vec![Dep { address, repo: dir.to_path_buf() }], prompt: "Search".to_string(), mode: None, profile: None, backlog: None, by: By::User, at: 100, blocked: None, gone_since: None, why: None, starts_at: None };
+        let wait = Wait { task: "search".to_string(), repo: dir.to_path_buf(), after: vec![Dep { address, repo: dir.to_path_buf() }], prompt: "Search".to_string(), mode: None, profile: None, backlog: None, by: By::User, at: 100, blocked: None, gone_since: None, why: None, starts_at: None, for_files: Vec::new() };
         save(&state, &wait).unwrap();
         (state, wait)
     }
@@ -1582,7 +1618,7 @@ mod tests {
         let (dir, origin, slot, _) = task_with_a_commit("billing");
         let state = state_of(&dir);
         let old = std::time::SystemTime::now() - std::time::Duration::from_secs(CLAIM_HOLDS + 5);
-        let lost = Wait { task: "search".to_string(), repo: dir.clone(), after: vec![Dep { address: "x@y".to_string(), repo: dir.clone() }], prompt: "Search".to_string(), mode: None, profile: None, backlog: None, by: By::User, at: 100, blocked: None, gone_since: None, why: None, starts_at: None };
+        let lost = Wait { task: "search".to_string(), repo: dir.clone(), after: vec![Dep { address: "x@y".to_string(), repo: dir.clone() }], prompt: "Search".to_string(), mode: None, profile: None, backlog: None, by: By::User, at: 100, blocked: None, gone_since: None, why: None, starts_at: None, for_files: Vec::new() };
         let running = Wait { task: "billing".to_string(), ..lost.clone() };
         for wait in [&lost, &running] {
             crate::state::write(&claimed_file(&state, &wait.address()), wait.to_json().to_string()).unwrap();

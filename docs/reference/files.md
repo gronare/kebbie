@@ -52,7 +52,7 @@ The folder is `0700` and its files `0600`. Each file is replaced whole on write.
 
 - `sessions/`: a file of two lines, the id and the mode, reads as the `task` profile on Claude. `<task>@<repo>.prompt` keeps its first prompt.
 - `phase/` holds `name`, with `why`, `head` or `sha`. What moved it there is its start, a turn, a report, a question or its answer, a push, a CI verdict or an API error. A task from before this file existed gets one the first time the board or `kebbie status` reads it.
-- `after/` holds its repo, the tasks it waits for by address and repo, its prompt, mode and backlog item, who queued it (you or the lead), when, and, once it waits for you, why. A file that does not read as one is removed unread. The keeper renames a file away before it starts the task, so a board and a keeper never start it twice.
+- `after/` holds its repo, the tasks it waits for by address and repo, which of them it waits for only because both change the same files, its prompt, mode and backlog item, who queued it (you or the lead), when, and, once it waits for you, why. A file that does not read as one is removed unread. The keeper renames a file away before it starts the task, so a board and a keeper never start it twice.
 - `recover/` holds the error, how many times kebbie resumed the task, when it resumes next and whether it is stuck. It survives restarts, so kebbie never resumes a task twice for one error.
 
 ### Review and rules

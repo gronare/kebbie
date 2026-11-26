@@ -237,7 +237,7 @@ mod tests {
     #[test]
     fn a_queued_task_on_the_same_files_is_waited_for_too() {
         let mut known = known(Vec::new());
-        known.waits.push(super::super::after::Wait { task: "queued".into(), repo: PathBuf::from("/repos/kebbie"), after: Vec::new(), prompt: "Count faults in src/status.rs".into(), mode: None, profile: None, backlog: None, by: super::super::intent::By::Lead, at: 1, blocked: None, gone_since: None, why: None, starts_at: None });
+        known.waits.push(super::super::after::Wait { task: "queued".into(), repo: PathBuf::from("/repos/kebbie"), after: Vec::new(), prompt: "Count faults in src/status.rs".into(), mode: None, profile: None, backlog: None, by: super::super::intent::By::Lead, at: 1, blocked: None, gone_since: None, why: None, starts_at: None, for_files: Vec::new() });
         let found = behind("next@kebbie", "Show src/status.rs on the board", Path::new("/repos/kebbie"), &known);
         assert_eq!(addresses(&found), ["queued@kebbie"]);
     }

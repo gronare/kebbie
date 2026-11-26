@@ -626,7 +626,7 @@ mod tests {
         wait_in(&state, &Caller::User, &asked("billing@web", &["rounding@api"], None), &known_now, 100, &mut nothing.clone()).unwrap();
         let circle = wait_in(&state, &Caller::User, &Asked { address: "rounding@api", repo: Path::new("/repos/api"), on: &["billing@web"], then: None }, &known_now, 100, &mut nothing.clone()).unwrap_err();
         assert_eq!(circle, "rounding@api cannot wait in a circle: rounding@api → billing@web → rounding@api");
-        let queued = Wait { task: "search".to_string(), repo: PathBuf::from("/repos/web"), after: vec![dep("billing@web")], prompt: "p".to_string(), mode: None, profile: None, backlog: None, by: By::User, at: 1, blocked: None, gone_since: None, why: None, starts_at: None };
+        let queued = Wait { task: "search".to_string(), repo: PathBuf::from("/repos/web"), after: vec![dep("billing@web")], prompt: "p".to_string(), mode: None, profile: None, backlog: None, by: By::User, at: 1, blocked: None, gone_since: None, why: None, starts_at: None, for_files: Vec::new() };
         let through_queue = known(&["billing@web", "rounding@api"], vec![queued], &[]);
         let circle = wait_in(&state, &Caller::User, &Asked { address: "rounding@api", repo: Path::new("/repos/api"), on: &["search@web"], then: None }, &through_queue, 100, &mut nothing.clone()).unwrap_err();
         assert!(circle.contains("rounding@api → search@web → billing@web → rounding@api"), "a queued task's wait closes the circle too: {circle}");

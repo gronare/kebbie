@@ -1127,7 +1127,7 @@ mod tests {
         crate::ci::hold_red(&state, &red_watch(&dir, &address, &landing, false));
         let wait = super::super::after::Wait {
             task: "invoices".to_string(), repo: dir.clone(), after: vec![super::super::after::Dep { address: address.clone(), repo: dir.clone() }], prompt: "go".to_string(), mode: None, profile: None, backlog: None,
-            by: intent::By::User, at: 1, blocked: Some(format!("{address} landed with red CI, so invoices did not start")), gone_since: None, why: None, starts_at: None,
+            by: intent::By::User, at: 1, blocked: Some(format!("{address} landed with red CI, so invoices did not start")), gone_since: None, why: None, starts_at: None, for_files: Vec::new(),
         };
         super::super::after::save(&state, &wait).unwrap();
         let repos = [dir.clone()];

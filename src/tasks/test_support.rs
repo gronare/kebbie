@@ -105,7 +105,7 @@ pub(crate) fn cleanup_intents(state: &Path, address: &str) {
 }
 
 pub(crate) fn queued(state: &Path, task: &str, repo: &Path, prompt: &str) -> String {
-    let wait = super::after::Wait { task: task.to_string(), repo: repo.to_path_buf(), after: Vec::new(), prompt: prompt.to_string(), mode: None, profile: None, backlog: None, by: super::intent::By::Lead, at: 1, blocked: None, gone_since: None, why: None, starts_at: Some(1) };
+    let wait = super::after::Wait { task: task.to_string(), repo: repo.to_path_buf(), after: Vec::new(), prompt: prompt.to_string(), mode: None, profile: None, backlog: None, by: super::intent::By::Lead, at: 1, blocked: None, gone_since: None, why: None, starts_at: Some(1), for_files: Vec::new() };
     super::after::save(state, &wait).unwrap();
     wait.address()
 }
