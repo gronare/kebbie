@@ -617,6 +617,24 @@ pub fn test_script(repo: &Path, listed: &[String], repo_config: &Path) -> Option
     Some(warn("test commands", format!("this repo has {script}, but task.test_commands does not name it, so kebbie records no task's run of it"), one(format!("add [task] test_commands = [\"{script}\"] to {}", repo_config.display()))))
 }
 
+// A cancelled deploy in a repo that names no deploy hours ended under Needs you, where ci.deploy_window would have kept it under CI running and re-run it.
+pub fn deploy_window(window: &Setting<Option<String>>, deploys: &[String], repo_config: &Path) -> Option<Check> {
+    let deploy = deploys.first().filter(|_| window.value.is_none())?;
+    Some(ok("deploy window", format!("a deploy here was cancelled ({deploy}) and ci.deploy_window is unset, so it went to Needs you as CI cancelled")).brief("no deploy hours")
+        .with(one(format!("if GitHub refuses this repo's deploys outside set hours, add [ci] deploy_window = \"mon-fri 08:00-17:00\" (your hours) to {}, and kebbie keeps such a run under CI running and re-runs it once they open", repo_config.display()))))
+}
+
+// The deploys cancelled in this repo: its watches that ended cancelled and the cancelled runs the user dismissed on its open tasks.
+fn cancelled_deploys(state: &Path, repo: &Path) -> Vec<String> {
+    let name = crate::repo::name_of(repo);
+    let mut deploys: Vec<String> = crate::ci::all(state).into_iter().filter(|watch| crate::repo::name_of(&watch.repo) == name).filter_map(|watch| match &watch.state {
+        crate::ci::State::Cancelled { what, .. } if watch.cancelled_deploy(what) => Some(what.clone()),
+        _ => None,
+    }).collect();
+    deploys.extend(crate::tasks::ci_dismissed_in(state, &name).into_iter().filter(|entry| entry["state"] == "cancelled").filter_map(|entry| entry["failed"]["what"].as_str().map(str::to_string)).filter(|what| crate::ci::names_a_deploy(what)));
+    deploys
+}
+
 // Every task's recorded runs in this repo, wherever its tasks stand now.
 fn repo_runs(state: &Path, repo: &Path) -> Vec<crate::evidence::Run> {
     let tail = format!("@{}.jsonl", crate::repo::name_of(repo));
@@ -1036,6 +1054,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
         let short = || short_full_run(&repo_runs(&env.kebbie_state, repo), &crate::evidence::listed_for(&settings));
         checks.extend(tests(&settings.tests_before_push, settings.tests_full_command.value.as_deref(), short, file));
         checks.extend(test_script(repo, &crate::evidence::listed_for(&settings), file));
+        checks.extend(deploy_window(&settings.ci_deploy_window, &cancelled_deploys(&env.kebbie_state, repo), file));
     }
     if let Some(repo) = env.repo.as_deref() {
         checks.push(comments(&settings.comments_watch, settings.comments_days.value, || crate::ci::target(repo, &crate::ci::gh())));
@@ -1412,6 +1431,38 @@ mod tests {
         let off = push_block(&dir);
         assert!(off.level == Level::Warn && off.fact.contains("push block is off") && off.fix[0].contains("config.worktree"), "{off:?}");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_cancelled_deploy_in_a_repo_without_deploy_hours_suggests_ci_deploy_window() {
+        let file = Path::new("/repos/app.toml");
+        let unset = Setting { value: None, layer: config::Layer::Default };
+        let deploys = vec!["Deploy · deploy-to-staging".to_string()];
+        let named = deploy_window(&unset, &deploys, file).unwrap();
+        assert!(named.level == Level::Ok && named.fact.contains("(Deploy · deploy-to-staging)") && named.fix[0].contains("deploy_window") && named.fix[0].contains("/repos/app.toml"), "a suggestion, since a repo without deploy hours has nothing to fix: {named:?}");
+        assert_eq!(deploy_window(&Setting { value: Some("mon-fri 08:00-17:00".to_string()), layer: config::Layer::Repo }, &deploys, file), None, "the hours are named");
+        assert_eq!(deploy_window(&unset, &[], file), None);
+    }
+
+    #[test]
+    fn the_cancelled_deploys_of_a_repo_are_its_cancelled_watches_and_its_dismissed_cancels() {
+        let state = scratch("cancelled-deploys");
+        let repo = state.join("app");
+        let watch = |address: &str, repo: &Path, ended: crate::ci::State| crate::ci::Watch { address: address.to_string(), repo: repo.to_path_buf(), slug: "acme/app".to_string(), sha: "abc".to_string(), started_at: 0, checked_at: None, close: true, runs: Vec::new(), state: ended, error: None, erring_since: None, following: None, pushed: crate::ci::Pushed::default() };
+        let cancelled = |what: &str| crate::ci::State::Cancelled { at: 1, what: what.to_string(), url: String::new() };
+        crate::ci::save(&state, &watch("billing@app", &repo, cancelled("deploy · prod"))).unwrap();
+        crate::ci::save(&state, &watch("tests@app", &repo, cancelled("ci · test (3.11)"))).unwrap();
+        let mut release = watch("release@app", &repo, cancelled("release · ship"));
+        release.pushed.deploy = Some("release".to_string());
+        crate::ci::save(&state, &release).unwrap();
+        crate::ci::save(&state, &watch("other@web", &state.join("web"), cancelled("deploy · web"))).unwrap();
+        crate::ci::save(&state, &watch("red@app", &repo, crate::ci::State::Failed { at: 1, what: "deploy · broke".to_string(), url: String::new() })).unwrap();
+        std::fs::create_dir_all(state.join("red-ci")).unwrap();
+        std::fs::write(state.join("red-ci/kept@app.json"), r#"{"dismissed":[{"state":"cancelled","failed":{"what":"Deploy · staging"}},{"state":"cancelled","failed":{"what":"ci · lint"}},{"state":"red","failed":{"what":"deploy"}}]}"#).unwrap();
+        let mut found = cancelled_deploys(&state, &repo);
+        found.sort();
+        assert_eq!(found, vec!["Deploy · staging".to_string(), "deploy · prod".to_string(), "release · ship".to_string()], "the repo's ci.deploy workflow counts, a cancelled test run, a red run and another repo's do not");
+        let _ = std::fs::remove_dir_all(state);
     }
 
     #[test]

@@ -54,6 +54,13 @@ pub(crate) fn dismissed(state: &Path, address: &str) -> Vec<Value> {
     read(state, address)["dismissed"].as_array().cloned().unwrap_or_default()
 }
 
+// Every dismissed entry of the repo's tasks, kept until a task closes.
+pub(crate) fn dismissed_in(state: &Path, repo: &str) -> Vec<Value> {
+    let tail = format!("@{repo}.json");
+    let names = fs::read_dir(dir(state)).into_iter().flatten().flatten().filter_map(|entry| entry.file_name().to_str().map(str::to_string));
+    names.filter_map(|name| name.strip_suffix(".json").filter(|_| name.ends_with(&tail)).map(str::to_string)).flat_map(|address| dismissed(state, &address)).collect()
+}
+
 pub(crate) fn forget(state: &Path, address: &str) {
     let _ = fs::remove_file(file(state, address));
 }

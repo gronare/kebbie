@@ -45,7 +45,7 @@ pub(crate) use line::{complete as complete_pushes, heads as push_heads};
 pub(crate) use permitted::tick as push_permitted;
 pub(crate) use park::{all as parked_all, Parked, UNPARKED, load as park_of, morning_in as park_morning_in, park, park_address, unpark, unpark_address, until as park_until};
 pub(crate) use landed::{AfterCancel, EVERY as LANDED_EVERY, after_cancel, branch_runs, passed_later, Unsure as LandedUnsure, mark as landed_mark, tick as landed_tick, tick_cli as landed_tick_cli};
-pub(crate) use red_ci::{dismiss as dismiss_ci, dismissed as ci_dismissed, outside as ci_outside, outside_reason as ci_outside_reason, over as red_ci_over};
+pub(crate) use red_ci::{dismiss as dismiss_ci, dismissed as ci_dismissed, dismissed_in as ci_dismissed_in, outside as ci_outside, outside_reason as ci_outside_reason, over as red_ci_over};
 pub(crate) use launch::{Begun, Session, Start, awaits_first_prompt, begin, codex_restart_refusal, codex_resume_args, bypasses, latest_transcript, mark_awaits_prompt, new_session_id, on_profile, own_start_mode, plan_dir, kebbie_prompts, profile_of, cluster_at, record_session, recorded_agent, recorded_session_id, start, task_at, task_role, task_role_now, transcript};
 pub(crate) use plan::{Asked as SubtasksAsked, add_preparatory, investigator_added, noted_after as subtasks_noted_after, seen_in as subtasks_seen_in, subtasks};
 #[cfg(test)]

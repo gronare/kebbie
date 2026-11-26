@@ -109,6 +109,7 @@ With `--plain`, without a terminal or with `NO_COLOR` set, each line is `ok`, `s
 | `docs` | Inside a repo: whether `docs.required` is on. |
 | `tests` | Inside a repo: which tests a push waits on, `tests.before_push` and its `tests.full_command`. |
 | `test commands` | Inside a repo: a test script of the repo's own (`script/test`, `bin/test`, `scripts/test`, `script/spec`, `bin/spec`) that `task.test_commands` leaves out, so no task's run of it is recorded. |
+| `deploy window` | Inside a repo: a deploy of its was cancelled (a watch that ended cancelled, or a cancelled run you dismissed on a task still open) and `ci.deploy_window` is unset, so the cancel went to Needs you; naming the repo's deploy hours keeps such a run under CI running and re-runs it once they open. |
 | `comments` | Inside a repo: whether kebbie reads comments on the commits it pushes there, and for how many days, and those on your own commits and that mention you, or why not. |
 | `setup skill` | The setup skill's plugin is installed and enabled. |
 | `hub` | Whether the machine joined a kebbie hub, and how its board posts go. |

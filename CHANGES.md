@@ -33,6 +33,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task reports ready with its lint red when the error came from main and main has fixed it since.
 
 ### Fixed
+- kebbie doctor and the lead suggest ci.deploy_window once a deploy is cancelled in a repo without it.
 - A cancelled CI run you re-run on GitHub puts its task back under CI running.
 - A pushed task that reported blocked moves to Needs you when its CI is cancelled or cannot be read.
 - A plan's brief says who the change reaches once pushed, every install or only where a setting turns it on, and the lead asks you before a push that reaches further than you meant.

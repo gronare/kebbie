@@ -894,7 +894,8 @@ fn cancelled_run(state: &Path, gh: &str, watch: &mut Watch, now: u64) -> Event {
     watch.pushed.held = None;
     watch.pushed.refused = None;
     let _ = save(state, watch);
-    let text = format!("CI was cancelled for {} ({}): {what}. Nothing on {} that holds it is running; re-run it or dismiss it on the board, and kebbie closes the task once a later run there passes. {}", watch.address, watch.short(), watch.branch(), run.url);
+    let hours = if watch.pushed.window.is_none() && watch.cancelled_deploy(&what) { " If GitHub refuses this repo's deploys outside set hours, name them as ci.deploy_window in its kebbie config, and kebbie keeps such a run under CI running and re-runs it once they open." } else { "" };
+    let text = format!("CI was cancelled for {} ({}): {what}. Nothing on {} that holds it is running; re-run it or dismiss it on the board, and kebbie closes the task once a later run there passes.{hours} {}", watch.address, watch.short(), watch.branch(), run.url);
     if let Err(error) = messages::to_lead(messages::ToLead::Notice, &text) {
         eprintln!("Could not tell the lead: {error}");
     }
@@ -924,6 +925,18 @@ fn re_run(state: &Path, gh: &str, watch: &mut Watch, now: u64) -> bool {
         eprintln!("Could not tell the lead: {error}");
     }
     true
+}
+
+// A cancelled run or job whose workflow or job name says deploy.
+pub fn names_a_deploy(what: &str) -> bool {
+    what.to_lowercase().contains("deploy")
+}
+
+impl Watch {
+    // What was cancelled is a deploy by its name or as the repo's ci.deploy workflow.
+    pub fn cancelled_deploy(&self, what: &str) -> bool {
+        names_a_deploy(what) || self.pushed.deploy.as_deref().is_some_and(|deploy| what.split(" · ").next() == Some(deploy))
+    }
 }
 
 // Trap: GitHub cannot say when a deploy window opens, so ci.deploy_window is the only source, and a run GitHub cancelled while it was open is a person's and never re-run.
@@ -1525,6 +1538,25 @@ mod tests {
         fs::write(&on_commit, CANCELLED_ON_COMMIT).unwrap();
         crate::executable::write(&path, format!("#!/bin/sh\necho \"$*\" >> '{calls}'\ncase \"$*\" in\n*--commit*) cat '{on_commit}';;\n*--branch*) echo '[{branch}]';;\n*jobs*) echo '{{\"jobs\":[]}}';;\nesac\n")).unwrap();
         path.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn a_deploy_cancelled_in_a_repo_without_deploy_hours_tells_the_lead_of_ci_deploy_window() {
+        let dir = crate::tasks::test_support::repo();
+        let state = crate::sh::test_dir("ci-cancelled-deploy-hint");
+        let branch = crate::repo::git(&dir, &["branch", "--show-current"]).unwrap();
+        let watched = crate::repo::git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        let ended = |name: &str, on_commit: &str| {
+            save(&state, &cancel_watch(&dir, &watched, &branch)).unwrap();
+            let events = tick_with(&state, &cancel_gh(&state, name, on_commit, &branch_run(&watched, "completed", "cancelled")), 100);
+            assert!(events.len() == 1 && events[0].kind == Kind::Cancelled, "{events:?}");
+            events[0].text.clone()
+        };
+        let deploy = ended("deploy-gh", &CANCELLED_ON_COMMIT.replace(r#""workflowName":"ci""#, r#""workflowName":"Deploy""#));
+        assert!(deploy.contains("Deploy · test (3.11)") && deploy.contains("ci.deploy_window"), "{deploy}");
+        assert!(!ended("plain-gh", CANCELLED_ON_COMMIT).contains("deploy_window"), "a cancelled test run is no deploy");
+        fs::remove_dir_all(state).unwrap();
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
