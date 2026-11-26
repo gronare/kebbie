@@ -520,9 +520,9 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   the same as kebbie issues
   kebbie faults [--json] | show <id>
                                   the faults kebbie's fault watcher follows: the issues it filed from the user's own
-                                  words, each with its fix task, how often it happened and whether it came back once
-                                  its fix was in use; show prints one with each time, the user's words kept on this
-                                  machine only
+                                  words and from incidents seen twice, each with its fix task, how often it happened
+                                  and whether it came back once its fix was in use; show prints one with each time,
+                                  the user's words kept on this machine only
   kebbie issue show|retry <id>    print one; retry marks it worth trying again
   kebbie issue close <id> fixed|wontfix|duplicate
   kebbie issue reopen <id>        open a closed one again, noted as come back on this build

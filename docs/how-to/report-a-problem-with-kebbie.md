@@ -32,7 +32,7 @@ On the board, the bugs and wishes to send wait under Work in one row; `⏎` on i
 
 When kebbie costs something in a session (an error, a workaround, a missing capability), the lead saves it as an issue with a text about kebbie alone, asks you nothing about it, and carries on with your work. It waits in the board's bugs to send until you send it.
 
-When you point out a fault in kebbie yourself, in the lead's chat, a task's chat or an answer on the board, [the fault watcher](../explanation/fault-watcher.md) saves it as an issue with its root cause and, with kebbie's repo in your worktree pool, queues the task that fixes it. `kebbie faults` lists the faults it follows.
+When you point out a fault in kebbie yourself, in the lead's chat, a task's chat or an answer on the board, or kebbie meets the same trouble twice, [the fault watcher](../explanation/fault-watcher.md) saves it as an issue with its root cause and, with kebbie's repo in your worktree pool, queues the task that fixes it. `kebbie faults` lists the faults it follows.
 
 A task tells the lead instead of asking you. Once saved, an issue is the keeper's to look after: the lead leaves kebbie issues out of its briefings and of what it asks you to decide, and takes up closing or retrying one when you ask about it.
 

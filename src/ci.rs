@@ -1065,6 +1065,7 @@ fn failed_run(state: &Path, gh: &str, watch: &mut Watch, run: &Run, now: u64) ->
         let _ = crate::state::write(&orphan_file(state, &watch.address), "");
     }
     remember_red(state, &watch.sha, &watch.address);
+    crate::faults::incidents::Incident::red_ci(&crate::repo::name_of(&watch.repo), &format!("{job}{step}"), &watch.address, &what, &log).note();
     crate::tasks::rollout::failed(state, &watch.address, &watch.pushed.stages, &format!("CI failed: {what}"), false);
     let handed = open && match messages::hand_to(&watch.address, &task_message(watch, run, &format!("{job}{step}"), &log_tail(&log, LOG_LINES), who)) {
         Ok(()) => true,

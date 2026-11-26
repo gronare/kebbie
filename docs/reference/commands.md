@@ -1201,7 +1201,7 @@ Problems and wishes about kebbie itself, saved on this machine, one file each un
 
 ## kebbie faults
 
-The faults [the fault watcher](../explanation/fault-watcher.md) follows: the kebbie issues it filed from your own words, and any issue it has seen happen.
+The faults [the fault watcher](../explanation/fault-watcher.md) follows: the kebbie issues it filed from your own words and from incidents seen twice, and any issue it has seen happen.
 
 | Command | What it does |
 | --- | --- |

@@ -340,6 +340,7 @@ fn left_text(address: &str, why: &str, lead: bool) -> String {
 fn leave(state: &Path, head: &Intent, why: &str) -> Turn {
     intent::forget(state, &head.address);
     intent::record_left(state, &head.address, why);
+    crate::faults::incidents::Incident::left_line(&head.address, why).note();
     phase::update(state, &head.address, "push", |current| (!matches!(current, Some(Phase::NeedsYou(_)))).then_some(Phase::NeedsYou(Why::LeftLine)));
     let spent = crate::permit::in_state(state, &head.address, &name_of(&head.repo)).is_some() && !intent::lead_may_repush(state, &head.address);
     let text = left_text(&head.address, why, lead_pushes_again(state, head));

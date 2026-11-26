@@ -171,6 +171,7 @@ A `routines/` file holds when the scheduler first saw the routine, when its last
 | Entry | Holds |
 | --- | --- |
 | `faults/cases.json` | The cases waiting to be weighed and the last ones settled, each with your words or the incident, what was said around it and its outcome; and when each fix task of the last two days starts, for the limit of three a day. |
+| `faults/incidents.json` | How often each incident fingerprint was seen since it was last a case, and how many times the watcher found no fault in it. |
 | `faults/read.json` | How far each chat has been read. |
 | `faults/occurrences/<id>.jsonl` | Each time issue `<id>` happened, with your words, and whether its fix was in use then. Never sent. |
 | `faults/watch.run`, `.running`, `.claude`, `.log`, `.last` | The watcher run under way, its Claude's process group, its output until it answers, and when the last run started. |
@@ -305,6 +306,7 @@ What happened: …
 | `cause` | The root cause the fault watcher named. Optional. |
 | `barrier` | `code`, `role` or `skill`: what its fix changes. `code` once a fault came back. Optional. |
 | `fix` | The task that fixes it, queued by the fault watcher. Optional. |
+| `fingerprints` | The incidents it stands for, so a later sighting lands on it. Optional. |
 
 - `id`: the `kebbie-issue: <id>` line in a sent issue is how `kebbie update` finds it on GitHub.
 - `source`: such an issue shows as `[report <id>, untrusted]`, its text fenced. It is never offered for sending, and never rechecked after an update.

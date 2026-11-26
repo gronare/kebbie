@@ -1,11 +1,12 @@
 # The fault watcher
 
-When you tell the lead something is wrong, the fault watcher makes it a kebbie issue with its root cause and queues the task that fixes the cause. Nothing waits on the lead remembering it, and kebbie counts whether the fault comes back once its fix is in use.
+When you tell the lead something is wrong, or kebbie meets the same trouble twice, the fault watcher makes it a kebbie issue with its root cause and queues the task that fixes the cause. Nothing waits on the lead remembering it, and kebbie counts whether the fault comes back once its fix is in use.
 
 ## What it reads
 
 - **Your own words in a chat**: the lead's chat and each task's Claude conversation. Only what you typed counts: messages from tasks or kebbie, tool output and reports from other installs never do. A chat that began before the watcher first looked is read from where it stood then, never its history; one that began since, such as the lead's after a restart, is read from its first words. A compaction's summary and the prompts kebbie types into a chat, a task's start prompt and the lead's first prompt, are never your words.
 - **Your answers on the board**: Ask for changes or Reject with a comment on a plan, Something is wrong on a check, and your own words in place of the options.
+- **The same incident twice**: CI going red with the same first error in the same job, a task that stops and waits for you, a push that falls out of the line, a keeper routine that fails, and an error kebbie records about itself. Numbers, shas, times and paths are left out of the comparison, so two runs of one fault match. An incident the watcher found no fault in has to be seen twice as often before it is weighed again.
 
 A short yes, a number or a pasted prompt is skipped. Everything else waits two minutes, so the agent's answer to it is in, and the watcher reads up to twelve cases at a time, at most every five minutes.
 
@@ -20,6 +21,8 @@ A read-only Claude, with the investigator's profile (the reviewer's when the inv
 | A new fault | Files a kebbie issue with its root cause, the kind of barrier the fix needs (code, role or skill) and the files it touches, then queues its fix task. |
 | Linked to a task | Files the issue for a fix a task started after your words already builds, so its return still counts. |
 | Ask | Puts the one question about what you want under a backlog item's open questions, where the board asks it. |
+
+An issue that holds an incident's fingerprint, filed from it or matched to it, takes each later sighting itself, with no Claude run.
 
 ## The fix task
 

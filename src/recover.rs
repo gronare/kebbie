@@ -604,6 +604,7 @@ fn apply(state: &Path, task: &Task, old: Option<&Record>, act: Act) {
             let _ = save(state, &record);
             crate::phase::record(state, &record.address, "recover", &crate::phase::Event::Stopped);
             let line = stuck_line(&record, task.agent);
+            crate::faults::incidents::Incident::stuck(&record.reason).note();
             if let Err(error) = messages::to_lead(messages::ToLead::TaskStopped, &line) {
                 eprintln!("Could not tell the lead that {} stopped: {error}", record.address);
             }

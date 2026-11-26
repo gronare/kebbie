@@ -8,6 +8,7 @@ use crate::issues::{self, Issue};
 use crate::sh::Result;
 
 pub mod capture;
+pub mod incidents;
 pub mod watch;
 
 pub const BY: &str = "fault watcher";
@@ -31,6 +32,7 @@ fn locked(state: &Path) -> Result<crate::state::Locked> {
 pub enum Source {
     Chat,
     Board,
+    Incident,
 }
 
 impl Source {
@@ -38,6 +40,7 @@ impl Source {
         match self {
             Source::Chat => "the user's words in a chat",
             Source::Board => "the user's answer on the board",
+            Source::Incident => "the same incident a second time",
         }
     }
 }

@@ -254,7 +254,12 @@ fn built() -> &'static str {
 
 pub fn act(state: &Path, case: &Case, verdict: &Verdict, checkout: Option<&Path>, now: u64) -> Result<(String, Option<String>)> {
     match verdict.kind.clone().ok_or("no verdict")? {
-        Kind::Ignore => Ok((format!("no fault in kebbie: {}", verdict.reason), None)),
+        Kind::Ignore => {
+            if let Some(print) = &case.fingerprint {
+                super::incidents::found_nothing(state, print)?;
+            }
+            Ok((format!("no fault in kebbie: {}", verdict.reason), None))
+        }
         Kind::Known(id) => {
             let dir = issues::dir(state);
             let mut issue = issues::find(&dir, &id)?;
@@ -263,6 +268,10 @@ pub fn act(state: &Path, case: &Case, verdict: &Verdict, checkout: Option<&Path>
             }
             if let Some(task) = verdict.task.clone().filter(|_| issue.is_open() && issue.fix.is_none()) {
                 issue.fix = Some(task);
+                issues::save(&dir, &issue)?;
+            }
+            if let Some(print) = case.fingerprint.clone().filter(|print| !issue.fingerprints.contains(print)) {
+                issue.fingerprints.push(print);
                 issues::save(&dir, &issue)?;
             }
             let said = again(state, &issue, case.source, &case.from, &case.words, checkout, now)?;

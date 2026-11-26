@@ -548,6 +548,9 @@ pub fn run() -> Result<String> {
             let routine = &routines[index];
             let outcome = unpanicked(|| (routine.run)(&mut ctx));
             if let Some(change) = record(&mut tracks[index], now, outcome) {
+                if tracks[index].failures > 0 {
+                    crate::faults::incidents::Incident::routine_failed(routine.name, &change).note();
+                }
                 let next = if tracks[index].failures > 0 { format!("; next try in {}", span(delay(routine.every, tracks[index].failures))) } else { String::new() };
                 log.line(&format!("{}: {change}{next}", routine.name));
             }

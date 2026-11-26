@@ -81,6 +81,7 @@ pub fn record_if(on: &dyn Fn() -> bool, state: &dyn Fn() -> Result<PathBuf>, com
     if on() && let Ok(state) = state() {
         record_in(&state, &component, kind);
     }
+    crate::faults::incidents::Incident::kebbie_error(component.as_str(), &format!("{kind:?}")).note();
 }
 
 // Tests count through record_if with a state dir of their own, so none writes into the shared one.
