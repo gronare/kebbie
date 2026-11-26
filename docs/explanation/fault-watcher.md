@@ -34,7 +34,7 @@ The fix task needs a checkout of kebbie's own repo in your worktree pool. Withou
 
 ## When a fault counts as fixed
 
-The keeper's recheck after each `kebbie update` closes an issue once the installed kebbie holds its fix, as for every kebbie issue. Only then is it in use. An occurrence after that opens the issue again and counts as come back. `kebbie faults` lists each fault with how often it happened before and after.
+The keeper's recheck after each `kebbie update` closes an issue once the installed kebbie holds its fix, as for every kebbie issue. Only then is it in use. An occurrence after that opens the issue again and counts as come back. The board's Work page shows the tally beside the machine's other lines: how many are being fixed, how many wait for a fix task, how many are fixed and in use, and how many came back. `kebbie faults` lists each fault with how often it happened before and after.
 
 ## Your words stay here
 
