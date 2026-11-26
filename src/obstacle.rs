@@ -888,7 +888,7 @@ fn start_task(state: &Path, address: &str, answer: &Answer, running: &[String]) 
     let repo = crate::repo::locate(&repo_name)?;
     let prompt = answer.prompt.clone().unwrap_or_else(|| answer.plan.clone());
     let why = format!("the investigator: first for {address}'s obstacle");
-    let queued = crate::tasks::queue_as(&Caller::Lead, &[repo], &crate::tasks::QueueAsked { name: &name, prompt: &prompt, after: &[], mode: None, profile: None, backlog: None, title: None, why: Some(&why), starts_at: Some(crate::messages::now()) })?;
+    let queued = crate::tasks::queue_as(&Caller::Lead, &[repo], &crate::tasks::QueueAsked { name: &name, prompt: &prompt, after: &[], mode: None, profile: None, backlog: None, title: None, why: Some(&why), starts_at: Some(crate::messages::now()), overlap: false })?;
     tell_lead(crate::messages::ToLead::Notice, &format!("kebbie queued {name} in {repo_name} for {address}'s obstacle, on the investigator's decision; the keeper starts it now. Give it its recipe with kebbie recipe {name} \"<recipe>: <why>\". {}", queued.unwrap_or_default()));
     Ok(format!("kebbie queued {name} in {repo_name} to start now: {prompt}. The work it blocks waits for it: go on with what it does not touch, or report blocked naming it."))
 }

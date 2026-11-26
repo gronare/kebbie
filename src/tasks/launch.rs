@@ -297,6 +297,10 @@ pub(crate) fn kebbie_prompts(task: &str, repo: &Path) -> Vec<String> {
     session_file(task, repo).map(|session| kebbie_prompts_in(&session)).unwrap_or_default()
 }
 
+pub(crate) fn start_prompt(task: &str, repo: &Path) -> Option<String> {
+    session_file(task, repo).ok().and_then(|session| stored_prompt(&prompt_file(&session)))
+}
+
 fn kebbie_prompts_in(session: &Path) -> Vec<String> {
     stored_prompt(&prompt_file(session)).into_iter().chain(typed_in(&typed_file(session))).collect()
 }

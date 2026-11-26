@@ -140,6 +140,8 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   --at <time> queues it to start at that time (15:00, tomorrow 09:00, fri 09:00,
                                   24 oct 09:00, 2026-10-24 09:00, in 2h), with --after once both hold;
                                   --why <reason> says on its Queued row why it waits;
+                                  a prompt naming files or modules a running or queued task in the repo works on queues it
+                                  behind that task, and says which files; --now starts it anyway;
                                   --recipe \"<recipe>: <why>\" names how it is done, from the lead's playbook, required
                                   when the lead starts a task)
   kebbie after [name]             the queued tasks: what each waits for, with that task's state; one blocked because
@@ -726,11 +728,12 @@ fn run(arguments: &Arguments) -> Result<String> {
             };
             let after = arguments.values_of("--after");
             let starts_at = arguments.value("--at").map(|text| crate::when::parse(text, messages::now(), &crate::recover::local_offset)).transpose().map_err(|error| format!("--at: {error}"))?;
-            if !after.is_empty() || starts_at.is_some() {
+            let overlap = !arguments.flag("--now") && arguments.value("--from").is_none() && prompt.is_some_and(tasks::prompt_names_files);
+            if !after.is_empty() || starts_at.is_some() || overlap {
                 if arguments.value("--from").is_some() {
                     return Err("kebbie start --after and --at start from the default branch, so they take no --from".to_string());
                 }
-                if let Some(queued) = tasks::queue(&repos, &tasks::QueueAsked { name, prompt: prompt.unwrap_or_default(), after: &after, mode: arguments.value("--mode"), profile: arguments.value("--profile"), backlog: arguments.value("--backlog"), title: None, why: arguments.value("--why"), starts_at })? {
+                if let Some(queued) = tasks::queue(&repos, &tasks::QueueAsked { name, prompt: prompt.unwrap_or_default(), after: &after, mode: arguments.value("--mode"), profile: arguments.value("--profile"), backlog: arguments.value("--backlog"), title: None, why: arguments.value("--why"), starts_at, overlap })? {
                     keep(&vec![true; repos.len()], true);
                     return Ok(queued);
                 }

@@ -508,7 +508,7 @@ mod tests {
     }
 
     fn known(open: &[&str], waits: Vec<Wait>, ends: &[Message]) -> Known {
-        Known { open: open.iter().map(|address| dep(address)).collect(), waits, ends: latest_ends(ends) }
+        Known { open: open.iter().map(|address| dep(address)).collect(), waits, ends: latest_ends(ends), running: Vec::new() }
     }
 
     fn end(address: &str, at: u64, how: &str, landed: Option<&str>) -> Message {

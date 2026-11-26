@@ -425,7 +425,7 @@ pub fn queue_fix(state: &Path, issue: &Issue, came_back: bool, checkout: Option<
     let quotes: Vec<String> = super::occurrences(state, &issue.id).into_iter().rev().take(5).map(|occurrence| format!("{} ({})", occurrence.quote, occurrence.from)).collect();
     let prompt = fix_prompt(issue, came_back, &quotes);
     let why = format!("the fault watcher: fixes kebbie issue {}", issue.id);
-    crate::tasks::queue_as(&Caller::Lead, &[repo], &crate::tasks::QueueAsked { name: &name, prompt: &prompt, after: &[], mode: None, profile: None, backlog: None, title: Some(&issue.title), why: Some(&why), starts_at: Some(starts) })?;
+    crate::tasks::queue_as(&Caller::Lead, &[repo], &crate::tasks::QueueAsked { name: &name, prompt: &prompt, after: &[], mode: None, profile: None, backlog: None, title: Some(&issue.title), why: Some(&why), starts_at: Some(starts), overlap: true })?;
     super::count_fix(state, starts, now)?;
     let dir = issues::dir(state);
     let mut kept = issues::find(&dir, &issue.id)?;

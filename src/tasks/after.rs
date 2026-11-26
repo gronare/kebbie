@@ -533,6 +533,7 @@ pub(crate) struct Known {
     pub open: Vec<Dep>,
     pub waits: Vec<Wait>,
     pub ends: HashMap<String, Message>,
+    pub running: Vec<super::overlap::Running>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -615,7 +616,7 @@ pub(super) fn known(state: &Path, repos: &[PathBuf]) -> Known {
     every.sort();
     every.dedup();
     let open = every.iter().flat_map(|repo| open_in(repo).into_iter().map(|address| Dep { address, repo: repo.clone() })).collect();
-    Known { open, waits, ends: latest_ends(&messages::load()) }
+    Known { open, waits, ends: latest_ends(&messages::load()), running: Vec::new() }
 }
 
 #[derive(Clone, Copy)]
@@ -629,20 +630,49 @@ pub(crate) struct Asked<'a> {
     pub title: Option<&'a str>,
     pub why: Option<&'a str>,
     pub starts_at: Option<u64>,
+    pub overlap: bool,
 }
 
 // Every half is checked before any is written, so a refusal changes nothing.
 pub(crate) fn queue_in(state: &Path, caller: &Caller, repos: &[PathBuf], asked: &Asked, known: &Known, now: u64) -> Result<Option<String>> {
-    let by = queuer(caller)?;
     let task = slug(asked.name)?;
+    let mut behind = Vec::new();
+    if asked.overlap {
+        for repo in repos {
+            behind.extend(super::overlap::behind(&peers::address(&task, &name_of(repo)), asked.prompt, repo, known));
+        }
+    }
     let mut planned = Vec::new();
     for repo in repos {
         let me = peers::address(&task, &name_of(repo));
-        planned.push((repo, plan(&me, asked.prompt, asked.after, known)?));
+        let plan = if asked.after.is_empty() && asked.starts_at.is_none() && behind.is_empty() { Plan::Now } else {
+            let mut deps = match plan(&me, asked.prompt, asked.after, known)? {
+                Plan::Now => Vec::new(),
+                Plan::Queue(deps) => deps,
+            };
+            for dep in behind.iter().map(|behind| &behind.dep) {
+                if !deps.iter().any(|known| known.address == dep.address) {
+                    deps.push(dep.clone());
+                }
+            }
+            if deps.is_empty() { Plan::Now } else { Plan::Queue(deps) }
+        };
+        planned.push((repo, plan));
     }
     if asked.starts_at.is_none() && planned.iter().all(|(_, plan)| *plan == Plan::Now) {
         return Ok(None);
     }
+    let by = match queuer(caller) {
+        Ok(by) => by,
+        Err(_) if !behind.is_empty() => return Err(format!("{task} was not started: it would go {}, and only the user or the lead queues a task; kebbie start {task} --now starts it anyway", super::overlap::said(&behind))),
+        Err(error) => return Err(error),
+    };
+    let overlap = (!behind.is_empty()).then(|| super::overlap::why(&behind));
+    let why = match (asked.why, &overlap) {
+        (why, None) => why.map(str::to_string),
+        (None, Some(overlap)) => Some(overlap.clone()),
+        (Some(why), Some(overlap)) => Some(format!("{why}; {overlap}")),
+    };
     let _lock = Lock::take(state, true);
     let mut said = Vec::new();
     for (repo, plan) in planned {
@@ -651,12 +681,15 @@ pub(crate) fn queue_in(state: &Path, caller: &Caller, repos: &[PathBuf], asked: 
             Plan::Now if asked.starts_at.is_some() => Vec::new(),
             Plan::Now => continue,
         };
-        let wait = Wait { task: task.clone(), repo: repo.clone(), after, prompt: asked.prompt.to_string(), mode: asked.mode.map(str::to_string), profile: asked.profile.map(str::to_string), backlog: asked.backlog.map(str::to_string), by: by.clone(), at: now, blocked: None, gone_since: None, why: asked.why.map(str::to_string), starts_at: asked.starts_at };
+        let wait = Wait { task: task.clone(), repo: repo.clone(), after, prompt: asked.prompt.to_string(), mode: asked.mode.map(str::to_string), profile: asked.profile.map(str::to_string), backlog: asked.backlog.map(str::to_string), by: by.clone(), at: now, blocked: None, gone_since: None, why: why.clone(), starts_at: asked.starts_at };
         save(state, &wait)?;
         if let Some(title) = asked.title.map(str::to_string).or_else(|| prompt_title(asked.prompt)) {
             crate::status::keep_title(state, &wait.address(), &crate::title::readable(&title, &name_of(repo)));
         }
         said.push(format!("Queued {}: it starts from the default branch {}, with no worktree, Space or Claude until then.", wait.address(), starts_when(&wait, now)));
+    }
+    if !behind.is_empty() {
+        said.push(format!("Queued {}; kebbie after {task} --now starts it anyway.", super::overlap::said(&behind)));
     }
     Ok(Some(said.join("\n")))
 }
@@ -685,7 +718,10 @@ pub(crate) fn queue_as(caller: &Caller, repos: &[PathBuf], asked: &Asked) -> Res
     asked.profile.map(|profile| crate::profiles::for_task(&crate::profiles::dir(), profile)).transpose().map_err(|error| format!("--profile: {error}"))?;
     let state = crate::lead::state_dir()?;
     let repos = repos.iter().map(|repo| crate::repo::main_checkout(repo)).collect::<Result<Vec<_>>>()?;
-    let known = known(&state, &repos);
+    let mut known = known(&state, &repos);
+    if asked.overlap && super::overlap::names_files(asked.prompt) {
+        known.running = super::overlap::running(&repos);
+    }
     let title = asked.title.map(str::to_string).or_else(|| asked.backlog.and_then(crate::backlog::title_of));
     let why = asked.why.map(str::trim).filter(|why| !why.is_empty());
     queue_in(&state, caller, &repos, &Asked { title: title.as_deref(), why, ..*asked }, &known, messages::now())
@@ -994,14 +1030,55 @@ mod tests {
     }
 
     fn known(open: &[&str], waits: Vec<Wait>, ends: &[Message]) -> Known {
-        Known { open: open.iter().map(|address| dep(address)).collect(), waits, ends: latest_ends(ends) }
+        Known { open: open.iter().map(|address| dep(address)).collect(), waits, ends: latest_ends(ends), running: Vec::new() }
+    }
+
+    #[test]
+    fn a_task_whose_prompt_names_files_a_running_task_changes_queues_behind_it() {
+        let state = crate::sh::test_dir("after-overlap");
+        let mut known = known(&["board@kebbie", "docs@kebbie"], Vec::new(), &[]);
+        let running = |address: &str, file: &str| super::super::overlap::Running { address: address.into(), repo: PathBuf::from("/repos/kebbie"), files: vec![file.into()], prompt: String::new() };
+        known.running = vec![running("board@kebbie", "src/status.rs"), running("docs@kebbie", "README.md")];
+        let asked = |prompt, overlap| Asked { name: "faults", prompt, after: &[], mode: None, profile: None, backlog: None, title: None, why: None, starts_at: None, overlap };
+        let kebbie = [PathBuf::from("/repos/kebbie")];
+        assert_eq!(queue_in(&state, &Caller::Lead, &kebbie, &asked("Show faults in src/status.rs", false), &known, 100).unwrap(), None, "--now starts it as usual");
+        assert_eq!(queue_in(&state, &Caller::Lead, &kebbie, &asked("Show faults in src/notify.rs", true), &known, 100).unwrap(), None, "no running task changes that file");
+        assert_eq!(queue_in(&state, &Caller::Agent, &kebbie, &asked("Show faults on the board", true), &known, 100).unwrap(), None, "a start that queues nothing needs no queuer");
+        let refused = queue_in(&state, &Caller::Agent, &kebbie, &asked("Show faults in src/status.rs", true), &known, 100).unwrap_err();
+        assert_eq!(refused, "faults was not started: it would go behind board@kebbie: both change src/status.rs, and only the user or the lead queues a task; kebbie start faults --now starts it anyway");
+        assert!(all(&state).is_empty(), "a refusal writes nothing");
+        let said = queue_in(&state, &Caller::Lead, &kebbie, &asked("Show faults in src/status.rs", true), &known, 100).unwrap().unwrap();
+        assert!(said.contains("once board@kebbie is done") && said.ends_with("Queued behind board@kebbie: both change src/status.rs; kebbie after faults --now starts it anyway."), "{said}");
+        let wait = load(&state, "faults@kebbie").unwrap();
+        assert_eq!(wait.after, vec![Dep { address: "board@kebbie".into(), repo: PathBuf::from("/repos/kebbie") }]);
+        assert_eq!(wait.why.as_deref(), Some("both change src/status.rs"), "the Queued row names the task already, so the reason names the files");
+        let state = crate::sh::test_dir("after-overlap-after");
+        let asked = Asked { after: &["docs"], why: Some("it builds on the docs"), ..asked("Show faults in src/status.rs", true) };
+        queue_in(&state, &Caller::User, &kebbie, &asked, &known, 100).unwrap().unwrap();
+        let wait = load(&state, "faults@kebbie").unwrap();
+        assert_eq!(wait.after.iter().map(|dep| dep.address.as_str()).collect::<Vec<_>>(), ["docs@kebbie", "board@kebbie"], "the asked wait and the overlap both hold");
+        assert_eq!(wait.why.as_deref(), Some("it builds on the docs; both change src/status.rs"));
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_task_across_repos_queues_every_half_when_one_half_overlaps() {
+        let state = crate::sh::test_dir("after-overlap-halves");
+        let mut known = known(&["board@kebbie"], Vec::new(), &[]);
+        known.running = vec![super::super::overlap::Running { address: "board@kebbie".into(), repo: PathBuf::from("/repos/kebbie"), files: vec!["src/status.rs".into()], prompt: String::new() }];
+        let asked = Asked { name: "faults", prompt: "Show faults in src/status.rs and hub/src/page.ts", after: &[], mode: None, profile: None, backlog: None, title: None, why: None, starts_at: None, overlap: true };
+        queue_in(&state, &Caller::Lead, &[PathBuf::from("/repos/kebbie"), PathBuf::from("/repos/hub")], &asked, &known, 100).unwrap().unwrap();
+        let halves = all(&state).into_iter().map(|wait| (wait.address(), wait.after.into_iter().map(|dep| dep.address).collect::<Vec<_>>())).collect::<HashMap<_, _>>();
+        assert_eq!(halves.get("faults@hub"), Some(&vec!["board@kebbie".to_string()]), "the half with no overlap waits too, so the task starts whole");
+        assert_eq!(halves.get("faults@kebbie"), Some(&vec!["board@kebbie".to_string()]));
+        fs::remove_dir_all(state).unwrap();
     }
 
     #[test]
     fn a_task_can_wait_for_a_time_alone_or_as_well_as_another_task() {
         let state = crate::sh::test_dir("after-at");
         let known = known(&["billing@api"], Vec::new(), &[]);
-        let asked = Asked { name: "nightly", prompt: "Run the import", after: &[], mode: None, profile: None, backlog: None, title: None, why: None, starts_at: Some(1_000) };
+        let asked = Asked { name: "nightly", prompt: "Run the import", after: &[], mode: None, profile: None, backlog: None, title: None, why: None, starts_at: Some(1_000), overlap: false };
         let said = queue_in(&state, &Caller::User, &[PathBuf::from("/repos/web")], &asked, &known, 100).unwrap().unwrap();
         assert!(said.starts_with("Queued nightly@web: it starts from the default branch at "), "a wait for a time alone queues, with nothing to wait for: {said}");
         let wait = load(&state, "nightly@web").unwrap();
@@ -1055,7 +1132,7 @@ mod tests {
         assert_eq!(crate::title::readable("kebbie — Queued row says what it waits for", "kebbie"), "Queued row says what it waits for", "a vault note's title drops its repo");
         let state = crate::sh::test_dir("after-title");
         let known = known(&["billing@api"], Vec::new(), &[]);
-        let asked = |title| Asked { name: "web-billing", prompt: "use the rounding field. Then bill.", after: &["billing@api"], mode: None, profile: None, backlog: None, title, why: Some("it needs the rounding field"), starts_at: None };
+        let asked = |title| Asked { name: "web-billing", prompt: "use the rounding field. Then bill.", after: &["billing@api"], mode: None, profile: None, backlog: None, title, why: Some("it needs the rounding field"), starts_at: None, overlap: false };
         queue_in(&state, &Caller::Lead, &[PathBuf::from("/repos/web")], &asked(None), &known, 100).unwrap().unwrap();
         assert_eq!(crate::status::kept_title(&state, "web-billing@web").as_deref(), Some("Use the rounding field"));
         assert_eq!(load(&state, "web-billing@web").unwrap().why.as_deref(), Some("it needs the rounding field"), "the reason is kept with the wait");
@@ -1158,8 +1235,8 @@ mod tests {
         let state = state_of(&dir);
         let billing = peers::address("billing", &name_of(&dir));
         let before = slots(&dir).unwrap().len();
-        let known = Known { open: vec![Dep { address: billing.clone(), repo: dir.clone() }], waits: Vec::new(), ends: HashMap::new() };
-        let said = queue_in(&state, &Caller::User, std::slice::from_ref(&dir), &Asked { name: "search", prompt: "Search the invoices", after: &["billing"], mode: None, profile: None, backlog: None, title: None, why: None, starts_at: None }, &known, 100).unwrap().unwrap();
+        let known = Known { open: vec![Dep { address: billing.clone(), repo: dir.clone() }], waits: Vec::new(), ends: HashMap::new(), running: Vec::new() };
+        let said = queue_in(&state, &Caller::User, std::slice::from_ref(&dir), &Asked { name: "search", prompt: "Search the invoices", after: &["billing"], mode: None, profile: None, backlog: None, title: None, why: None, starts_at: None, overlap: false }, &known, 100).unwrap().unwrap();
         assert!(said.contains("no worktree, Space or Claude"), "{said}");
         assert_eq!(slots(&dir).unwrap().len(), before, "no worktree is claimed or made");
         assert!(!crate::repo::branch_exists(&dir, "search"), "no branch either");
@@ -1174,7 +1251,7 @@ mod tests {
         let known = known(&[], Vec::new(), &[end("billing@api", 50, "done", None)]);
         assert_eq!(plan("web-billing@web", "Use it", &["billing@api"], &known).unwrap(), Plan::Now);
         assert_eq!(plan("web-billing@web", "Use it", &["billing"], &known).unwrap(), Plan::Now);
-        let asked = Asked { name: "web-billing", prompt: "Use it", after: &["billing"], mode: None, profile: None, backlog: None, title: None, why: None, starts_at: None };
+        let asked = Asked { name: "web-billing", prompt: "Use it", after: &["billing"], mode: None, profile: None, backlog: None, title: None, why: None, starts_at: None, overlap: false };
         assert_eq!(queue_in(&state, &Caller::Lead, &[PathBuf::from("/repos/web")], &asked, &known, 100).unwrap(), None, "the caller starts it as usual");
         assert!(all(&state).is_empty() && !dir(&state).join("web-billing@web.json").exists());
         fs::remove_dir_all(state).unwrap();
@@ -1651,7 +1728,7 @@ mod tests {
         let known = known(&["a@x"], vec![b], &[]);
         let error = plan("a@x", "Do a", &["b"], &known).unwrap_err();
         assert_eq!(error, "a@x cannot wait in a circle: a@x → b@x → a@x");
-        let asked = Asked { name: "a", prompt: "Do a", after: &["b"], mode: None, profile: None, backlog: None, title: None, why: None, starts_at: None };
+        let asked = Asked { name: "a", prompt: "Do a", after: &["b"], mode: None, profile: None, backlog: None, title: None, why: None, starts_at: None, overlap: false };
         assert!(queue_in(&state, &Caller::User, &[PathBuf::from("/repos/x")], &asked, &known, 100).is_err());
         assert_eq!(all(&state).iter().map(Wait::address).collect::<Vec<_>>(), ["b@x"]);
         fs::remove_dir_all(state).unwrap();
@@ -1673,7 +1750,7 @@ mod tests {
         for asked in ["nothing", "billing@web", "search"] {
             assert!(plan("web-billing@web", "Use it", &[asked], &known).unwrap_err().contains("no task, queued task or task done by that name"), "{asked}");
         }
-        let asked = Asked { name: "web-billing", prompt: "Use it", after: &["billing", "nothing"], mode: None, profile: None, backlog: None, title: None, why: None, starts_at: None };
+        let asked = Asked { name: "web-billing", prompt: "Use it", after: &["billing", "nothing"], mode: None, profile: None, backlog: None, title: None, why: None, starts_at: None, overlap: false };
         assert!(queue_in(&state, &Caller::User, &[PathBuf::from("/repos/web")], &asked, &known, 100).is_err());
         assert!(all(&state).is_empty(), "one unknown name refuses the whole wait");
         fs::remove_dir_all(state).unwrap();
@@ -1694,7 +1771,7 @@ mod tests {
     fn only_the_user_or_the_lead_can_queue_or_change_a_wait() {
         let state = crate::sh::test_dir("after-who");
         let known = known(&["billing@api"], Vec::new(), &[]);
-        let asked = Asked { name: "web-billing", prompt: "Use it", after: &["billing"], mode: None, profile: None, backlog: None, title: None, why: None, starts_at: None };
+        let asked = Asked { name: "web-billing", prompt: "Use it", after: &["billing"], mode: None, profile: None, backlog: None, title: None, why: None, starts_at: None, overlap: false };
         for caller in [Caller::Task("billing@api".to_string()), Caller::Agent] {
             assert!(queue_in(&state, &caller, &[PathBuf::from("/repos/web")], &asked, &known, 100).unwrap_err().contains("only the user or the lead"));
             assert!(all(&state).is_empty());
