@@ -208,7 +208,7 @@ fn turn(state: &Path, head: &Intent, log: &[Message], now: u64, read: Read, work
         return Turn::Out(why);
     };
     let stamped;
-    let head = if crate::builds::place(&head.address).is_some() {
+    let head = if crate::builds::waits_for_slot(&head.address) {
         let Some(fresh) = intent::stamp_waited(state, &head.address, now) else { return Turn::Waits };
         stamped = fresh;
         &stamped
@@ -655,6 +655,31 @@ mod tests {
         assert!(driven.notes.is_empty() && load(&state, &first).is_some(), "the ceiling counts from when it last waited for a slot: {driven:?}");
         let driven = drive(&state, &dir, None, &[], slot_free + CEILING, &|_, _| None, &|_| false, &mut push);
         assert!(driven.notes[0].contains("its Claude did not report ready within 30 minutes"), "{driven:?}");
+        drop_worktree(&dir, &beta);
+        cleanup(dir, origin, &alpha);
+    }
+
+    #[test]
+    fn a_head_whose_build_waits_on_its_own_low_disk_gives_way_at_the_ceiling() {
+        let (dir, origin, alpha, upstream) = task_with_a_commit("alpha");
+        let beta = another_task(&dir, "beta", "e");
+        let state = crate::lead::state_dir().unwrap();
+        let (first, second) = (crate::peers::address("alpha", &name_of(&dir)), crate::peers::address("beta", &name_of(&dir)));
+        let _line = Line { state: state.clone(), addresses: vec![first.clone(), second.clone()] };
+        upstream_commit(&dir, "d", "theirs", "d on main");
+        super::super::push::join(&state, &Caller::User, &dir, &alpha, Through::All).unwrap();
+        super::super::push::join(&state, &Caller::User, &dir, &beta, Through::All).unwrap();
+        let (_, mut push) = real_push(&state);
+        drive(&state, &dir, None, &[], 1000, &|_, _| None, &|_| false, &mut push);
+        let handed = load(&state, &first).unwrap().at;
+        crate::builds::line_up(&first);
+        crate::builds::low_on_disk(&first);
+        let driven = drive(&state, &dir, None, &[], handed + CEILING - 1, &|_, _| None, &|_| false, &mut push);
+        assert!(driven.notes.is_empty() && load(&state, &first).is_some_and(|head| head.waited.is_none()), "a build that gets no turn on a low disk is not waiting for a slot: {driven:?}");
+        let driven = drive(&state, &dir, None, &[], handed + CEILING, &|_, _| None, &|_| false, &mut push);
+        assert!(driven.notes[0].contains("its Claude did not report ready within 30 minutes"), "{driven:?}");
+        assert!(landed(&origin, &upstream).starts_with("beta\nd on main\n"), "beta went out without waiting for alpha: {}", landed(&origin, &upstream));
+        crate::builds::forget(&first);
         drop_worktree(&dir, &beta);
         cleanup(dir, origin, &alpha);
     }

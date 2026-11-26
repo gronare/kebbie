@@ -94,6 +94,11 @@ impl Queue {
         self.line.iter().position(|queued| queued == address).map(|at| at + 1)
     }
 
+    // A task in line whose own disk is low gets no turn until space is freed, so it waits on the disk rather than on a slot.
+    pub fn waits_for_slot(&self, address: &str) -> bool {
+        self.place(address).is_some() && !self.low_disk.iter().any(|low| low == address)
+    }
+
     fn commands(&self) -> Vec<String> {
         self.commands.clone().unwrap_or_else(|| crate::config::DEFAULT_BUILD_COMMANDS.map(str::to_string).to_vec())
     }
@@ -135,6 +140,7 @@ impl Queue {
     pub fn forget(&mut self, address: &str) {
         self.line.retain(|queued| queued != address);
         self.turns.retain(|turn| turn.address != address);
+        self.low_disk.retain(|low| low != address);
     }
 
     // kebbie update stays first, then the heads of the push lines, whose pushes wait on their builds; the rest keep their order.
@@ -273,6 +279,10 @@ fn with_queue<T>(dir: &Path, change: impl FnOnce(&mut Queue) -> T) -> Result<T> 
 
 pub fn place(address: &str) -> Option<usize> {
     dir().ok().and_then(|dir| load(&dir).place(address))
+}
+
+pub fn waits_for_slot(address: &str) -> bool {
+    dir().is_ok_and(|dir| load(&dir).waits_for_slot(address))
 }
 
 pub fn forget(address: &str) {
@@ -708,6 +718,11 @@ pub(crate) fn line_up(address: &str) {
 }
 
 #[cfg(test)]
+pub(crate) fn low_on_disk(address: &str) {
+    with_queue(&dir().unwrap(), |queue| queue.low_disk.push(address.to_string())).unwrap();
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -858,7 +873,9 @@ mod tests {
         assert_eq!(queue.line, strings(&["b@app"]));
         queue.turns.clear();
         assert!(queue.tick(1, &[], &[], |_| true, 102).is_empty(), "a line of only low disks hands out nothing");
+        assert!(!queue.waits_for_slot("b@app") && queue.place("b@app") == Some(1), "it keeps its place but waits on its disk, not on a slot");
         queue.low_disk.clear();
+        assert!(queue.waits_for_slot("b@app"));
         assert_eq!(queue.tick(1, &[], &[], |_| true, 103), vec![("b@app".to_string(), TURN.to_string())]);
     }
 
