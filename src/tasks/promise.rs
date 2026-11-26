@@ -116,8 +116,9 @@ fn next_id(state: &Path) -> u64 {
     id
 }
 
+// A broken promise waits for nothing any more: it stays only until the lead closes it.
 pub(super) fn waited_on(state: &Path, address: &str) -> bool {
-    all(state).iter().any(|promise| promise.after.iter().any(|dep| dep.address == address))
+    all(state).iter().filter(|promise| promise.broken.is_none()).any(|promise| promise.after.iter().any(|dep| dep.address == address))
 }
 
 fn forget(state: &Path, promise: &Promise) {
@@ -304,8 +305,9 @@ pub(crate) fn tick_in(state: &Path, facts: &Facts, log: &[Message], now: u64, te
             Next::Broken(why) => {
                 tell(&broken_text(&promise, &why));
                 notes.push(format!("promise {}: cannot hold", promise.id));
-                after::release_deps(state, promise.after.iter());
-                let _ = save(state, &Promise { broken: Some(why), ..promise });
+                let broken = Promise { broken: Some(why), ..promise };
+                let _ = save(state, &broken);
+                after::release_deps(state, broken.after.iter());
             }
             Next::Due => {
                 tell(&reminder(&promise));
@@ -552,6 +554,12 @@ mod tests {
         let mut red = facts(&[end("red@kebbie", 200, "done")], &[]);
         red.ci.insert("red@kebbie".to_string(), false);
         assert!(reminded(&state, &red, &[], 300)[0].contains("red@kebbie landed with red CI"));
+        let watch = crate::ci::Watch { address: "red@kebbie".to_string(), repo: PathBuf::from("/repos/kebbie"), slug: "acme/kebbie".to_string(), sha: "abcdef0".to_string(), started_at: 10, checked_at: None, close: false, runs: Vec::new(), state: crate::ci::State::Failed { at: 20, what: "ci".to_string(), url: String::new() }, error: None, erring_since: None, following: None, pushed: crate::ci::Pushed::default() };
+        crate::ci::save(&state, &watch).unwrap();
+        save(&state, &promise(4, &["red@kebbie"], None, None)).unwrap();
+        assert!(reminded(&state, &red, &[], 300)[0].contains("Promise 4"));
+        assert!(!waited_on(&state, "red@kebbie"), "a broken promise waits for nothing");
+        assert!(crate::ci::load(&state, "red@kebbie").is_none(), "the CI watch it held goes once it breaks");
         save(&state, &promise(3, &["gone@kebbie"], None, None)).unwrap();
         let gone = facts(&[], &[]);
         assert!(reminded(&state, &gone, &[], 300).is_empty(), "a task missing for a moment gets the grace a wait gets");
