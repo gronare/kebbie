@@ -1025,7 +1025,7 @@ fn unknown_context(run: &Run) -> String {
         return format!("kebbie recorded `{}` without a result: {QUEUED}. Run it again once kebbie tells you a build slot is free.", run.runner);
     }
     if run.lint {
-        return format!("kebbie recorded `{}` without a result: {}. A ready report and every push wait for a green run of the repo's lint, and only a run whose result kebbie read counts, so saying in your report how it ended does not stand in for it: run it again in the foreground, as a command of its own, with no pipe and nothing after it.", run.runner, run.why);
+        return format!("kebbie recorded `{}` without a result: {}. A ready report and every push wait for a green run of the repo's lint, and only a run whose result kebbie read counts, so saying in your report how it ended does not stand in for it: run it again in the foreground, as a command of its own, with no pipe after it.", run.runner, run.why);
     }
     if run.why == IN_BACKGROUND {
         let settles = if run.background.is_empty() { "kebbie cannot see how it ends" } else { "kebbie reads its result from the notice of its end at your next shell command" };
@@ -1809,7 +1809,7 @@ mod tests {
         assert_eq!((run.result, run.why.as_str(), run.exit, run.background.as_str()), (Outcome::Unknown, IN_BACKGROUND, None, "bx1"), "moved to the background at its timeout, it has not ended");
         assert!(unknown_context(&run).contains("run it in the foreground, or say in your report how it ended"));
         let lint = unknown_context(&Run { lint: true, ..run.clone() });
-        assert!(lint.contains("does not stand in for it: run it again in the foreground, as a command of its own, with no pipe") && !lint.contains("or say in your report"), "a lint run is owed a green result, never an account of one: {lint}");
+        assert!(lint.contains("does not stand in for it: run it again in the foreground, as a command of its own, with no pipe after it.") && !lint.contains("or say in your report") && !lint.contains("nothing after it"), "a lint run is owed a green result, never an account of one, and an echo of its exit after it is fine: {lint}");
         assert!(settle(&state, "billing@app", &list, 10).is_empty(), "no notice of its end yet");
         let output = dir.join("bx1.output");
         fs::write(&output, "Test Case '-[AppUITests testCheckout]' failed\n\t Executed 40 tests, with 1 failure (0 unexpected) in 700.1 (700.2) seconds\n** TEST FAILED **\n").unwrap();

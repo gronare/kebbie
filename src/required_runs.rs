@@ -199,7 +199,7 @@ fn owed_in(state: &Path, worktree: &Path, address: &str, end: Option<&str>, find
 
 pub fn report_refusal(gap: &Gap) -> String {
     format!(
-        "Not reported ready: this repo takes a ready report only on a green run of {} on HEAD ({}), and {}. Run {} in your worktree, each as a command of its own, with nothing after it, then report ready again; when one stays red on something your change did not cause, raise it with kebbie obstacle.",
+        "Not reported ready: this repo takes a ready report only on a green run of {} on HEAD ({}), and {}. Run {} in your worktree, each as a command of its own with no pipe after it, then report ready again; when one stays red on something your change did not cause, raise it with kebbie obstacle.",
         gap.names(), gap.settings(), gap.whys(), gap.commands()
     )
 }
@@ -321,6 +321,7 @@ mod tests {
         let gap = Gap { owed: vec![no_run(full("uv run pytest -q"))], end: None };
         let report = report_refusal(&gap);
         assert!(report.starts_with("Not reported ready:") && report.contains("Run `uv run pytest -q` in your worktree") && report.contains("kebbie obstacle"), "{report}");
+        assert!(report.contains("each as a command of its own with no pipe after it") && !report.contains("nothing after it"), "an echo of its exit after the run is what the role recommends: {report}");
         let push = push_refusal(&gap, "Not pushed", "billing");
         assert!(push.contains("Not pushed: its full suite has no green run on HEAD") && push.contains("`uv run pytest -q`"), "{push}");
         let part = push_refusal(&Gap { end: Some("abc1234".to_string()), ..gap }, "Not pushed", "billing");

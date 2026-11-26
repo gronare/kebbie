@@ -286,8 +286,8 @@ pub fn test_commands_line(commands: &[String]) -> Option<String> {
 // A repo on tests.before_push = "full" has its tasks run the whole suite, and one with tests.lint_command its lint, after their last commit, since ready and every push wait on them.
 pub fn tests_line(commands: &[String], full: Option<&str>, lint: Option<&str>) -> String {
     let own = test_commands_line(commands).map_or(String::new(), |line| format!(" {line}: run your tests through it, with the files or test names your change touches as its arguments, and start no other test setup, such as the bare test runner it wraps, which can boot another environment and reset its data."));
-    let full = full.map_or(String::new(), |full| format!(" This repo pushes only on a green run of its full suite on HEAD (`tests.before_push = \"full\"`): once your last commit is made, run `{full}` as a command of its own, with nothing after it in the line, before you report ready. kebbie refuses the ready report, and every push, until that run passed on HEAD."));
-    let lint = lint.map_or(String::new(), |lint| format!(" This repo lints with `{lint}` (`tests.lint_command`), as CI does: once your last commit is made, run it word for word as a command of its own, with nothing after it in the line, before you report ready. kebbie refuses the ready report, and every push, until that run passed on HEAD; fix what it finds, as --red-cause excuses no lint."));
+    let full = full.map_or(String::new(), |full| format!(" This repo pushes only on a green run of its full suite on HEAD (`tests.before_push = \"full\"`): once your last commit is made, run `{full}` as a command of its own, with no pipe after it, before you report ready. kebbie refuses the ready report, and every push, until that run passed on HEAD."));
+    let lint = lint.map_or(String::new(), |lint| format!(" This repo lints with `{lint}` (`tests.lint_command`), as CI does: once your last commit is made, run it word for word as a command of its own, with no pipe after it, before you report ready. kebbie refuses the ready report, and every push, until that run passed on HEAD; fix what it finds, as --red-cause excuses no lint."));
     own + &full + &lint
 }
 
@@ -447,6 +447,13 @@ pub fn write_role(file: &Path, template: &str, pairs: &[(&str, &str)], profile: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_full_suite_and_lint_lines_ask_for_no_pipe_after_the_run_not_for_nothing_after_it() {
+        let line = tests_line(&[], Some("cargo test --locked"), Some("cargo clippy --locked --all-targets -- -D warnings"));
+        assert_eq!(line.matches("as a command of its own, with no pipe after it, before you report ready").count(), 2, "an echo of its exit after the run is what the role recommends: {line}");
+        assert!(!line.contains("nothing after it"), "{line}");
+    }
 
     #[test]
     fn an_addresss_task_is_the_text_before_its_first_at() {
