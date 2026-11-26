@@ -27,7 +27,7 @@ Three pages hold what happens between the start and the push. Read the one your 
 
 ## Review by assessment
 
-Whether a task needs a reviewer is the assessor's judgement of its work, as your role's Review station says: no recipe adds a review or skips one. Bring the user each `review suggested` with your recommendation, and send it on their word.
+A review is optional, and the user's to ask for: no recipe adds one or skips one. A `review suggested` from the assessor is information for the user; send a task to review on the user's word alone.
 
 ## The note holds the history
 

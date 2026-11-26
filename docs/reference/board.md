@@ -231,7 +231,7 @@ kebbie keeps one phase per task, and only what changes it writes it: its start, 
 - A task whose turn ended without a report even after kebbie asked for one.
 - A task whose CI failed after a push of only some of its commits, marked `CI failed: <workflow> · <job> · <step>`, and `its Claude says outside the code: <reason>` once its Claude has said so. `C` dismisses it.
 - A push under way whose Claude reported needs-you.
-- A push that left its repo's push line unpushed, marked `out of the push line: <why>`: its Claude did not report ready within 30 minutes, it reported needs-you, or it has commits nobody checked since you chose push. Push again and it joins the end of the line.
+- A push that left its repo's push line unpushed, marked `out of the push line: <why>`: its Claude did not report ready within 30 minutes while another push waited behind it, or stopped without one alone in the line, it reported needs-you, or it has commits nobody checked since you chose push. Push again and it joins the end of the line.
 - A push or close kebbie could not finish.
 - A pushed task whose CI was cancelled with no newer run on the branch to follow, and not by a shut deploy window, marked `CI cancelled: <workflow> · <job>`. `G` runs it again, `C` dismisses it, and a later run that passes closes it.
 - A pushed task whose CI gh has not been able to read for 15 minutes, marked `CI unknown`, its row marked `gh cannot read it: <error>` meanwhile. `C` dismisses it.
