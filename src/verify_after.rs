@@ -41,12 +41,18 @@ pub fn load(state: &Path, address: &str) -> Option<Held> {
     Some(Held { what: value["what"].as_str()?.to_string(), asked: value["asked"].as_str().map(str::to_string), landed: value["landed"].as_str().map(str::to_string), fixing: value["fixing"].as_u64() })
 }
 
+// Held across each read, change and write of the file, which the report, the push or CI watch and the user's answer each rewrite from their own process.
+fn locked(state: &Path, address: &str) -> Result<crate::state::Locked> {
+    crate::state::Locked::wait(&file(state, address).with_extension("lock"))
+}
+
 fn save(state: &Path, address: &str, held: &Held) -> Result<()> {
     crate::state::write(&file(state, address), json!({ "what": held.what, "asked": held.asked, "landed": held.landed, "fixing": held.fixing }).to_string())
 }
 
 // A later ready report names the check anew, withdrawing a question about the old one; the commits of a push already out and a fix still to push stay.
 pub fn name(state: &Path, address: &str, what: &str) -> Result<()> {
+    let _held = locked(state, address)?;
     let held = load(state, address).unwrap_or_default();
     if let Some(id) = &held.asked {
         crate::kebbie_questions::withdraw(state, id);
@@ -66,6 +72,7 @@ pub fn holds_open(state: &Path, address: &str) -> bool {
 
 // Where kebbie would close the task: with a check named, it asks the user instead and the task waits under Needs you; None closes as before. pushed is the commits of the push that got it there, None when no push of kebbie's did.
 pub fn hold(state: &Path, address: &str, pushed: Option<&str>) -> Option<String> {
+    let _held = locked(state, address).map_err(|error| eprintln!("kebbie asks {address}'s verification without its lock: {error}")).ok();
     let held = load(state, address)?;
     if waiting(state, address) {
         return Some(waits(&held.what));
@@ -98,6 +105,7 @@ fn waits(what: &str) -> String {
 
 // The user saw something wrong: the task fixes it, and only the push of the fix asks again.
 pub fn reopen(state: &Path, address: &str) {
+    let _held = locked(state, address).map_err(|error| eprintln!("kebbie reopens {address}'s verification without its lock: {error}")).ok();
     if let Some(held) = load(state, address) {
         let _ = save(state, address, &Held { asked: None, fixing: Some(messages::now()), ..held });
     }
@@ -114,6 +122,7 @@ pub fn head_line(path: &Path) -> Option<String> {
 }
 
 pub fn forget(state: &Path, address: &str) {
+    let _held = locked(state, address);
     let _ = fs::remove_file(file(state, address));
 }
 
@@ -219,8 +228,31 @@ mod tests {
     }
 
     #[test]
+    fn naming_the_check_waits_while_another_process_asks_and_withdraws_the_question_it_asked() {
+        use crate::kebbie_questions::Kind;
+        let state = crate::sh::test_dir("verify-after-locked");
+        let solved = || crate::kebbie_questions::load(&state).into_iter().filter(|asked| asked.kind == Kind::Solved).count();
+        name(&state, "billing@app", "the refunds page loads").unwrap();
+        let asking = locked(&state, "billing@app").unwrap();
+        let naming = {
+            let state = state.clone();
+            std::thread::spawn(move || name(&state, "billing@app", "the refunds page shows totals"))
+        };
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(!naming.is_finished(), "name waits for the lock the asking process holds");
+        let asked = crate::kebbie_questions::ask_solved(&state, "billing@app", "billing is out. Check: the refunds page loads").unwrap();
+        save(&state, "billing@app", &Held { asked: Some(asked.id), ..load(&state, "billing@app").unwrap() }).unwrap();
+        drop(asking);
+        naming.join().unwrap().unwrap();
+        assert_eq!(solved(), 0, "name read the question the other process asked and withdrew it");
+        assert_eq!(load(&state, "billing@app").map(|held| (held.what, held.asked)), Some(("the refunds page shows totals".to_string(), None)));
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
     fn a_ready_report_with_nothing_to_push_asks_the_users_check_and_not_whether_to_close() {
         use crate::kebbie_questions::Kind;
+        use crate::phase::{Phase, Why};
         let (dir, origin, slot, upstream) = crate::tasks::test_support::task_with_a_commit("billing");
         let state = crate::lead::state_dir().unwrap();
         let address = crate::peers::address("billing", &crate::repo::name_of(&dir));
@@ -229,6 +261,11 @@ mod tests {
         crate::repo::git(&dir, &["fetch", "--quiet", "origin"]).unwrap();
         let asked = || crate::kebbie_questions::load(&state).into_iter().filter(|asked| asked.address == address).map(|asked| asked.kind).collect::<Vec<_>>();
         crate::report::report(&slot.path, Some("ready"), Some("nothing"), None, &[], None, Some("the refunds page loads"), None, "refunds out").unwrap();
+        assert_eq!(asked(), [Kind::Solved]);
+        let phase = || crate::phase::load(&state, &address).map(|record| record.phase);
+        assert_eq!(phase(), Some(Phase::NeedsYou(Why::Verify)));
+        crate::report::report(&slot.path, Some("ready"), Some("nothing"), None, &[], None, None, None, "still out").unwrap();
+        assert_eq!(phase(), Some(Phase::NeedsYou(Why::Verify)), "a ready report while the user's verification waits keeps the row on it");
         assert_eq!(asked(), [Kind::Solved]);
         crate::kebbie_questions::forget(&address);
         reopen(&state, &address);
