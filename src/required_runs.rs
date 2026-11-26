@@ -145,17 +145,21 @@ impl Gap {
     }
 }
 
-// The required runs a ready report still owes on HEAD; a run counts on the code it ran on, so one run before committing counts for the commit that holds the same tree.
-pub fn owed(worktree: &Path, address: &str, excused: Option<&str>) -> Owing {
-    let Ok(state) = crate::lead::state_dir() else { return Owing::default() };
-    owed_in(&state, worktree, address, None, had_findings(&state, address), excused.map(str::to_string))
+// The required runs a ready report still owes on HEAD; a run counts on the code it ran on, so one run before committing counts for the commit that holds the same tree. What kebbie cannot read is an error, so the gate stays shut.
+pub fn owed(worktree: &Path, address: &str, excused: Option<&str>) -> crate::sh::Result<Owing> {
+    let state = crate::lead::state_dir().map_err(unreadable("its state folder"))?;
+    owed_in(&state, worktree, address, None, had_findings(&state, address)?, excused.map(str::to_string))
 }
 
 // The same for a push, which may end at an earlier commit than HEAD and goes out only on green runs of that commit's own code; findings never hold the user's push.
-pub fn owed_at(worktree: &Path, address: &str, end: Option<&str>) -> Option<Gap> {
-    let state = crate::lead::state_dir().ok()?;
+pub fn owed_at(worktree: &Path, address: &str, end: Option<&str>) -> crate::sh::Result<Option<Gap>> {
+    let state = crate::lead::state_dir().map_err(unreadable("its state folder"))?;
     let excused = std::fs::read_to_string(crate::evidence::excuse_file(&state, address)).ok().map(|code| code.trim().to_string());
-    owed_in(&state, worktree, address, end, false, excused).gap
+    Ok(owed_in(&state, worktree, address, end, false, excused)?.gap)
+}
+
+fn unreadable(what: &str) -> impl Fn(String) -> String + '_ {
+    move |error| format!("kebbie cannot tell which test and lint runs this task owes, as it could not read {what} ({error}); fix that and try again")
 }
 
 // Kept once a ready report with --red-cause is taken, so the push answers to the same red run the report did.
@@ -163,20 +167,27 @@ pub fn excuse(state: &Path, address: &str, code: &str) -> crate::sh::Result<()> 
     crate::state::write(&crate::evidence::excuse_file(state, address), code)
 }
 
-// The review's latest verdict asked for changes the task makes in code, not only for the user's confirmation.
-fn had_findings(state: &Path, address: &str) -> bool {
-    std::fs::read_to_string(crate::review::verdict_file(state, address)).ok().and_then(|text| crate::review::parse_verdict(&text)).is_some_and(|verdict| !verdict.ok && !verdict.asks_only_confirmation())
+// The review's latest verdict asked for changes the task makes in code, not only for the user's confirmation; no verdict file is no review, one kebbie cannot read or parse is an error.
+fn had_findings(state: &Path, address: &str) -> crate::sh::Result<bool> {
+    let file = crate::review::verdict_file(state, address);
+    let text = match std::fs::read_to_string(&file) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(unreadable("the review's verdict")(error.to_string())),
+    };
+    let verdict = crate::review::parse_verdict(&text).ok_or_else(|| unreadable("the review's verdict")(format!("{} holds no verdict", file.display())))?;
+    Ok(!verdict.ok && !verdict.asks_only_confirmation())
 }
 
 // The default branch moved under the task's tests: no green test run holds the base HEAD now sits on, as after a rebase onto a newer default branch; a task that never ran a test needs one once HEAD left the base its branch started on, unless it changes only files that run no test.
-fn rebased(worktree: &Path, head: &str, tests: &[Run]) -> bool {
-    let Some(upstream) = crate::repo::main_checkout(worktree).and_then(|repo| crate::repo::default_branch(&repo)).map(|upstream| crate::repo::tracking(&upstream)).ok() else { return false };
-    let Ok(base) = git(worktree, &["merge-base", head, &upstream]) else { return false };
+fn rebased(worktree: &Path, head: &str, tests: &[Run]) -> crate::sh::Result<bool> {
+    let upstream = crate::repo::main_checkout(worktree).and_then(|repo| crate::repo::default_branch(&repo)).map(|upstream| crate::repo::tracking(&upstream)).map_err(unreadable("the default branch"))?;
+    let base = git(worktree, &["merge-base", head, &upstream]).map_err(unreadable("where the branch left the default branch"))?;
     if tests.is_empty() {
         let code = git(worktree, &["diff", "--name-only", "--no-renames", &base, head]).map(|files| files.lines().any(|file| !file.is_empty() && !crate::tasks::text_only(file)));
-        return code.unwrap_or(true) && started_on(worktree, &upstream).is_none_or(|start| start != base);
+        return Ok(code.unwrap_or(true) && started_on(worktree, &upstream).is_none_or(|start| start != base));
     }
-    !tests.iter().any(|run| run.result == Outcome::Passed && crate::sh::succeeds("git", &["merge-base", "--is-ancestor", &base, &run.code], Some(worktree)))
+    Ok(!tests.iter().any(|run| run.result == Outcome::Passed && crate::sh::succeeds("git", &["merge-base", "--is-ancestor", &base, &run.code], Some(worktree))))
 }
 
 // Where the task's branch left the default branch when it was made, from the oldest entry of its reflog.
@@ -191,20 +202,20 @@ fn suggested(settings: &Settings, tests: &[Run]) -> String {
     tests.last().map(|run| run.runner.clone()).or_else(|| settings.test_commands.value.first().cloned()).unwrap_or_default()
 }
 
-fn owed_in(state: &Path, worktree: &Path, address: &str, end: Option<&str>, findings: bool, excused: Option<String>) -> Owing {
-    let Ok(settings) = crate::config::resolve(Some(worktree)).map(|loaded| loaded.settings) else { return Owing::default() };
+fn owed_in(state: &Path, worktree: &Path, address: &str, end: Option<&str>, findings: bool, excused: Option<String>) -> crate::sh::Result<Owing> {
+    let settings = crate::config::resolve(Some(worktree)).map(|loaded| loaded.settings).map_err(unreadable("the repo's config"))?;
     crate::evidence::settle(state, address, &crate::evidence::listed_for(&settings), crate::messages::now());
-    let Ok(head) = git(worktree, &["rev-parse", end.unwrap_or("HEAD")]) else { return Owing::default() };
+    let head = git(worktree, &["rev-parse", end.unwrap_or("HEAD")]).map_err(unreadable("the commit the runs must hold"))?;
     let head_tree = crate::evidence::tree_of(worktree, &head);
     let on_head = |run: &Run| run.code == head || (head_tree.is_some() && crate::evidence::tree_of(worktree, &run.code) == head_tree);
     let (tests, lints) = (crate::evidence::runs_in(state, address), crate::evidence::lint_runs_in(state, address));
     let mut required = required(&settings);
-    let after = if findings { Some(After::Findings) } else if rebased(worktree, &head, &tests) { Some(After::Rebase) } else { None };
+    let after = if findings { Some(After::Findings) } else if rebased(worktree, &head, &tests)? { Some(After::Rebase) } else { None };
     if let Some(after) = after.filter(|_| !required.iter().any(|required| required.kind == Kind::Full)) {
         required.push(Required { kind: Kind::Tests(after), command: suggested(&settings, &tests) });
     }
     if required.is_empty() {
-        return Owing::default();
+        return Ok(Owing::default());
     }
     // A red test run whose cause the task found and leaves red answers the test run owed on HEAD while it is the latest and ran on HEAD's code; the lint and the full suite still need theirs.
     let excused_on_head = excused.is_some_and(|code| crate::evidence::latest(&tests).is_some_and(|run| run.result == Outcome::Failed && run.code == code && on_head(run)));
@@ -219,7 +230,7 @@ fn owed_in(state: &Path, worktree: &Path, address: &str, end: Option<&str>, find
         owed.retain(|owed| owed.required.kind != Kind::Lint);
     }
     let gap = (!owed.is_empty()).then(|| Gap { owed, end: end.map(|end| end[..7.min(end.len())].to_string()), from_main: from_main.filter(|from_main| !from_main.shown) });
-    Owing { gap, from_main: shown }
+    Ok(Owing { gap, from_main: shown })
 }
 
 // Whether the lint red on HEAD came from the default branch, by the lint's latest run on each tree: red on HEAD's, red on the base's and green on a commit of the default branch since shows it, also once that branch moved on again; a green run on the base or a red one there rules it out.
@@ -356,6 +367,36 @@ mod tests {
     }
 
     #[test]
+    fn the_gate_stays_shut_when_kebbie_cannot_read_the_repos_config() {
+        let (dir, origin, slot, upstream) = crate::tasks::test_support::task_with_a_commit("billing");
+        let address = crate::peers::address("billing", &crate::repo::name_of(&dir));
+        let file = crate::config::repo_file(&dir);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "[tests\nlint_command = ").unwrap();
+        let refused = owed(&slot.path, &address, None).map(|_| ()).unwrap_err();
+        assert!(refused.contains("could not read the repo's config"), "{refused}");
+        assert!(owed_at(&slot.path, &address, None).is_err(), "a push is held the same way");
+        let _ = std::fs::remove_file(file);
+        let state = crate::lead::state_dir().unwrap();
+        let verdict = crate::review::verdict_file(&state, &address);
+        std::fs::create_dir_all(verdict.parent().unwrap()).unwrap();
+        std::fs::write(&verdict, "half a verdi").unwrap();
+        assert!(owed(&slot.path, &address, None).map(|_| ()).unwrap_err().contains("could not read the review's verdict"), "a verdict kebbie cannot parse never reads as no findings");
+        let _ = std::fs::remove_file(&verdict);
+        assert!(owed(&slot.path, &address, None).unwrap().gap.is_none(), "no verdict at all is no review");
+        let empty = git(&dir, &["hash-object", "-t", "tree", "/dev/null"]).unwrap();
+        let unrelated = git(&dir, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit-tree", &empty, "-m", "unrelated root"]).unwrap();
+        let tip = git(&dir, &["rev-parse", &format!("refs/remotes/{upstream}")]).unwrap();
+        git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), &unrelated]).unwrap();
+        assert!(owed(&slot.path, &address, None).map(|_| ()).unwrap_err().contains("could not read where the branch left the default branch"), "a default branch with no history in common never reads as not rebased");
+        git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), &tip]).unwrap();
+        git(&dir, &["update-ref", "-d", "--no-deref", "refs/remotes/origin/HEAD"]).unwrap();
+        git(&dir, &["update-ref", "-d", &format!("refs/remotes/{upstream}")]).unwrap();
+        assert!(owed(&slot.path, &address, None).map(|_| ()).unwrap_err().contains("could not read the default branch"), "a default branch kebbie cannot find never reads as not rebased");
+        crate::tasks::test_support::cleanup(dir, origin, &slot);
+    }
+
+    #[test]
     fn after_findings_a_ready_report_owes_a_green_test_run_on_heads_tree_and_a_reworded_commit_keeps_it() {
         let (dir, origin, slot, _) = crate::tasks::test_support::task_with_a_commit("billing");
         let state = crate::lead::state_dir().unwrap();
@@ -363,7 +404,7 @@ mod tests {
         let head = || git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
         let verdict = crate::review::verdict_file(&state, &address);
         std::fs::create_dir_all(verdict.parent().unwrap()).unwrap();
-        let owed_kinds = || owed(&slot.path, &address, None).gap.map(|gap| gap.owed.iter().map(|owed| owed.required.kind).collect::<Vec<_>>());
+        let owed_kinds = || owed(&slot.path, &address, None).unwrap().gap.map(|gap| gap.owed.iter().map(|owed| owed.required.kind).collect::<Vec<_>>());
         assert_eq!(owed_kinds(), None, "no review, nothing owed in a repo on related");
         std::fs::write(&verdict, format!("verdict: changes\nreviewed: {}\n\n- confirm: is the new wording what you want\n", head())).unwrap();
         assert_eq!(owed_kinds(), None, "a finding only the user can settle asks for no test run");
@@ -371,8 +412,8 @@ mod tests {
         assert_eq!(owed_kinds(), Some(vec![Kind::Tests(After::Findings)]));
         let run = |code: &str, result: Outcome| crate::evidence::save(&state, &address, &Run { command: "cargo test --lib billing".to_string(), runner: "cargo test".to_string(), result, sha: code.to_string(), code: code.to_string(), ..Run::default() }).unwrap();
         run(&head(), Outcome::Failed);
-        assert!(owed(&slot.path, &address, None).gap.is_some_and(|gap| report_refusal(&gap).contains("green run of its tests on HEAD (its review had findings)")));
-        assert!(owed(&slot.path, &address, Some(&head())).gap.is_none(), "a red run on HEAD whose cause the task found and leaves red, with --red-cause, answers the findings");
+        assert!(owed(&slot.path, &address, None).unwrap().gap.is_some_and(|gap| report_refusal(&gap).contains("green run of its tests on HEAD (its review had findings)")));
+        assert!(owed(&slot.path, &address, Some(&head())).unwrap().gap.is_none(), "a red run on HEAD whose cause the task found and leaves red, with --red-cause, answers the findings");
         let tested = head();
         run(&tested, Outcome::Passed);
         assert_eq!(owed_kinds(), None, "any green test run on HEAD answers the findings");
@@ -384,7 +425,7 @@ mod tests {
         let older = head();
         crate::tasks::test_support::commit(&slot.path, "more", "more after the red run");
         run(&older, Outcome::Failed);
-        assert!(owed(&slot.path, &address, Some(&older)).gap.is_some(), "a red run on older code excuses nothing on HEAD");
+        assert!(owed(&slot.path, &address, Some(&older)).unwrap().gap.is_some(), "a red run on older code excuses nothing on HEAD");
         let _ = std::fs::remove_file(verdict);
         let _ = std::fs::remove_file(crate::evidence::file(&state, &address));
         crate::tasks::test_support::cleanup(dir, origin, &slot);
@@ -404,30 +445,30 @@ mod tests {
         let (head, base) = (rev("HEAD"), rev(&upstream));
         let ran = |code: &str, result: Outcome| crate::evidence::save(&state, &address, &Run { command: cmd.to_string(), runner: cmd.to_string(), result, sha: code.to_string(), code: code.to_string(), lint: true, ..Run::default() }).unwrap();
         ran(&head, Outcome::Failed);
-        assert!(owed(&slot.path, &address, None).gap.is_some_and(|gap| gap.from_main.is_none()), "on the tip of main, a red lint is the task's own");
+        assert!(owed(&slot.path, &address, None).unwrap().gap.is_some_and(|gap| gap.from_main.is_none()), "on the tip of main, a red lint is the task's own");
         upstream_commit(&dir, "fix", "x", "main fixes its lint");
         let tip = rev(&upstream);
-        let owing = owed(&slot.path, &address, None);
+        let owing = owed(&slot.path, &address, None).unwrap();
         let refusal = report_refusal(owing.gap.as_ref().unwrap());
         assert!(owing.from_main.is_none() && refusal.contains(&format!("`git restore --source={} --staged --worktree :/`", &base[..7])) && refusal.contains(&format!("--source={upstream}")) && refusal.contains("each step as a command of its own") && refusal.contains("never check out another commit"), "the refusal says how to show it: {refusal}");
         ran(&base, Outcome::Failed);
-        assert!(owed(&slot.path, &address, None).gap.is_some(), "red on the base alone does not say main fixed it");
+        assert!(owed(&slot.path, &address, None).unwrap().gap.is_some(), "red on the base alone does not say main fixed it");
         crate::evidence::save(&state, &address, &Run { command: cmd.to_string(), runner: cmd.to_string(), result: Outcome::Unknown, why: "piped".to_string(), sha: tip.clone(), code: tip.clone(), lint: true, ..Run::default() }).unwrap();
-        assert!(owed(&slot.path, &address, None).gap.is_some_and(|gap| gap.from_main.is_some_and(|from_main| !from_main.shown && from_main.fixed.is_none())), "a lint run on main whose result kebbie could not read shows nothing fixed");
+        assert!(owed(&slot.path, &address, None).unwrap().gap.is_some_and(|gap| gap.from_main.is_some_and(|from_main| !from_main.shown && from_main.fixed.is_none())), "a lint run on main whose result kebbie could not read shows nothing fixed");
         ran(&tip, Outcome::Passed);
-        let owing = owed(&slot.path, &address, None);
+        let owing = owed(&slot.path, &address, None).unwrap();
         assert!(owing.gap.is_none(), "red on HEAD and on the base, green on the tip: the error came from main");
         let taken = owing.from_main.unwrap().taken();
         assert!(taken.contains(&format!("passes on {upstream} at {}", &tip[..7])) && taken.contains(&format!("the error comes from {upstream} and is fixed there")) && taken.contains("lints the rebased code"), "{taken}");
-        assert!(owed_at(&slot.path, &address, None).is_none(), "the push of the whole task joins the line on the same proof");
+        assert!(owed_at(&slot.path, &address, None).unwrap().is_none(), "the push of the whole task joins the line on the same proof");
         upstream_commit(&dir, "later", "y", "another task's push");
-        assert!(owed(&slot.path, &address, None).gap.is_none(), "the green run on main's commit still shows it once main moved on");
-        assert!(owed_at(&slot.path, &address, Some(&head)).is_some_and(|gap| gap.owed.iter().any(|owed| owed.required.kind == Kind::Lint)), "a push that ends at a named commit gets no let-off");
+        assert!(owed(&slot.path, &address, None).unwrap().gap.is_none(), "the green run on main's commit still shows it once main moved on");
+        assert!(owed_at(&slot.path, &address, Some(&head)).unwrap().is_some_and(|gap| gap.owed.iter().any(|owed| owed.required.kind == Kind::Lint)), "a push that ends at a named commit gets no let-off");
         ran(&tip, Outcome::Failed);
-        assert!(owed(&slot.path, &address, None).gap.is_some_and(|gap| gap.from_main.is_none()), "red on the tip too: main has not fixed it");
+        assert!(owed(&slot.path, &address, None).unwrap().gap.is_some_and(|gap| gap.from_main.is_none()), "red on the tip too: main has not fixed it");
         ran(&tip, Outcome::Passed);
         ran(&base, Outcome::Passed);
-        assert!(owed(&slot.path, &address, None).gap.is_some_and(|gap| gap.from_main.is_none()), "green on the base: the error is the task's");
+        assert!(owed(&slot.path, &address, None).unwrap().gap.is_some_and(|gap| gap.from_main.is_none()), "green on the base: the error is the task's");
         let _ = std::fs::remove_file(file);
         let _ = std::fs::remove_file(crate::evidence::file(&state, &address));
         cleanup(dir, origin, &slot);

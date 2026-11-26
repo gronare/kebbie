@@ -623,7 +623,7 @@ pub(super) fn join_on(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, t
     if waiting.is_some() && !By::of(caller).is_some_and(|by| by.is_user()) {
         return Notice::new(Tone::NotNow, "Already being pushed").next("It is in the push line; kebbie pushes it when its turn comes.").detail("task", &task).err();
     }
-    if let Some(gap) = crate::required_runs::owed_at(&slot.path, &address, pushed_end(&slot.path, &upstream, through)?.as_deref()) {
+    if let Some(gap) = crate::required_runs::owed_at(&slot.path, &address, pushed_end(&slot.path, &upstream, through)?.as_deref()).map_err(|error| format!("Not pushed: {error}."))? {
         return Err(crate::required_runs::push_refusal(&gap, "Not pushed", &task));
     }
     let now = messages::now();
@@ -791,7 +791,7 @@ fn prepare(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Thr
     }
     intent::forget(state, &address);
     let pusher = authorize(caller, repo, slot, &upstream, through)?;
-    if let Some(gap) = crate::required_runs::owed_at(&slot.path, &address, pushed_end(&slot.path, &upstream, through)?.as_deref()) {
+    if let Some(gap) = crate::required_runs::owed_at(&slot.path, &address, pushed_end(&slot.path, &upstream, through)?.as_deref()).map_err(|error| format!("Not pushed: {error}."))? {
         if through != Through::All || git(&slot.path, &["rev-parse", "HEAD"])? == before {
             return Err(crate::required_runs::push_refusal(&gap, "Not pushed", &task));
         }
@@ -1797,7 +1797,7 @@ mod tests {
         let (dir, origin, slot, _) = task_with_a_commit("billing");
         let pushing = Pushing::new(&dir);
         let (_, hand) = handed();
-        assert!(crate::required_runs::owed_at(&slot.path, &pushing.address, None).is_none(), "on the base its branch started on, nothing is owed");
+        assert!(crate::required_runs::owed_at(&slot.path, &pushing.address, None).unwrap().is_none(), "on the base its branch started on, nothing is owed");
         upstream_commit(&dir, "elsewhere", "x", "someone else's work");
         let handed = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap();
         assert!(matches!(&handed, Prepared::Handed(said) if said.contains("so its tests run first")), "no recorded run is no proof the rebased code works: {handed:?}");

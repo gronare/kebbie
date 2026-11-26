@@ -55,7 +55,7 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
         let runs = crate::evidence::runs_in(&state_dir()?, &me);
         let red = red_gate(&runs, red_cause)?;
         let excused = red.as_ref().and_then(|_| crate::evidence::latest(&runs)).map(|run| run.code.clone());
-        let owing = if to_push(cwd) { crate::required_runs::owed(cwd, &me, excused.as_deref()) } else { crate::required_runs::Owing::default() };
+        let owing = if to_push(cwd) { crate::required_runs::owed(cwd, &me, excused.as_deref()).map_err(|error| format!("Not reported ready: {error}."))? } else { crate::required_runs::Owing::default() };
         if let Some(gap) = &owing.gap {
             return Err(crate::required_runs::report_refusal(gap));
         }
