@@ -161,15 +161,23 @@ pub(super) fn release_with(repo: &Path, slot: &Slot, upstream: &str, folders: &[
     let default = upstream.split_once('/').map_or(upstream, |(_, branch)| branch);
     let mine = |branch: &str| !branch.is_empty() && branch != default && branch != format!("wt{}", slot.number) && branch_exists(repo, branch);
     let task = task_of(slot);
+    let mut kept = None;
     if mine(task) {
-        git(repo, &["branch", "-D", task])?;
+        // Closing checked only the commit the worktree was on, so a task branch it had left may hold commits found nowhere else.
+        match (on != task).then(|| super::finish::unlanded(repo, upstream, task)) {
+            Some(Ok(missing)) if !missing.is_empty() => kept = Some(format!("kept branch {task}, which has {} not on {default}", crate::board::widgets::plural(missing.len(), "commit"))),
+            Some(Err(error)) => kept = Some(format!("kept branch {task}, as its commits could not be compared with {default}: {error}")),
+            _ => {
+                git(repo, &["branch", "-D", task])?;
+            }
+        }
     }
     // The slot may be on a branch the user had before the task, with commits only there; only one created since the slot was claimed is the task's.
     if on != task && mine(&on) && claimed.is_some_and(|claimed| created_since(repo, &on, claimed)) {
         git(repo, &["branch", "-D", &on])?;
     }
     let freed = tidy(repo, &slot.path, upstream, folders);
-    let said: Vec<String> = ran.into_iter().chain(freed).collect();
+    let said: Vec<String> = ran.into_iter().chain(kept).chain(freed).collect();
     Ok((!said.is_empty()).then(|| said.join("; ")))
 }
 
@@ -595,6 +603,7 @@ mod tests {
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         let default = upstream.split_once('/').unwrap().1.to_string();
         git(&slot.path, &["switch", "--quiet", "-c", "shared"]).unwrap();
+        git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), "billing"]).unwrap();
         let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
         std::fs::File::options().write(true).open(task_record(&slot.path).unwrap()).unwrap().set_modified(later).unwrap();
         git(&dir, &["switch", "--quiet", "--detach"]).unwrap();
@@ -612,6 +621,19 @@ mod tests {
         assert!(branch_exists(&dir, "long-held"), "a branch whose reflog lost its creation is not taken for the task's, though its oldest entry left is newer than the claim");
         git(&dir, &["switch", "--quiet", &default]).unwrap();
         git(&slot.path, &["switch", "--quiet", "-c", "billing"]).unwrap();
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_release_from_another_branch_keeps_the_task_branch_while_it_holds_commits_not_on_upstream() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        git(&slot.path, &["switch", "--quiet", "--detach", &upstream]).unwrap();
+        let freed = release_with(&dir, &slot, &upstream, &[], None, false).unwrap().unwrap_or_default();
+        assert!(branch_exists(&dir, "billing"), "the commit only billing has stays reachable");
+        assert!(freed.contains("kept branch billing, which has 1 commit not on"), "{freed}");
+        git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), "billing"]).unwrap();
+        release_with(&dir, &slot, &upstream, &[], None, false).unwrap();
+        assert!(!branch_exists(&dir, "billing"), "once upstream has its commits it goes");
         cleanup(dir, origin, &slot);
     }
 

@@ -23,6 +23,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The lead's promises ("once that lands I set the lint command") are kept by kebbie: it reminds the lead when one is due, a fresh lead hears of them, and the board shows one only when it is overdue.
 
 ### Fixed
+- Closing or dropping a task whose worktree moved to another branch keeps the task's branch while it has commits not on the default branch.
 - A message to the lead goes at once, mid-turn or while you talk with it, and no longer waits 3 quiet minutes or stays held after the lead went idle.
 - A task the lead pushes shows no yellow read count or subtask to accept, and no task row shows its recipe or rules check.
 - The head of a push line is told its real place when it joins the build queue.

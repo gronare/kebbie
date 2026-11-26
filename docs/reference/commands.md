@@ -401,7 +401,7 @@ Mark the comment's reply as posted, which takes it off the board. Yours alone. S
 
 ### `kebbie done [name]`
 
-Close a task once every change on its branch is on the default branch, pushed as is, cherry-picked or squashed, and it has no uncommitted changes or stash. It closes its Space, deletes the branch, frees the worktree, fast-forwards a clean main checkout and, with the vault, closes the task's note whatever it holds. Otherwise it names the missing commits.
+Close a task once every change on its branch is on the default branch, pushed as is, cherry-picked or squashed, and it has no uncommitted changes or stash. It closes its Space, deletes the branch (a task branch the worktree has left is kept while it has commits not on the default branch, and the closing line says so), frees the worktree, fast-forwards a clean main checkout and, with the vault, closes the task's note whatever it holds. Otherwise it names the missing commits.
 
 You rarely need it. Every minute the keeper closes a task whose commits reached the default branch some other way than kebbie's push of that task: pushed with git, cherry-picked or rebased with conflict resolutions, squashed, or carried by another task's push.
 

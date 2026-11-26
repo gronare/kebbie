@@ -248,13 +248,17 @@ impl Drop for Closing {
 
 // The branch's commits whose change upstream lacks, as "sha subject"; empty when every change landed, however it was cherry-picked or squashed.
 pub(super) fn missing_from(path: &Path, upstream: &str) -> Result<Vec<String>> {
+    unlanded(path, upstream, "HEAD")
+}
+
+pub(super) fn unlanded(path: &Path, upstream: &str, rev: &str) -> Result<Vec<String>> {
     let upstream = &crate::repo::tracking(upstream);
-    let unmatched: Vec<String> = git(path, &["cherry", "-v", "--abbrev", upstream, "HEAD"])?.lines()
+    let unmatched: Vec<String> = git(path, &["cherry", "-v", "--abbrev", upstream, rev])?.lines()
         .filter_map(|line| line.strip_prefix("+ ")).map(str::to_string).collect();
     if unmatched.is_empty() {
         return Ok(unmatched);
     }
-    let merged = git(path, &["merge-tree", "--write-tree", upstream, "HEAD"]);
+    let merged = git(path, &["merge-tree", "--write-tree", upstream, rev]);
     if merged.is_ok_and(|tree| tree.lines().next() == git(path, &["rev-parse", &format!("{upstream}^{{tree}}")]).ok().as_deref()) {
         return Ok(Vec::new());
     }
