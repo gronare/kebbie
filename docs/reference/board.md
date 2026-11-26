@@ -238,6 +238,8 @@ kebbie keeps one phase per task, and only what changes it writes it: its start, 
 
 After the tasks under Needs you, one row per backlog item whose questions block its start and wait on you, newest first, such as `? Links show used pages   1 question · answer on its card`. NEEDS YOU shows for them even when no task is there, and its count and the status line's `need you` count them. `↑` `↓` step onto them from the tasks, `⏎` opens the item's card, where you answer its questions, and `g` starts the item as on the Backlog page. A row leaves once its blocking questions are answered. A filter keeps the rows whose title or repo it matches.
 
+Two lines about the machine itself close the group, after these backlog rows, each marked `!`, and stand as a Needs you group of their own when no task needs you: the disk, when the keeper could not free enough room (see [Disk space](configuration.md#disk-space)), and the clock, when this machine's clock is more than a minute off the hub's, as in `! Clock: this machine runs 6h 28m behind the hub, so the phone's commands are refused as expired; set the clock, for example with sudo chronyc makestep`. The clock line goes with the keeper's next comparison, every five minutes, once the clock is set, and 15 minutes after the keeper stops.
+
 `N` puts what needs you in one numbered list, in the order to do it, these backlog items among them. See [The Next window](#the-next-window).
 
 ### Working

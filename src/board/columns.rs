@@ -254,19 +254,23 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
     let mut spacers = Vec::new();
     let groups = app.groups.clone();
     let rank = |group: Group| groups.iter().position(|shown| *shown == group).unwrap_or(usize::MAX);
-    let mut disk = app.disk_line.clone();
-    let disk_waits = disk.is_some();
+    let mut machine = app.machine_lines.clone();
     let needs_count = tasks.iter().enumerate().filter(|(index, other)| other.parked.is_none() && other.group() == Group::NeedsYou && app.shown(Column::Work, *index)).count();
-    let put_disk = |lines: &mut Vec<Line<'static>>, disk: &mut Option<String>, header: bool| {
-        let Some(text) = disk.take() else { return };
+    let machine_count = machine.len();
+    let put_machine = |lines: &mut Vec<Line<'static>>, machine: &mut Vec<String>, header: bool| {
+        if machine.is_empty() {
+            return;
+        }
         if header {
             if !lines.is_empty() && lines.last() != Some(&Line::default()) {
                 lines.push(Line::default());
             }
-            lines.push(group_line(Group::NeedsYou.title(), 1, group_color(Group::NeedsYou)));
+            lines.push(group_line(Group::NeedsYou.title(), machine.len(), group_color(Group::NeedsYou)));
         }
-        lines.push(Line::default());
-        lines.extend(wrap(&format!("! {text}"), width.saturating_sub(4), 8).into_iter().map(|text| Line::from(vec![Span::raw("   "), Span::styled(text, style(PEACH))])));
+        for text in machine.drain(..) {
+            lines.push(Line::default());
+            lines.extend(wrap(&format!("! {text}"), width.saturating_sub(4), 8).into_iter().map(|text| Line::from(vec![Span::raw("   "), Span::styled(text, style(PEACH))])));
+        }
     };
     let asks = app.asks_shown().len();
     let ask_boundary = app.ask_boundary();
@@ -279,7 +283,7 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
             if current.is_some() {
                 lines.push(Line::default());
             }
-            lines.push(group_line(Group::NeedsYou.title(), asks + usize::from(disk_waits), group_color(Group::NeedsYou)));
+            lines.push(group_line(Group::NeedsYou.title(), asks + machine_count, group_color(Group::NeedsYou)));
             *current = Some(Group::NeedsYou);
         }
         let (ask_lines, ask_rows, ask_selected) = super::asks::ask_lines(app, width, lines.len(), focused_column);
@@ -293,12 +297,12 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
         if index == ask_boundary {
             put_asks(app, &mut lines, &mut rows, &mut selected_line, &mut current);
         }
-        if disk.is_some() && needs_count == 0 && current != Some(Group::NeedsYou) && (item.parked.is_some() || rank(item.group()) > rank(Group::NeedsYou)) && app.shown(Column::Work, index) {
-            put_disk(&mut lines, &mut disk, true);
+        if !machine.is_empty() && needs_count == 0 && current != Some(Group::NeedsYou) && (item.parked.is_some() || rank(item.group()) > rank(Group::NeedsYou)) && app.shown(Column::Work, index) {
+            put_machine(&mut lines, &mut machine, true);
             current = Some(Group::NeedsYou);
         }
         if current == Some(Group::NeedsYou) && (item.parked.is_some() || item.group() != Group::NeedsYou) && app.shown(Column::Work, index) {
-            put_disk(&mut lines, &mut disk, false);
+            put_machine(&mut lines, &mut machine, false);
         }
         if index == boundary {
             put_comments(app, &mut lines, &mut rows, &mut selected_line, current.is_some());
@@ -330,7 +334,7 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
             if current.is_some() {
                 lines.push(Line::default());
             }
-            let count = tasks.iter().enumerate().filter(|(other_index, other)| other.group() == item.group() && app.shown(Column::Work, *other_index)).count() + if item.group() == Group::NeedsYou { asks + usize::from(disk.is_some()) } else { 0 };
+            let count = tasks.iter().enumerate().filter(|(other_index, other)| other.group() == item.group() && app.shown(Column::Work, *other_index)).count() + if item.group() == Group::NeedsYou { asks + machine_count } else { 0 };
             lines.push(group_line(item.group().title(), count, group_color(item.group())));
             current = Some(item.group());
         }
@@ -402,7 +406,7 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
     if ask_boundary >= tasks.len() {
         put_asks(app, &mut lines, &mut rows, &mut selected_line, &mut current);
     }
-    put_disk(&mut lines, &mut disk, current != Some(Group::NeedsYou));
+    put_machine(&mut lines, &mut machine, current != Some(Group::NeedsYou));
     if tasks.is_empty() {
         lines.push(Line::from(Span::styled(format!("No tasks. {} starts one, or pick one from the backlog.", keys::key(Act::New)), style(MUTED))));
     }
@@ -629,20 +633,20 @@ mod tests {
         let mut working = crate::status::tests::task(Some("working"), None, 0);
         working.name = "working".to_string();
         let mut app = test_app(vec![asking.clone(), working.clone()]);
-        app.disk_line = Some(line.to_string());
+        app.machine_lines = vec![line.to_string()];
         let (rows, _) = render(&mut app, 140, 30);
         let screen = rows.join("\n");
         let at = |text: &str| find(&rows, text).first().map(|found| found.1).unwrap_or_else(|| panic!("no {text}: {screen}"));
         assert!(at("asking") < at("! Disk: 12.3 GB free") && at("! Disk: 12.3 GB free") < at("WORKING"), "the line ends Needs you: {screen}");
         assert!(screen.contains("NEEDS YOU") && screen.contains("2"), "{screen}");
         let mut quiet = test_app(vec![working]);
-        quiet.disk_line = Some(line.to_string());
+        quiet.machine_lines = vec![line.to_string()];
         let (rows, _) = render(&mut quiet, 140, 30);
         let screen = rows.join("\n");
         let at = |text: &str| find(&rows, text).first().map(|found| found.1).unwrap_or_else(|| panic!("no {text}: {screen}"));
         assert!(at("NEEDS YOU") < at("! Disk: 12.3 GB free") && at("! Disk: 12.3 GB free") < at("WORKING"), "Needs you holds the line alone: {screen}");
         let mut none = test_app(vec![asking]);
-        none.disk_line = None;
+        none.machine_lines = Vec::new();
         let (rows, _) = render(&mut none, 140, 30);
         assert!(!rows.join("\n").contains("Disk:"));
     }
@@ -657,7 +661,7 @@ mod tests {
         for (tasks, count) in [(vec![working.clone()], 3), (vec![asking, working], 4)] {
             let mut app = test_app(tasks);
             app.backlog.entries = vec![waiting_item("Rounding per invoice", "high", "5 d", 2), waiting_item("Links show used pages", "medium", "1 d", 1)];
-            app.disk_line = Some(line.to_string());
+            app.machine_lines = vec![line.to_string()];
             let (rows, _) = render(&mut app, 140, 30);
             let screen = rows.join("\n");
             let at = |text: &str| find(&rows, text).first().map(|found| found.1).unwrap_or_else(|| panic!("no {text}: {screen}"));
@@ -665,6 +669,20 @@ mod tests {
             assert!(screen.contains(&format!("NEEDS YOU  {count}")), "the tasks, the items and the disk line: {screen}");
             assert!(at("NEEDS YOU") < at("Rounding per invoice") && at("Rounding per invoice") < at("! Disk: 12.3 GB free") && at("! Disk: 12.3 GB free") < at("WORKING"), "the disk line closes the group after the items: {screen}");
         }
+    }
+
+    #[test]
+    fn the_clock_line_joins_the_disk_line_under_needs_you_and_counts_there() {
+        let mut working = crate::status::tests::task(Some("working"), None, 0);
+        working.name = "working".to_string();
+        let mut app = test_app(vec![working]);
+        app.machine_lines = vec!["Disk: 12.3 GB free of 242.0 GB, below 30 GB (disk.trim_below)".to_string(), crate::clock::line(23_316).unwrap()];
+        let (rows, _) = render(&mut app, 200, 30);
+        let screen = rows.join("\n");
+        let at = |text: &str| find(&rows, text).first().map(|found| found.1).unwrap_or_else(|| panic!("no {text}: {screen}"));
+        assert!(at("NEEDS YOU") < at("! Disk:") && at("! Disk:") < at("! Clock: this machine runs 6h 28m behind the hub") && at("! Clock:") < at("WORKING"), "{screen}");
+        let header = rows.iter().find(|row| row.contains("NEEDS YOU")).unwrap();
+        assert!(header.contains('2'), "both lines count: {header}");
     }
 
     #[test]

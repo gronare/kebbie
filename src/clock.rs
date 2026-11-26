@@ -7,6 +7,7 @@ use crate::doctor::{Check, Level};
 pub const FILE: &str = "clock.json";
 pub const EVERY: u64 = 300;
 pub const OFF_BY: u64 = 60;
+const FRESH: u64 = 3 * EVERY;
 
 // offset is the hub's time minus this machine's: positive when the machine runs behind.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -86,6 +87,15 @@ pub fn tick(state: &Path) -> crate::sh::Result<Vec<String>> {
     tick_in(state, crate::messages::now(), |url| measure(url, crate::messages::now))
 }
 
+// A reading older than three rounds is a stopped keeper's, and shows nothing.
+pub fn board_line_in(state: &Path, now: u64) -> Option<String> {
+    read(state).filter(|reading| now.saturating_sub(reading.at) <= FRESH).and_then(|reading| line(reading.offset))
+}
+
+pub fn board_line() -> Option<String> {
+    crate::lead::state_dir().ok().and_then(|state| board_line_in(&state, crate::messages::now()))
+}
+
 pub fn doctor(url: Option<&str>, measure: impl FnOnce(&str) -> Result<i64, String>) -> Option<Check> {
     let url = url?;
     Some(match measure(url) {
@@ -118,7 +128,7 @@ mod tests {
     }
 
     #[test]
-    fn the_line_needs_more_than_a_minute_apart() {
+    fn the_board_line_needs_more_than_a_minute_apart_and_a_fresh_reading() {
         assert_eq!(line(OFF_BY as i64), None);
         assert_eq!(line(-(OFF_BY as i64)), None);
         let behind = line(23_316).unwrap();
@@ -126,6 +136,13 @@ mod tests {
         assert!(line(-120).unwrap().contains("runs 2m ahead of the hub, so the phone's commands expire 2m early;"), "{:?}", line(-120));
         assert!(line(120).unwrap().contains("runs 2m behind the hub, and the phone's commands are refused as expired once it is more than 5m behind;"), "{:?}", line(120));
         assert!(behind.contains("behind the hub, so the phone's commands are refused as expired;"), "{behind}");
+        let state = crate::sh::test_dir("clock-board");
+        assert_eq!(board_line_in(&state, 1000), None, "no reading, no line");
+        std::fs::write(state.join(FILE), r#"{"at":1000,"offset":23316}"#).unwrap();
+        assert_eq!(board_line_in(&state, 1000 + FRESH), Some(behind));
+        assert_eq!(board_line_in(&state, 1001 + FRESH), None, "a stopped keeper's reading goes stale");
+        std::fs::write(state.join(FILE), r#"{"at":1000,"offset":30}"#).unwrap();
+        assert_eq!(board_line_in(&state, 1000), None, "half a minute off is in step");
     }
 
     #[test]
