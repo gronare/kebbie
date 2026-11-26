@@ -358,8 +358,10 @@ mod tests {
         let refused = answer_in(&state, &Caller::User, &asked.id, Some(0), "", &|_| Err("Not closed: its note lacks its Solution".to_string()));
         assert_eq!(refused.unwrap_err(), "Not closed: its note lacks its Solution");
         assert_eq!(load(&state).iter().map(|one| one.id.as_str()).collect::<Vec<_>>(), [asked.id.as_str()], "nothing else asks again, so the question stays");
+        crate::faults::capture::HEARD.with(|heard| heard.borrow_mut().clear());
         assert!(answer_in(&state, &Caller::User, &asked.id, Some(0), "", &|address| Ok(format!("Closed {address}"))).is_ok());
         assert!(load(&state).is_empty(), "answered once it closed");
+        assert_eq!(crate::faults::capture::HEARD.with(|heard| heard.borrow().clone()), [("billing@app".to_string(), Some("Close".to_string()), String::new())], "the answer reaches the fault watcher once it is carried out, and only then");
         fs::remove_dir_all(state).unwrap();
     }
 

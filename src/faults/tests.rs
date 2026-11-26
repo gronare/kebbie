@@ -190,14 +190,6 @@ fn the_prompts_kebbie_types_into_a_new_chat_are_never_the_users_words() {
 }
 
 #[test]
-fn every_board_answer_reaches_the_fault_watcher() {
-    for (source, function) in [(include_str!("../questions.rs"), "pub fn answer_as("), (include_str!("../kebbie_questions.rs"), "pub fn answer_in(")] {
-        let body = source.split_once(function).map(|(_, rest)| rest.split_once("\n}\n").map_or(rest, |(body, _)| body)).unwrap_or_else(|| panic!("{function} is gone"));
-        assert!(body.contains("crate::faults::capture::board_answer("), "{function} no longer hands the user's answer to the fault watcher");
-    }
-}
-
-#[test]
 fn a_board_answer_is_a_case_only_when_it_corrects() {
     let state = state("board");
     let answer = |label: Option<&str>, comment: &str| capture::board_answer_in(&state, "billing@app", "Approve the plan for the export?", label, comment, 10).unwrap();
@@ -206,8 +198,10 @@ fn a_board_answer_is_a_case_only_when_it_corrects() {
     assert!(answer(Some("Reject with a comment"), "this plan builds the instance, not the cause").is_some());
     assert!(answer(Some("Something is wrong"), "").is_some());
     assert!(answer(None, "you asked this twice already").is_some());
+    assert!(answer(Some("Change it"), "the review asked the wrong thing").is_some(), "a review's Change it corrects");
+    assert_eq!(answer(Some("Confirm"), ""), None);
     let words: Vec<String> = pending(&state).into_iter().map(|case| case.words).collect();
-    assert_eq!(words, ["this plan builds the instance, not the cause", "Something is wrong", "you asked this twice already"]);
+    assert_eq!(words, ["this plan builds the instance, not the cause", "Something is wrong", "you asked this twice already", "the review asked the wrong thing"]);
     fs::remove_dir_all(state).unwrap();
 }
 

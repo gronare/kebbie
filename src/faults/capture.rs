@@ -15,7 +15,7 @@ const READ_AT_MOST: u64 = 8 * 1024 * 1024;
 const LONGEST: usize = 4_000;
 const REPLY_CHARS: usize = 700;
 const KEPT_UNLISTED: u64 = 30 * super::DAY;
-pub const CORRECTING: [&str; 3] = ["Ask for changes", "Reject with a comment", "Something is wrong"];
+pub const CORRECTING: [&str; 4] = ["Ask for changes", "Reject with a comment", "Something is wrong", "Change it"];
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 struct Held {
@@ -189,8 +189,24 @@ pub fn board_answer_in(state: &Path, task: &str, question: &str, label: Option<&
     super::add_case(state, &NewCase { source: Source::Board, from: task, words: &words, context: &context, fingerprint: None }, now)
 }
 
+#[cfg(test)]
+thread_local! {
+    pub static HEARD: std::cell::RefCell<Vec<(String, Option<String>, String)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+fn heard(task: &str, label: Option<&str>, comment: &str) {
+    HEARD.with(|heard| heard.borrow_mut().push((task.to_string(), label.map(str::to_string), comment.to_string())));
+}
+
+#[cfg(not(test))]
+fn heard(_: &str, _: Option<&str>, _: &str) {}
+
 pub fn board_answer(task: &str, question: &str, label: Option<&str>, comment: &str) {
-    if cfg!(test) || !super::watch::on() {
+    if cfg!(test) {
+        return heard(task, label, comment);
+    }
+    if !super::watch::on() {
         return;
     }
     let Ok(state) = crate::lead::state_dir() else { return };

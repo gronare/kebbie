@@ -850,10 +850,11 @@ fn to_task(address: &str, text: &str, copy: &str) -> Result<String> {
 pub fn answer_question(question: &messages::Message, choice: Option<usize>, comment: &str) -> Result<String> {
     let address = question.about.as_deref().and_then(|about| about.strip_prefix(&format!("{QUESTION_KIND}:"))).ok_or("That review question names no task")?;
     let (task, place) = address.split_once('@').ok_or("That review question names no task")?;
-    let repo = crate::status::known_repos(&crate::herdr::workspaces().unwrap_or_default(), crate::repo::pooled_checkouts()).into_iter().find(|repo| name_of(repo) == place).ok_or_else(|| format!("No repo {place} is known to kebbie"))?;
-    let slot = tasks::find_task(&repo, Some(task), &repo)?;
     match choice {
-        Some(0) => confirmed(&repo, &slot, comment),
+        Some(0) => {
+            let repo = crate::status::known_repos(&crate::herdr::workspaces().unwrap_or_default(), crate::repo::pooled_checkouts()).into_iter().find(|repo| name_of(repo) == place).ok_or_else(|| format!("No repo {place} is known to kebbie"))?;
+            confirmed(&repo, &tasks::find_task(&repo, Some(task), &repo)?, comment)
+        }
         Some(1) if comment.trim().is_empty() => Err("Change it takes your comment; write it before sending".to_string()),
         Some(1) => {
             let asks = confirmation_question(&fs::read_to_string(verdict_file(&state_dir()?, address)).unwrap_or_default());

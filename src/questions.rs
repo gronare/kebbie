@@ -307,13 +307,22 @@ pub fn answer(id: &str, choice: Option<usize>, comment: &str) -> Result<String> 
 
 // Only the user answers, at the board or through the hub; the hub answers a task's or a plan's question, never a restart's or a review's.
 pub fn answer_as(caller: &crate::permit::Caller, id: &str, choice: Option<usize>, comment: &str) -> std::result::Result<String, Unanswered> {
+    let (said, heard) = answer_heard(caller, id, choice, comment)?;
+    if let Some(message) = heard {
+        to_fault_watcher(&message, choice, comment);
+    }
+    Ok(said)
+}
+
+// Each answer names the question the fault watcher hears it on, so no branch can leave the watcher out by returning early.
+fn answer_heard(caller: &crate::permit::Caller, id: &str, choice: Option<usize>, comment: &str) -> std::result::Result<(String, Option<Message>), Unanswered> {
     use crate::permit::Caller;
     let hub = matches!(caller, Caller::Hub { .. });
     if !matches!(caller, Caller::User) && !hub {
         return Err(Unanswered::NotAllowed(format!("answering the user's question is the user's call; {} cannot", crate::permit::describe(caller))));
     }
     if crate::kebbie_questions::is_ours(id) {
-        return crate::kebbie_questions::answer_as(caller, id, choice, comment).map_err(Unanswered::Invalid);
+        return crate::kebbie_questions::answer_as(caller, id, choice, comment).map(|said| (said, None)).map_err(Unanswered::Invalid);
     }
     let sessions = peers::sessions().unwrap_or_default();
     let _lock = Lock::take(true)?;
@@ -334,17 +343,17 @@ pub fn answer_as(caller: &crate::permit::Caller, id: &str, choice: Option<usize>
         }
         messages::append(&json!({ "id": id, "at": messages::now(), "state": "answered" }))?;
         drop(_lock);
-        return Ok(crate::restart::answer(&session, yes)?);
+        return Ok((crate::restart::answer(&session, yes)?, None));
     }
     if message.kind.as_deref() == Some(crate::review::QUESTION_KIND) {
         let message = (*message).clone();
         drop(_lock);
-        return Ok(crate::review::answer_question(&message, choice, comment)?);
+        return Ok((crate::review::answer_question(&message, choice, comment)?, Some(message)));
     }
     if message.kind.as_deref() == Some(crate::obstacle::QUESTION_KIND) {
         let message = (*message).clone();
         drop(_lock);
-        return crate::obstacle::answer_question(&message, choice, comment, caller).map_err(Unanswered::Invalid);
+        return Ok((crate::obstacle::answer_question(&message, choice, comment, caller).map_err(Unanswered::Invalid)?, Some(message)));
     }
     let text = answer_text(message, choice, comment).map_err(Unanswered::Invalid)?;
     let told = match sessions.iter().find(|session| session.address == message.from) {
@@ -360,10 +369,8 @@ pub fn answer_as(caller: &crate::permit::Caller, id: &str, choice: Option<usize>
         }
     };
     messages::copy_to_lead_locked(&answer_copy(message, choice, comment, caller), None, &sessions)?;
-    let picked = choice.and_then(|index| message.question.as_ref()?.options.get(index)).map(|(label, _)| label.as_str());
-    crate::faults::capture::board_answer(&message.from, &message.text, picked, comment);
     crate::hub::notices::settle(crate::hub::notices::Subject::Question, &message.from);
-    Ok(crate::notice::Notice::new(crate::notice::Tone::Done, "Answered").next(told).detail("task", &message.from).to_string())
+    Ok((crate::notice::Notice::new(crate::notice::Tone::Done, "Answered").next(told).detail("task", &message.from).to_string(), Some((*message).clone())))
 }
 
 // kebbie's own question about a task, on its review or one of its obstacles, which shows and is answered under that task.
@@ -374,13 +381,22 @@ pub fn kebbies_about(message: &Message, address: &str) -> bool {
 // The task a question shows under on the board and the phone: its asker's, or for kebbie's own question on a task's review or obstacle that task's.
 pub fn shown_under(id: &str) -> Option<String> {
     let message = messages::load().into_iter().find(|message| message.id == id && message.question.is_some())?;
+    Some(task_of(&message))
+}
+
+fn task_of(message: &Message) -> String {
     let about = message.about.as_deref();
     let task = match message.kind.as_deref() {
         Some(crate::obstacle::QUESTION_KIND) => crate::obstacle::task_of(about),
         Some(crate::review::QUESTION_KIND) => about.and_then(|about| about.strip_prefix(crate::review::QUESTION_KIND)?.strip_prefix(':')),
         _ => None,
     };
-    Some(task.map_or_else(|| message.from.clone(), str::to_string))
+    task.map_or_else(|| message.from.clone(), str::to_string)
+}
+
+fn to_fault_watcher(message: &Message, choice: Option<usize>, comment: &str) {
+    let picked = choice.and_then(|index| message.question.as_ref()?.options.get(index)).map(|(label, _)| label.as_str());
+    crate::faults::capture::board_answer(&task_of(message), &message.text, picked, comment);
 }
 
 #[derive(Debug, PartialEq)]
@@ -417,7 +433,7 @@ fn closed_unanswered<'a>(messages: &'a [Message], id: &str) -> Option<&'a Messag
 }
 
 // The caller holds the lock. A turn that starts in the task's pane, or a newer question, closes a question, so an answer given on the board a moment later is delivered as the user's word rather than lost; a task that ended gets nothing.
-fn answer_late(messages: &[Message], id: &str, choice: Option<usize>, comment: &str, sessions: &[peers::Session], caller: &crate::permit::Caller) -> std::result::Result<String, Unanswered> {
+fn answer_late(messages: &[Message], id: &str, choice: Option<usize>, comment: &str, sessions: &[peers::Session], caller: &crate::permit::Caller) -> std::result::Result<(String, Option<Message>), Unanswered> {
     let message = closed_unanswered(messages, id).ok_or_else(|| Unanswered::Settled("That question no longer waits for an answer".to_string()))?;
     let closed = closed_by(messages, message, report::prompted);
     if closed == Closed::Ended {
@@ -441,7 +457,7 @@ fn answer_late(messages: &[Message], id: &str, choice: Option<usize>, comment: &
         Closed::Newer { open: false } => crate::notice::Notice::new(crate::notice::Tone::Done, "Answered, as a message").next(format!("The question had closed when the task asked a newer one. {told}")),
         _ => crate::notice::Notice::new(crate::notice::Tone::Done, "Answered, as a message").next(format!("The question had closed when a turn started in its pane. {told}")),
     };
-    Ok(notice.detail("task", &message.from).to_string())
+    Ok((notice.detail("task", &message.from).to_string(), Some(message.clone())))
 }
 
 pub fn ask(cwd: &Path, options: &[&str], recommend: Option<&str>, plan: Option<&str>, text: &str) -> Result<String> {
@@ -1006,5 +1022,41 @@ mod tests {
         let old = log(&[json!({ "id": "q", "at": 1, "from": "a@x", "to": "you", "text": "Approve this plan?", "state": "asked", "question": { "options": PLAN_OPTIONS.iter().map(|(label, meaning)| json!({ "label": label, "meaning": meaning })).collect::<Vec<_>>(), "recommend": 1, "plan": "vault:Projects/a.md" } })]);
         assert_eq!(old[0].question.as_ref().unwrap().comment, PLAN_COMMENT);
         assert!(answer_text(&old[0], Some(2), "").is_err() && answer_text(&old[0], Some(0), "").is_ok());
+    }
+
+    #[test]
+    fn every_answer_reaches_the_fault_watcher_under_the_task_it_shows_under() {
+        use crate::permit::Caller;
+        let from = format!("lateanswer{}@web", std::process::id());
+        let (first, newer) = (messages::new_id("question"), messages::new_id("question"));
+        messages::append(&record(&first, messages::now(), &from, &asked(), None, None)).unwrap();
+        messages::append(&record(&newer, messages::now() + 1, &from, &asked(), None, None)).unwrap();
+        crate::faults::capture::HEARD.with(|heard| heard.borrow_mut().clear());
+        answer_as(&Caller::User, &first, None, "you asked this twice already").unwrap();
+        answer_as(&Caller::User, &newer, Some(0), "").unwrap();
+        let heard = crate::faults::capture::HEARD.with(|heard| heard.borrow().clone());
+        assert_eq!(heard.iter().map(|(task, label, comment)| (task.as_str(), label.as_deref(), comment.as_str())).collect::<Vec<_>>(), [(from.as_str(), None, "you asked this twice already"), (from.as_str(), Some("Sidekiq"), "")], "a late answer reaches the watcher as an open one does");
+        let reviewed = format!("heardreview{}@web", std::process::id());
+        let review = messages::new_id("question");
+        let confirm = parse(&["Confirm: the review passes", "Change it: the task reworks it"], Some("1"), false, "Your review asks: drop the old export?").unwrap();
+        let mut asked_review = record(&review, messages::now() + 2, "kebbie", &confirm, None, None);
+        asked_review["kind"] = json!(crate::review::QUESTION_KIND);
+        asked_review["about"] = json!(crate::review::question_about(&reviewed));
+        messages::append(&asked_review).unwrap();
+        let state = state_dir().unwrap();
+        let blocked = format!("heardobstacle{}@web", std::process::id());
+        crate::obstacle::forget_in(&state, &blocked);
+        let worktree = crate::sh::test_dir("heard-obstacle");
+        crate::obstacle::raise_in(&state, &blocked, &worktree, crate::obstacle::Source::Task, "first", "Export", true, 1).unwrap();
+        let second = crate::obstacle::raise_in(&state, &blocked, &worktree, crate::obstacle::Source::Task, "second", "export", true, 2).unwrap().0.unwrap();
+        crate::obstacle::ask_replan(&state, &blocked, &second).unwrap();
+        let obstacle = messages::load().into_iter().rev().find(|message| message.about.as_deref() == Some(crate::obstacle::question_about(&blocked, &second.id).as_str())).unwrap().id;
+        crate::faults::capture::HEARD.with(|heard| heard.borrow_mut().clear());
+        answer_as(&Caller::User, &review, Some(1), "keep the export").unwrap();
+        answer_as(&Caller::User, &obstacle, Some(1), "").unwrap();
+        let heard = crate::faults::capture::HEARD.with(|heard| heard.borrow().clone());
+        assert_eq!(heard.iter().map(|(task, label, comment)| (task.as_str(), label.as_deref(), comment.as_str())).collect::<Vec<_>>(), [(reviewed.as_str(), Some("Change it"), "keep the export"), (blocked.as_str(), Some("Plan again"), "")], "a review's and an obstacle's answer reach the watcher under the task they show under");
+        crate::obstacle::forget_in(&state, &blocked);
+        let _ = std::fs::remove_dir_all(worktree);
     }
 }
