@@ -844,7 +844,8 @@ pub(super) fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through
     super::push_steps::step(&task, &format!("pushing to {}", main_of(upstream)));
     let (count, watch, staged) = send(state, repo, slot, upstream, &address, &task, pusher, &went, watch)?;
     let (vault, log) = after_push(state, repo, slot, &address, &task, &went, &crate::vault_cli::detect);
-    let full = !went.keep_open;
+    let followed = crate::report::check_in(state, &address).is_some() || staged.check.is_some() || crate::verify_after::load(state, &address).is_some();
+    let full = !went.keep_open && !followed;
     let tidy = || full.then(|| super::pool::tidy(repo, &slot.path, upstream, &super::pool::build_folders(repo))).flatten().unwrap_or_default();
     let Went { sha, keep_open, rest, pushed, note, target, .. } = went;
     let main = main_of(upstream);
@@ -1312,7 +1313,7 @@ mod tests {
     }
 
     #[test]
-    fn a_full_push_empties_the_tasks_build_output_and_says_how_much_while_a_push_that_keeps_it_open_leaves_it() {
+    fn a_full_push_empties_the_tasks_build_output_and_says_how_much_while_a_push_the_task_or_a_check_follows_leaves_it() {
         let built = |slot: &Slot| {
             std::fs::create_dir_all(slot.path.join("target/debug")).unwrap();
             std::fs::write(slot.path.join("target/debug/app"), vec![0u8; 1_500_000]).unwrap();
@@ -1349,6 +1350,24 @@ mod tests {
         assert!(slot.path.join("target/debug/app").exists(), "the task builds on, so its build stays");
         crate::ci::forget(&state, &crate::peers::address("rates", &name_of(&dir)));
         cleanup(dir, origin, &slot);
+        let unwatched = |_: &Path, _: &Path, _: &str, _: &str, _: bool, _: crate::ci::Pushed| crate::ci::Begin::Off;
+        let checked = |state: &Path, address: &str| crate::report::save_check(state, address, "the old key gets 401").unwrap();
+        let verified = |state: &Path, address: &str| crate::verify_after::name(state, address, "the refunds page loads").unwrap();
+        for (followed, by) in [(&checked as &dyn Fn(&Path, &str), "the task's check"), (&verified, "the user's verification")] {
+            for ci in [&watching as Watch, &unwatched] {
+                let (dir, origin, slot, upstream) = rust_task("refunds");
+                let state = state_of(&dir);
+                let address = crate::peers::address("refunds", &name_of(&dir));
+                followed(&state, &address);
+                let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false }, "the user", &state, ci).unwrap();
+                assert!(!said.contains("removed target/") && slot.path.join("target/debug/app").exists(), "with {by} to follow, the build stays until the close releases the worktree: {said}");
+                crate::ci::forget(&state, &address);
+                crate::verify_after::forget(&state, &address);
+                crate::report::forget_check_in(&state, &address);
+                crate::kebbie_questions::forget(&address);
+                cleanup(dir, origin, &slot);
+            }
+        }
     }
 
     #[test]
