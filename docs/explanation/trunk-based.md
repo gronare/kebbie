@@ -14,7 +14,7 @@ So kebbie keeps branches short. A task is meant to finish, land and free its wor
 
 - When the commits it goes over changed files the task changes too, kebbie hands the task to its Claude to run their tests, and pushes once it reports ready with the same commits.
 - `CHANGES.md` and pages under `docs/` run no test, so both sides changing them counts as no overlap.
-- When they changed none of its files, the task's code still sits on a new default branch: kebbie pushes only once a test run, and the repo's lint when it names one, passed on the rebased code. The task's Claude runs them and reports ready, and kebbie pushes then.
+- When they changed none of its files, the task's code still sits on a new default branch: kebbie pushes only once a test run, and the repo's lint when it names one, passed on the rebased code. The task's Claude runs them and reports ready, and kebbie pushes then. That is also why a lint red on code the task only brought from an older main, which main has fixed since, does not hold its ready report: the lint on the rebased code decides.
 - When the rebase conflicts, kebbie aborts it, leaves the worktree as it was, and hands the conflict to the task's Claude, which knows the change best.
 - When the rebase stops only on `CHANGES.md`, where every task adds its line at the top of the same list, kebbie keeps both sides' lines and goes on. It stays a conflict when a side changed or removed a line already there, when the merge would repeat a heading, or when another file conflicts too.
 

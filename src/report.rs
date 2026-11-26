@@ -50,17 +50,18 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
             return Ok(said);
         }
     }
-    let (red, excused) = if report.state == "ready" {
+    let (red, excused, from_main) = if report.state == "ready" {
         crate::rules_check::refuse_unformed(cwd)?;
         let runs = crate::evidence::runs_in(&state_dir()?, &me);
         let red = red_gate(&runs, red_cause)?;
         let excused = red.as_ref().and_then(|_| crate::evidence::latest(&runs)).map(|run| run.code.clone());
-        if to_push(cwd) && let Some(gap) = crate::required_runs::owed(cwd, &me, excused.as_deref()) {
-            return Err(crate::required_runs::report_refusal(&gap));
+        let owing = if to_push(cwd) { crate::required_runs::owed(cwd, &me, excused.as_deref()) } else { crate::required_runs::Owing::default() };
+        if let Some(gap) = &owing.gap {
+            return Err(crate::required_runs::report_refusal(gap));
         }
-        (red, excused)
+        (red, excused, owing.from_main)
     } else {
-        (None, None)
+        (None, None, None)
     };
     let card = card.map(|file| cwd.join(file));
     let text = card.as_deref().map(read_card).transpose()?;
@@ -84,6 +85,9 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
     }
     if let Some(code) = &excused {
         crate::required_runs::excuse(&state, &me, code)?;
+    }
+    if let Some(from_main) = &from_main {
+        kept.push_str(&from_main.taken());
     }
     if let Some(check) = &check {
         save_check(&state, &me, check)?;

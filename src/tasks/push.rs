@@ -1714,6 +1714,41 @@ mod tests {
     }
 
     #[test]
+    fn a_task_let_off_a_lint_red_from_main_joins_the_push_and_owes_the_lint_on_the_rebased_code() {
+        use crate::evidence::{Outcome, Run};
+        use crate::permit::Caller;
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let pushing = Pushing::new(&dir);
+        let lint = "cargo clippy --locked --all-targets -- -D warnings";
+        let file = crate::config::repo_file(&dir);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, format!("[tests]\nlint_command = \"{lint}\"\n")).unwrap();
+        let ran = |code: &str, result: Outcome| crate::evidence::save(&pushing.state, &pushing.address, &Run { command: lint.to_string(), runner: lint.to_string(), result, sha: code.to_string(), code: code.to_string(), lint: true, ..Run::default() }).unwrap();
+        let rev = |rev: &str| git(&slot.path, &["rev-parse", rev]).unwrap();
+        let base = rev(&upstream);
+        ran(&rev("HEAD"), Outcome::Failed);
+        ran(&base, Outcome::Failed);
+        upstream_commit(&dir, "elsewhere", "x", "main fixes its lint");
+        ran(&rev(&upstream), Outcome::Passed);
+        upstream_commit(&dir, "later", "y", "another task's push after the green run");
+        join(&pushing.state, &Caller::User, &dir, &slot, Through::All).expect("the push joins the line on the proof its ready report was taken on, though main moved again since");
+        intent::forget(&pushing.state, &pushing.address);
+        let (texts, hand) = handed();
+        let handed = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap();
+        assert!(matches!(&handed, Prepared::Handed(said) if said.contains("moved under it, so its lint and its tests run first")), "on the rebased code the base is the tip, so the lint is owed there: {handed:?}");
+        assert!(texts.borrow()[0].contains(&format!("Run `{lint}` and the tests that cover your change in this worktree")), "{}", texts.borrow()[0]);
+        let refused = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand);
+        assert!(refused.as_ref().is_err_and(|said| said.contains("its lint and its tests have no green run on HEAD")), "the resumed push waits for the lint on the rebased code: {refused:?}");
+        let head = rev("HEAD");
+        ran(&head, Outcome::Passed);
+        crate::evidence::save(&pushing.state, &pushing.address, &Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result: Outcome::Passed, sha: head.clone(), code: head, ..Run::default() }).unwrap();
+        assert!(matches!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap(), Prepared::Push(..)), "the lint green on the rebased code lets it go");
+        let _ = std::fs::remove_file(file);
+        let _ = std::fs::remove_file(crate::evidence::file(&pushing.state, &pushing.address));
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
     fn a_push_whose_rebase_moved_head_without_touching_its_files_hands_its_tests_to_its_claude_and_waits_for_them_green() {
         use crate::evidence::{Outcome, Run};
         use crate::permit::Caller;

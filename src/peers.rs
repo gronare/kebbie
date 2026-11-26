@@ -287,7 +287,7 @@ pub fn test_commands_line(commands: &[String]) -> Option<String> {
 pub fn tests_line(commands: &[String], full: Option<&str>, lint: Option<&str>) -> String {
     let own = test_commands_line(commands).map_or(String::new(), |line| format!(" {line}: run your tests through it, with the files or test names your change touches as its arguments, and start no other test setup, such as the bare test runner it wraps, which can boot another environment and reset its data."));
     let full = full.map_or(String::new(), |full| format!(" This repo pushes only on a green run of its full suite on HEAD (`tests.before_push = \"full\"`): once your last commit is made, run `{full}` as a command of its own, with no pipe after it, before you report ready. kebbie refuses the ready report, and every push, until that run passed on HEAD."));
-    let lint = lint.map_or(String::new(), |lint| format!(" This repo lints with `{lint}` (`tests.lint_command`), as CI does: once your last commit is made, run it word for word as a command of its own, with no pipe after it, before you report ready. kebbie refuses the ready report, and every push, until that run passed on HEAD; fix what it finds, as --red-cause excuses no lint."));
+    let lint = lint.map_or(String::new(), |lint| format!(" This repo lints with `{lint}` (`tests.lint_command`), as CI does: once your last commit is made, run it word for word as a command of its own, with no pipe after it, before you report ready. kebbie refuses the ready report, and every push, until that run passed on HEAD; fix what it finds, as --red-cause excuses no lint; when it fails on code from main that main has fixed since, the refusal says how to show that."));
     own + &full + &lint
 }
 
@@ -673,7 +673,7 @@ mod tests {
         let both = role("[task]\ntest_commands = [\"script/test\"]\n[tests]\nfull_command = \"script/test --all\"\n", "[tests]\nbefore_push = \"full\"\n");
         assert!(both.contains("This repo runs its tests with `script/test` (`task.test_commands`)") && both.contains("run `script/test --all` as a command of its own"), "{both}");
         let lint = role("[tests]\nlint_command = \"cargo clippy --locked --all-targets -- -D warnings\"\n", "");
-        assert!(lint.contains("This repo lints with `cargo clippy --locked --all-targets -- -D warnings` (`tests.lint_command`)") && lint.contains("until that run passed on HEAD") && !lint.contains("full suite on HEAD"), "{lint}");
+        assert!(lint.contains("This repo lints with `cargo clippy --locked --all-targets -- -D warnings` (`tests.lint_command`)") && lint.contains("until that run passed on HEAD") && lint.contains("fails on code from main that main has fixed since") && !lint.contains("full suite on HEAD"), "{lint}");
         assert!(!related.contains("tests.lint_command"), "a repo without a lint names none: {related}");
     }
 

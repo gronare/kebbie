@@ -2205,6 +2205,41 @@ fn kebbie_order_shows_the_push_order_moves_and_groups_and_refuses_what_it_cannot
 }
 
 #[test]
+fn a_ready_report_with_a_lint_red_from_main_that_main_has_fixed_is_taken_and_says_where_the_error_came_from() {
+    let lab = Lab::new("lint-from-main");
+    let (app, slot) = lab.task_fixture();
+    let slot_str = slot.to_str().unwrap();
+    let lint = "cargo clippy --locked --all-targets -- -D warnings";
+    let repos = lab.home.join(".config/kebbie/repos");
+    fs::create_dir_all(&repos).unwrap();
+    fs::write(repos.join("app.toml"), format!("[tests]\nlint_command = \"{lint}\"\n")).unwrap();
+    git(&slot, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend", "-m", "Add refunds\n\nThe billing page lists refunds now."]);
+    let base = git(&slot, &["rev-parse", "origin/main"]);
+    commit(&app, "c", "Fix the lint on main");
+    git(&app, &["push", "--quiet", "origin", "main"]);
+    git(&app, &["fetch", "--quiet", "origin"]);
+    let (head, tip) = (git(&slot, &["rev-parse", "HEAD"]), git(&app, &["rev-parse", "origin/main"]));
+    let task_bin = lab.root.join("task-bin");
+    fs::create_dir_all(&task_bin).unwrap();
+    crate::executable::write(task_bin.join("claude"), "#!/bin/sh\ncat > /dev/null\n").unwrap();
+    fs::write(slot.join("card.md"), "**Refunds show under each invoice.**\n\nBuilt:\n- Each invoice lists its refunds at /billing.\n").unwrap();
+    let report = || lab.command().env("PATH", format!("{}:{}", task_bin.display(), lab.path())).args(["-C", slot_str, "report", "--state", "ready", "--next", "push", "--card", "card.md", "refunds done"]).output().unwrap();
+    let ran = |code: &str, result: &str, at: u64| format!("{{\"command\":\"{lint}\",\"runner\":\"{lint}\",\"result\":\"{result}\",\"sha\":\"{code}\",\"code\":\"{code}\",\"at\":{at},\"lint\":true}}\n");
+    fs::create_dir_all(lab.state.join("evidence")).unwrap();
+    let evidence = lab.state.join("evidence/billing@app.jsonl");
+    fs::write(&evidence, ran(&head, "failed", 1)).unwrap();
+    let refused = report();
+    assert!(!refused.status.success() && stderr(&refused).contains(&format!("git restore --source={} --staged --worktree :/", &base[..7])), "the refusal says how to show the error came from main: {}", stderr(&refused));
+    fs::write(&evidence, ran(&head, "failed", 1) + &ran(&base, "failed", 2) + &ran(&tip, "passed", 3)).unwrap();
+    commit(&app, "d", "Another task's push");
+    git(&app, &["push", "--quiet", "origin", "main"]);
+    git(&app, &["fetch", "--quiet", "origin"]);
+    let taken = report();
+    assert!(taken.status.success(), "{}", stderr(&taken));
+    assert!(stdout(&taken).contains(&format!("passes on origin/main at {}", &tip[..7])) && stdout(&taken).contains("the error comes from origin/main and is fixed there"), "{}", stdout(&taken));
+}
+
+#[test]
 fn a_red_run_left_red_with_its_cause_on_the_rebased_code_lets_the_push_go_once_the_report_is_taken() {
     let lab = Lab::new("red-cause-push");
     let (app, slot) = lab.task_fixture();

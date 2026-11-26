@@ -26,6 +26,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - After review findings, a task reports ready only once a test run passed on its latest code; a reworded commit keeps that run.
 - After the push line rebases a task onto a moved default branch, it pushes only once a test run and the repo's lint passed on the rebased code, even when no file overlaps.
 - While CI is red on the default branch, the repo's push line holds every push but the fix, and the board says why; the lead names the fix task with kebbie ci fixer when the red CI's own task has ended.
+- A task reports ready with its lint red when the error came from main and main has fixed it since.
 
 ### Fixed
 - A build that waits for a build slot or a fuller disk says so on a line starting with error:, which an error filter keeps.

@@ -1231,7 +1231,7 @@ fn rereview_brief(saved: &str, before: &str, sha: &str, delta: &str) -> String {
 // The recorded test runs, then the repo's own test commands and its lint, so a finding that asks for a run names one of them.
 fn with_test_commands(tests: &str, commands: &[String], lint: Option<&str>) -> String {
     let own = crate::peers::test_commands_line(commands).map(|line| format!("{line}: a finding that asks for a test run names one of these, never another test setup."));
-    let lint = lint.map(|lint| format!("This repo lints with `{lint}` (tests.lint_command), as CI does, and kebbie takes a ready report and pushes only on a green run of exactly that command on HEAD, kept apart from the test runs above: a finding about lint names this command."));
+    let lint = lint.map(|lint| format!("This repo lints with `{lint}` (tests.lint_command), as CI does, and kebbie takes a ready report and pushes only on a green run of exactly that command on HEAD, kept apart from the test runs above; it also takes a lint red on HEAD that is red where the task's branch left main and green on main since, and lints the rebased code at the push: a finding about lint names this command, never that inherited red."));
     [Some(tests.to_string()).filter(|tests| !tests.is_empty()), own, lint].into_iter().flatten().collect::<Vec<_>>().join("\n\n")
 }
 
@@ -1909,7 +1909,7 @@ mod tests {
         assert_eq!(with_test_commands("", &commands, None), "This repo runs its tests with `script/test` or `bin/rspec` (`task.test_commands`): a finding that asks for a test run names one of these, never another test setup.", "without a recorded run the commands stand alone");
         assert_eq!(with_test_commands(runs, &[], None), runs, "a repo without task.test_commands adds nothing");
         let lint = with_test_commands(runs, &commands, Some("cargo clippy --locked --all-targets -- -D warnings"));
-        assert!(lint.starts_with(runs) && lint.ends_with("This repo lints with `cargo clippy --locked --all-targets -- -D warnings` (tests.lint_command), as CI does, and kebbie takes a ready report and pushes only on a green run of exactly that command on HEAD, kept apart from the test runs above: a finding about lint names this command."), "{lint}");
+        assert!(lint.starts_with(runs) && lint.ends_with("This repo lints with `cargo clippy --locked --all-targets -- -D warnings` (tests.lint_command), as CI does, and kebbie takes a ready report and pushes only on a green run of exactly that command on HEAD, kept apart from the test runs above; it also takes a lint red on HEAD that is red where the task's branch left main and green on main since, and lints the rebased code at the push: a finding about lint names this command, never that inherited red."), "{lint}");
     }
 
     #[test]
