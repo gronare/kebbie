@@ -854,6 +854,8 @@ pub(super) fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through
     let short = &sha[..7.min(sha.len())];
     if matches!(watch, crate::ci::Begin::Watching) {
         crate::ci::arm(state, &address, log.as_ref().map(|log| matches!(log, Ok(Some(_)))));
+    } else {
+        super::unblocked::tell(repo, &address, &super::unblocked::landed(&address, &sha, &target, super::unblocked::Ci::Unwatched));
     }
     let ci = match &watch {
         crate::ci::Begin::Watching => format!("kebbie watches {short}"),
@@ -1368,6 +1370,21 @@ mod tests {
                 cleanup(dir, origin, &slot);
             }
         }
+    }
+
+    #[test]
+    fn a_push_without_ci_tells_the_blocked_tasks_of_its_repo_it_landed() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let at = |task: &str| peers::address(task, &name_of(&dir));
+        let blocked = messages::Report { state: "blocked".to_string(), next: "nothing".to_string(), head: None, after: Vec::new() };
+        messages::log_report(&at("copy"), &blocked, "waiting for billing's push").unwrap();
+        let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        let unwatched = |_: &Path, _: &Path, _: &str, _: &str, _: bool, _: crate::ci::Pushed| crate::ci::Begin::Off;
+        deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head.clone(), rebased: false }, "the user", &state, &unwatched).unwrap();
+        let told: Vec<String> = messages::load().into_iter().filter(|message| message.to == at("copy")).map(|message| message.text).collect();
+        assert!(told.len() == 1 && told[0].starts_with(&format!("{} landed on", at("billing"))) && told[0].contains(&head[..7]) && told[0].contains("watches no CI"), "{told:?}");
+        cleanup(dir, origin, &slot);
     }
 
     #[test]

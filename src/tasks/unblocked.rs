@@ -39,6 +39,22 @@ pub(crate) fn main_green(green: &Watch, reds: &[Watch]) -> String {
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Ci {
+    Green,
+    NoneRan,
+    Unwatched,
+}
+
+pub(crate) fn landed(address: &str, sha: &str, target: &str, ci: Ci) -> String {
+    let ci = match ci {
+        Ci::Green => ", and its CI is green",
+        Ci::NoneRan => "; no CI ran for it",
+        Ci::Unwatched => "; kebbie watches no CI for it",
+    };
+    format!("{address} landed on {target} ({}){ci}. If you reported blocked waiting for it, {GO_ON}", short(sha))
+}
+
 pub(crate) fn dismissed(red: &Watch) -> String {
     format!(
         "The user dismissed the red CI of {} ({}) in {}: its pushes no longer wait on it, though main's CI did not go green. If you reported blocked on it, {GO_ON}",

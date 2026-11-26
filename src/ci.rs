@@ -578,6 +578,15 @@ fn tell_green(state: &Path, green: &Watch, ended: &[Watch]) -> Vec<String> {
     crate::tasks::unblocked::tell(&green.repo, &green.address, &crate::tasks::unblocked::main_green(green, ended))
 }
 
+// A green push that ended no red run is news of its own, to a task blocked waiting for it.
+fn tell_landed(state: &Path, green: &Watch, ended: &[Watch], ci: crate::tasks::unblocked::Ci) -> Vec<String> {
+    if !ended.is_empty() && !red_in(state, &green.repo) {
+        return tell_green(state, green, ended);
+    }
+    let target = if green.pushed.target.is_empty() { "the default branch" } else { &green.pushed.target };
+    crate::tasks::unblocked::tell(&green.repo, &green.address, &crate::tasks::unblocked::landed(&green.address, &green.sha, target, ci))
+}
+
 fn pushing_file(state: &Path, address: &str) -> PathBuf {
     dir(state).join(format!(".{address}.pushing"))
 }
@@ -751,7 +760,7 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
                 }
                 if crate::tasks::passed_later(&watch, &failed, gh) {
                     let fixed = Watch { pushed: Pushed { inherited: None, ..watch.pushed.clone() }, ..watch.clone() };
-                    events.push(green(state, &fixed, format!("CI is green for {}: a later push holding it passed {}, red since {}", watch.short(), inherited.what, inherited.short()), now));
+                    events.push(green(state, &fixed, format!("CI is green for {}: a later push holding it passed {}, red since {}", watch.short(), inherited.what, inherited.short()), crate::tasks::unblocked::Ci::Green, now));
                 } else {
                     let _ = save(state, &Watch { checked_at: Some(now), ..watch });
                 }
@@ -789,10 +798,10 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
                 let _ = save(state, &watch);
             }
             Verdict::Green if watch.waits_for_deploy() => events.push(undeployed(state, &watch)),
-            Verdict::Green => events.push(green(state, &watch, format!("CI is green for {}", watch.short()), now)),
+            Verdict::Green => events.push(green(state, &watch, format!("CI is green for {}", watch.short()), crate::tasks::unblocked::Ci::Green, now)),
             Verdict::NoneRan => match crate::sh::run(gh, &["workflow", "list", "-R", &watch.slug, "--json", "path,state", "--limit", "100"], Some(&watch.repo)).and_then(|text| has_workflows(&text)) {
-                Ok(false) if !watch.pushed.stages.is_empty() => events.push(staged(state, &watch, format!("No CI ran for {}", watch.short()), Some("no CI ran for it"), now)),
-                Ok(false) => events.push(green(state, &watch, format!("No CI ran for {}", watch.short()), now)),
+                Ok(false) if !watch.pushed.stages.is_empty() => events.push(staged_without_ci(state, &watch, now)),
+                Ok(false) => events.push(green(state, &watch, format!("No CI ran for {}", watch.short()), crate::tasks::unblocked::Ci::NoneRan, now)),
                 Ok(true) => {
                     let _ = save(state, &watch);
                     if now.saturating_sub(watch.started_at) >= UNSEEN_AFTER {
@@ -805,7 +814,7 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
                 }
             },
             Verdict::Cancelled(cancelled) => match crate::tasks::after_cancel(&watch, &cancelled, gh) {
-                crate::tasks::AfterCancel::Passed => events.push(green(state, &watch, format!("CI is green for {}: {} was cancelled and a later run on {} that holds it passed", watch.short(), cancelled.join(", "), watch.branch()), now)),
+                crate::tasks::AfterCancel::Passed => events.push(green(state, &watch, format!("CI is green for {}: {} was cancelled and a later run on {} that holds it passed", watch.short(), cancelled.join(", "), watch.branch()), crate::tasks::unblocked::Ci::Green, now)),
                 crate::tasks::AfterCancel::Following(sha) => {
                     watch.following = Some(sha);
                     watch.pushed.held = None;
@@ -917,9 +926,9 @@ fn unknown(state: &Path, watch: &mut Watch, now: u64, refused: bool) -> Event {
 }
 
 // A task that named a check for after its push runs it now, and closes once it reports that the check held.
-fn green(state: &Path, watch: &Watch, what: String, now: u64) -> Event {
+fn green(state: &Path, watch: &Watch, what: String, ci: crate::tasks::unblocked::Ci, now: u64) -> Event {
     let ended = release_red(state, watch);
-    tell_green(state, watch, &ended);
+    tell_landed(state, watch, &ended, ci);
     if !watch.pushed.stages.is_empty() {
         return staged(state, watch, what, None, now);
     }
@@ -959,10 +968,17 @@ fn rolled_on(state: &Path, watch: &Watch, text: String) -> Event {
     Event { address: watch.address.clone(), kind: Kind::Green, text }
 }
 
+// A repo without workflows has its push out as soon as it went: main is as green as it gets, and the stages go on from there.
+fn staged_without_ci(state: &Path, watch: &Watch, now: u64) -> Event {
+    let ended = release_red(state, watch);
+    tell_landed(state, watch, &ended, crate::tasks::unblocked::Ci::NoneRan);
+    staged(state, watch, format!("No CI ran for {}", watch.short()), Some("no CI ran for it"), now)
+}
+
 // The rest went green and no run of the deploy workflow showed up: the stages that wait on it fail, so nothing after them goes out on a deploy nobody saw.
 fn undeployed(state: &Path, watch: &Watch) -> Event {
     let ended = release_red(state, watch);
-    tell_green(state, watch, &ended);
+    tell_landed(state, watch, &ended, crate::tasks::unblocked::Ci::Green);
     let deploy = watch.pushed.deploy.clone().unwrap_or_default();
     let note = format!("no run of {deploy} on {} in {} min", watch.short(), UNSEEN_AFTER / 60);
     crate::tasks::rollout::failed(state, &watch.address, &watch.pushed.stages, &note, true);
@@ -1314,6 +1330,35 @@ mod tests {
         for conclusion in ["failure", "timed_out", "startup_failure", "action_required"] {
             assert!(matches!(verdict(&[run("completed", "success"), run("completed", conclusion), run("in_progress", "")], 5), Verdict::Failed(failed) if failed.len() == 1), "{conclusion}");
         }
+    }
+
+    #[test]
+    fn a_staged_push_in_a_repo_without_workflows_tells_the_blocked_tasks_it_landed() {
+        let dir = crate::sh::test_dir("ci-staged-unseen");
+        let gh = dir.join("gh");
+        crate::executable::write(&gh, "#!/bin/sh\ncase \"$*\" in\n*\"workflow list\"*) echo '[]' ;;\n*) echo '[]' ;;\nesac\n").unwrap();
+        let at = |task: &str| crate::peers::address(task, &crate::repo::name_of(&dir));
+        let watch = Watch { address: at("billing"), repo: dir.clone(), slug: "acme/app".to_string(), sha: "abcdef0".to_string(), started_at: 0, checked_at: None, close: false, runs: Vec::new(), state: State::Running, error: None, erring_since: None, following: None, pushed: Pushed { target: "main".to_string(), stages: vec!["add the column".to_string()], ..Pushed::default() } };
+        save(&dir, &watch).unwrap();
+        let blocked = messages::Report { state: "blocked".to_string(), next: "nothing".to_string(), head: None, after: Vec::new() };
+        messages::log_report(&at("copy"), &blocked, "waiting for billing's first stage").unwrap();
+        tick_with(&dir, &gh.to_string_lossy(), APPEAR_SECONDS + 1);
+        let told: Vec<String> = messages::load().into_iter().filter(|message| message.to == at("copy")).map(|message| message.text).collect();
+        assert!(told.len() == 1 && told[0].starts_with(&format!("{} landed on main (abcdef0); no CI ran for it", at("billing"))), "{told:?}");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_push_green_but_for_a_deploy_that_never_ran_tells_the_blocked_tasks_it_landed() {
+        let dir = crate::sh::test_dir("ci-undeployed-told");
+        let at = |task: &str| crate::peers::address(task, &crate::repo::name_of(&dir));
+        let watch = Watch { address: at("billing"), repo: dir.clone(), slug: "acme/app".to_string(), sha: "abcdef0".to_string(), started_at: 0, checked_at: None, close: false, runs: Vec::new(), state: State::Running, error: None, erring_since: None, following: None, pushed: Pushed { target: "main".to_string(), deploy: Some("deploy".to_string()), ..Pushed::default() } };
+        let blocked = messages::Report { state: "blocked".to_string(), next: "nothing".to_string(), head: None, after: Vec::new() };
+        messages::log_report(&at("copy"), &blocked, "waiting for billing's push").unwrap();
+        undeployed(&dir, &watch);
+        let told: Vec<String> = messages::load().into_iter().filter(|message| message.to == at("copy")).map(|message| message.text).collect();
+        assert!(told.len() == 1 && told[0].starts_with(&format!("{} landed on main (abcdef0), and its CI is green", at("billing"))), "with no red run to end, the push landing is the news: {told:?}");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -1865,6 +1910,25 @@ mod tests {
         let text = told();
         assert!(text.len() == 1 && text[0].contains(&elsewhere[..7]) && text[0].contains(&format!("{} ({})", at("ledger"), &elsewhere[..7])) && text[0].contains("rebase onto the default branch"), "{text:?}");
         assert!(tell_green(&state, &fix, &release_red(&state, &fix)).is_empty() && told().len() == 1, "the hold is gone, so a second green says nothing");
+        crate::tasks::test_support::cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_green_push_that_ends_no_red_run_tells_the_blocked_tasks_it_landed() {
+        let (dir, origin, slot, _) = crate::tasks::test_support::task_with_a_commit("billing");
+        let state = crate::tasks::test_support::state_of(&dir);
+        let at = |task: &str| crate::peers::address(task, &crate::repo::name_of(&dir));
+        let blocked = messages::Report { state: "blocked".to_string(), next: "nothing".to_string(), head: None, after: Vec::new() };
+        messages::log_report(&at("copy"), &blocked, "waiting for billing's push").unwrap();
+        let green = Watch { address: at("billing"), repo: dir.clone(), slug: "acme/app".to_string(), sha: "abcdef0123".to_string(), started_at: 1, checked_at: None, close: false, runs: Vec::new(), state: State::Running, error: None, erring_since: None, following: None, pushed: Pushed { target: "main".to_string(), ..Pushed::default() } };
+        let told = || messages::load().into_iter().filter(|message| message.to == at("copy")).map(|message| message.text).collect::<Vec<_>>();
+        assert_eq!(tell_landed(&state, &green, &[], crate::tasks::unblocked::Ci::Green), [at("copy")]);
+        assert!(told().len() == 1 && told()[0].starts_with(&format!("{} landed on main (abcdef0), and its CI is green", at("billing"))), "{:?}", told());
+        tell_landed(&state, &green, &[], crate::tasks::unblocked::Ci::NoneRan);
+        assert!(told().len() == 2 && told()[1].starts_with(&format!("{} landed on main (abcdef0); no CI ran for it", at("billing"))), "a repo without workflows is never called green: {:?}", told());
+        let red = Watch { address: at("ledger"), state: State::Failed { at: 2, what: "ci · clippy".to_string(), url: String::new() }, ..green.clone() };
+        tell_landed(&state, &green, std::slice::from_ref(&red), crate::tasks::unblocked::Ci::Green);
+        assert!(told().len() == 3 && told()[2].starts_with("main is green again"), "a push that ends main's last red run says so once, not that it landed as well: {:?}", told());
         crate::tasks::test_support::cleanup(dir, origin, &slot);
     }
 
