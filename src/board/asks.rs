@@ -9,7 +9,7 @@ use super::columns::Rows;
 use super::widgets::{SURFACE, YELLOW, plural, row, style};
 use super::{App, Column, Hit, Mode, Page};
 
-// One backlog item whose questions wait on the user, as a row under the Work page's Needs you.
+// One backlog item the user asked to start whose questions hold it, as a row under the Work page's Needs you.
 pub(super) fn ask_line(entry: &Entry, selected: bool, focused: bool, place: bool, width: usize) -> Line<'static> {
     let questions = plural(entry.shape.waiting, "question");
     let facts = format!("{questions} · answer on its card");
@@ -28,10 +28,10 @@ pub(super) fn ask_line(entry: &Entry, selected: bool, focused: bool, place: bool
 }
 
 impl App {
-    // The backlog items Needs you lists on the Work page: those whose blocking questions wait on the user, kept by a Work filter on their title or repo.
+    // The backlog items Needs you lists on the Work page: those the user asked to start whose blocking questions hold them, kept by a Work filter on their title or repo.
     pub(super) fn asks_shown(&self) -> Vec<usize> {
         let wanted = self.filter_of(Column::Work).map(str::to_lowercase);
-        self.backlog_asks().into_iter().filter(|index| {
+        self.work_asks().into_iter().filter(|index| {
             let entry = &self.backlog.entries[*index];
             wanted.as_deref().is_none_or(|wanted| entry.title.to_lowercase().contains(wanted) || entry.area.to_lowercase().contains(wanted))
         }).collect()
@@ -205,7 +205,7 @@ mod tests {
     use ratatui::crossterm::event::KeyCode;
 
     fn item(title: &str, priority: &str, age: &str, waiting: usize) -> Entry {
-        let shape = Shape { state: Some(if waiting > 0 { State::Drafting } else { State::Ready }), waiting, ..Shape::default() };
+        let shape = Shape { state: Some(if waiting > 0 { State::Drafting } else { State::Ready }), waiting, start: true, ..Shape::default() };
         Entry { source: "vault".to_string(), title: title.to_string(), priority: priority.to_string(), area: "web".to_string(), reference: format!("Projects/{}.md", title.to_lowercase().replace(' ', "-")), age: age.to_string(), shape, ..Entry::default() }
     }
 
@@ -214,7 +214,7 @@ mod tests {
     }
 
     #[test]
-    fn needs_you_on_the_work_page_lists_each_item_whose_questions_wait_with_no_task_there() {
+    fn needs_you_on_the_work_page_lists_each_item_you_asked_to_start_whose_questions_wait_with_no_task_there() {
         let mut app = test_app(vec![crate::status::tests::task(Some("idle"), Some("ready"), 2)]);
         app.backlog.entries = backlog();
         let (rows, _) = render(&mut app, 120, 30);
@@ -226,6 +226,21 @@ mod tests {
         assert!(rows[older].contains("2 questions · answer on its card") && rows[newest].contains("1 question · answer on its card"), "{screen}");
         assert!(!screen.contains("Session drops on reload"), "an item no question holds stays on the Backlog page: {screen}");
         assert!(screen.contains("● 2 need you"), "the count holds them: {screen}");
+    }
+
+    #[test]
+    fn an_item_whose_questions_wait_but_nobody_asked_to_start_shows_only_under_the_backlog_pages_needs_you() {
+        let mut app = test_app(vec![crate::status::tests::task(Some("idle"), Some("needs-you"), 0)]);
+        app.backlog.entries = vec![Entry { shape: Shape { start: false, ..item("Dark mode", "medium", "2 d", 1).shape }, ..item("Dark mode", "medium", "2 d", 1) }];
+        let (rows, _) = render(&mut app, 120, 30);
+        let screen = rows.join("\n");
+        assert!(!screen.contains("Dark mode") && screen.contains("NEEDS YOU  1") && screen.contains("● 1 need you"), "Needs you on the Work page holds the task alone: {screen}");
+        assert!(screen.contains("2 ?1"), "the Backlog tab still marks the question: {screen}");
+        press(&mut app, key(KeyCode::Down));
+        assert_eq!(app.ask_focus, None, "no row to step onto");
+        app.column = Column::Backlog;
+        let screen = render(&mut app, 120, 30).0.join("\n");
+        assert!(screen.contains("NEEDS YOU  1") && screen.contains("Dark mode"), "the Backlog page lists it under its own Needs you: {screen}");
     }
 
     #[test]

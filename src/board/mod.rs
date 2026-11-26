@@ -334,12 +334,17 @@ impl App {
         self.tasks.get(self.work_selected).filter(|_| self.shown(Column::Work, self.work_selected)).cloned()
     }
 
-    // The backlog items whose questions block their start and wait on the user, newest first, as the hub lists them under Needs you.
+    // The backlog items whose questions block their start and wait on the user, newest first, as the Backlog page lists them under Needs you.
     pub(super) fn backlog_asks(&self) -> Vec<usize> {
         let days = |entry: &Entry| entry.age.split_whitespace().next().and_then(|days| days.parse::<u64>().ok()).unwrap_or(u64::MAX);
         let mut asks: Vec<usize> = (0..self.backlog.entries.len()).filter(|index| self.backlog.entries[*index].shape.waiting > 0).collect();
         asks.sort_by_key(|index| days(&self.backlog.entries[*index]));
         asks
+    }
+
+    // Of those, the ones the user asked to start, which their questions hold: only these stand under the Work page's Needs you and in Next.
+    pub(super) fn work_asks(&self) -> Vec<usize> {
+        self.backlog_asks().into_iter().filter(|index| self.backlog.entries[*index].shape.start).collect()
     }
 
     // The Backlog column's rows top to bottom; backlog_selected and Hit::Entry index into this.

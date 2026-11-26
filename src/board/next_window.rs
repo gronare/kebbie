@@ -290,7 +290,7 @@ pub(super) fn draw_device(frame: &mut Frame, request: Option<&Request>, now: u64
 
 impl App {
     pub(super) fn next(&self) -> Next {
-        next::of(&self.tasks).with_asks(self.backlog_asks().into_iter().map(|index| &self.backlog.entries[index])).with_devices(&self.devices, crate::messages::now())
+        next::of(&self.tasks).with_asks(self.work_asks().into_iter().map(|index| &self.backlog.entries[index])).with_devices(&self.devices, crate::messages::now())
     }
 
     pub(super) fn handle_device(&mut self, id: String, back: Window, key: KeyEvent, act: Option<Act>) {
@@ -503,13 +503,13 @@ mod tests {
     }
 
     #[test]
-    fn backlog_items_whose_questions_wait_follow_the_tasks_stopped_on_you_and_enter_opens_their_card() {
-        let asked = |title: &str, age: &str, waiting: usize| {
-            let shape = crate::backlog_file::Shape { state: Some(crate::backlog_file::State::Drafting), waiting, ..Default::default() };
+    fn backlog_items_you_asked_to_start_that_questions_hold_follow_the_tasks_stopped_on_you_and_enter_opens_their_card() {
+        let asked = |title: &str, age: &str, waiting: usize, start: bool| {
+            let shape = crate::backlog_file::Shape { state: Some(crate::backlog_file::State::Drafting), waiting, start, ..Default::default() };
             crate::backlog::Entry { source: "vault".to_string(), title: title.to_string(), priority: "low".to_string(), area: "web".to_string(), reference: format!("Projects/{}.md", title.to_lowercase().replace(' ', "-")), age: age.to_string(), shape, ..Default::default() }
         };
         let mut app = app_with(vec![asking("billing", "web", 600), ready("card-component", "web", 300)]);
-        app.backlog.entries = vec![asked("Rounding", "5 d", 2), asked("Links used", "1 d", 1)];
+        app.backlog.entries = vec![asked("Rounding", "5 d", 2, true), asked("Links used", "1 d", 1, true), asked("Dark mode", "2 d", 1, false)];
         app.card_reader = true;
         let rows = window(&mut app, 100, 30);
         let screen = rows.join("\n");
@@ -518,6 +518,7 @@ mod tests {
         let at = |text: &str| find(&rows, text).first().map_or(usize::MAX, |found| found.1);
         assert!(at("STOPPED ON YOU") < at("QUESTIONS ON BACKLOG ITEMS") && at("QUESTIONS ON BACKLOG ITEMS") < at("Links used") && at("Links used") < at("Rounding") && at("Rounding") < at("PUSH, IN THIS ORDER"), "{screen}");
         assert!(screen.contains("2 questions · answer on its card") && screen.contains("1 question · answer on its card"), "{screen}");
+        assert!(!screen.contains("Dark mode"), "an item nobody asked to start waits under the Backlog page only: {screen}");
         app.handle_key(key(KeyCode::Down), None);
         app.handle_key(key(KeyCode::Down), None);
         app.handle_key(key(KeyCode::Enter), None);

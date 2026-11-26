@@ -665,6 +665,7 @@ mod tests {
         for (tasks, count) in [(vec![working.clone()], 3), (vec![asking, working], 4)] {
             let mut app = test_app(tasks);
             app.backlog.entries = vec![waiting_item("Rounding per invoice", "high", "5 d", 2), waiting_item("Links show used pages", "medium", "1 d", 1)];
+            app.backlog.entries.iter_mut().for_each(|entry| entry.shape.start = true);
             app.machine_lines = vec![line.to_string()];
             let (rows, _) = render(&mut app, 140, 30);
             let screen = rows.join("\n");
