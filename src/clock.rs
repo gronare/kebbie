@@ -92,10 +92,6 @@ pub fn board_line_in(state: &Path, now: u64) -> Option<String> {
     read(state).filter(|reading| now.saturating_sub(reading.at) <= FRESH).and_then(|reading| line(reading.offset))
 }
 
-pub fn board_line() -> Option<String> {
-    crate::lead::state_dir().ok().and_then(|state| board_line_in(&state, crate::messages::now()))
-}
-
 pub fn doctor(url: Option<&str>, measure: impl FnOnce(&str) -> Result<i64, String>) -> Option<Check> {
     let url = url?;
     Some(match measure(url) {

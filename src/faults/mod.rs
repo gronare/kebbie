@@ -7,7 +7,6 @@ use serde_json::json;
 use crate::issues::{self, Issue};
 use crate::sh::Result;
 
-pub mod board;
 pub mod capture;
 pub mod incidents;
 pub mod watch;

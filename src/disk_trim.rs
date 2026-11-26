@@ -119,10 +119,6 @@ pub fn board_line_in(state: &Path, now: u64) -> Option<String> {
     (now.saturating_sub(record.at) <= SHOWN_FOR).then_some(record.line).flatten()
 }
 
-pub fn board_line() -> Option<String> {
-    board_line_in(&crate::lead::state_dir().ok()?, crate::messages::now())
-}
-
 fn seen_now(repos: &[PathBuf]) -> Vec<Seen> {
     let mut seen = Vec::new();
     for repo in repos {

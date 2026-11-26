@@ -102,7 +102,7 @@ pub(super) fn spawn_refresher(board_pane: Option<String>) -> (Receiver<std::resu
             }
             let snapshot = status::gather_with_checkouts().map(|(items, checkouts)| {
                 let questions = questions::open_now(&messages::load()).into_iter().cloned().chain(lead::state_dir().map(|state| crate::kebbie_questions::as_messages(&state)).unwrap_or_default()).collect();
-                Snapshot { checkouts, items, messages: messages::recent(200), questions, offers: super::bug_report::load_offers(), comments: crate::comments::board(), fixed: super::bug_report::load_fixed(), usage: usage::load(), ongoing: load_ongoing(), lead_chat: board_pane.as_deref().and_then(lead::chat_hidden), restart_auto: config::restart_settings().map_or(true, |(auto, _)| auto), lead_context: usage::lead_context(), lead_context_limit: config::lead_context_limit().unwrap_or(config::DEFAULT_LEAD_CONTEXT), devices: lead::state_dir().map(|state| crate::hub::devices::requests(&state, messages::now())).unwrap_or_default(), backlog: crate::backlog::load(), machine: crate::disk_trim::board_line().into_iter().chain(crate::clock::board_line()).chain(crate::faults::board::board_line()).collect(), overdue_promises: lead::state_dir().map(|state| crate::tasks::promises_overdue(&state, messages::now())).unwrap_or_default() }
+                Snapshot { checkouts, items, messages: messages::recent(200), questions, offers: super::bug_report::load_offers(), comments: crate::comments::board(), fixed: super::bug_report::load_fixed(), usage: usage::load(), ongoing: load_ongoing(), lead_chat: board_pane.as_deref().and_then(lead::chat_hidden), restart_auto: config::restart_settings().map_or(true, |(auto, _)| auto), lead_context: usage::lead_context(), lead_context_limit: config::lead_context_limit().unwrap_or(config::DEFAULT_LEAD_CONTEXT), devices: lead::state_dir().map(|state| crate::hub::devices::requests(&state, messages::now())).unwrap_or_default(), backlog: crate::backlog::load(), machine: lead::state_dir().map(|state| machine_lines_in(&state, messages::now())).unwrap_or_default(), overdue_promises: lead::state_dir().map(|state| crate::tasks::promises_overdue(&state, messages::now())).unwrap_or_default() }
             });
             if crate::keeper::current_owner() == crate::keeper::Owner::Board && carded.is_none_or(|at: Instant| at.elapsed() >= Duration::from_secs(crate::vault_card::EVERY)) && let (Ok(snapshot), Ok(state)) = (&snapshot, crate::lead::state_dir()) {
                 carded = Some(Instant::now());
@@ -115,6 +115,11 @@ pub(super) fn spawn_refresher(board_pane: Option<String>) -> (Receiver<std::resu
         }
     });
     (snapshot_rx, refresh_tx)
+}
+
+// Each line shows under Needs you, so only what waits on the user belongs here.
+fn machine_lines_in(state: &Path, now: u64) -> Vec<String> {
+    crate::disk_trim::board_line_in(state, now).into_iter().chain(crate::clock::board_line_in(state, now)).collect()
 }
 
 pub(super) fn spawn_update_checker() -> (Receiver<Vec<(String, String)>>, Sender<()>) {
@@ -340,5 +345,15 @@ mod tests {
         std::fs::write(dir.join("src/search/filters.txt"), "two").unwrap();
         assert_eq!(gather_detail(&dir, None).changed, ["src/search/filters.txt"]);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_fault_watchers_tally_never_shows_under_needs_you() {
+        let state = crate::sh::test_dir("board-machine-faults");
+        let dir = crate::issues::dir(&state);
+        crate::issues::save(&dir, &crate::issues::Issue { id: "aa0001".to_string(), title: "x".to_string(), kind: "bug".to_string(), status: "open".to_string(), by: crate::faults::BY.to_string(), fix: Some("fault-aa0001".to_string()), ..crate::issues::Issue::default() }).unwrap();
+        crate::issues::save(&dir, &crate::issues::Issue { id: "aa0002".to_string(), title: "y".to_string(), kind: "bug".to_string(), status: "open".to_string(), by: crate::faults::BY.to_string(), ..crate::issues::Issue::default() }).unwrap();
+        assert_eq!(machine_lines_in(&state, crate::messages::now()), Vec::<String>::new(), "nothing the fault watcher follows waits on the user");
+        let _ = std::fs::remove_dir_all(state);
     }
 }
