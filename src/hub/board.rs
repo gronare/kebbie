@@ -246,6 +246,7 @@ fn ci(item: &status::Item) -> Option<Ci> {
         crate::ci::State::Running => Ci { state: CiState::Running, failure: None },
         crate::ci::State::Failed { what, .. } => Ci { state: CiState::Failed, failure: Some(what.clone()) },
         crate::ci::State::Cancelled { what, .. } => Ci { state: CiState::Failed, failure: Some(format!("cancelled: {what}")) },
+        crate::ci::State::Unknown { error, refused: true, .. } => Ci { state: CiState::Failed, failure: Some(format!("unknown: GitHub refused to re-run it: {error}")) },
         crate::ci::State::Unknown { error, .. } => Ci { state: CiState::Failed, failure: Some(format!("unknown: gh could not read it: {error}")) },
     })
 }
@@ -609,6 +610,16 @@ pub(crate) mod tests {
         });
         in_phase(&mut item, Phase::NeedsYou(crate::phase::Why::Question));
         item
+    }
+
+    #[test]
+    fn a_deploy_github_refused_to_re_run_says_github_refused_on_the_phone() {
+        let mut item = task(Some("idle"), None, 0);
+        let watch = |refused| crate::ci::Watch { address: "billing@web".to_string(), repo: std::path::PathBuf::new(), slug: "acme/web".to_string(), sha: "abc".to_string(), started_at: 1, checked_at: None, close: true, runs: Vec::new(), state: crate::ci::State::Unknown { at: 2, error: "HTTP 403".to_string(), refused }, error: None, erring_since: None, following: None, pushed: crate::ci::Pushed::default() };
+        item.ci = Some(watch(true));
+        assert_eq!(ci(&item).and_then(|ci| ci.failure).as_deref(), Some("unknown: GitHub refused to re-run it: HTTP 403"));
+        item.ci = Some(watch(false));
+        assert_eq!(ci(&item).and_then(|ci| ci.failure).as_deref(), Some("unknown: gh could not read it: HTTP 403"));
     }
 
     #[test]

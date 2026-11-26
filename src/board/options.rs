@@ -79,6 +79,7 @@ pub(super) fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_wo
         Some(crate::ci::State::Running) if item.and_then(|item| item.ci.as_ref()).is_some_and(|ci| ci.pushed.inherited.is_some()) => choices.push(choice(Act::DismissCi, "Dismiss the inherited red CI", "stop waiting for the push that made it red to be fixed: kept on record, and the task closes once its commits are on main (asks first)")),
         Some(crate::ci::State::Failed { .. }) => choices.push(choice(Act::DismissCi, "Dismiss the red CI", "the failure is not the code's (a deploy window, infra, a flake): kept on record, and the task closes once its commits are on main (asks first)")),
         Some(crate::ci::State::Cancelled { .. }) => choices.push(choice(Act::DismissCi, "Dismiss the cancelled CI", "leave the run cancelled: kept on record, and the task closes once its commits are on main (asks first)")),
+        Some(crate::ci::State::Unknown { refused: true, .. }) => choices.push(choice(Act::DismissCi, "Dismiss the unknown CI", "GitHub refused to re-run its deploy: kept on record, and the task closes once its commits are on main (asks first)")),
         Some(crate::ci::State::Unknown { .. }) => choices.push(choice(Act::DismissCi, "Dismiss the unknown CI", "gh could not read its runs: kept on record, and the task closes once its commits are on main (asks first)")),
         Some(crate::ci::State::Running) | None => {}
     }
@@ -410,6 +411,18 @@ mod tests {
         assert_eq!(keys(&pushed), "gcrdGZzx", "a cancelled run re-runs too");
         pushed.ci.as_mut().unwrap().runs[0] = crate::ci::Run { status: "in_progress".to_string(), conclusion: String::new(), ..pushed.ci.as_ref().unwrap().runs[0].clone() };
         assert_eq!(keys(&pushed), "gcrdZzx", "while CI runs there is nothing to re-run");
+    }
+
+    #[test]
+    fn a_deploy_github_refused_to_re_run_re_runs_and_dismisses_saying_github_refused() {
+        let mut pushed = crate::status::tests::task(Some("idle"), None, 0);
+        let unknown = |refused| watched(crate::ci::State::Unknown { at: 2, error: "HTTP 403".to_string(), refused }, "cancelled");
+        let dismiss = |item: &Item| task_choices(Some(item), None, None).into_iter().find(|choice| choice.act == Some(Act::DismissCi)).unwrap().about;
+        pushed.ci = Some(unknown(true));
+        assert!(reruns_ci(&pushed), "G re-runs the refused deploy");
+        assert!(dismiss(&pushed).starts_with("GitHub refused to re-run its deploy"), "{}", dismiss(&pushed));
+        pushed.ci = Some(unknown(false));
+        assert!(dismiss(&pushed).starts_with("gh could not read its runs"), "{}", dismiss(&pushed));
     }
 
     #[test]
