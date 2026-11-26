@@ -755,7 +755,7 @@ fn a_task_reports_asks_and_messages_through_the_log_and_the_fake_herdr_sees_only
 }
 
 #[test]
-fn a_lead_whose_session_start_recorded_its_inbox_gets_a_message_there_at_once_even_behind_a_draft() {
+fn a_lead_whose_session_start_recorded_its_inbox_gets_a_message_from_stdin_there_at_once_even_behind_a_draft() {
     use std::io::{Read, Write};
     let lab = Lab::new("inbox");
     let (_, slot) = lab.task_fixture();
@@ -783,7 +783,7 @@ fn a_lead_whose_session_start_recorded_its_inbox_gets_a_message_there_at_once_ev
         stream.read_to_string(&mut got).unwrap();
         got
     });
-    let told = lab.run(&["-C", slot.to_str().unwrap(), "tell", "lead", "payload renamed"]);
+    let told = lab.run_with_stdin(&["-C", slot.to_str().unwrap(), "tell", "lead", "-"], "payload renamed\n");
     assert!(stdout(&told).contains("Told lead."), "the inbox leaves the user's draft alone, so nothing waits for it: {}\n{}", stdout(&told), stderr(&told));
     assert_eq!(reader.join().unwrap(), "{\"type\":\"auth\",\"token\":\"tok-9\"}\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"<cross-session-message from=\\\"kebbie\\\" from-name=\\\"kebbie\\\">\\n[from billing@app] payload renamed\\n  (kebbie: work silently; end in 1 to 3 lines, or one line if nothing needs the user)\\n</cross-session-message>\"},\"from\":\"kebbie\"}\n");
     let _ = fs::remove_file(&socket);

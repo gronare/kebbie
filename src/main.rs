@@ -770,7 +770,7 @@ fn run(arguments: &Arguments) -> Result<String> {
             let forced = after.first().is_some_and(|argument| argument == "--force");
             let after = &after[usize::from(forced)..];
             let to = after.first().ok_or("kebbie tell needs a recipient: a task, task@repo or lead")?;
-            let text = after[1..].join(" ");
+            let text = messages::tell_text(&after[1..], &mut std::io::stdin())?;
             if forced { messages::tell_forced(to, Some(&text)) } else { messages::tell(&cwd, to, &text) }
         }
         Some("release") => messages::tell_forced(name.ok_or("kebbie release needs the task whose held messages go through")?, None),

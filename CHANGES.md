@@ -7,6 +7,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### What's new
 - After an answer the questions window closes back to the board on the row you answered from; board.next_question = true opens the next question instead.
 - Tab stays on the question you opened in the questions window; board.tab_questions = true moves between questions as before.
+- kebbie tell <to> - reads the message from stdin, as kebbie ask - does.
 - The board's Going out group holds what is in the push line or the lead pushes, with its place in line.
 - Tasks build and test in sweeps: one run lists every error, all get fixed, one run verifies.
 - Tasks and the lead consult an advisor, the best one your account can use, or the profile's advisor.

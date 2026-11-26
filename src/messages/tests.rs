@@ -1015,6 +1015,17 @@ fn a_typed_message_never_goes_over_the_users_text_in_the_leads_box_and_what_wait
 }
 
 #[test]
+fn tell_reads_its_message_from_stdin_after_a_lone_dash() {
+    let words = |words: &[&str]| words.iter().map(|word| word.to_string()).collect::<Vec<_>>();
+    let mut stdin = "line one\n- line two\n".as_bytes();
+    assert_eq!(tell_text(&words(&["-"]), &mut stdin).unwrap(), "line one\n- line two\n");
+    let mut untouched = "never read".as_bytes();
+    assert_eq!(tell_text(&words(&["-", "a", "list"]), &mut untouched).unwrap(), "- a list", "a message that only starts with a dash is the message");
+    assert_eq!(tell_text(&words(&["payload", "renamed"]), &mut untouched).unwrap(), "payload renamed");
+    assert_eq!(untouched, "never read".as_bytes());
+}
+
+#[test]
 fn a_sender_outside_kebbies_sessions_is_named_by_its_folder_and_delivered_as_safely_as_a_task() {
     let claude = outside_sender(Path::new("/src/notes"), Some(crate::agent::Agent::Claude));
     assert_eq!(claude, "a Claude session in /src/notes");

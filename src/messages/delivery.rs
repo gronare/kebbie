@@ -379,6 +379,16 @@ pub(super) fn send_locked_in(dir: &Path, from: &str, recipients: &[&Session], te
     Ok(report)
 }
 
+// A lone "-" after the recipient reads the message from stdin, as kebbie ask - does; any other words are the message.
+pub fn tell_text(words: &[String], stdin: &mut dyn std::io::Read) -> Result<String> {
+    if words != ["-"] {
+        return Ok(words.join(" "));
+    }
+    let mut text = String::new();
+    stdin.read_to_string(&mut text).map_err(|error| format!("kebbie tell: stdin: {error}"))?;
+    Ok(text)
+}
+
 pub fn tell(cwd: &Path, to: &str, text: &str) -> Result<String> {
     if text.trim().is_empty() {
         return Err("kebbie tell needs a message: kebbie tell <task|task@repo|lead> \"<text>\"".to_string());
