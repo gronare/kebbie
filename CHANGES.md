@@ -5,6 +5,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- kebbie start queues a task behind a running task on the same files and names them; --now starts it anyway.
 - A task that reported blocked hears from kebbie once main is green again, you dismissed its red CI, or another task's push landed in its repo, so it no longer waits idle for a fix that landed.
 - The fix of a red main goes first in its repo's push line, so a push that waits for main to go green no longer holds that fix up behind it.
 - kebbie pushes a ready task under your push permission itself once its rules check passed, through the same push line, so it goes out without the lead awake.

@@ -66,6 +66,7 @@ Start a task in a pooled worktree, in its own herdr Space, with Claude.
 | `--after <task[@repo]>` | Queue the task until that task has ended as done. Repeat it to wait for several. See [`kebbie after`](#kebbie-after-name). |
 | `--at <time>` | Queue the task to start at that local time. |
 | `--why <reason>` | With `--after`: why the task waits, in a few words for the user, shown on the board's Queued row. |
+| `--now` | Start it now even when a running task in the repo changes files its prompt names. See [Behind a task on the same files](#behind-a-task-on-the-same-files). |
 | `--recipe "<recipe>: <why>"` | How the task is done and why, such as `--recipe "small-fix: one function and its test"`. Required when the lead starts a task; see [`kebbie recipe`](#kebbie-recipe-task-recipe-why). |
 
 A task you start takes you to its Space. One the lead or another task starts leaves you where you are, unless it passes `--focus`.
@@ -85,6 +86,18 @@ With `--after` or `--at`:
 - Both need a prompt and take no `--from`. With both, the task starts once both hold.
 - `--at` takes `15:00` (its next one), `today 15:00`, `tomorrow 09:00`, `fri 09:00`, `24 oct 09:00`, `2026-10-24 09:00` or `in 2h`.
 - A `--why` reads on the Queued row as: "Waits for Billing totals (ready to push): it uses the rounding field. Starts by itself once it is pushed and CI is green."
+
+#### Behind a task on the same files
+
+A task whose prompt names files or modules that a running or queued task in the same repo works on is queued behind that task, as with `--after`, and kebbie says why: `Queued behind board-colours@kebbie: both change src/status.rs`. The Queued row reads `Waits for Board colours (working): both change src/status.rs.` Two tasks on the same files would otherwise conflict at every rebase, and each push after the first would wait for its tests to run again.
+
+- A prompt names a file by its path (`src/status.rs`, `src/status.rs:42`), by its name alone (`status.rs`), by a folder (`docs/how-to/`) or, in a Rust repo, by a module path (`tasks::queue_as` names every file of `src/tasks`).
+- A running task works on the files its branch changed since it left the default branch, the edits it has not committed, the files it added and what its own start prompt names, so a task started a minute ago counts too. A queued task works on what its prompt names.
+- A task across repos is queued whole: when one half goes behind a task, every half waits for it.
+- `--now` starts it at once anyway; `kebbie after <name> --now` starts one already queued. `--from` skips the check too.
+- Only you and the lead queue a task, so when a task's own Claude starts one that would go behind another, the start is refused and names the files and `--now`.
+- The same check holds when the fault watcher queues a task to fix a fault. The investigator's task for an obstacle starts at once: the task that raised the obstacle waits for it.
+- A start with no prompt, such as `--backlog <item>` alone, a start from the board's area page and a start of a found item are not checked.
 
 Prompts at the start:
 
