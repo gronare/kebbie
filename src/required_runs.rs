@@ -179,15 +179,16 @@ fn had_findings(state: &Path, address: &str) -> crate::sh::Result<bool> {
     Ok(!verdict.ok && !verdict.asks_only_confirmation())
 }
 
-// The default branch moved under the task's tests: no green test run holds the base HEAD now sits on, as after a rebase onto a newer default branch; a task that never ran a test needs one once HEAD left the base its branch started on, unless it changes only files that run no test.
+// The default branch moved under the task's tests: no green test run holds the base HEAD now sits on, as after a rebase onto a newer default branch; a task with no green test run needs one once HEAD left the base its branch started on, unless it changes only files that run no test.
 fn rebased(worktree: &Path, head: &str, tests: &[Run]) -> crate::sh::Result<bool> {
     let upstream = crate::repo::main_checkout(worktree).and_then(|repo| crate::repo::default_branch(&repo)).map(|upstream| crate::repo::tracking(&upstream)).map_err(unreadable("the default branch"))?;
     let base = git(worktree, &["merge-base", head, &upstream]).map_err(unreadable("where the branch left the default branch"))?;
-    if tests.is_empty() {
+    let passed: Vec<&Run> = tests.iter().filter(|run| run.result == Outcome::Passed).collect();
+    if passed.is_empty() {
         let code = git(worktree, &["diff", "--name-only", "--no-renames", &base, head]).map(|files| files.lines().any(|file| !file.is_empty() && !crate::tasks::text_only(file)));
         return Ok(code.unwrap_or(true) && started_on(worktree, &upstream).is_none_or(|start| start != base));
     }
-    Ok(!tests.iter().any(|run| run.result == Outcome::Passed && crate::sh::succeeds("git", &["merge-base", "--is-ancestor", &base, &run.code], Some(worktree))))
+    Ok(!passed.iter().any(|run| crate::sh::succeeds("git", &["merge-base", "--is-ancestor", &base, &run.code], Some(worktree))))
 }
 
 // Where the task's branch left the default branch when it was made, from the oldest entry of its reflog.
@@ -393,6 +394,18 @@ mod tests {
         git(&dir, &["update-ref", "-d", "--no-deref", "refs/remotes/origin/HEAD"]).unwrap();
         git(&dir, &["update-ref", "-d", &format!("refs/remotes/{upstream}")]).unwrap();
         assert!(owed(&slot.path, &address, None).map(|_| ()).unwrap_err().contains("could not read the default branch"), "a default branch kebbie cannot find never reads as not rebased");
+        crate::tasks::test_support::cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_task_whose_only_test_run_kebbie_could_not_read_owes_no_run_after_a_rebase_it_never_had() {
+        let (dir, origin, slot, _) = crate::tasks::test_support::task_with_a_commit("billing");
+        let state = crate::lead::state_dir().unwrap();
+        let address = crate::peers::address("billing", &crate::repo::name_of(&dir));
+        let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        crate::evidence::save(&state, &address, &Run { command: "cargo test 2>&1 | tail -3".to_string(), runner: "cargo test".to_string(), result: Outcome::Unknown, sha: head.clone(), code: head, ..Run::default() }).unwrap();
+        assert!(owed(&slot.path, &address, None).unwrap().gap.is_none(), "the default branch has not moved under the task");
+        let _ = std::fs::remove_file(crate::evidence::file(&state, &address));
         crate::tasks::test_support::cleanup(dir, origin, &slot);
     }
 
