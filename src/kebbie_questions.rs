@@ -291,6 +291,7 @@ pub fn answer_in(state: &Path, caller: &Caller, id: &str, choice: Option<usize>,
             return Err(error);
         }
     };
+    crate::faults::capture::board_answer(&asked.address, &asked.text, choice.and_then(|choice| asked.kind.labels().get(choice).copied()), &comment);
     if let Err(error) = messages::to_lead(messages::ToLead::QuestionCopy, &format!("The user answered kebbie's question on {} ({}): {}", asked.address, asked.text, said)) {
         eprintln!("Could not tell the lead: {error}");
     }

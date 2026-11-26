@@ -483,8 +483,14 @@ fn handover_first() -> Result<String> {
     Ok(handover_prompt(&file))
 }
 
+const HANDOVER_OPENS: &str = "kebbie started you on a new conversation, as your last one's context was nearly full.";
+
+pub fn first_prompt_by_kebbie(text: &str) -> bool {
+    text.starts_with(HANDOVER_OPENS) || text.starts_with("You have ") && text.contains(tasks::PROMISES_KEEP)
+}
+
 fn handover_prompt(file: &Path) -> String {
-    format!("kebbie started you on a new conversation, as your last one's context was nearly full. Read your handover in {} before anything else and carry on from it.", file.display())
+    format!("{HANDOVER_OPENS} Read your handover in {} before anything else and carry on from it.", file.display())
 }
 
 // A new conversation knows only its role and the vault, so it hears that promises wait for it.
@@ -1227,6 +1233,13 @@ mod tests {
         assert_eq!(written["autoCompactEnabled"], json!(false), "a compacted lead loses its rules, so it never compacts on its own");
         assert!(written["permissions"]["allow"].as_array().unwrap().contains(&json!(format!("Bash({kebbie} handover:*)"))), "no permission prompt holds the handover");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_fault_watcher_knows_the_first_prompts_kebbie_gives_the_lead() {
+        assert!(first_prompt_by_kebbie(&handover_prompt(Path::new("/s/kebbie/lead-handover.md"))));
+        assert!(first_prompt_by_kebbie(&format!("You have 3 open promises{}", tasks::PROMISES_KEEP)));
+        assert!(!first_prompt_by_kebbie("You have the wrong task on the board again"));
     }
 
     #[test]

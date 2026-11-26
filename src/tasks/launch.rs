@@ -248,9 +248,14 @@ fn recorded_session(task: &str, repo: &Path) -> Record {
 
 pub(super) fn forget_session(task: &str, repo: &Path) {
     if let Ok(file) = session_file(task, repo) {
-        let _ = std::fs::remove_file(prompt_file(&file));
-        let _ = std::fs::remove_file(file);
+        forget_in(&file);
     }
+}
+
+fn forget_in(session: &Path) {
+    let _ = std::fs::remove_file(prompt_file(session));
+    let _ = std::fs::remove_file(typed_file(session));
+    let _ = std::fs::remove_file(session);
 }
 
 fn prompt_file(session: &Path) -> PathBuf {
@@ -264,6 +269,36 @@ fn store_prompt(file: &Path, prompt: Option<&str>) -> Result<()> {
         Some(prompt) => crate::state::write(file, prompt),
         None => std::fs::remove_file(file).or_else(|error| if error.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(error.to_string()) }),
     }
+}
+
+fn typed_file(session: &Path) -> PathBuf {
+    let mut name = session.file_name().unwrap_or_default().to_os_string();
+    name.push(".typed");
+    session.with_file_name(name)
+}
+
+const TYPED_KEPT: usize = 10;
+
+fn typed_in(file: &Path) -> Vec<String> {
+    std::fs::read_to_string(file).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+}
+
+fn remember_typed(session: &Path, prompt: &str) -> Result<()> {
+    let file = typed_file(session);
+    let mut typed = typed_in(&file);
+    typed.retain(|earlier| earlier != prompt);
+    typed.push(prompt.to_string());
+    let drop = typed.len().saturating_sub(TYPED_KEPT);
+    typed.drain(..drop);
+    crate::state::write(&file, serde_json::to_string(&typed).map_err(|error| error.to_string())?)
+}
+
+pub(crate) fn kebbie_prompts(task: &str, repo: &Path) -> Vec<String> {
+    session_file(task, repo).map(|session| kebbie_prompts_in(&session)).unwrap_or_default()
+}
+
+fn kebbie_prompts_in(session: &Path) -> Vec<String> {
+    stored_prompt(&prompt_file(session)).into_iter().chain(typed_in(&typed_file(session))).collect()
 }
 
 fn stored_prompt(file: &Path) -> Option<String> {
@@ -838,6 +873,9 @@ fn restart(place: &Launch, slot: &Slot, focus: bool, given: Option<&str>) -> Res
         Session::New(_) => true,
     };
     let prompt = prompt_for(&session, given, stored, unheard);
+    if let (Some(prompt), Ok(file)) = (&prompt, session_file(task, place.repo)) {
+        remember_typed(&file, prompt)?;
+    }
     let (agent_name, started, notice) = launch(&place, &pane, session)?;
     let address = peers::address(task, &name_of(place.repo));
     let prompted = match &started {
@@ -1222,12 +1260,29 @@ mod tests {
         assert_eq!(prompt_for(&new, None, stored_prompt(&file), true), None);
         std::fs::remove_dir_all(dir).unwrap();
         let source = include_str!("launch.rs");
-        let body = |name: &str| { let start = source.find(&format!("\nfn {name}(")).or_else(|| source.find(&format!("\npub fn {name}("))).or_else(|| source.find(&format!("\npub(super) fn {name}("))).unwrap(); &source[start..start + source[start..].find("\n}\n").unwrap()] };
+        let body = |name: &str| { let start = source.find(&format!("\nfn {name}(")).or_else(|| source.find(&format!("\npub fn {name}("))).or_else(|| source.find(&format!("\npub(super) fn {name}("))).or_else(|| source.find(&format!("\npub(crate) fn {name}("))).unwrap(); &source[start..start + source[start..].find("\n}\n").unwrap()] };
         assert!(body("launch_new").find("store_prompt(").unwrap() < body("launch_new").find("launch(").unwrap(), "the prompt is kept even when the first start fails");
         assert!(body("begin").contains("restart(&place(existing), existing, focus, prompt)"), "start's prompt reaches the resume path");
         assert!(body("restart").contains("prompt_for(&session, given, stored, unheard)") && body("restart").contains("send_prompt(agent.name(), started, prompt.as_deref(),"));
+        assert!(body("restart").find("remember_typed(&file, prompt)").unwrap() < body("restart").find("send_prompt(").unwrap(), "the fault watcher knows each prompt kebbie types into a restarted task as kebbie's, never the user's");
+        assert!(body("restart").contains("Ok(file)) = (&prompt, session_file(task, place.repo))") && body("kebbie_prompts").contains("session_file(task, repo).map(|session| kebbie_prompts_in(&session))"), "restart remembers under the session file the fault watcher reads");
+        assert!(body("forget_session").contains("forget_in(&file)"));
         assert!(body("restart").contains("unheard_in(agent, &file)"));
-        assert!(body("forget_session").contains("prompt_file("));
+    }
+
+    #[test]
+    fn the_fault_watcher_knows_each_prompt_kebbie_typed_into_a_task_until_its_session_is_forgotten() {
+        let dir = crate::sh::test_dir("task-typed");
+        let session = dir.join("sessions").join("billing@my.app");
+        crate::state::write(&session, "1f0c").unwrap();
+        store_prompt(&prompt_file(&session), Some("Fix the invoice rounding")).unwrap();
+        for typed in ["Use the new card", "Report ready again", "Use the new card"] {
+            remember_typed(&session, typed).unwrap();
+        }
+        assert_eq!(kebbie_prompts_in(&session), ["Fix the invoice rounding", "Report ready again", "Use the new card"], "the start prompt and every prompt typed on a restart, each once");
+        forget_in(&session);
+        assert!(kebbie_prompts_in(&session).is_empty() && !typed_file(&session).exists() && !prompt_file(&session).exists(), "a later task of the same name inherits none of them");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

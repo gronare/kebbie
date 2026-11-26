@@ -166,7 +166,7 @@ pub fn event(line: &str) -> Option<Event> {
     match record["type"].as_str()? {
         "user" => {
             let text = content_text(&record["message"]["content"])?;
-            if record["isMeta"] == true && !text.contains("<cross-session-message") {
+            if record["isCompactSummary"] == true || record["isMeta"] == true && !text.contains("<cross-session-message") {
                 return None;
             }
             said(id, at, &text)

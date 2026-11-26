@@ -366,9 +366,11 @@ pub(crate) fn listing_in(state: &Path, log: &[Message], now: u64) -> String {
 }
 
 // The lead's command line carries its first prompt, so a new conversation hears how many promises wait and where to read them, not the promises themselves.
+pub(crate) const FIRST_LINE_KEEPS: &str = " that kebbie keeps for you: kebbie promises lists them, and kebbie reminds you when each is due.";
+
 pub(crate) fn first_prompt_line(state: &Path) -> Option<String> {
     let count = all(state).len();
-    (count > 0).then(|| format!("You have {count} open promise{} that kebbie keeps for you: kebbie promises lists them, and kebbie reminds you when each is due.", if count == 1 { "" } else { "s" }))
+    (count > 0).then(|| format!("You have {count} open promise{}{FIRST_LINE_KEEPS}", if count == 1 { "" } else { "s" }))
 }
 
 pub fn list() -> Result<String> {

@@ -360,6 +360,8 @@ pub fn answer_as(caller: &crate::permit::Caller, id: &str, choice: Option<usize>
         }
     };
     messages::copy_to_lead_locked(&answer_copy(message, choice, comment, caller), None, &sessions)?;
+    let picked = choice.and_then(|index| message.question.as_ref()?.options.get(index)).map(|(label, _)| label.as_str());
+    crate::faults::capture::board_answer(&message.from, &message.text, picked, comment);
     crate::hub::notices::settle(crate::hub::notices::Subject::Question, &message.from);
     Ok(crate::notice::Notice::new(crate::notice::Tone::Done, "Answered").next(told).detail("task", &message.from).to_string())
 }

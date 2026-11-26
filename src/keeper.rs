@@ -56,6 +56,8 @@ pub fn routines() -> Vec<Routine> {
         Routine { name: "prompts", every: crate::menu::EVERY, run: |ctx| { ctx.notes.extend(crate::menu::tick(&crate::lead::state_dir()?)?); Ok(()) } },
         Routine { name: "recover", every: 30, run: |_| { crate::recover::tick(&crate::lead::state_dir()?); Ok(()) } },
         Routine { name: "comments", every: crate::comments::EVERY, run: |ctx| { ctx.notes.extend(crate::comments::tick(&crate::lead::state_dir()?)); Ok(()) } },
+        Routine { name: "faults", every: crate::faults::capture::EVERY, run: |ctx| { ctx.notes.extend(crate::faults::capture::tick(&crate::lead::state_dir()?)); Ok(()) } },
+        Routine { name: "watch", every: crate::faults::watch::EVERY, run: |ctx| { ctx.notes.extend(crate::faults::watch::tick(&crate::lead::state_dir()?)); Ok(()) } },
         Routine { name: "issues", every: crate::issue_recheck::EVERY, run: |ctx| { ctx.notes.extend(crate::issue_recheck::tick(&crate::lead::state_dir()?)); Ok(()) } },
         Routine { name: "rules", every: crate::rules_check::EVERY, run: |ctx| { ctx.notes.extend(crate::rules_check::tick(&crate::lead::state_dir()?)); Ok(()) } },
         Routine { name: "review", every: crate::rules_check::EVERY, run: |ctx| { ctx.notes.extend(crate::review::tick(&crate::lead::state_dir()?)); Ok(()) } },

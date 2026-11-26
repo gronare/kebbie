@@ -1,0 +1,228 @@
+use super::*;
+use super::watch::{Kind, Verdict};
+
+fn state(name: &str) -> PathBuf {
+    crate::sh::test_dir(&format!("faults-{name}"))
+}
+
+fn case(state: &Path, source: Source, from: &str, words: &str, now: u64) -> Case {
+    let id = add_case(state, &NewCase { source, from, words, context: "Before it, the agent had said: done", fingerprint: None }, now).unwrap().unwrap();
+    cases(state).into_iter().find(|case| case.id == id).unwrap()
+}
+
+fn new_fault(title: &str) -> Verdict {
+    Verdict { case: String::new(), kind: Some(Kind::New), issue_kind: Some("bug".to_string()), title: Some(title.to_string()), happened: Some("the lead asked the user in its chat".to_string()), expected: Some("questions go on the board".to_string()), cause: Some("roles/lead.md lets the lead ask in its reply".to_string()), barrier: Some("role".to_string()), files: Some("roles/lead.md".to_string()), question: None, task: None, reason: "a rule about how a lead works".to_string() }
+}
+
+#[test]
+fn the_same_words_from_the_same_chat_wait_as_one_case() {
+    let state = state("dedup");
+    let first = add_case(&state, &NewCase { source: Source::Chat, from: "lead", words: "you asked me in the chat again", context: "", fingerprint: None }, 10).unwrap();
+    let again = add_case(&state, &NewCase { source: Source::Chat, from: "lead", words: "you asked me in the chat again", context: "", fingerprint: None }, 20).unwrap();
+    let elsewhere = add_case(&state, &NewCase { source: Source::Chat, from: "billing@app", words: "you asked me in the chat again", context: "", fingerprint: None }, 30).unwrap();
+    assert_eq!((first.as_deref(), again, elsewhere.as_deref()), (Some("c1"), None, Some("c2")));
+    settle(&state, "c1", "no fault in kebbie", None).unwrap();
+    assert_eq!(pending(&state).iter().map(|case| case.id.as_str()).collect::<Vec<_>>(), ["c2"]);
+    fs::remove_dir_all(state).unwrap();
+}
+
+#[test]
+fn at_most_three_fix_tasks_start_in_a_day_and_the_fourth_waits_for_the_oldest_to_age() {
+    let state = state("cap");
+    for at in [100, 200, 300] {
+        assert_eq!(next_start(&state, at), at);
+        count_fix(&state, at, at).unwrap();
+    }
+    assert_eq!(next_start(&state, 400), 100 + DAY, "the fourth starts when the first of the day is a day old");
+    assert_eq!(next_start(&state, 100 + DAY + 1), 100 + DAY + 1);
+    fs::remove_dir_all(state).unwrap();
+}
+
+#[test]
+fn the_users_words_stay_on_this_machine_and_out_of_the_issues_text() {
+    let state = state("private");
+    let said = case(&state, Source::Chat, "lead", "why do you keep asking me in the chat, I said put it on the board", 10);
+    let issue = watch::filed_fault(&state, &said, &new_fault("The lead asks the user in its chat instead of on the board"), 10).unwrap();
+    assert!(!issue.body.contains("I said") && !issue.title.contains("I said"), "{issue:?}");
+    assert_eq!((issue.by.as_str(), issue.cause.as_deref(), issue.barrier.as_deref()), (BY, Some("roles/lead.md lets the lead ask in its reply"), Some("role")));
+    assert!(occurrences(&state, &issue.id)[0].quote.contains("I said put it on the board"));
+    assert!(show_in(&state, &issue.id).unwrap().contains("I said put it on the board"));
+    let report = crate::hub::report::payload(&issue, &crate::hub::report::Scrub::default());
+    assert!(!report.text.contains("I said") && !report.text.contains("roles/lead.md lets"), "the report carries the issue's text alone: {}", report.text);
+    fs::remove_dir_all(state).unwrap();
+}
+
+#[test]
+fn a_fault_without_a_kebbie_checkout_is_filed_and_waits_for_the_maintainers() {
+    let state = state("no-checkout");
+    let said = case(&state, Source::Board, "billing@app", "this plan again puts my question in the chat", 10);
+    let (outcome, issue) = watch::act(&state, &said, &new_fault("A plan's question reaches the chat"), None, 10).unwrap();
+    assert!(outcome.contains("waits for kebbie's maintainers"), "{outcome}");
+    let issue = issues::find(&issues::dir(&state), &issue.unwrap()).unwrap();
+    assert_eq!(issue.fix, None);
+    assert_eq!(list_in(&state, false).lines().next().unwrap().split_whitespace().nth(1), Some("open"));
+    fs::remove_dir_all(state).unwrap();
+}
+
+#[test]
+fn a_known_issue_from_another_install_is_never_this_machines_fault() {
+    let state = state("untrusted");
+    let dir = issues::dir(&state);
+    issues::save(&dir, &Issue { id: "r9".to_string(), title: "x".to_string(), kind: "bug".to_string(), status: "open".to_string(), source: Some("report 9".to_string()), ..Issue::default() }).unwrap();
+    let said = case(&state, Source::Chat, "lead", "this broke again today", 10);
+    let verdict = Verdict { kind: Some(Kind::Known("r9".to_string())), ..Verdict::default() };
+    assert!(watch::act(&state, &said, &verdict, None, 10).unwrap_err().contains("another install's report"));
+    fs::remove_dir_all(state).unwrap();
+}
+
+#[test]
+fn the_watchers_answer_reads_one_block_per_case() {
+    let answer = "I read roles/lead.md.\n\ncase: c1\nverdict: ignore\nreason: the user answers a question\n\ncase: c2\nverdict: new\nreason: a lead rule\nkind: bug\ntitle: The lead hands the user a command\nhappened: the lead told the user to run a command\nexpected: the lead runs it\ncause: roles/lead.md has no rule against it\nbarrier: Code\nfiles: roles/lead.md, src/lead.rs\nquestion: none\n\ncase: c3\nverdict: known 3f9a2c.\nreason: same fault\n\ncase: c4\nverdict: linked lead-asks-on-board\n\ncase: c5\nverdict: maybe\n";
+    let verdicts = watch::parse(answer);
+    assert_eq!(verdicts.iter().map(|verdict| (verdict.case.as_str(), verdict.kind.clone().unwrap())).collect::<Vec<_>>(), [("c1", Kind::Ignore), ("c2", Kind::New), ("c3", Kind::Known("3f9a2c".to_string())), ("c4", Kind::Linked("lead-asks-on-board".to_string()))], "a verdict kebbie cannot read is no verdict");
+    let fenced = watch::parse("Here are the verdicts.\n\n```\ncase: c1\nverdict: new\nreason: r\ntitle: The lead asks in its chat\ncause: src/lead.rs has no Stop hook for the lead\nbarrier: code\n```\n\n```\ncase: c2\nverdict: known 6f6168\nreason: same\n```\n");
+    assert_eq!(fenced.iter().map(|verdict| verdict.kind.clone().unwrap()).collect::<Vec<_>>(), [Kind::New, Kind::Known("6f6168".to_string())], "a block in a code fence reads the same");
+    let new = &verdicts[1];
+    assert_eq!((new.barrier.as_deref(), new.question.as_deref(), new.files.as_deref()), (Some("code"), None, Some("roles/lead.md, src/lead.rs")));
+}
+
+#[test]
+fn a_case_waits_for_the_agents_turn_and_runs_come_apart() {
+    let waiting = |at| Case { id: format!("c{at}"), at, source: Source::Chat, from: "lead".to_string(), words: "w".to_string(), context: String::new(), fingerprint: None, settled: None, issue: None, tries: 0 };
+    let cases = vec![waiting(1_000), waiting(1_100)];
+    assert_eq!(watch::due(&cases, 0, 1_110), Vec::<String>::new(), "neither has waited two minutes");
+    assert_eq!(watch::due(&cases, 0, 1_150), ["c1000"]);
+    assert_eq!(watch::due(&cases, 1_200, 1_400), Vec::<String>::new(), "a run came less than five minutes ago");
+    let spent = vec![Case { tries: 2, ..waiting(1_000) }];
+    assert_eq!(watch::due(&spent, 0, 5_000), Vec::<String>::new(), "a case two runs gave no answer on is not tried again");
+}
+
+#[test]
+fn a_fix_task_is_told_to_build_a_code_barrier_once_a_text_fix_did_not_hold() {
+    let issue = Issue { id: "3f9a2c".to_string(), title: "The lead hands the user a command".to_string(), body: "What happened: x\nWhat I expected: y".to_string(), cause: Some("roles/lead.md".to_string()), barrier: Some("code".to_string()), history: vec!["files: src/lead.rs".to_string()], ..Issue::default() };
+    let prompt = watch::fix_prompt(&issue, true, &["type sudo apt install mold (lead)".to_string()]);
+    assert!(prompt.starts_with("The lead hands the user a command\n") && prompt.contains("kebbie issue 3f9a2c") && prompt.contains("- type sudo apt install mold (lead)") && prompt.contains("Files it names: src/lead.rs"), "{prompt}");
+    assert!(prompt.contains("a text fix did not hold") && prompt.contains(watch::barrier_line("code")), "{prompt}");
+    assert!(!watch::fix_prompt(&Issue { barrier: Some("role".to_string()), ..issue }, false, &[]).contains("did not hold"));
+}
+
+#[test]
+fn the_chats_give_the_users_own_turns_with_the_agents_answer_and_nothing_else() {
+    let state = state("chat");
+    let transcript = state.join("lead.jsonl");
+    let user = |text: &str| serde_json::json!({ "type": "user", "uuid": "u", "timestamp": "2026-11-26T08:00:00.000Z", "message": { "role": "user", "content": text } }).to_string();
+    let reply = |text: &str| serde_json::json!({ "type": "assistant", "uuid": "a", "timestamp": "2026-11-26T08:00:05.000Z", "message": { "stop_reason": "end_turn", "content": [{ "type": "text", "text": text }] } }).to_string();
+    let end = serde_json::json!({ "type": "system", "subtype": "turn_duration", "timestamp": "2026-11-26T08:00:06.000Z" }).to_string();
+    fs::write(&transcript, format!("{}\n", user("an old correction from before the watcher ran"))).unwrap();
+    let chats = vec![capture::Chat { from: "lead".to_string(), path: transcript.clone(), kebbie_typed: Vec::new() }];
+    let now = crate::messages::now() + 5;
+    assert!(capture::tick_in(&state, &chats, now).is_empty(), "the history before the watcher ran is never weighed");
+    let lines = [reply("Noted."), end.clone(), user("ja"), reply("Ok."), end.clone(), user("[from billing@app] the board is wrong again, please fix"), end.clone(), user("why is the push line standing still again? fix the cause"), reply("I re-queued the push."), end];
+    let mut appended = fs::read_to_string(&transcript).unwrap();
+    appended.push_str(&format!("{}\n", lines.join("\n")));
+    fs::write(&transcript, appended).unwrap();
+    assert_eq!(capture::tick_in(&state, &chats, now + 30), ["faults: 1 of the user's words to weigh"]);
+    let [taken] = pending(&state).try_into().unwrap();
+    assert_eq!((taken.source, taken.from.as_str(), taken.words.as_str()), (Source::Chat, "lead", "why is the push line standing still again? fix the cause"));
+    assert!(taken.context.contains("The agent answered: I re-queued the push.") && taken.context.contains("Before it, the agent had said: Ok."), "{}", taken.context);
+    assert!(capture::tick_in(&state, &chats, now + 60).is_empty(), "read once");
+    fs::remove_dir_all(state).unwrap();
+}
+
+#[test]
+fn a_chat_that_began_after_the_watcher_first_looked_is_read_from_its_first_words() {
+    let state = state("new-chat");
+    let user = |text: &str| serde_json::json!({ "type": "user", "uuid": "u", "timestamp": "2026-11-26T08:00:00.000Z", "message": { "role": "user", "content": text } }).to_string();
+    let end = serde_json::json!({ "type": "system", "subtype": "turn_duration", "timestamp": "2026-11-26T08:00:06.000Z" }).to_string();
+    let now = crate::messages::now();
+    assert!(capture::tick_in(&state, &[], now - 60).is_empty());
+    let lead = state.join("restarted-lead.jsonl");
+    let summary = serde_json::json!({ "type": "user", "uuid": "s", "isCompactSummary": true, "timestamp": "2026-11-26T08:00:00.000Z", "message": { "role": "user", "content": "This session is being continued from a previous conversation. The user said the push line is wrong again." } }).to_string();
+    fs::write(&lead, format!("{summary}\n{}\n{end}\n", user("you restarted and the board still shows the wrong task, fix it"))).unwrap();
+    let chat = |path: &Path| [capture::Chat { from: "lead".to_string(), path: path.to_path_buf(), kebbie_typed: Vec::new() }];
+    assert_eq!(capture::tick_in(&state, &chat(&lead), now), ["faults: 1 of the user's words to weigh"]);
+    let [taken] = pending(&state).try_into().unwrap();
+    assert_eq!(taken.words, "you restarted and the board still shows the wrong task, fix it", "a compaction's summary is never the user's words");
+    fs::write(&lead, format!("{}\n{}\n{end}\n", fs::read_to_string(&lead).unwrap().trim_end(), user("and the second thing is wrong too, look at it"))).unwrap();
+    assert_eq!(capture::tick_in(&state, &[], now + 30), Vec::<String>::new(), "a chat missing from one tick keeps its mark");
+    assert_eq!(capture::tick_in(&state, &chat(&lead), now + 60), ["faults: 1 of the user's words to weigh"]);
+    assert_eq!(pending(&state).len(), 2);
+    fs::remove_dir_all(state).unwrap();
+}
+
+#[test]
+fn the_prompts_kebbie_types_into_a_new_chat_are_never_the_users_words() {
+    let state = state("start-prompt");
+    let user = |text: &str| serde_json::json!({ "type": "user", "uuid": "u", "timestamp": "2026-11-26T08:00:00.000Z", "message": { "role": "user", "content": text } }).to_string();
+    let reply = |text: &str| serde_json::json!({ "type": "assistant", "uuid": "a", "timestamp": "2026-11-26T08:00:05.000Z", "message": { "stop_reason": "end_turn", "content": [{ "type": "text", "text": text }] } }).to_string();
+    let end = serde_json::json!({ "type": "system", "subtype": "turn_duration", "timestamp": "2026-11-26T08:00:06.000Z" }).to_string();
+    let now = crate::messages::now();
+    assert!(capture::tick_in(&state, &[], now - 60).is_empty());
+    let prompt = "The push line is broken again:\n  a task falls out of it unpushed. Fix the cause.";
+    let task = state.join("task.jsonl");
+    fs::write(&task, format!("{}\n{}\n{end}\n{}\n{end}\n{}\n{end}\n", user("The push line is broken again: a task falls out of it unpushed. Fix the cause."), reply("On it."), user("this task is wrong already, it rebuilt the old screen"), user("Use the new card, the old one is broken"))).unwrap();
+    let lead = state.join("lead.jsonl");
+    fs::write(&lead, format!("{}\n{}\n{end}\n", user("kebbie started you on a new conversation, as your last one's context was nearly full. Read your handover in /s/kebbie/lead-handover.md before anything else and carry on from it. You have 2 open promises that kebbie keeps for you: kebbie promises lists them, and kebbie reminds you when each is due."), reply("Read it."))).unwrap();
+    let chats = [capture::Chat { from: "billing@app".to_string(), path: task, kebbie_typed: vec![prompt.to_string(), "Use the new card, the old one is broken".to_string()] }, capture::Chat { from: "lead".to_string(), path: lead, kebbie_typed: Vec::new() }];
+    assert_eq!(capture::tick_in(&state, &chats, now), ["faults: 1 of the user's words to weigh"]);
+    let [taken] = pending(&state).try_into().unwrap();
+    assert_eq!((taken.from.as_str(), taken.words.as_str()), ("billing@app", "this task is wrong already, it rebuilt the old screen"), "a task's start prompt, a prompt kebbie typed on its restart and the lead's handover are kebbie's words");
+    fs::remove_dir_all(state).unwrap();
+}
+
+#[test]
+fn every_board_answer_reaches_the_fault_watcher() {
+    for (source, function) in [(include_str!("../questions.rs"), "pub fn answer_as("), (include_str!("../kebbie_questions.rs"), "pub fn answer_in(")] {
+        let body = source.split_once(function).map(|(_, rest)| rest.split_once("\n}\n").map_or(rest, |(body, _)| body)).unwrap_or_else(|| panic!("{function} is gone"));
+        assert!(body.contains("crate::faults::capture::board_answer("), "{function} no longer hands the user's answer to the fault watcher");
+    }
+}
+
+#[test]
+fn a_board_answer_is_a_case_only_when_it_corrects() {
+    let state = state("board");
+    let answer = |label: Option<&str>, comment: &str| capture::board_answer_in(&state, "billing@app", "Approve the plan for the export?", label, comment, 10).unwrap();
+    assert_eq!(answer(Some("Approve"), ""), None);
+    assert_eq!(answer(Some("Approve with a comment"), "fine"), None);
+    assert!(answer(Some("Reject with a comment"), "this plan builds the instance, not the cause").is_some());
+    assert!(answer(Some("Something is wrong"), "").is_some());
+    assert!(answer(None, "you asked this twice already").is_some());
+    let words: Vec<String> = pending(&state).into_iter().map(|case| case.words).collect();
+    assert_eq!(words, ["this plan builds the instance, not the cause", "Something is wrong", "you asked this twice already"]);
+    fs::remove_dir_all(state).unwrap();
+}
+
+#[test]
+fn a_fault_seen_again_gets_one_fix_task_and_a_closed_one_stays_the_users_call() {
+    use watch::{Step, step};
+    let issue = |status: &str, fix: Option<&str>| Issue { id: "3f9a2c".to_string(), status: status.to_string(), fix: fix.map(str::to_string), ..Issue::default() };
+    assert_eq!(step(&issue("open", None), None), Step::Queue { came_back: false });
+    assert_eq!(step(&issue("open", Some("start-queues-overlap")), Some("start-queues-overlap@kebbie".to_string())), Step::Tell("start-queues-overlap@kebbie".to_string()), "a task on it hears of it, and no second one starts");
+    assert_eq!(step(&issue("retry", Some("fault-3f9a2c")), None), Step::Wait("fault-3f9a2c".to_string()), "its fix ended but is not in use yet: no fault-3f9a2c-2");
+    let rechecked = Issue { history: vec!["fixed in 0.42.0 (abc1234), checked automatically".to_string()], ..issue("fixed", Some("fault-3f9a2c")) };
+    assert_eq!(step(&rechecked, None), Step::Queue { came_back: true }, "only the keeper's recheck puts a fix in use");
+    assert_eq!(step(&issue("fixed", Some("fault-3f9a2c")), None), Step::Keep, "an issue closed by hand stays closed");
+    assert_eq!(step(&issue("wontfix", None), None), Step::Keep);
+    assert_eq!(step(&issue("duplicate", Some("x")), None), Step::Keep);
+}
+
+#[test]
+fn an_issue_the_user_closed_is_never_reopened_by_the_watcher() {
+    let state = state("wontfix");
+    let dir = issues::dir(&state);
+    issues::save(&dir, &Issue { id: "aa11bb".to_string(), title: "x".to_string(), kind: "bug".to_string(), status: "wontfix".to_string(), ..Issue::default() }).unwrap();
+    let said = case(&state, Source::Chat, "lead", "that thing happened again today", 10);
+    let (outcome, _) = watch::act(&state, &said, &Verdict { kind: Some(Kind::Known("aa11bb".to_string())), ..Verdict::default() }, None, 10).unwrap();
+    assert!(outcome.contains("stays wontfix"), "{outcome}");
+    assert_eq!(issues::find(&dir, "aa11bb").unwrap().status, "wontfix");
+    assert!(!occurrences(&state, "aa11bb")[0].came_back);
+    fs::remove_dir_all(state).unwrap();
+}
+
+#[test]
+fn a_task_the_watcher_names_is_kept_by_its_bare_name() {
+    assert_eq!(watch::task_name("start-queues-overlap@kebbie (queued)"), "start-queues-overlap");
+    assert_eq!(watch::task_name("`fault-3f9a2c`"), "fault-3f9a2c");
+    let [known] = watch::parse("case: c6\nverdict: known 6f6168\nreason: same\ntask: Start köar en task (start-queues-overlap@kebbie) (queued)\n").try_into().unwrap();
+    assert_eq!(known.task.as_deref(), Some("start-queues-overlap"), "the brief shows a task's title beside its address");
+}

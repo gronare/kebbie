@@ -33,6 +33,7 @@ mod docs;
 mod evidence;
 #[cfg(test)]
 mod executable;
+mod faults;
 mod fetch;
 mod found;
 mod required_runs;
@@ -517,6 +518,11 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   or sent; --take prints it and clears it; nothing is held with [issues] propose = false
   kebbie issue list [--json] [--all]
                                   the same as kebbie issues
+  kebbie faults [--json] | show <id>
+                                  the faults kebbie's fault watcher follows: the issues it filed from the user's own
+                                  words, each with its fix task, how often it happened and whether it came back once
+                                  its fix was in use; show prints one with each time, the user's words kept on this
+                                  machine only
   kebbie issue show|retry <id>    print one; retry marks it worth trying again
   kebbie issue close <id> fixed|wontfix|duplicate
   kebbie issue reopen <id>        open a closed one again, noted as come back on this build
@@ -941,6 +947,9 @@ fn run(arguments: &Arguments) -> Result<String> {
             None => config::show(&cwd, arguments.value("--repo")),
         },
         Some("issues") => Ok(issues::list_in(&issues::dir(&lead::state_dir()?), arguments.flag("--all"), arguments.flag("--json"))),
+        Some("faults") if arguments.flag("--watch") => faults::watch::run(),
+        Some("faults") if name == Some("show") => faults::show_in(&lead::state_dir()?, arguments.positional(2).ok_or("kebbie faults show needs the issue's id; kebbie faults lists them")?),
+        Some("faults") => Ok(faults::list_in(&lead::state_dir()?, arguments.flag("--json"))),
         Some("issue") => issue(arguments, name),
         Some("setup") if matches!(name, Some("mindin" | "vault")) => setup::vault(),
         Some("setup") if name == Some("codex") => setup::codex(arguments.flag("--uninstall"), arguments.flag("--yes")),
