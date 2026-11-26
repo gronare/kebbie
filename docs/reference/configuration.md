@@ -354,7 +354,7 @@ networks = ["wireguard"]
 
 Each Claude task runs its builds through a guard kebbie puts first on the PATH of its commands. A build takes one of the machine's `builds.slots`:
 
-- A task that finds every slot taken is told its place in line, and its command exits with status 75. The board shows `waiting for a build slot, 2nd` on its row.
+- A task that finds every slot taken is told its place in line on a line that starts with `error: kebbie:`, so a filter on error lines keeps it, and its command exits with status 75. The board shows `waiting for a build slot, 2nd` on its row.
 - When a slot frees, the keeper tells the next task in line that its turn has come and holds the slot 3 minutes for it. A task that does not build in that time loses its turn to the next, and is told so.
 - `kebbie update` goes first in line and waits there, at most 10 minutes, then builds without a slot.
 - The head of a repo's [push line](../explanation/trunk-based.md#one-push-line-per-repo) goes next, before every other task, since its push waits on its build. It is told that place as it joins the queue.
@@ -392,7 +392,7 @@ It skips a worktree when any of these holds:
 
 It checks each worktree again just before it trims it, and stops once the disk is above the limit. A task whose output was trimmed builds it again the next time it builds. When the free space is still below the limit after a round, the board shows a line under Needs you with the free space. The line goes after the next round that finds enough room, or 10 minutes after the keeper stops. With the keeper off, an open board runs the same round every minute. On macOS kebbie cannot see which processes use a worktree, so it trims nothing there: the line under Needs you shows the free space and says to free it by hand.
 
-When the free space under a worktree is below `disk.builds_below`, a task's build there takes no build slot and does not run. The guard says how much is free and exits with status 75, and a task in line whose own worktree is on such a disk gets no build turn: it keeps its place while the turn goes to the next task whose disk has room.
+When the free space under a worktree is below `disk.builds_below`, a task's build there takes no build slot and does not run. The guard says how much is free, on a line that starts with `error: kebbie:`, and exits with status 75, and a task in line whose own worktree is on such a disk gets no build turn: it keeps its place while the turn goes to the next task whose disk has room.
 
 Each limit is free space in GB, as `"30 GB"`, or a share of the whole disk, as `"15%"`.
 

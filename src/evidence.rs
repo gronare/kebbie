@@ -1662,7 +1662,7 @@ mod tests {
         let mut grepped = passed("cargo test 2>&1 | grep -E 'test result|no build slot'");
         grepped["tool_response"]["stdout"] = json!(line);
         assert_eq!(record_in(&state, "billing@app", &dir, &list, &grepped, 2).remove(0).why, QUEUED);
-        grepped["tool_response"]["stdout"] = json!("kebbie: a build slot is free, but it goes first to the tasks ahead of this one (alpha@app); it is 2nd in line, and kebbie tells it when its turn comes.");
+        grepped["tool_response"]["stdout"] = json!("error: kebbie: a build slot is free, but it goes first to the tasks ahead of this one (alpha@app); it is 2nd in line, and kebbie tells it when its turn comes.");
         assert_eq!(record_in(&state, "billing@app", &dir, &list, &grepped, 2).remove(0).why, QUEUED, "a run behind tasks ahead in line never ran either");
         let mut red = passed("cargo test 2>&1 | grep -E 'test result|no build slot'");
         red["tool_response"]["stdout"] = json!(format!("{line}\ntest result: FAILED. 1 passed; 1 failed"));

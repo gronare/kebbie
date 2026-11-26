@@ -18,6 +18,8 @@ const MAX_HOLD: u64 = 30 * 60;
 const UPDATE_WAIT: Duration = Duration::from_secs(10 * 60);
 const KEEPER_QUIET: u64 = 60;
 pub const QUEUED_EXIT: u8 = 75;
+// A build that exits 75 without building starts its line so, as a filter on error lines keeps it and a filtered build never looks clean.
+pub const REFUSED: &str = "error: kebbie: ";
 const HELD_VAR: &str = "KEBBIE_BUILD_SLOT";
 const GUARD_DIR: &str = "build-guard";
 const QUEUE: &str = "queue.json";
@@ -213,9 +215,9 @@ impl Blocked {
 pub fn queued_line(place: usize, blocked: &Blocked) -> String {
     let place = crate::tasks::ordinal(place);
     match blocked {
-        Blocked::Full(holding) => format!("kebbie: no build slot is free for this task ({holding}); it is {place} in line, and kebbie tells it when its turn comes."),
-        Blocked::Ahead(ahead) => format!("kebbie: a build slot is free, but it goes first to the tasks ahead of this one ({ahead}); it is {place} in line, and kebbie tells it when its turn comes."),
-        Blocked::Next => format!("kebbie: a build slot is free and kebbie hands it to this task next; it is {place} in line, and kebbie tells it when its turn comes."),
+        Blocked::Full(holding) => format!("{REFUSED}no build slot is free for this task ({holding}); it is {place} in line, and kebbie tells it when its turn comes."),
+        Blocked::Ahead(ahead) => format!("{REFUSED}a build slot is free, but it goes first to the tasks ahead of this one ({ahead}); it is {place} in line, and kebbie tells it when its turn comes."),
+        Blocked::Next => format!("{REFUSED}a build slot is free and kebbie hands it to this task next; it is {place} in line, and kebbie tells it when its turn comes."),
     }
 }
 
@@ -231,12 +233,15 @@ pub fn holding(holders: &[Holder], turns: &[Turn]) -> String {
 // The keeper publishes the limit in the queue, as a sandboxed task reads no config, and the guard measures the disk under the build itself.
 pub fn disk_refusal(space: Option<crate::disk::Space>, limit: Option<crate::disk::Limit>) -> Option<String> {
     let (space, limit) = (space?, limit?);
-    space.below(limit).then(|| format!("kebbie: the disk under this worktree has {} free, below the {} a build needs (disk.builds_below), so this build takes no build slot and does not run. The keeper trims build output from worktrees nobody uses when the disk runs low; free space and build again.", crate::disk::gb(space.free), limit.shown()))
+    space.below(limit).then(|| format!("{REFUSED}the disk under this worktree has {} free, below the {} a build needs (disk.builds_below), so this build takes no build slot and does not run. The keeper trims build output from worktrees nobody uses when the disk runs low; free space and build again.", crate::disk::gb(space.free), limit.shown()))
 }
 
-// Whether a command's output holds a line a build queued for a slot prints before it exits without building, whatever held it back.
+// Whether a command's output holds a line a build queued for a slot prints before it exits without building, whatever held it back; a run recorded before the error prefix has it bare.
 pub fn queued_in(output: &str) -> bool {
-    output.lines().any(|line| line.trim_start().starts_with("kebbie: ") && line.trim_end().ends_with(" in line, and kebbie tells it when its turn comes."))
+    output.lines().any(|line| {
+        let line = line.trim_start();
+        line.strip_prefix("error: ").unwrap_or(line).starts_with("kebbie: ") && line.trim_end().ends_with(" in line, and kebbie tells it when its turn comes.")
+    })
 }
 
 pub fn board_note(place: usize) -> String {
@@ -885,9 +890,21 @@ mod tests {
         let low = Space { free: 8_200_000_000, total: 242_000_000_000 };
         let refusal = disk_refusal(Some(low), Some(Limit::Gb(10))).unwrap();
         assert!(refusal.contains("8.2 GB free, below the 10 GB") && refusal.contains("disk.builds_below"), "{refusal}");
+        assert!(refusal.starts_with("error: kebbie: "), "a filter on lines that start with error keeps it: {refusal}");
         assert_eq!(disk_refusal(Some(low), Some(Limit::Gb(8))), None);
         assert_eq!(disk_refusal(None, Some(Limit::Gb(10))), None, "a disk that cannot be read never stops a build");
         assert_eq!(disk_refusal(Some(low), None), None, "without a keeper's limit the build goes ahead");
+    }
+
+    #[test]
+    fn every_line_of_a_build_that_did_not_run_starts_with_error_and_is_read_back_as_queued() {
+        let lines = [queued_line(1, &Blocked::Full("alpha@app building".to_string())), queued_line(2, &Blocked::Ahead("alpha@app".to_string())), queued_line(1, &Blocked::Next)];
+        for line in &lines {
+            assert!(line.starts_with("error: kebbie: "), "{line}");
+            assert!(queued_in(&format!("   Compiling kebbie\n{line}\n")), "{line}");
+        }
+        assert!(queued_in("kebbie: no build slot is free for this task (a@app building); it is 1st in line, and kebbie tells it when its turn comes."), "a line from before the prefix still reads as queued");
+        assert!(!queued_in("error: kebbie: the disk under this worktree has 1 GB free"), "the disk refusal is read by its exit, not as a place in line");
     }
 
     #[test]
@@ -1139,7 +1156,7 @@ mod tests {
         let turned = Queue { turns: vec![Turn { address: "alpha@app".into(), until: now + HOLD, told: true }], ..queue(1, now) };
         crate::state::write(&dir.join(QUEUE), serde_json::to_string(&turned).unwrap()).unwrap();
         let Ok(Took::Queued(place, held)) = take_slot(&dir, "b@app", false, &[], false) else { panic!("a slot held by a turn queues the next build") };
-        assert_eq!(queued_line(place, &held), "kebbie: no build slot is free for this task (alpha@app has its turn); it is 1st in line, and kebbie tells it when its turn comes.");
+        assert_eq!(queued_line(place, &held), "error: kebbie: no build slot is free for this task (alpha@app has its turn); it is 1st in line, and kebbie tells it when its turn comes.");
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -1150,7 +1167,7 @@ mod tests {
         let ahead = Queue { line: strings(&["alpha@app"]), ..queue(1, crate::messages::now()) };
         crate::state::write(&dir.join(QUEUE), serde_json::to_string(&ahead).unwrap()).unwrap();
         let Ok(Took::Queued(place, held)) = take_slot(&dir, "b@app", false, &[], false) else { panic!("a task ahead in line keeps the free slot from the next build") };
-        assert_eq!(queued_line(place, &held), "kebbie: a build slot is free, but it goes first to the tasks ahead of this one (alpha@app); it is 2nd in line, and kebbie tells it when its turn comes.");
+        assert_eq!(queued_line(place, &held), "error: kebbie: a build slot is free, but it goes first to the tasks ahead of this one (alpha@app); it is 2nd in line, and kebbie tells it when its turn comes.");
         assert_eq!(held.who(), "alpha@app ahead in line");
         let _ = fs::remove_dir_all(dir);
     }
@@ -1164,7 +1181,7 @@ mod tests {
         let Ok(Took::Queued(place, held)) = take_slot(&dir, UPDATE, true, &[], false) else { panic!("kebbie update waits for the keeper to hand it the free slot") };
         assert_eq!((place, held.clone()), (1, Blocked::Next));
         assert_eq!(held.who(), "one is free and kebbie hands it here next");
-        assert_eq!(queued_line(place, &held), "kebbie: a build slot is free and kebbie hands it to this task next; it is 1st in line, and kebbie tells it when its turn comes.");
+        assert_eq!(queued_line(place, &held), "error: kebbie: a build slot is free and kebbie hands it to this task next; it is 1st in line, and kebbie tells it when its turn comes.");
         let _ = fs::remove_dir_all(dir);
     }
 
