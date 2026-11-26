@@ -52,7 +52,7 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
     }
     let (red, excused, from_main) = if report.state == "ready" {
         crate::rules_check::refuse_unformed(cwd)?;
-        let runs = crate::evidence::runs_in(&state_dir()?, &me);
+        let runs = crate::evidence::settled_runs_in(&state_dir()?, &me, cwd);
         let red = red_gate(&runs, red_cause)?;
         let excused = red.as_ref().and_then(|_| crate::evidence::latest(&runs)).map(|run| run.code.clone());
         let owing = if to_push(cwd) { crate::required_runs::owed(cwd, &me, excused.as_deref()).map_err(|error| format!("Not reported ready: {error}."))? } else { crate::required_runs::Owing::default() };
@@ -836,6 +836,27 @@ mod tests {
         assert_eq!(red_gate(&[run(crate::evidence::Outcome::Unknown)], None), Ok(None), "a result kebbie could not read is not red");
         let line = [crate::evidence::Run { in_line: 2, ..run(crate::evidence::Outcome::Failed) }, crate::evidence::Run { in_line: 2, ..run(crate::evidence::Outcome::Passed) }];
         assert!(red_gate(&line, None).is_err(), "a green run later in the same line leaves the red one the latest");
+    }
+
+    #[test]
+    fn a_ready_report_reads_a_background_test_that_just_ended_red() {
+        let (dir, origin, slot, _) = crate::tasks::test_support::task_with_a_commit("billing");
+        let state = state_dir().unwrap();
+        let address = peers::address("billing", &crate::repo::name_of(&dir));
+        crate::repo::git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend", "-m", "Add refunds\n\nThe billing page lists refunds now."]).unwrap();
+        let head = crate::repo::git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        let scratch = crate::sh::test_dir("report-background");
+        let (output, transcript) = (scratch.join("bg1.output"), scratch.join("session.jsonl"));
+        std::fs::write(&output, "test result: FAILED. 1 passed; 1 failed; 0 ignored\n").unwrap();
+        let content = format!("<task-notification>\n<task-id>bg1</task-id>\n<output-file>{}</output-file>\n<status>failed</status>\n<summary>Background command \"cargo test\" failed (exit code 101)</summary>\n</task-notification>", output.display());
+        std::fs::write(&transcript, format!("{}\n", serde_json::json!({ "type": "queue-operation", "operation": "enqueue", "content": content }))).unwrap();
+        let run = crate::evidence::Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), why: "still running in the background".to_string(), background: "bg1".to_string(), transcript: transcript.to_string_lossy().into_owned(), sha: head.clone(), code: head, ..crate::evidence::Run::default() };
+        crate::evidence::save(&state, &address, &run).unwrap();
+        let refused = report(&slot.path, Some("ready"), Some("push and close"), None, &[], None, None, None, "refunds done").unwrap_err();
+        assert!(refused.contains("Your latest test run is red: `cargo test` failed"), "the run that ended red holds the report: {refused}");
+        let _ = std::fs::remove_file(crate::evidence::file(&state, &address));
+        let _ = std::fs::remove_dir_all(scratch);
+        crate::tasks::test_support::cleanup(dir, origin, &slot);
     }
 
     #[test]

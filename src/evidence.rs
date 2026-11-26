@@ -672,6 +672,12 @@ pub fn runs_in(state: &Path, address: &str) -> Vec<Run> {
     all_runs_in(state, address).into_iter().filter(|run| !run.lint).collect()
 }
 
+// The task's test runs once every background run whose end its session's transcript holds is settled, so a gate never reads a run as still running that has ended red.
+pub fn settled_runs_in(state: &Path, address: &str, worktree: &Path) -> Vec<Run> {
+    settle(state, address, &listed_in(worktree), crate::messages::now());
+    runs_in(state, address)
+}
+
 pub fn lint_runs_in(state: &Path, address: &str) -> Vec<Run> {
     all_runs_in(state, address).into_iter().filter(|run| run.lint).collect()
 }
