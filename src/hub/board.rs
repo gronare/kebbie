@@ -982,7 +982,7 @@ pub(crate) mod tests {
         assert!(held.summary().ends_with("withdraw with v to push without a pass"), "the lead's summary keeps its key: {}", held.summary());
         let assessed = Seen { assessed: BTreeMap::from([(crate::peers::address(&held.name, &held.place), 1_761_069_300)]), ..Seen::default() };
         let shown = &build(std::slice::from_ref(&held), &[], Vec::new(), None, &assessed).items[0];
-        assert_eq!(shown.summary, "2 commits", "its findings are the lead's; the phone reads them from the verdict");
+        assert_eq!(shown.summary, format!("2 commits · {}", crate::status::FIXING_FINDINGS), "its findings are the lead's; the phone reads them from the verdict");
         assert_eq!(shown.verdict.as_ref().unwrap().held, Some(true));
         assert_eq!(shown.second_opinion, None);
         let mut seconded = held.clone();

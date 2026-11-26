@@ -112,6 +112,10 @@ impl RulesShown {
     }
 }
 
+pub const FIXING_FINDINGS: &str = "fixing what its review asks";
+
+pub const NO_VERDICT: &str = "its review gave no verdict: send it again with v, or withdraw it to push without a pass";
+
 pub const LEAD_PUSHES: &str = "the lead pushes it";
 
 pub fn breaks(count: usize) -> String {
@@ -328,7 +332,28 @@ impl Item {
         self.git.as_ref().is_some_and(|git| git.ahead > 0) && self.verdict.as_ref().is_some_and(crate::review::Shown::stopped)
     }
 
-    // Sent to review and not passed yet: it waits under In review, and push waits with it.
+    // In review means a reviewer reads it now; otherwise review is optional and a ready task waits under Ready to push.
+    fn reviewer_reading(&self) -> bool {
+        self.git.as_ref().is_some_and(|git| git.ahead > 0) && self.verdict.as_ref().is_some_and(|shown| shown.running)
+    }
+
+    // A verdict on the current code that asks for changes: its agent works on the findings until new commits make it stale, or, for a review that holds no push, until it reports ready again.
+    pub fn fixing_findings(&self) -> bool {
+        let Some(shown) = self.verdict.as_ref().filter(|shown| !shown.running && !shown.stale && shown.verdict.as_ref().is_some_and(|verdict| !verdict.ok && !verdict.asks_only_confirmation())) else { return false };
+        self.git.as_ref().is_some_and(|git| git.ahead > 0) && (shown.held || self.report.as_ref().is_none_or(|report| report.at <= shown.at))
+    }
+
+    // A held review that ended without a verdict keeps the push held until you send it again or withdraw it.
+    fn review_gave_none(&self) -> bool {
+        self.git.as_ref().is_some_and(|git| git.ahead > 0) && self.verdict.as_ref().is_some_and(|shown| shown.held && !shown.running && shown.verdict.is_none())
+    }
+
+    // A push that waits on its agent to run the tests or resolve a conflict is work, not yet going out.
+    fn push_fixing(&self) -> bool {
+        self.push_waits.as_ref().is_some_and(|pending| matches!(pending.work, tasks::PushWork::Tests | tasks::PushWork::Conflict) && !self.reported_since(pending.at, "ready"))
+    }
+
+    // Sent to review and not passed yet: push waits with it.
     pub fn awaiting_review(&self) -> bool {
         self.git.as_ref().is_some_and(|git| git.ahead > 0) && self.verdict.as_ref().is_some_and(|shown| shown.held && shown.pending())
     }
@@ -344,6 +369,7 @@ impl Item {
             _ if shown.running => "review running · waits on the reviewer".to_string(),
             Some(_) if shown.stale => "review stale".to_string(),
             Some(verdict) if verdict.ok => "reviewed".to_string(),
+            Some(_) if self.fixing_findings() => FIXING_FINDINGS.to_string(),
             _ => return None,
         })
     }
@@ -365,7 +391,10 @@ impl Item {
     }
 
     fn review_note_on(&self, surface: Surface) -> Option<String> {
-        self.review_note().or_else(|| self.review_note_for_lead().filter(|_| surface == Surface::Lead))
+        match surface {
+            Surface::Lead => self.review_note_for_lead().or_else(|| self.review_note()),
+            Surface::User => self.review_note(),
+        }
     }
 
     pub fn report_state(&self) -> Option<&str> {
@@ -495,8 +524,11 @@ impl Item {
             Phase::NeedsYou(Why::Failed) if self.lead_pushes() && self.git.as_ref().is_some_and(|git| git.ahead > 0) => Group::GoingOut,
             Phase::NeedsYou(_) | Phase::CiRed { .. } => Group::NeedsYou,
             Phase::Ready { .. } if self.review_stopped() => Group::NeedsYou,
-            Phase::Ready { .. } if self.awaiting_review() => Group::InReview,
+            Phase::Ready { .. } | Phase::Staged { .. } if self.reviewer_reading() => Group::InReview,
+            Phase::Ready { .. } | Phase::Staged { .. } if self.fixing_findings() => Group::Working,
+            Phase::Ready { .. } | Phase::Staged { .. } if self.review_gave_none() => Group::NeedsYou,
             Phase::Ready { .. } | Phase::Staged { .. } if self.to_accept.is_some() => Group::NeedsYou,
+            Phase::Pushing { .. } if self.push_fixing() => Group::Working,
             Phase::Pushing { .. } => Group::GoingOut,
             Phase::Ready { .. } if self.lead_pushes() => Group::GoingOut,
             Phase::Ready { .. } | Phase::Staged { .. } => Group::ReadyToPush,
@@ -577,6 +609,9 @@ impl Item {
         if self.review_stopped() {
             return Some(crate::review::LOOPED);
         }
+        if self.review_gave_none() {
+            return Some(NO_VERDICT);
+        }
         if let Some(waits) = self.accept_waits().filter(|_| !self.held_by_changes()) {
             return Some(&waits.next);
         }
@@ -621,6 +656,9 @@ impl Item {
         }
         if self.review_stopped() {
             return Some(crate::review::LOOPED.to_string());
+        }
+        if self.review_gave_none() {
+            return Some(NO_VERDICT.to_string());
         }
         if let Some(held) = self.held_by_uncommitted().filter(|_| !self.held_by_changes()) {
             return Some(held);
@@ -1553,7 +1591,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn in_review(ok: bool, findings: usize, stale: bool, running: bool) -> crate::review::Shown {
-        crate::review::Shown { verdict: Some(crate::review::Verdict { ok, sha: "abc".to_string(), findings, ..Default::default() }), stale, running, held: true, file: PathBuf::from("/state/verdicts/billing@web.md"), looped: false }
+        crate::review::Shown { verdict: Some(crate::review::Verdict { ok, sha: "abc".to_string(), findings, ..Default::default() }), stale, running, held: true, file: PathBuf::from("/state/verdicts/billing@web.md"), looped: false, at: 0 }
     }
 
     #[test]
@@ -1566,29 +1604,74 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_task_sent_to_review_waits_under_in_review_until_its_reviewer_passes_its_code() {
+    fn in_review_holds_a_task_only_while_its_reviewer_reads_and_review_is_optional_for_ready_to_push() {
         let reviewed = |shown: crate::review::Shown| { let mut item = task(Some("idle"), Some("ready"), 2); item.verdict = Some(shown); item };
-        let running = reviewed(crate::review::Shown { verdict: None, stale: false, running: true, held: true, file: PathBuf::new(), looped: false });
+        let running = reviewed(crate::review::Shown { verdict: None, stale: false, running: true, held: true, file: PathBuf::new(), looped: false, at: 0 });
         assert!(running.group() == Group::InReview);
         assert_eq!(running.summary(), "2 commits · review running · waits on the reviewer");
         assert_eq!(Group::InReview.title(), "IN REVIEW");
-        let findings = reviewed(in_review(false, 2, false, false));
-        assert!(findings.group() == Group::InReview);
-        assert!(findings.summary().ends_with("review: 2 findings · withdraw with v to push without a pass"), "the lead's summary names the findings: {}", findings.summary());
-        assert_eq!(findings.summary_on(Surface::User), "2 commits", "the phone's row leaves them to the lead");
-        let stale = reviewed(in_review(true, 0, true, false));
-        assert!(stale.group() == Group::InReview, "a pass on older code is not a pass");
-        assert!(stale.summary().ends_with("review stale"));
+        let advised = reviewed(crate::review::Shown { held: false, ..running.verdict.clone().unwrap() });
+        assert!(advised.group() == Group::InReview, "a review that holds no push is still a reviewer reading");
+        let again = reviewed(in_review(false, 2, false, true));
+        assert!(again.group() == Group::InReview, "a reviewer reading again after findings");
+        let never = task(Some("idle"), Some("ready"), 2);
+        assert!(never.group() == Group::ReadyToPush && !never.awaiting_review(), "a task never sent to review is ready to push");
+        let mut suggested = task(Some("idle"), Some("ready"), 2);
+        suggested.assessment = Some(crate::assessment::Word::Suggested { reason: "changes rounding".to_string() });
+        assert!(suggested.group() == Group::ReadyToPush, "a suggested review is optional");
         let passed = reviewed(in_review(true, 0, false, false));
         assert!(passed.group() == Group::ReadyToPush);
         assert_eq!(passed.summary(), "2 commits · ready to push · reviewed");
-        assert!(!task(Some("idle"), Some("ready"), 2).awaiting_review(), "a task never sent to review goes straight to push");
+        let stale = reviewed(in_review(true, 0, true, false));
+        assert!(stale.group() == Group::ReadyToPush && stale.summary().ends_with("review stale"), "no reviewer reads it now");
+    }
+
+    #[test]
+    fn a_review_that_asks_for_changes_puts_the_task_under_working_until_it_reports_ready_again() {
+        let mut item = task(Some("idle"), Some("ready"), 2);
+        item.report.as_mut().unwrap().at = 100;
+        item.verdict = Some(crate::review::Shown { at: 200, ..in_review(false, 2, false, false) });
+        assert!(item.group() == Group::Working);
+        assert_eq!(item.summary_on(Surface::User), format!("2 commits · {FIXING_FINDINGS}"), "the phone's row says why, never the findings");
+        assert!(item.summary().ends_with("review: 2 findings · withdraw with v to push without a pass"), "the lead's summary names them: {}", item.summary());
+        item.report.as_mut().unwrap().at = 300;
+        assert!(item.group() == Group::Working, "a held verdict keeps it under Working until new commits, since its gate refuses the push");
+        assert_eq!(item.summary_on(Surface::User), format!("2 commits · {FIXING_FINDINGS}"));
+        item.verdict.as_mut().unwrap().held = false;
+        assert!(item.group() == Group::ReadyToPush, "an advised review's agent reported ready after the verdict");
+        item.report.as_mut().unwrap().at = 100;
+        assert!(item.group() == Group::Working, "an advised review's findings are work too");
+        item.report.as_mut().unwrap().at = 100;
+        item.verdict = Some(crate::review::Shown { at: 200, ..in_review(false, 2, true, false) });
+        assert!(item.group() == Group::ReadyToPush, "findings on older commits ask nothing of this code");
+    }
+
+    #[test]
+    fn a_held_review_that_gave_no_verdict_waits_on_you() {
+        let mut item = task(Some("idle"), Some("ready"), 2);
+        item.verdict = Some(crate::review::Shown { verdict: None, stale: false, running: false, held: true, file: PathBuf::new(), looped: false, at: 0 });
+        assert_eq!((item.group(), item.wanted("enter").as_deref(), item.next_for_you()), (Group::NeedsYou, Some(NO_VERDICT), Some(NO_VERDICT)));
+        item.verdict.as_mut().unwrap().held = false;
+        assert!(item.group() == Group::ReadyToPush, "an advised review holds nothing");
+    }
+
+    #[test]
+    fn a_push_waiting_on_its_tests_or_a_conflict_is_work_and_its_turn_is_going_out() {
+        let mut item = task(Some("idle"), Some("ready"), 2);
+        item.report.as_mut().unwrap().at = 100;
+        item.phase = Some(crate::phase::Record { phase: Phase::Pushing { ahead: 0 }, since: 100, by: "push".to_string(), from: None });
+        for (work, group) in [(tasks::PushWork::Tests, Group::Working), (tasks::PushWork::Conflict, Group::Working), (tasks::PushWork::Turn, Group::GoingOut)] {
+            item.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work, at: 200, ahead: 0, after: None });
+            assert_eq!(item.group(), group, "{work:?}");
+        }
+        item.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work: tasks::PushWork::Tests, at: 50, ahead: 0, after: None });
+        assert!(item.group() == Group::GoingOut, "it reported ready after the push asked for the tests");
     }
 
     #[test]
     fn a_review_under_way_or_of_this_code_covers_the_rules_and_a_stale_one_does_not() {
         let reviewed = |shown: crate::review::Shown| { let mut item = task(Some("idle"), Some("ready"), 2); item.git.as_mut().unwrap().approved = false; item.verdict = Some(shown); item };
-        let running = reviewed(crate::review::Shown { verdict: None, stale: false, running: true, held: true, file: PathBuf::new(), looped: false });
+        let running = reviewed(crate::review::Shown { verdict: None, stale: false, running: true, held: true, file: PathBuf::new(), looped: false, at: 0 });
         assert_eq!(running.summary(), "2 commits · review running · waits on the reviewer", "the reviewer is the rules check");
         assert!(!reviewed(in_review(false, 2, false, false)).summary().contains(UNCHECKED));
         assert!(reviewed(in_review(true, 0, true, false)).summary().contains(UNCHECKED), "a review of older code checked none of this");
@@ -1602,7 +1685,7 @@ pub(crate) mod tests {
         assert_eq!(item.summary(), "2 commits · ready to push · reviewed", "the pass recorded the approval, so no rules check waits");
         let mut working = task(Some("working"), Some("ready"), 2);
         working.verdict = Some(in_review(false, 1, false, false));
-        assert!(working.group() == Group::InReview, "a turn is the row's icon, not its group");
+        assert!(working.group() == Group::Working, "its agent works on the findings");
         let mut asks = task(Some("idle"), Some("needs-you"), 2);
         asks.verdict = Some(in_review(false, 1, false, false));
         assert!(asks.group() == Group::NeedsYou);
@@ -1709,8 +1792,8 @@ pub(crate) mod tests {
         step(&mut item, "approved", None, &[Some("idle")], Group::ReadyToPush);
         step(&mut item, "an update notice it reads", Some(Event::TurnBegan { by_user: false }), &[Some("working"), Some("idle"), Some("done")], Group::ReadyToPush);
         item.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work: tasks::PushWork::Tests, at: 40, ahead: 0, after: None });
-        step(&mut item, "push: main changed its files, so its Claude runs the tests", Some(Event::PushHanded), &[Some("idle")], Group::GoingOut);
-        step(&mut item, "the hand-over it takes up", Some(Event::TurnBegan { by_user: false }), &[Some("working")], Group::GoingOut);
+        step(&mut item, "push: main changed its files, so its Claude runs the tests", Some(Event::PushHanded), &[Some("idle")], Group::Working);
+        step(&mut item, "the hand-over it takes up", Some(Event::TurnBegan { by_user: false }), &[Some("working")], Group::Working);
         reported(&mut item, "ready", 50);
         step(&mut item, "the tests pass", Some(Event::Reported { state: "ready", head: Some("abd"), committed: true, pushing: true }), &[Some("idle"), Some("done")], Group::GoingOut);
         item.push_waits = None;
@@ -1789,7 +1872,7 @@ pub(crate) mod tests {
         let mut shown = in_review(false, 1, false, false);
         shown.verdict.as_mut().unwrap().first = Some("confirm: src/links.rs:12 — dropping the link is now the intent".to_string());
         item.verdict = Some(shown.clone());
-        assert_eq!(item.group(), Group::InReview);
+        assert_eq!(item.group(), Group::Working, "its agent works on the findings");
         assert!(item.held_by_changes(), "the verdict, not the step to accept, holds it");
         assert_eq!((item.wanted("enter"), item.next_for_you()), (None, None), "its findings are the lead's and the task's");
         item.verdict.as_mut().unwrap().verdict.as_mut().unwrap().confirm = 1;
@@ -2122,8 +2205,8 @@ pub(crate) mod tests {
         assert_eq!((item.to_json()["push_waits"].clone(), item.push_note(), item.group()), (Value::Null, None, Group::ReadyToPush));
         item.push_waits = Some(PendingPush { by: PushBy::Lead, work: PushWork::Tests, at: 10, ahead: 0, after: None });
         moved(&mut item, &Event::PushHanded);
-        assert_eq!((item.to_json()["push_waits"].clone(), item.group()), (json!("lead"), Group::GoingOut), "the Claude working on the push is the push, not new work");
-        assert_eq!(item.summary(), "1 commit · pushing for the lead · its Claude runs the tests");
+        assert_eq!((item.to_json()["push_waits"].clone(), item.group()), (json!("lead"), Group::Working), "its Claude runs the tests the push needs");
+        assert_eq!(item.summary(), "pushing for the lead · its Claude runs the tests · 1 commit");
         assert_eq!(item.next_for_you(), None, "nothing for the user to do while it runs");
         item.push_waits = Some(PendingPush { by: PushBy::User, work: PushWork::Conflict, at: 10, ahead: 0, after: None });
         assert_eq!((item.to_json()["push_waits"].clone(), item.push_note().unwrap()), (json!("user"), "pushing for you · its Claude resolves the conflict".to_string()));
@@ -2144,7 +2227,7 @@ pub(crate) mod tests {
         report(&mut item, "needs-you");
         assert_eq!(item.group(), Group::NeedsYou, "a red test or a choice between behaviours stops the push");
         report(&mut item, "working");
-        assert_eq!(item.group(), Group::GoingOut, "back at it, the push goes on");
+        assert_eq!(item.group(), Group::Working, "back at the conflict, it is work again");
         item.held_by_draft = Some("its box holds your draft".to_string());
         assert_eq!(item.group(), Group::NeedsYou, "a draft in the way needs the user");
         item.held_by_draft = None;

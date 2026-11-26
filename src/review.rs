@@ -179,6 +179,7 @@ pub struct Shown {
     pub held: bool,
     pub file: PathBuf,
     pub looped: bool,
+    pub at: u64,
 }
 
 impl Shown {
@@ -233,7 +234,8 @@ fn shown_by(state: &Path, address: &str, current: impl Fn(&Verdict) -> bool) -> 
         return None;
     }
     let stale = verdict.as_ref().is_some_and(|verdict| !current(verdict));
-    Some(Shown { verdict, stale, running, held: !marked(state, address, "advised").exists(), file, looped: looped_in(state, address) })
+    let at = fs::metadata(&file).and_then(|meta| meta.modified()).ok().and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |at| at.as_secs());
+    Some(Shown { verdict, stale, running, held: !marked(state, address, "advised").exists(), file, looped: looped_in(state, address), at })
 }
 
 // A task never sent to review pushes freely; one sent pushes only code its reviewer passed, which `covered` says of the reviewed sha.
@@ -1461,7 +1463,7 @@ mod tests {
     }
 
     fn shown_as(ok: Option<bool>, stale: bool, running: bool) -> Shown {
-        Shown { verdict: ok.map(|ok| Verdict { ok, sha: "abc".to_string(), findings: usize::from(!ok) * 2, ..Verdict::default() }), stale, running, held: true, file: PathBuf::new(), looped: false }
+        Shown { verdict: ok.map(|ok| Verdict { ok, sha: "abc".to_string(), findings: usize::from(!ok) * 2, ..Verdict::default() }), stale, running, held: true, file: PathBuf::new(), looped: false, at: 0 }
     }
 
     #[test]
@@ -1533,7 +1535,7 @@ mod tests {
         assert!(!holds(&changes, &dir, "main", &head), "the reword was the fix the findings asked for, so the task goes back to the reviewer");
         assert!(holds(&pass, &dir, "main", &head), "a pass belongs to the code, which a reword keeps");
         assert!(holds(&changes, &dir, "main", &reviewed));
-        let shown = Shown { verdict: Some(changes), stale: true, running: false, held: true, file: PathBuf::new(), looped: false };
+        let shown = Shown { verdict: Some(changes), stale: true, running: false, held: true, file: PathBuf::new(), looped: false, at: 0 };
         assert!(review_again(Some(&shown), false), "a ready report on it starts the reviewer again, in any phase");
         fs::remove_dir_all(dir).unwrap();
     }
@@ -2250,7 +2252,7 @@ mod tests {
         assert!(!looped_in(&state, address));
         assert!(!rerun_allowed(&state, address).unwrap(), "the third does not");
         assert!(looped_in(&state, address));
-        let stopped = Shown { verdict: Some(Verdict { ok: false, sha: "abc".to_string(), findings: 3, ..Verdict::default() }), stale: true, running: false, held: true, file: PathBuf::new(), looped: true };
+        let stopped = Shown { verdict: Some(Verdict { ok: false, sha: "abc".to_string(), findings: 3, ..Verdict::default() }), stale: true, running: false, held: true, file: PathBuf::new(), looped: true, at: 0 };
         assert_eq!(gate(Some(&stopped), |_| false), Ok(()), "the user may push what kebbie stopped re-reviewing");
         assert!(gate(Some(&Shown { running: true, ..stopped.clone() }), |_| false).is_err(), "a review the user sent again holds it while it runs");
         forget_reruns(&state, address);

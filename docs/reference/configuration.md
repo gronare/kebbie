@@ -156,7 +156,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 
 `review.auto`: on a ready report, a read-only assessor judges whether the task's work since it started, pushed steps included, needs an independent review.
 
-- `"suggest"`: the lead hears `review suggested: <why>`, and nothing starts until you or the lead send it.
+- `"suggest"`: the lead hears `review suggested: <why>`, and nothing starts until you or the lead send it. Review is optional: the task stays under Ready to push either way.
 - `"run"`: the reviewer starts by itself; the push is not held.
 - `"require"`: the push is held from the ready report on, until the reviewer passes.
 

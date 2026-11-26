@@ -199,9 +199,9 @@ A listed test command inside a loop, a condition or `xargs` is not recorded eith
 | Group | Contains |
 | --- | --- |
 | Needs you | Tasks waiting on your answer or action, open questions first, then backlog items whose questions wait on you. |
-| Working | Tasks at work since their prompt, their last report or your answer. |
-| In review | Reported ready and sent to the reviewer, waiting for a pass on its current code. The row says `review running · waits on the reviewer` while the reviewer reads. Its findings go to the lead and the task, never onto the row; `v` withdraws it to push without a pass. |
-| Ready to push | Reported ready with its commits, for you to push. |
+| Working | Tasks at work since their prompt, their last report or your answer, fixing what a review asked, or running the tests and resolving a conflict a push needs. |
+| In review | Reported ready, while a reviewer reads it: `review running · waits on the reviewer`, or `review running · push not held` under `review.auto = "run"`. Its findings go to the lead and the task, never onto the row; `v` withdraws it to push without a pass. |
+| Ready to push | Reported ready with its commits, for you to push. A review is optional: `v` sends it to one, and it waits under In review while the reviewer reads. |
 | Going out | On its way out without you: in its repo's push line, or ready with the lead holding [push permission](../how-to/let-the-lead-push.md) for it. |
 | CI running | Pushed, with its worktree kept until every workflow run for the pushed commit is green and the task's check after the push holds; then it closes as done. A run cancelled for a newer run on the default branch follows that run, and one cancelled while the repo's [`ci.deploy_window`](configuration.md#ci-updates-and-the-keeper) was shut is re-run once it opens. |
 | Waiting for work | Started without work, blocked on something outside you, or kept open with nothing left on top. |
@@ -225,6 +225,7 @@ kebbie keeps one phase per task, and only what changes it writes it: its start, 
 - A queued task whose start failed, with why it did not start, as when its shell asked a question while it started.
 - A task whose commits are on the default branch that kebbie does not close by itself, marked `landed on main · d closes it` beside a question (kebbie asks you whether to close it), or `landed on main, but its worktree has uncommitted changes or a stash` (see [`kebbie done`](commands.md#kebbie-done-name)).
 - A task that reported needs-you, or ready with nothing committed.
+- A task whose held review ended without a verdict, marked `its review gave no verdict: send it again with v, or withdraw it to push without a pass`.
 - A task that reported ready with commits while tracked files are uncommitted, marked `2 uncommitted files hold it: a.md and b.md · p then p pushes the commits and keeps them`. The push window opens on its last commit, so `p` pushes every commit and keeps the task open with the files as they are; its approval is of the commits and stays.
 - With `task.require_accept` on, a ready task with a commit you have not accepted, marked `accept “<title>”`.
 - A task whose turn ended without a report even after kebbie asked for one.
@@ -246,6 +247,8 @@ Two lines about the machine itself close the group, after these backlog rows, ea
 ### Working
 
 - Started with a prompt, or at work since its last report or since you answered it.
+- A ready task whose review asks for changes, marked `fixing what its review asks`, until new commits answer it; under `review.auto = "run"`, whose review holds no push, until it reports ready again.
+- A push that waits on its Claude to run the tests for files the default branch changed under it, or to resolve a conflict, marked `pushing for you · its Claude runs the tests` or `… resolves the conflict`.
 - A pushed task whose CI is green and that kebbie closes once its note is written, marked `pushed · kebbie closes it`.
 - A task kebbie resumes after an API error, marked `retrying after overload (2/4, next 21:14)`, `out of allowance until 17:00`, then `resumed after …` until Claude answers. See [When the API stops a task](../explanation/lead-and-away-mode.md#when-the-api-stops-a-task).
 
@@ -260,7 +263,7 @@ How far it is behind the default branch does not matter. A task on local main st
 A task leaves Ready to push once it is on its way out, and nothing here waits on you. A ready task the lead holds push permission for says `the lead pushes it`. A push under way says `pushing for you · <what it waits for>`, or `pushing for the lead`:
 
 - its turn, as `2nd in line after <title>` while other pushes of its repo go first, and `kebbie pushes it now` at the head;
-- the tests for files the default branch changed under it, a conflict, or a fix for CI that failed after the push.
+- a fix for CI that failed after the push. A push that waits on its tests or a conflict stands under Working meanwhile.
 
 Each repo pushes one task at a time, in the order you pushed them, and rebases a task only when its turn comes. A head whose Claude works keeps its place for as long as it works, and for up to 30 minutes once another push waits behind it; time its build spends waiting for a build slot does not count. See [Pushing](../explanation/trunk-based.md#one-push-line-per-repo).
 

@@ -132,8 +132,9 @@ fn trunk(git: &crate::status::Git) -> &str {
 }
 
 // While its Claude works, the branch can still move, so the steps that rewrite, push or close it wait.
+// A ready task under Working for its review's findings or its push's tests keeps its review and push choices.
 pub(super) fn busy(item: &Item) -> bool {
-    item.group() == Group::Working || item.turn_under_way()
+    (item.group() == Group::Working && !matches!(item.phase(), Some(crate::phase::Phase::Ready { .. } | crate::phase::Phase::Staged { .. } | crate::phase::Phase::Pushing { .. }))) || item.turn_under_way()
 }
 
 pub(super) fn ongoing_choices(note: &Ongoing) -> Vec<Choice> {
@@ -442,9 +443,9 @@ mod tests {
         let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 1);
         item.verdict = Some(crate::status::tests::in_review(false, 2, false, false));
         assert_eq!(keys(&item), "gcrvtdauZzx");
-        assert_eq!(row_facts(&item, None), "1 commit", "the findings are the lead's and the task's");
+        assert_eq!(row_facts(&item, None), format!("1 commit · {}", crate::status::FIXING_FINDINGS), "the findings are the lead's and the task's");
         item.agent.as_mut().unwrap().status = "working".to_string();
-        assert_eq!(row_facts(&item, None), "1 commit", "its Claude is at the findings");
+        assert_eq!(row_facts(&item, None), format!("1 commit · {}", crate::status::FIXING_FINDINGS), "its Claude is at the findings");
         item.agent.as_mut().unwrap().status = "idle".to_string();
         item.unrecorded = Some("script/test is not recorded as a test run: add it to task.test_commands".to_string());
         assert!(row_facts(&item, None).ends_with(" · script/test is not recorded as a test run: add it to task.test_commands"), "{}", row_facts(&item, None));
