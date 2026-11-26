@@ -407,13 +407,20 @@ pub(super) fn pass(state: &Path, world: &World, close: Close, tell: &mut dyn FnM
                         continue;
                     }
                     let kebbie_pushed = crate::phase::load(state, &address).is_some_and(|record| record.phase == crate::phase::Phase::Closing);
+                    let settled = crate::ci::load(state, &address).filter(|watch| !watch.running());
+                    let red = crate::ci::held_red(state, &address).filter(|red| settled.is_some() || superseded(red, world.gh));
+                    // Trap: the hold ends before the close, whose forgetting of the watch would otherwise tell the lead main is still red.
+                    if let Some(red) = &red {
+                        if crate::ci::last_red(state, red) {
+                            super::unblocked::tell(repo, &address, &super::unblocked::cleared(red));
+                        }
+                        crate::ci::end_red(state, &address);
+                    }
                     match close(repo, task) {
                         Ok(_) => {
                             drop_mark(state, &address);
-                            if crate::ci::load(state, &address).is_some_and(|watch| !watch.running()) {
-                                crate::ci::end_red(state, &address);
-                                crate::ci::forget(state, &address);
-                                super::after::red_ci_superseded(state, &address);
+                            if let Some(red) = settled.or(red) {
+                                super::red_ci::over(state, &red);
                             }
                             if intent::pending(state, &address).is_some_and(|pending| pending.work == Work::Ci) {
                                 intent::forget(state, &address);
@@ -972,6 +979,41 @@ mod tests {
         assert!(!branch_exists(&dir, "billing"), "landed and its deploy green later: it closes");
         assert!(crate::ci::load(&state, &address).is_none() && intent::pending(&state, &address).is_none(), "the red watch and the push waiting for its fix go");
         assert!(crate::ci::holding(&state, &dir, "copy@app").is_none(), "a red task closed as done holds no other push");
+        cleanup(dir, origin, &slot);
+    }
+
+    // As close_task does: finish, then settle the CI watch, which forgets it when no wait names the task.
+    fn closing_as_done(state: &Path, upstream: &str) -> impl FnMut(&Path, &str) -> Result<Notice> {
+        let (state, upstream) = (state.to_path_buf(), upstream.to_string());
+        move |repo: &Path, task: &str| {
+            let slot = find_task(repo, Some(task), repo)?;
+            let closed = finish(repo, &slot, &upstream, &state, None);
+            super::super::after::settle_ci(&state, &peers::address(task, &name_of(repo)));
+            closed
+        }
+    }
+
+    #[test]
+    fn a_red_task_closed_as_done_once_main_is_green_over_it_holds_no_push_and_asks_the_lead_for_no_fixer() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        on_main(&dir, &slot, &upstream);
+        git(&dir, &["merge", "--quiet", "--ff-only", &upstream]).unwrap();
+        let landing = git(&dir, &["rev-parse", &upstream]).unwrap();
+        upstream_commit(&dir, "fix", "toolchain", "fixed outside kebbie");
+        let later = git(&dir, &["rev-parse", &upstream]).unwrap();
+        let address = peers::address("billing", &name_of(&dir));
+        let watch = red_watch(&dir, &address, &landing, true);
+        crate::ci::save(&state, &watch).unwrap();
+        crate::ci::hold_red(&state, &watch);
+        let green = fake_gh(&dir, &format!("[{}]", run(&later, "deploy", "success", "push")));
+        let repos = [dir.clone()];
+        let seen = herdr(&slot, "idle");
+        pass(&state, &world(&repos, &seen, &[], &green), &mut closing_as_done(&state, &upstream), &mut |_| {});
+        assert!(!branch_exists(&dir, "billing"), "landed and green later: it closes");
+        assert!(crate::ci::holding(&state, &dir, "copy@app").is_none(), "main is green over the red run, so no other push waits on it");
+        let fixer = messages::load().into_iter().filter(|message| message.to == crate::status::LEAD_LABEL && message.text.contains(&format!("kebbie ci fixer {address}"))).count();
+        assert_eq!(fixer, 0, "the lead is not told main is still red");
         cleanup(dir, origin, &slot);
     }
 

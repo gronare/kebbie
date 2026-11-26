@@ -499,7 +499,7 @@ pub(crate) fn hold_red(state: &Path, red: &Watch) {
     let _ = crate::state::write(&hold_file(state, &red.address), serde_json::to_string_pretty(&red.to_json()).unwrap_or_default());
 }
 
-fn held_red(state: &Path, address: &str) -> Option<Watch> {
+pub(crate) fn held_red(state: &Path, address: &str) -> Option<Watch> {
     Watch::from_json(&serde_json::from_str(&fs::read_to_string(hold_file(state, address)).ok()?).ok()?)
 }
 
@@ -568,6 +568,11 @@ pub(crate) fn held(state: &Path, address: &str) -> bool {
 
 pub(crate) fn red_in(state: &Path, repo: &Path) -> bool {
     holds(state).iter().any(|red| red.repo == repo)
+}
+
+// No other red run holds the repo, so ending this one makes main green for its pushes.
+pub(crate) fn last_red(state: &Path, red: &Watch) -> bool {
+    holds(state).iter().all(|other| other.repo != red.repo || other.address == red.address)
 }
 
 // The blocked tasks of the repo hear it once the last red run over main has ended.

@@ -55,6 +55,13 @@ pub(crate) fn landed(address: &str, sha: &str, target: &str, ci: Ci) -> String {
     format!("{address} landed on {target} ({}){ci}. If you reported blocked waiting for it, {GO_ON}", short(sha))
 }
 
+pub(crate) fn cleared(red: &Watch) -> String {
+    format!(
+        "main is green again in {}: a later push over the red CI of {} ({}) passed, so its pushes no longer wait on it. If you reported blocked on main's red CI, {GO_ON}",
+        name_of(&red.repo), red.address, red.short()
+    )
+}
+
 pub(crate) fn dismissed(red: &Watch) -> String {
     format!(
         "The user dismissed the red CI of {} ({}) in {}: its pushes no longer wait on it, though main's CI did not go green. If you reported blocked on it, {GO_ON}",

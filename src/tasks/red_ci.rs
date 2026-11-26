@@ -28,6 +28,18 @@ fn red(state: &Path, address: &str) -> Option<crate::ci::Watch> {
     crate::ci::load(state, address).filter(crate::ci::Watch::dismissable)
 }
 
+// Main went green over the red run, or the user dismissed it: its hold ends, and with it the red watch, the push waiting for its fix and the waits it blocked.
+pub(crate) fn over(state: &Path, red: &crate::ci::Watch) -> Vec<String> {
+    crate::ci::end_red(state, &red.address);
+    if crate::ci::load(state, &red.address).is_some_and(|watch| watch.sha == red.sha && !watch.running()) {
+        crate::ci::forget(state, &red.address);
+    }
+    if intent::pending(state, &red.address).is_some_and(|pending| pending.work == Work::Ci) {
+        intent::forget(state, &red.address);
+    }
+    super::after::red_ci_superseded(state, &red.address)
+}
+
 pub(crate) fn outside_reason(state: &Path, address: &str) -> Option<String> {
     let watch = red(state, address)?;
     let said = read(state, address)["outside"].clone();
