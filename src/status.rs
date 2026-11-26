@@ -204,6 +204,7 @@ pub struct Item {
     pub ci_dismissed: Vec<Value>,
     pub unrecorded: Option<String>,
     pub push_left: Option<String>,
+    pub left_times: usize,
     pub staged: bool,
     pub subtasks: tasks::Subtasks,
     pub to_accept: Option<tasks::Unaccepted>,
@@ -258,7 +259,7 @@ impl Item {
             name: wait.task.clone(), title, place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
             report: None, question: None, ci: None, recover: None, routine: None, push_waits: None,
             queued: Some(Queued { after, blocked: wait.blocked.clone(), waiting, names, base, at, backlog: wait.backlog.is_some() }),
-            held_by_draft: None, held_messages: 0, unsent_start: false, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), unrecorded: None, push_left: None, staged: false, subtasks: tasks::Subtasks::default(), to_accept: None, parked: None, assessment: None, recipe: None, obstacle: None, built: Built::default(), build_wait: None, waits_on: None, blocks: Vec::new(),
+            held_by_draft: None, held_messages: 0, unsent_start: false, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), unrecorded: None, push_left: None, left_times: 0, staged: false, subtasks: tasks::Subtasks::default(), to_accept: None, parked: None, assessment: None, recipe: None, obstacle: None, built: Built::default(), build_wait: None, waits_on: None, blocks: Vec::new(),
         }
     }
 
@@ -541,7 +542,7 @@ impl Item {
             Phase::Starting | Phase::Working | Phase::Closing => Group::Working,
             Phase::Idle if self.obstacle.as_ref().is_some_and(|obstacle| obstacle.state != crate::obstacle::State::Asked) => Group::Working,
             Phase::Idle => Group::Idle,
-            Phase::NeedsYou(Why::LeftLine) if self.lead_pushes() => Group::GoingOut,
+            Phase::NeedsYou(Why::LeftLine) if self.lead_pushes() && self.left_times <= tasks::REPUSHES => Group::GoingOut,
             Phase::NeedsYou(Why::Failed) if self.lead_pushes() && self.git.as_ref().is_some_and(|git| git.ahead > 0) => Group::GoingOut,
             Phase::NeedsYou(_) | Phase::CiRed { .. } => Group::NeedsYou,
             Phase::Ready { .. } if self.review_stopped() => Group::NeedsYou,
@@ -706,10 +707,11 @@ impl Item {
     }
 
     fn left_note(&self) -> String {
-        match &self.push_left {
+        let note = match &self.push_left {
             Some(why) => format!("out of the push line: {why}"),
             None => "out of the push line before it went out; push it again when it is ready".to_string(),
-        }
+        };
+        if self.permit.is_some() && self.left_times > tasks::REPUSHES { format!("{note} · it left {} times, so the lead pushes it no more", self.left_times) } else { note }
     }
 
     pub fn landed_note(&self) -> Option<String> {
@@ -1264,6 +1266,7 @@ fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>,
                 ci_dismissed: state.as_deref().map(|state| tasks::ci_dismissed(state, &address)).unwrap_or_default(),
                 unrecorded: state.as_deref().and_then(|state| crate::evidence::unrecorded_for(state, &address, repo)),
                 push_left: state.as_deref().and_then(|state| tasks::push_left(state, &address)),
+                left_times: state.as_deref().map_or(0, |state| tasks::push_left_count(state, &address)),
                 staged: state.as_deref().is_some_and(|state| tasks::staged(state, repo, &address)),
                 subtasks: steps,
                 to_accept: state.as_deref().filter(|_| accept_required && ahead > 0).zip(shas.as_ref()).and_then(|(state, shas)| tasks::unaccepted_at(state, &address, &slot.path, &shas.tips)),
@@ -1345,6 +1348,7 @@ fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>,
             ci_dismissed: Vec::new(),
             unrecorded: None,
             push_left: None,
+            left_times: 0,
             staged: false,
             subtasks: tasks::Subtasks::default(),
             to_accept: None,
@@ -1424,6 +1428,7 @@ pub(crate) mod tests {
             ci_dismissed: Vec::new(),
             unrecorded: None,
             push_left: None,
+            left_times: 0,
             staged: false,
             subtasks: tasks::Subtasks::default(),
             to_accept: None,
@@ -2003,6 +2008,13 @@ pub(crate) mod tests {
             assert_eq!(item.group(), Group::GoingOut, "{why:?}: the lead pushes it again, so it never needs the user: {summary}");
             assert!(summary.ends_with(LEAD_PUSHES) && (why != Why::LeftLine || summary.contains("out of the push line: it reported needs-you")), "{summary}");
         }
+        in_phase(&mut item, Phase::NeedsYou(Why::LeftLine));
+        item.left_times = tasks::REPUSHES;
+        assert_eq!(item.group(), Group::GoingOut, "the third time out the lead still pushes it again");
+        item.left_times = tasks::REPUSHES + 1;
+        assert_eq!(item.group(), Group::NeedsYou, "after that it waits for the user");
+        assert_eq!(item.wanted("enter").as_deref(), Some("out of the push line: it reported needs-you · it left 4 times, so the lead pushes it no more"));
+        item.left_times = 0;
         assert_eq!(Group::GoingOut.title(), "GOING OUT");
         assert_eq!(Group::ALL.iter().position(|group| *group == Group::GoingOut), Group::ALL.iter().position(|group| *group == Group::ReadyToPush).map(|at| at + 1), "it follows Ready to push");
     }

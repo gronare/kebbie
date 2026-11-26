@@ -214,9 +214,30 @@ fn left_file(state: &Path, address: &str) -> PathBuf {
     state.join("push-left").join(address)
 }
 
-// Why a push left its line before it went out, for the board's Needs you row until the task is pushed again or ends.
+fn left_count_file(state: &Path, address: &str) -> PathBuf {
+    state.join("push-left-count").join(address)
+}
+
+// The lead pushes a task that left its line again at most this many times; after that it is the user's.
+pub(crate) const REPUSHES: usize = 3;
+
+// Why a push left its line before it went out, for the board's Needs you row until the task is pushed again or ends, and how many times it left since the user last pushed it.
 pub(super) fn record_left(state: &Path, address: &str, why: &str) {
     let _ = crate::state::write(&left_file(state, address), why);
+    let _ = crate::state::write(&left_count_file(state, address), (left_count(state, address) + 1).to_string());
+}
+
+pub(crate) fn left_count(state: &Path, address: &str) -> usize {
+    std::fs::read_to_string(left_count_file(state, address)).ok().and_then(|count| count.trim().parse().ok()).unwrap_or(0)
+}
+
+// The lead may push it again while it left the line no more than REPUSHES times.
+pub(crate) fn lead_may_repush(state: &Path, address: &str) -> bool {
+    left_count(state, address) <= REPUSHES
+}
+
+pub(super) fn forget_left_count(state: &Path, address: &str) {
+    let _ = std::fs::remove_file(left_count_file(state, address));
 }
 
 pub(crate) fn left(state: &Path, address: &str) -> Option<String> {
@@ -312,6 +333,22 @@ pub(super) mod tests {
             id: id.to_string(), at, from: "billing@app".to_string(), to: crate::status::LEAD_LABEL.to_string(), text: "tests pass".to_string(), held: false,
             report: Some(Report { state: state.to_string(), next: "push".to_string(), head: None, after: Vec::new() }), ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false, fyi: false,
         }
+    }
+
+    #[test]
+    fn the_lead_may_push_a_task_that_left_the_line_again_three_times_and_the_count_ends_with_the_task() {
+        let state = crate::sh::test_dir("left-count");
+        for left in 1..=REPUSHES {
+            record_left(&state, "billing@app", "it reported needs-you");
+            assert!(lead_may_repush(&state, "billing@app"), "left {left} times");
+        }
+        record_left(&state, "billing@app", "it reported needs-you");
+        assert!(!lead_may_repush(&state, "billing@app") && left_count(&state, "billing@app") == REPUSHES + 1);
+        forget_left(&state, "billing@app");
+        assert_eq!(left_count(&state, "billing@app"), REPUSHES + 1, "joining the line again keeps the count");
+        forget_left_count(&state, "billing@app");
+        assert!(lead_may_repush(&state, "billing@app"));
+        std::fs::remove_dir_all(state).unwrap();
     }
 
     pub(in crate::tasks) fn intent(by: By, repo: &Path, fingerprint: &str) -> Intent {

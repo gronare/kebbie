@@ -282,9 +282,9 @@ fn open_before(head: &Intent, log: &[Message]) -> Vec<String> {
 
 const AGAIN: &str = "Your push permission covers it, so it stays yours under Going out, off the user's Needs you: push it again once it is ready, at the end of the line.";
 
-// A task under the lead's push permission is the lead's to push again once it leaves the line.
+// A task under the lead's push permission is the lead's to push again once it leaves the line, up to REPUSHES times.
 fn lead_pushes_again(state: &Path, head: &Intent) -> bool {
-    crate::permit::in_state(state, &head.address, &name_of(&head.repo)).is_some()
+    crate::permit::in_state(state, &head.address, &name_of(&head.repo)).is_some() && intent::lead_may_repush(state, &head.address)
 }
 
 fn failed_text(text: &str, lead: bool) -> String {
@@ -301,7 +301,9 @@ fn leave(state: &Path, head: &Intent, why: &str) -> Turn {
     intent::forget(state, &head.address);
     intent::record_left(state, &head.address, why);
     phase::update(state, &head.address, "push", |current| (!matches!(current, Some(Phase::NeedsYou(_)))).then_some(Phase::NeedsYou(Why::LeftLine)));
-    tell_lead(&left_text(&head.address, why, lead_pushes_again(state, head)));
+    let spent = crate::permit::in_state(state, &head.address, &name_of(&head.repo)).is_some() && !intent::lead_may_repush(state, &head.address);
+    let text = left_text(&head.address, why, lead_pushes_again(state, head));
+    tell_lead(&if spent { format!("{text} It left the line more than {} times, so your push permission no longer covers it until the user pushes it.", intent::REPUSHES) } else { text });
     Turn::Out(format!("out of the push line: {why}"))
 }
 

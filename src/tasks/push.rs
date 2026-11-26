@@ -433,6 +433,9 @@ pub(super) fn authorize_as(caller: &Caller, repo: &Path, slot: &Slot, upstream: 
         return Notice::new(Tone::NotNow, format!("{refused}: {why}")).next("It stays under Ready to push while the assessor reads it; push it again once the board shows its word.").detail("task", task).err();
     }
     crate::review::gate(shown.as_ref(), covered).map_err(|why| Notice::new(Tone::NotNow, format!("{refused}: {why}")).detail("task", task).to_string())?;
+    if *caller == Caller::Lead && state_dir().is_ok_and(|state| !intent::lead_may_repush(&state, &address)) {
+        return Notice::new(Tone::NotNow, format!("{refused}: it left the push line more than {} times, so it waits for the user", intent::REPUSHES)).detail("task", task).err();
+    }
     let check = Pusher { caller: caller.clone(), permit: crate::permit::of(&address, &name_of(repo)), approved: approved(&slot.path, upstream, &address) };
     check.allowed().map_err(|why| Notice::new(Tone::Failed, format!("{refused}: {} may not push it", crate::permit::describe(&check.caller))).detail("task", task).detail("why", why).to_string())
 }
@@ -622,6 +625,9 @@ pub(super) fn join(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, thro
     let queued = waiting.and_then(|waiting| waiting.queued).unwrap_or(now);
     intent::save(state, &Intent { by: by.clone(), work: Work::Turn, address: address.clone(), repo: repo.to_path_buf(), task, fingerprint: pushed_fingerprint(&slot.path, &upstream, through)?, through, at: now, seen, hand: None, queued: Some(queued), waited: None })?;
     intent::forget_left(state, &address);
+    if by.is_user() {
+        intent::forget_left_count(state, &address);
+    }
     let ahead = intent::line(state, repo).iter().position(|queued| queued.address == address).unwrap_or(0);
     crate::phase::record(state, &address, by.key(), &crate::phase::Event::PushQueued { ahead });
     Ok(())
@@ -2344,6 +2350,13 @@ mod tests {
         record_approval(&state, &address, &fingerprint(&slot.path, &upstream).unwrap(), crate::tasks::ApprovedBy::Reviewer).unwrap();
         assess(true);
         assert_eq!(authorize(&Caller::Lead, &dir, &slot, &upstream, Through::All), Ok("the lead".to_string()), "a suggested review holds nothing");
+        for _ in 0..=intent::REPUSHES {
+            intent::record_left(&state, &address, "it reported needs-you");
+        }
+        assert!(authorize(&Caller::Lead, &dir, &slot, &upstream, Through::All).unwrap_err().contains("left the push line more than 3 times"), "past the cap it is the user's");
+        assert_eq!(authorize(&Caller::User, &dir, &slot, &upstream, Through::All), Ok("the user".to_string()));
+        intent::forget_left(&state, &address);
+        intent::forget_left_count(&state, &address);
         commit(&slot.path, "f", "sixth");
         assert!(authorize(&Caller::Lead, &dir, &slot, &upstream, Through::All).unwrap_err().contains("rules approval"), "a commit without a rules approval does");
         crate::permit::set_repo_in(&state, &name_of(&dir), false).unwrap();

@@ -261,7 +261,7 @@ How far it is behind the default branch does not matter. A task on local main st
 
 ### Going out
 
-A task leaves Ready to push once it is on its way out, and nothing here waits on you. A ready task the lead holds push permission for says `the lead pushes it`. A push under way says `pushing for you · <what it waits for>`, or `pushing for the lead`:
+A task leaves Ready to push once it is on its way out, and nothing here waits on you. A ready task the lead holds push permission for says `the lead pushes it`, and so does one whose push left the line, which the lead pushes again up to 3 times; the fourth time it waits for you under Needs you, marked `it left 4 times, so the lead pushes it no more`, until you push it. A push under way says `pushing for you · <what it waits for>`, or `pushing for the lead`:
 
 - its turn, as `2nd in line after <title>` while other pushes of its repo go first, and `kebbie pushes it now` at the head;
 - a fix for CI that failed after the push. A push that waits on its tests or a conflict stands under Working meanwhile.

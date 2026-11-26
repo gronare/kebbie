@@ -88,6 +88,7 @@ The folder is `0700` and its files `0600`. Each file is replaced whole on write.
 | `push-intents/` | One file per push that waits for its task's Claude to test the files the default branch changed under it: who asked (you or the lead), the commits it holds for, and which commits to push. |
 | `push-line/` | Per repo, the lock of its push line. |
 | `push-left/` | Per task, why a push left its line unpushed, for its Needs you row. |
+| `push-left-count/` | Per task, how many times its push left the line since you last pushed it; past 3 the lead's permission no longer covers it. |
 | `push-tokens/` | Per push, the token the worktree's push block lets through only while kebbie runs that push. |
 | `ci/` | One file per CI watch, `<task>@<repo>.json`. A watch survives board restarts. |
 | `jobs/` | Per job `kebbie job run` sent, by its id: `<id>.sent.json` with the worker it went to and the blobs that carry its commit, `<id>.log` with its output as it comes, `<id>.heard.json` with the last report taken and `<id>.end.json` with how it ended, all removed however the command ends, Ctrl-C included, and those of one killed outright by the next `kebbie job run`. `jobs/bases.json` holds, per worker and repo, the last commit that worker took, which the next job builds on. |
