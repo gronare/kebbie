@@ -371,7 +371,7 @@ fn a_rules_check_the_busy_lead_did_not_take_goes_again_once_its_turn_ends() {
     let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(Via::Typed) };
     let lead = |status: &str| Session { address: LEAD_LABEL.to_string(), task: None, pane: Some("p_lead".to_string()), status: Some(status.to_string()), agent: Some(crate::agent::Agent::Claude), asks: None };
     assert_eq!(flush_held_in(&dir, &[lead("working")], &mut type_into, &|_, _| false, &|_, _| true).unwrap(), 0, "typed mid-turn it would sit in the box again");
-    assert_eq!(load_in(&dir)[0].why.as_deref(), Some(LEAD_BUSY));
+    assert_eq!(load_in(&dir)[0].why.as_deref(), Some(BUSY_HOLD));
     assert_eq!(flush_held_in(&dir, &[lead("idle")], &mut type_into, &|_, _| false, &|_, _| true).unwrap(), 1);
     assert_eq!(typed.into_inner(), [sent]);
     assert!(!load_in(&dir)[0].held);
@@ -971,101 +971,46 @@ fn lead_at(status: &str) -> Session {
 }
 
 #[test]
-fn what_asks_the_lead_waits_while_the_user_is_in_a_conversation_with_it() {
-    let dir = state("lead-hold");
-    let at = now();
-    let idle = lead_at("idle");
-    assert_eq!(lead_hold_in(&dir, &idle, "kebbie", None, at), None, "nobody has talked to the lead");
-    note_lead_prompt_in(&dir, "what is left on billing?", at - 60).unwrap();
-    assert_eq!(lead_hold_in(&dir, &idle, "kebbie", None, at), Some(LEAD_TALKING), "the user prompted it a minute ago");
-    assert_eq!(lead_hold_in(&dir, &idle, "billing@web", None, at), Some(LEAD_TALKING), "a task's question waits too");
-    assert_eq!(lead_hold_in(&dir, &idle, "kebbie", None, at + 120), None, "3 minutes after the prompt the user is quiet");
-    note_lead_prompt_in(&dir, "  [from kebbie] billing@web reviewed at a1b2c3d", at - 10).unwrap();
-    assert_eq!(lead_hold_in(&dir, &idle, "kebbie", None, at), None, "kebbie's own prompt is not the user talking");
-    note_lead_prompt_in(&dir, "<cross-session-message from=\"kebbie\">x</cross-session-message>", at - 10).unwrap();
-    assert_eq!(lead_hold_in(&dir, &idle, "kebbie", None, at), None, "nor is one that came through the inbox");
-    assert_eq!(lead_hold_in(&dir, &lead_at("working"), "kebbie", None, at), Some(LEAD_BUSY), "mid-turn on kebbie's own batch it waits for the turn's end");
-    assert_eq!(lead_hold_in(&dir, &idle, "kebbie", None, at), None, "and goes once the lead is idle");
-    note_lead_prompt_in(&dir, "push billing", at - 600).unwrap();
-    assert_eq!(lead_hold_in(&dir, &lead_at("working"), "kebbie", None, at), Some(LEAD_BUSY));
-    assert_eq!(lead_hold_in(&dir, &idle, "kebbie", None, at + 1), Some(LEAD_TALKING), "a long turn on the user's prompt counts as talking until it ends");
-    assert_eq!(lead_hold_in(&dir, &idle, "kebbie", None, at + QUIET_FOR), None);
-    LEAD_DRAFT.with(|draft| draft.set(true));
-    assert_eq!(lead_hold_in(&dir, &idle, "kebbie", None, at + QUIET_FOR), Some(DRAFT_HOLD), "the user's text in the lead's box");
-    LEAD_DRAFT.with(|draft| draft.set(false));
-    assert_eq!(lead_hold_in(&dir, &lead_at("working"), USER_LABEL, None, at), None, "the user's own word is never held");
-    assert_eq!(lead_hold_in(&dir, &session(Some("w1:p1"), Some("working")), "kebbie", None, at), None, "only the lead");
-    crate::permit::set_away_in(&dir, true, at).unwrap();
-    assert_eq!(lead_hold_in(&dir, &lead_at("working"), "kebbie", None, at), None, "away mode delivers at once, as before");
+fn a_message_to_the_lead_goes_at_once_whether_it_is_idle_mid_turn_or_just_spoke_with_the_user() {
+    let dir = state("lead-at-once");
+    let typed = RefCell::new(Vec::new());
+    let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(Via::Inbox) };
+    for (status, text) in [("idle", "Which queue?"), ("working", "And the retries?"), ("idle", "One more")] {
+        let lead = lead_at(status);
+        let said = send_locked_in(&dir, "billing@web", &[&lead], text, std::slice::from_ref(&lead), None, None, &mut type_into).unwrap();
+        assert_eq!(said, ["Told lead."], "{status}: Claude Code queues what comes mid-turn itself");
+    }
+    assert_eq!(typed.into_inner(), ["Which queue?", "And the retries?", "One more"].map(|text| typed_text("billing@web", LEAD_LABEL, text)), "each goes alone, the moment it is sent");
+    assert!(!load_in(&dir).iter().any(|message| message.held), "nothing waits");
     fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
-fn what_waited_for_the_lead_goes_as_one_message_grouped_by_task_with_a_blocking_prompt_first() {
+fn a_typed_message_never_goes_over_the_users_text_in_the_leads_box_and_what_waited_goes_as_one_message_grouped_by_task() {
     let dir = state("lead-batch");
+    let lead = lead_at("idle");
+    let mut refused = |_: &str, _: &str, _: &str| Err(crate::typing::Refused::Draft);
+    let said = send_locked_in(&dir, "shop@web", &[&lead], "Which queue do I take for the retries?", std::slice::from_ref(&lead), None, None, &mut refused).unwrap();
+    assert_eq!(said, [format!("lead {DRAFT_HOLD}; held, and delivered when it is free.")], "typing refuses while the user's text is in the box");
     let at = now();
-    let held = |id: &str, from: &str, text: &str, kind: Option<&str>| json!({ "id": id, "at": at - 30, "from": from, "to": LEAD_LABEL, "text": text, "state": "held", "kind": kind });
-    write_log(&dir, &[
-        held("f1", "kebbie", "billing@web reviewed at a1b2c3d: 2 findings — /v/billing", None),
-        held("t1", "shop@web", "Which queue do I take for the retries?", None),
-        held("r1", "kebbie", "billing@web is ready at e4f5a6b: check its commits against `rules`", Some(RULES_KIND)),
-        held("o1", "kebbie", "The user gave you push permission for the repo web.", None),
-        held("p1", "kebbie", "shop@web waits on its Claude's own prompt (prompt 7): Do you want to proceed?", Some(crate::menu::KIND)),
-    ]);
-    note_lead_prompt_in(&dir, "how is billing going?", at - 60).unwrap();
+    let held = |id: &str, text: &str, kind: Option<&str>| json!({ "id": id, "at": at - 30, "from": "kebbie", "to": LEAD_LABEL, "text": text, "state": "held", "kind": kind });
+    for record in [
+        held("f1", "billing@web reviewed at a1b2c3d: 2 findings — /v/billing", None),
+        held("r1", "billing@web is ready at e4f5a6b: check its commits against `rules`", Some(RULES_KIND)),
+        held("o1", "The user gave you push permission for the repo web.", None),
+        held("p1", "shop@web waits on its Claude's own prompt (prompt 7): Do you want to proceed?", Some(crate::menu::KIND)),
+    ] {
+        append_in(&dir, &record, ROTATE_BYTES).unwrap();
+    }
     let typed = RefCell::new(Vec::new());
     let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(Via::Inbox) };
-    LEAD_DRAFT.with(|draft| draft.set(true));
-    assert_eq!(flush_held_in(&dir, &[lead_at("idle")], &mut type_into, &|_, _| false, &|_, _| true).unwrap(), 0, "the user's text is in the lead's box");
-    LEAD_DRAFT.with(|draft| draft.set(false));
-    assert!(load_in(&dir).iter().all(|message| message.held && message.why.as_deref() == Some(DRAFT_HOLD)));
-    note_lead_prompt_in(&dir, "how is billing going?", at - QUIET_FOR - 1).unwrap();
-    assert_eq!(flush_held_in(&dir, &[lead_at("idle")], &mut type_into, &|_, _| false, &|_, _| true).unwrap(), 5);
+    assert_eq!(flush_held_in(&dir, std::slice::from_ref(&lead), &mut type_into, &|_, _| false, &|_, _| true).unwrap(), 5);
     let typed = typed.into_inner();
     assert_eq!(typed.len(), 1, "one message, one turn: {typed:?}");
     assert_eq!(typed[0], format!("[from kebbie] 5 messages for you, by task; the first blocks a task:\n  shop@web\n  - [from kebbie] shop@web waits on its Claude's own prompt (prompt 7): Do you want to proceed?\n  - [from shop@web] Which queue do I take for the retries?\n  billing@web\n  - [from kebbie] billing@web reviewed at a1b2c3d: 2 findings — /v/billing\n  - [from kebbie] billing@web is ready at e4f5a6b: check its commits against `rules`\n  Other\n  - [from kebbie] The user gave you push permission for the repo web.\n  {LEAD_CUE}"));
     assert!(load_in(&dir).iter().all(|message| !message.held), "all delivered");
-    assert_eq!(lead_hold_in(&dir, &lead_at("idle"), "kebbie", None, now()), None, "kebbie's batch is not the user talking");
     assert!(hold_again_in(&dir, LEAD_LABEL, &typed[0]).unwrap(), "a batch the lead never took holds its rules check again");
     assert_eq!(load_in(&dir).iter().filter(|message| message.held).map(|message| message.id.as_str()).collect::<Vec<_>>(), ["r1"], "only the rules check is sent twice");
-    fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
-fn a_prompt_blocking_a_task_reaches_the_lead_when_its_turn_ends_though_the_user_still_talks_with_it() {
-    let dir = state("lead-prompt-turn");
-    let at = now();
-    let held = |id: &str, text: &str, kind: Option<&str>| json!({ "id": id, "at": at - 30, "from": "kebbie", "to": LEAD_LABEL, "text": text, "state": "held", "kind": kind });
-    write_log(&dir, &[
-        held("f1", "billing@web reviewed at a1b2c3d: 2 findings", None),
-        held("p1", "shop@web waits on its Claude's own prompt (prompt 7): Do you want to proceed?", Some(crate::menu::KIND)),
-    ]);
-    note_lead_prompt_in(&dir, "how is billing going?", at - 20).unwrap();
-    let typed = RefCell::new(Vec::new());
-    let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(Via::Inbox) };
-    assert_eq!(flush_held_in(&dir, &[lead_at("working")], &mut type_into, &|_, _| false, &|_, _| true).unwrap(), 0, "mid-turn, it waits for the turn's end");
-    assert_eq!(flush_held_in(&dir, &[lead_at("idle")], &mut type_into, &|_, _| false, &|_, _| true).unwrap(), 1, "the turn ended: the prompt goes, though the user prompted 20 seconds ago");
-    assert!(typed.into_inner().iter().any(|text| text.starts_with("[from kebbie] shop@web waits on its Claude's own prompt (prompt 7)")));
-    let messages = load_in(&dir);
-    assert!(messages.iter().any(|message| message.id == "f1" && message.held && message.why.as_deref() == Some(LEAD_TALKING)), "what only asks waits out the conversation");
-    LEAD_DRAFT.with(|draft| draft.set(true));
-    assert_eq!(lead_hold_in(&dir, &lead_at("idle"), "kebbie", Some(crate::menu::KIND), at), Some(DRAFT_HOLD), "never typed over the user's own text");
-    LEAD_DRAFT.with(|draft| draft.set(false));
-    fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
-fn a_message_to_the_lead_while_the_user_talks_with_it_is_held_and_goes_alone_once_they_are_quiet() {
-    let dir = state("lead-send");
-    let at = now();
-    note_lead_prompt_in(&dir, "start billing", at - 30).unwrap();
-    let lead = lead_at("idle");
-    let said = send_locked_in(&dir, "billing@web", &[&lead], "Which queue?", std::slice::from_ref(&lead), None, None, &mut |_, _, _| panic!("held while the user talks")).unwrap();
-    assert_eq!(said, [format!("lead {LEAD_TALKING}; held, and delivered when it is free.")]);
-    note_lead_prompt_in(&dir, "start billing", at - QUIET_FOR - 1).unwrap();
-    let typed = RefCell::new(Vec::new());
-    assert_eq!(flush_held_in(&dir, std::slice::from_ref(&lead), &mut |_, text, _| { typed.borrow_mut().push(text.to_string()); Ok(Via::Typed) }, &|_, _| false, &|_, _| true).unwrap(), 1);
-    assert_eq!(typed.into_inner(), [typed_text("billing@web", LEAD_LABEL, "Which queue?")], "one message goes as it would have at once");
     fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -1084,18 +1029,16 @@ fn a_sender_outside_kebbies_sessions_is_named_by_its_folder_and_delivered_as_saf
     let typed = RefCell::new(Vec::new());
     let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(Via::Typed) };
     let busy = lead("working");
-    let held = send_locked_in(&dir, &claude, &[&busy], "the notes server moved to port 8040", std::slice::from_ref(&busy), None, None, &mut type_into).unwrap();
-    assert!(held[0].contains(LEAD_BUSY) && typed.borrow().is_empty(), "held while the lead is mid-turn, as a task's message is: {held:?}");
+    let told = send_locked_in(&dir, &claude, &[&busy], "the notes server moved to port 8040", std::slice::from_ref(&busy), None, None, &mut type_into).unwrap();
+    assert_eq!(told, ["Told lead."], "delivered at once though the lead is mid-turn");
     let logged = load_in(&dir);
-    assert_eq!((logged[0].from.as_str(), logged[0].held), (claude.as_str(), true), "and logged under the folder it came from");
-    let idle = lead("idle");
-    flush_held_in(&dir, std::slice::from_ref(&idle), &mut type_into, &|_, _| false, &|_, _| true).unwrap();
+    assert_eq!((logged[0].from.as_str(), logged[0].held), (claude.as_str(), false), "and logged under the folder it came from");
     assert_eq!(typed.borrow().as_slice(), [format!("[from a Claude session in /src/notes] the notes server moved to port 8040\n  {LEAD_CUE}")], "the lead reads where it came from, never you or lead");
     fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
-fn a_message_from_a_device_goes_in_as_your_own_prompt_once_the_lead_is_idle_with_an_empty_box_and_kebbies_flush_leaves_it_alone() {
+fn a_message_from_a_device_goes_in_as_your_own_prompt_mid_turn_too_once_the_box_is_empty_and_kebbies_flush_leaves_it_alone() {
     let dir = state("device");
     let id = hold_for_lead_in(&dir, "(from iPhone) Hold the push").unwrap();
     let lead = |status: &str| Session { address: LEAD_LABEL.to_string(), task: None, pane: Some("w1:p1".to_string()), status: Some(status.to_string()), agent: Some(crate::agent::Agent::Claude), asks: None };
@@ -1109,13 +1052,10 @@ fn a_message_from_a_device_goes_in_as_your_own_prompt_once_the_lead_is_idle_with
     };
     let why = |dir: &Path| load_in(dir).into_iter().find(|message| message.id == id).and_then(|message| message.why);
     assert_eq!(deliver_device_in(&dir, &[lead("working")], &mut type_as_user).unwrap(), 0);
-    assert_eq!((why(&dir).as_deref(), typed.borrow().len()), (Some(LEAD_WORKING), 0), "held while the lead's turn runs");
-    assert_eq!(deliver_device_in(&dir, &[lead("idle")], &mut type_as_user).unwrap(), 0);
-    assert_eq!(why(&dir).as_deref(), Some(DRAFT_HOLD), "held behind the user's draft");
-    assert_eq!(deliver_device_in(&dir, &[lead("idle")], &mut type_as_user).unwrap(), 1);
+    assert_eq!((why(&dir).as_deref(), typed.borrow().len()), (Some(DRAFT_HOLD), 1), "held behind the user's draft, mid-turn or not");
+    assert_eq!(deliver_device_in(&dir, &[lead("working")], &mut type_as_user).unwrap(), 1, "mid-turn it goes in once the box is empty, as Claude Code queues it");
     assert_eq!(typed.borrow().last().unwrap(), &("w1:p1".to_string(), "(from iPhone) Hold the push".to_string()), "typed as it is, with no sender line");
     assert!(!load_in(&dir).iter().any(|message| message.held));
-    assert!(fs::read_to_string(dir.join("lead-prompted")).unwrap().ends_with(" you"), "kebbie's own messages then wait while you talk with the lead");
     assert_eq!(deliver_device_in(&dir, &[lead("idle")], &mut type_as_user).unwrap(), 0, "nothing more waits");
     fs::remove_dir_all(&dir).unwrap();
 }

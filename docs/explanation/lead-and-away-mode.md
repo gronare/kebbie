@@ -33,17 +33,11 @@ kebbie sorts what it says to the lead in two:
 - **What only informs** never starts a lead turn: a task started, pushed or closed, a review that passed, a rebase or a red CI its task resolves itself, an update. It comes with your next prompt.
 - **What asks the lead to act** is delivered: findings to pass on, a rules check the reviewer left, a task's question of method, a push that failed, a prompt on a task's screen, a red CI no task took.
 
-## It waits while you talk with it
+## It gets each message as it comes
 
-What asks the lead to act waits while you are in a conversation with it:
+What asks the lead to act goes to it the moment it is sent, whether the lead is idle, mid-turn or you just wrote to it. It arrives through the lead's inbox: Claude Code queues what comes mid-turn and reads it between tool calls, and your text in the input box stays as it is.
 
-- the lead is mid-turn,
-- you prompted it within the last 3 minutes, or its turn on your prompt ended less than 3 minutes ago,
-- your own text sits in its input box.
-
-Once you have been quiet for 3 minutes and the lead is idle, what waited goes as one message, grouped by task, so the lead handles it in one turn. A prompt on a task's screen waits only for the lead's turn to end and for your text to leave its box, since the task stands still until someone answers it; with other messages it comes first. The message log shows each one as held, with the reason.
-
-In away mode nothing waits: the lead gets each message as it comes.
+Without an inbox, kebbie types the message into the lead's pane, and only when its input box is empty. While your text sits there, the message is held, and goes once the box is empty. Several messages that waited go as one, grouped by task, a prompt on a task's screen first, so the lead handles them in one turn. The message log shows each held one with the reason.
 
 ## It writes at the end of a turn
 

@@ -21,6 +21,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Red CI on main goes only to the task whose push made it red; tasks that pushed on top wait under CI running and close once the fix is green.
 
 ### Fixed
+- A message to the lead goes at once, mid-turn or while you talk with it, and no longer waits 3 quiet minutes or stays held after the lead went idle.
 - A task the lead pushes shows no yellow read count or subtask to accept, and no task row shows its recipe or rules check.
 - The head of a push line is told its real place when it joins the build queue.
 - A task keeps its own name until it is released.

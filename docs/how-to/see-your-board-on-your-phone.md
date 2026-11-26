@@ -156,9 +156,9 @@ A task whose subtask waits for your acceptance offers a review on its row, and a
 
 1. Pick the machine at the top of **Lead**.
 2. Write your message and tap **Send**.
-3. Read the line under it: `Waiting for the lead to finish its turn`, `Waiting: a draft is in the lead's input`, then `delivered` once the lead has it.
+3. Read the line under it: `Waiting: a draft is in the lead's input` while your text is in its box, then `delivered` once the lead has it.
 
-The lead gets it as your own word, typed into its chat as `(from iPhone) <your message>` once its turn has ended and its input box is empty. The machine answers the device only when the lead's conversation shows the message, and the lead's reply comes as a `Lead · MacBook` notification with its first line.
+The lead gets it as your own word, typed into its chat as `(from iPhone) <your message>` once its input box is empty, mid-turn too: Claude Code queues it and the lead reads it between tool calls. The machine answers the device only when the lead's conversation shows the message, and the lead's reply comes as a `Lead · MacBook` notification with its first line.
 
 - If the lead is not running, the message waits on the machine and goes in once the lead runs again; after a week it expires.
 - If no lead has run on the machine yet, the message is refused.

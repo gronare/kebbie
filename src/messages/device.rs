@@ -5,14 +5,13 @@ use serde_json::json;
 use crate::peers::Session;
 use crate::sh::Result;
 use crate::status::LEAD_LABEL;
-use super::{DRAFT_HOLD, ROTATE_BYTES, USER_LABEL, append_in, hold_reason, kebbies_own, load_in, new_id, note_lead_prompt_in, note_typed, note_why, now};
+use super::{DRAFT_HOLD, ROTATE_BYTES, USER_LABEL, append_in, hold_reason, kebbies_own, load_in, new_id, note_typed, note_why, now};
 
 pub const DEVICE_KIND: &str = "device";
-pub const LEAD_WORKING: &str = "is mid-turn; it goes in once the lead's turn ends";
 
 pub type TypeAsUser<'a> = &'a mut dyn FnMut(&str, &str) -> std::result::Result<(), crate::typing::Refused>;
 
-// What you wrote to the lead on a device, held until the lead is idle with an empty input box; the log line's id is returned.
+// What you wrote to the lead on a device, held until the lead's input box is empty; the log line's id is returned.
 pub fn hold_for_lead_in(dir: &Path, typed: &str) -> Result<String> {
     let id = new_id(DEVICE_KIND);
     append_in(dir, &json!({ "id": id, "at": now(), "from": USER_LABEL, "to": LEAD_LABEL, "text": typed, "state": "held", "kind": DEVICE_KIND }), ROTATE_BYTES)?;
@@ -35,14 +34,9 @@ pub(super) fn deliver_device_in(dir: &Path, sessions: &[Session], type_as_user: 
         note_why(dir, message, why)?;
         return Ok(0);
     }
-    if lead.status.as_deref() == Some("working") {
-        note_why(dir, message, LEAD_WORKING)?;
-        return Ok(0);
-    }
     match type_as_user(lead.pane.as_deref().unwrap_or_default(), &message.text) {
         Ok(()) => {
             note_typed(dir, LEAD_LABEL);
-            note_lead_prompt_in(dir, &message.text, now())?;
             append_in(dir, &json!({ "id": message.id, "at": now(), "state": "delivered", "via": crate::inbox::Via::Typed.word() }), ROTATE_BYTES)?;
             Ok(1)
         }

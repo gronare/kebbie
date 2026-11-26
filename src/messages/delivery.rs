@@ -10,7 +10,7 @@ use crate::peers::{self, Session};
 use crate::questions;
 use crate::sh::Result;
 use crate::status::LEAD_LABEL;
-use super::{HAND_KIND, Lock, Message, NOTICE_KIND, PROMPT_KIND, ROTATE_BYTES, RULES_KIND, USER_LABEL, append_in, batch_text, holds, lead_hold_in, load, load_in, new_id, note_lead_prompt_in, now};
+use super::{HAND_KIND, Lock, Message, NOTICE_KIND, PROMPT_KIND, ROTATE_BYTES, RULES_KIND, USER_LABEL, append_in, by_task, holds, load, load_in, new_id, now};
 
 // Nothing is ever typed into a question: a session waiting for an answer, or with no Claude, gets the message later.
 pub fn hold_reason(session: &Session) -> Option<&'static str> {
@@ -108,12 +108,6 @@ fn flush_held(sessions: &[Session]) -> Result<usize> {
     Ok(from_device + flush_held_in(&dir, sessions, &mut crate::inbox::prompt, &heard, &rules_check_wanted)?)
 }
 
-fn note_kebbie_typed_lead(dir: &Path, address: &str) {
-    if address == LEAD_LABEL {
-        let _ = note_lead_prompt_in(dir, "[from kebbie]", now());
-    }
-}
-
 // A rules check is wanted while its task still waits for one, a hand-over always; either only while its Claude has not taken it since it was first typed.
 fn rules_check_wanted(message: &Message, session: &Session) -> bool {
     let rules = message.kind.as_deref() == Some(RULES_KIND);
@@ -180,7 +174,7 @@ pub(super) fn flush_typing_in(dir: &Path, sessions: &[Session], type_into: TypeI
         }
         let Some(session) = sessions.iter().find(|session| session.address == message.to) else { continue };
         let open_question = questions::holding(&open, &session.address);
-        if let Some(why) = question_hold(message.about.as_deref(), open_question).or_else(|| hold_reason(session)).or_else(|| lead_hold_in(dir, session, &message.from, message.kind.as_deref(), now())) {
+        if let Some(why) = question_hold(message.about.as_deref(), open_question).or_else(|| hold_reason(session)) {
             note_why(dir, message, why)?;
             continue;
         }
@@ -222,7 +216,6 @@ pub(super) fn flush_typing_in(dir: &Path, sessions: &[Session], type_into: TypeI
                     note_typed(dir, LEAD_LABEL);
                     typed_into.insert(LEAD_LABEL.to_string());
                 }
-                note_kebbie_typed_lead(dir, LEAD_LABEL);
                 for message in &for_lead {
                     append_in(dir, &json!({ "id": message.id, "at": now(), "state": "delivered", "via": via.word() }), ROTATE_BYTES)?;
                 }
@@ -236,6 +229,15 @@ pub(super) fn flush_typing_in(dir: &Path, sessions: &[Session], type_into: TypeI
         }
     }
     Ok((delivered, typed_into))
+}
+
+// What was held for the lead goes as one message, grouped by task, a prompt that blocks a task first, with one cue at the end.
+pub(super) fn batch_text(dir: &Path, messages: &[&Message]) -> String {
+    let urgent = messages.first().is_some_and(|message| message.kind.as_deref() == Some(crate::menu::KIND));
+    let lines = by_task(dir, messages, |message| format!("- {}", part(message)));
+    let cue = if messages.iter().any(|message| cued(&message.from, &message.to)) { format!("\n{LEAD_CUE}") } else { String::new() };
+    let first = if urgent { "; the first blocks a task" } else { "" };
+    delivered("kebbie", &format!("{} messages for you, by task{first}:\n{}{cue}", messages.len(), lines.join("\n")))
 }
 
 // A held message keeps the latest reason it waits, written only when it changes, so the board can say why.
@@ -330,9 +332,7 @@ pub fn send_locked(from: &str, recipients: &[&Session], text: &str, sessions: &[
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn send_locked_in(dir: &Path, from: &str, recipients: &[&Session], text: &str, sessions: &[Session], about: Option<&str>, kind: Option<&str>, type_into: TypeInto) -> Result<Vec<String>> {
-    let to_lead = recipients.iter().any(|session| session.address == LEAD_LABEL) && from != USER_LABEL && from != LEAD_LABEL;
-    let others: Vec<Session> = sessions.iter().filter(|session| !to_lead || session.address != LEAD_LABEL).cloned().collect();
-    let (_, typed_into) = flush_typing_in(dir, &others, type_into, &heard, &rules_check_wanted, &inbox_live(dir))?;
+    let (_, typed_into) = flush_typing_in(dir, sessions, type_into, &heard, &rules_check_wanted, &inbox_live(dir))?;
     let mut report = Vec::new();
     for (index, session) in recipients.iter().enumerate() {
         let messages = load_in(dir);
@@ -343,13 +343,12 @@ pub(super) fn send_locked_in(dir: &Path, from: &str, recipients: &[&Session], te
         let outcome = match question_hold(about, questions::holding(&open, &session.address)) {
             Some(reason) => Err(reason),
             None if earlier_held && !answering => Err("still has earlier messages held"),
-            None => match lead_hold_in(dir, session, from, kind, now()).map_or_else(|| deliver(session, &typed_text(from, &session.address, text), type_into), Err) {
+            None => match deliver(session, &typed_text(from, &session.address, text), type_into) {
                 Err(DRAFT_HOLD) if typed_into.contains(&session.address) => Err(EARLIER_TYPING),
                 Ok(via) => {
                     if via != Via::Inbox {
                         note_typed(dir, &session.address);
                     }
-                    note_kebbie_typed_lead(dir, &session.address);
                     Ok(via)
                 }
                 Err(why) => Err(kebbies_own(dir, &session.address, why)),
