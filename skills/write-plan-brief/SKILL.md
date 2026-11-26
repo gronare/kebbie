@@ -29,10 +29,10 @@ The user approves a plan from its **brief**: the text of the `kebbie ask --plan`
 
 - **The first line** is the question's title: one sentence of about 15 words saying what the user says yes to, as an outcome.
 - **Four parts**, each a bold heading on its own line with one to four bullets under it:
-  1. What you get: what the user can see or do once it is built.
+  1. What you get: what the user can see or do once it is built, and **who it reaches** once pushed: everyone who runs the code (every install of a tool, every user of an app), or only the machines or accounts whose setting turns it on.
   2. What it costs: risks, behaviour that changes or slows, and everything the user must do himself (a setting, a credential, a check on a device). "None" is an answer.
   3. What is left out: what the user might expect from this plan that it leaves for later or for good.
-  4. Decisions already taken: each choice made for the user that they may want to overturn, with its reason in a few words.
+  4. Decisions already taken: each choice made for the user that they may want to overturn, with its reason in a few words. A limit the user set on who the change is for (only this machine, only behind a setting) is one of them, said with how the plan keeps it.
 - **The language** is the vault's, which your role names: the headings and every line. English for an English vault or none. The interface's own English words (Approve, Read the whole plan) appear only quoted, as what the user sees.
 
 | Language | The four headings |
@@ -44,7 +44,7 @@ Another language takes the same four, translated.
 
 ## Steps
 
-1. **Read the plan as the user.** List each thing they will notice: what they see, do, wait for or must do themselves. Done when every part of the plan the user notices is on the list, and work they never notice (a refactor, a move, test setup, how the commits are split) is off it.
+1. **Read the plan as the user.** List each thing they will notice: what they see, do, wait for or must do themselves, and who else gets the change once it is pushed. A push to the repo of a tool others install, kebbie's own among them, reaches every install on its next update, on by default unless a setting holds it back. Done when every part of the plan the user notices is on the list, who the change reaches is on it, and work they never notice (a refactor, a move, test setup, how the commits are split) is off it.
 2. **Sort** the list into the four parts. The goal the user gave stays out: they know it, and the first line says what this plan does about it. Done when each part has one to four bullets, and an empty part says so in one bullet.
 3. **Write** in the vault's language, in **plain** sentences of about 15 words, one fact per bullet, naming things in the user's words. Done when the whole brief is under 150 words and every line holds:
    - the user's words for things, never an internal name (a function, flag, table, module, recipe or subtask) they did not use;
@@ -74,6 +74,7 @@ Godkänn att en plan bara kan läggas fram med en kort beslutsbrief överst.
 **Vad du får**
 - Varje plan börjar med en mening om vad du säger ja till.
 - Under den står vad du får, vad det kostar, vad som inte ingår och vad som är bestämt.
+- Det gäller varje installation av kebbie från nästa uppdatering.
 - Texten är på valvets språk, och knapparna är som förut.
 
 **Vad det kostar**

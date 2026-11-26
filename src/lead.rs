@@ -1067,6 +1067,18 @@ mod tests {
     }
 
     #[test]
+    fn a_plan_says_who_its_change_reaches_and_the_lead_asks_before_a_push_that_reaches_further() {
+        let role = role_text(include_str!("../roles/lead.md"), "/opt/kebbie/kebbie", &[Source::Local], false, true, "English");
+        assert!(role.contains("every limit the user set on who the change is for (only this machine, only behind a setting) in their words"), "the prompt carries the user's limit on who the change is for");
+        assert!(role.contains("check that the plan the user approved says who the change reaches") && role.contains("ask the user on the board before you push") && role.contains("An approved plan that never said who it reaches is no go-ahead to reach everyone"), "{role}");
+        assert!(include_str!("../roles/task.md").contains("Its brief says who the change reaches once pushed, and keeps every limit your prompt or the user set on who it is for"));
+        let brief = include_str!("../skills/write-plan-brief/SKILL.md");
+        for says in ["and **who it reaches** once pushed", "A limit the user set on who the change is for (only this machine, only behind a setting) is one of them", "who the change reaches is on it"] {
+            assert!(brief.contains(says), "the plan brief skill asks who the change reaches: {says}");
+        }
+    }
+
+    #[test]
     fn the_lead_runs_a_tasks_tests_through_its_repos_test_commands() {
         let role = role_text(include_str!("../roles/lead.md"), "/opt/kebbie/kebbie", &[Source::Local], false, true, "English");
         assert!(role.contains("running its tests, through the commands its repo names in `task.test_commands` (`kebbie config --repo <path>` shows them) and never another test setup beside them"), "{role}");

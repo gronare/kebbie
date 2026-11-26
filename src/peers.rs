@@ -739,7 +739,7 @@ mod tests {
             assert!(step.contains("write the question by the skill `kebbie:write-plan-brief`") && step.contains(" - <<'EOF'`, the question on the lines after it") && step.contains("kebbie refuses a first line with a commit id, a file path or backticks"), "{step}");
         }
         let role = fill(include_str!("../roles/task.md"), &[("plan", &file)]);
-        assert!(role.contains(&format!("2. A plan to approve: {file} The user approves it")) && !role.contains("{plan}"), "{role}");
+        assert!(role.contains(&format!("2. A plan to approve: {file} Its brief says who the change reaches once pushed")) && !role.contains("{plan}"), "{role}");
     }
 
     #[test]
