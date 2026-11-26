@@ -69,6 +69,8 @@ pub fn tick(state: &Path) -> Vec<String> {
     let now = crate::messages::now();
     let pending = super::pending(state);
     notes.extend(drop_spent(state, &pending, tell_lead));
+    let log = std::cell::OnceCell::new();
+    notes.extend(release_unlanded(state, |task| active(state, task).is_none().then(|| ended_how(log.get_or_init(crate::messages::load), task)).flatten()));
     let ids = due(&pending, last_run(state), now);
     if ids.is_empty() {
         return notes;
@@ -88,6 +90,25 @@ pub fn drop_spent(state: &Path, pending: &[Case], tell: impl Fn(&str)) -> Vec<St
         let _ = super::settle(state, &case.id, &why, None);
         tell(&unweighed(case, &why));
         notes.push(format!("faults: {} dropped after {TRIES} runs without an answer", case.id));
+    }
+    notes
+}
+
+pub fn ended_how(messages: &[crate::messages::Message], task: &str) -> Option<String> {
+    messages.iter().rev().filter(|message| message.ended && message.to.split_once('@').map_or(message.to.as_str(), |(name, _)| name) == task).find_map(|message| crate::messages::ended_how(message).map(str::to_string))
+}
+
+pub fn release_unlanded(state: &Path, ended: impl Fn(&str) -> Option<String>) -> Vec<String> {
+    let dir = issues::dir(state);
+    let mut notes = Vec::new();
+    for mut issue in super::tracked(state).into_iter().filter(Issue::is_open) {
+        let Some(task) = issue.fix.clone() else { continue };
+        let Some(how) = ended(&task).filter(|how| how != "done") else { continue };
+        issue.fix = None;
+        issue.history.push(format!("fix task {task} ended ({how}) without landing"));
+        if issues::save(&dir, &issue).is_ok() {
+            notes.push(format!("faults: kebbie issue {} waits for a fix again, as {task} ended ({how})", issue.id));
+        }
     }
     notes
 }
@@ -375,7 +396,7 @@ pub fn again(state: &Path, issue: &Issue, source: Source, from: &str, quote: &st
             return Ok(format!("{running} fixes it and was told"));
         }
         Step::Wait(task) => {
-            tell_lead(&format!("kebbie issue {} ({}) happened again after its fix task {task} ended; it waits for the keeper's recheck after the next kebbie update. When {task} ended without its fix, start it again.", issue.id, issue.title));
+            tell_lead(&format!("kebbie issue {} ({}) happened again after its fix task {task} ended; it waits for the keeper's recheck after the next kebbie update.", issue.id, issue.title));
             return Ok(format!("its fix task {task} has ended, so it waits for the recheck after the next update"));
         }
         Step::Queue { came_back: false } => return queue_fix(state, issue, false, checkout, now),

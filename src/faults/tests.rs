@@ -305,3 +305,22 @@ fn the_running_mark_stays_until_every_verdict_is_carried_out() {
     assert!(!watch::is_running(&state), "a run that failed leaves no mark behind");
     fs::remove_dir_all(state).unwrap();
 }
+
+#[test]
+fn a_fix_task_reset_before_it_landed_lets_go_of_its_issue() {
+    let state = state("unlanded");
+    let dir = issues::dir(&state);
+    let filed = |id: &str, fix: &str| issues::save(&dir, &Issue { id: id.to_string(), title: id.to_string(), kind: "bug".to_string(), status: "open".to_string(), by: BY.to_string(), fix: Some(fix.to_string()), ..Issue::default() }).unwrap();
+    filed("aa0001", "fault-aa0001");
+    filed("aa0002", "fault-aa0002");
+    filed("aa0003", "fault-aa0003");
+    let end = |task: &str, how: &str| crate::messages::fold(&serde_json::json!({ "id": format!("e-{task}"), "at": 5, "from": "kebbie", "to": format!("{task}@kebbie"), "text": format!("{task} ended ({how})"), "state": "ended" }).to_string());
+    let log: Vec<crate::messages::Message> = [end("fault-aa0001", "reset"), end("fault-aa0002", "done")].into_iter().flatten().collect();
+    let notes = watch::release_unlanded(&state, |task| (task != "fault-aa0003").then(|| watch::ended_how(&log, task)).flatten());
+    assert_eq!(watch::ended_how(&log, "fault-aa0003"), None);
+    assert_eq!(notes, ["faults: kebbie issue aa0001 waits for a fix again, as fault-aa0001 ended (reset)"]);
+    let fix = |id: &str| issues::find(&dir, id).unwrap().fix;
+    assert_eq!((fix("aa0001"), fix("aa0002").as_deref(), fix("aa0003").as_deref()), (None, Some("fault-aa0002"), Some("fault-aa0003")), "a landed fix waits for the recheck and a running one keeps its issue");
+    assert_eq!(watch::step(&issues::find(&dir, "aa0001").unwrap(), None), watch::Step::Queue { came_back: false }, "its next occurrence queues a new fix");
+    fs::remove_dir_all(state).unwrap();
+}
