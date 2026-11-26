@@ -21,6 +21,7 @@ mod red_ci;
 pub(crate) mod rollout;
 mod stage;
 mod started;
+pub(crate) mod unblocked;
 mod waiting;
 #[cfg(test)]
 pub(crate) mod test_support;

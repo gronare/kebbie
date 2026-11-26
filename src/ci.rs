@@ -546,8 +546,9 @@ pub fn holding(state: &Path, repo: &Path, address: &str) -> Option<Watch> {
 }
 
 // Main is green again once a push on top of a red run passes: the red runs it went over end, except one whose own task still has the log to fix and another task pushed.
-pub(crate) fn release_red(state: &Path, green: &Watch) {
+pub(crate) fn release_red(state: &Path, green: &Watch) -> Vec<Watch> {
     let log = messages::load();
+    let mut ended = Vec::new();
     for red in holds(state).into_iter().filter(|red| red.repo == green.repo) {
         let over = crate::sh::succeeds("git", &["merge-base", "--is-ancestor", &red.sha, &green.sha], Some(&green.repo));
         if over && (red.address == green.address || fixer_of(state, &red.address).as_deref() == Some(green.address.as_str()) || !task_open(&red, &log)) {
@@ -555,8 +556,26 @@ pub(crate) fn release_red(state: &Path, green: &Watch) {
             if red.address != green.address && load(state, &red.address).is_some_and(|watch| watch.sha == red.sha && matches!(watch.state, State::Failed { .. })) {
                 forget(state, &red.address);
             }
+            ended.push(red);
         }
     }
+    ended
+}
+
+pub(crate) fn held(state: &Path, address: &str) -> bool {
+    hold_file(state, address).exists()
+}
+
+pub(crate) fn red_in(state: &Path, repo: &Path) -> bool {
+    holds(state).iter().any(|red| red.repo == repo)
+}
+
+// The blocked tasks of the repo hear it once the last red run over main has ended.
+fn tell_green(state: &Path, green: &Watch, ended: &[Watch]) -> Vec<String> {
+    if ended.is_empty() || red_in(state, &green.repo) {
+        return Vec::new();
+    }
+    crate::tasks::unblocked::tell(&green.repo, &green.address, &crate::tasks::unblocked::main_green(green, ended))
 }
 
 fn pushing_file(state: &Path, address: &str) -> PathBuf {
@@ -899,7 +918,8 @@ fn unknown(state: &Path, watch: &mut Watch, now: u64, refused: bool) -> Event {
 
 // A task that named a check for after its push runs it now, and closes once it reports that the check held.
 fn green(state: &Path, watch: &Watch, what: String, now: u64) -> Event {
-    release_red(state, watch);
+    let ended = release_red(state, watch);
+    tell_green(state, watch, &ended);
     if !watch.pushed.stages.is_empty() {
         return staged(state, watch, what, None, now);
     }
@@ -941,7 +961,8 @@ fn rolled_on(state: &Path, watch: &Watch, text: String) -> Event {
 
 // The rest went green and no run of the deploy workflow showed up: the stages that wait on it fail, so nothing after them goes out on a deploy nobody saw.
 fn undeployed(state: &Path, watch: &Watch) -> Event {
-    release_red(state, watch);
+    let ended = release_red(state, watch);
+    tell_green(state, watch, &ended);
     let deploy = watch.pushed.deploy.clone().unwrap_or_default();
     let note = format!("no run of {deploy} on {} in {} min", watch.short(), UNSEEN_AFTER / 60);
     crate::tasks::rollout::failed(state, &watch.address, &watch.pushed.stages, &note, true);
@@ -1816,6 +1837,35 @@ mod tests {
         tick_with(&state, "false", messages::now());
         assert!(load(&state, "billing@app").unwrap().checked_at.is_some(), "once armed, the rounds poll it");
         fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_blocked_task_hears_once_the_last_red_run_over_main_ends() {
+        let (dir, origin, slot, _) = crate::tasks::test_support::task_with_a_commit("billing");
+        let state = crate::tasks::test_support::state_of(&dir);
+        let at = |task: &str| crate::peers::address(task, &crate::repo::name_of(&dir));
+        let main = crate::repo::git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        let fixed = crate::repo::git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        let watch = |task: &str, sha: &str, state: State| Watch { address: at(task), repo: dir.clone(), slug: "acme/app".to_string(), sha: sha.to_string(), started_at: 1, checked_at: None, close: true, runs: Vec::new(), state, error: None, erring_since: None, following: None, pushed: Pushed::default() };
+        let failed = State::Failed { at: 2, what: "ci · clippy".to_string(), url: String::new() };
+        let blocked = messages::Report { state: "blocked".to_string(), next: "nothing".to_string(), head: None, after: Vec::new() };
+        messages::log_report(&at("copy"), &blocked, "waiting for the clippy fix on main").unwrap();
+        let told = || messages::load().into_iter().filter(|message| message.to == at("copy") && message.text.starts_with("main is green again")).map(|message| message.text).collect::<Vec<_>>();
+        let elsewhere = crate::repo::git(&dir, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit-tree", &format!("{main}^{{tree}}"), "-m", "not under the fix"]).unwrap();
+        for (task, sha) in [("billing", &main), ("ledger", &elsewhere)] {
+            save(&state, &watch(task, sha, failed.clone())).unwrap();
+            hold_red(&state, &watch(task, sha, failed.clone()));
+        }
+        let green = watch("billing", &fixed, State::Running);
+        assert!(tell_green(&state, &green, &release_red(&state, &green)).is_empty() && told().is_empty(), "ledger's red run, which the fix is not on top of, holds main red");
+        messages::log_report(&at("ledger"), &blocked, "fixing its own red run").unwrap();
+        let fix = watch("ledger", &elsewhere, State::Running);
+        let ended = release_red(&state, &fix);
+        assert_eq!(tell_green(&state, &fix, &ended), [at("copy")], "ledger itself pushed the last fix, so only the blocked copy hears");
+        let text = told();
+        assert!(text.len() == 1 && text[0].contains(&elsewhere[..7]) && text[0].contains(&format!("{} ({})", at("ledger"), &elsewhere[..7])) && text[0].contains("rebase onto the default branch"), "{text:?}");
+        assert!(tell_green(&state, &fix, &release_red(&state, &fix)).is_empty() && told().len() == 1, "the hold is gone, so a second green says nothing");
+        crate::tasks::test_support::cleanup(dir, origin, &slot);
     }
 
     #[test]

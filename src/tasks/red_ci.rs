@@ -91,7 +91,11 @@ pub(crate) fn dismiss_as(state: &Path, caller: &Caller, cwd: &Path, name: Option
     archived.push(entry);
     record["dismissed"] = json!(archived);
     crate::state::write(&file(state, &address), record.to_string())?;
+    let held = crate::ci::held(state, &address);
     crate::ci::end_red(state, &address);
+    if held && !crate::ci::red_in(state, &watch.repo) {
+        super::unblocked::tell(&watch.repo, &address, &super::unblocked::dismissed(&watch));
+    }
     crate::ci::forget(state, &address);
     if intent::pending(state, &address).is_some_and(|pending| pending.work == Work::Ci) {
         intent::forget(state, &address);
@@ -147,6 +151,22 @@ mod tests {
         crate::tasks::landed::keep_open(&state, &address, true);
         let kept = dismiss_as(&state, &Caller::User, &dir, Some("billing"), Some("a flake")).unwrap();
         assert!(kept.contains("It stays open, as the user chose") && !kept.contains("kebbie closes"), "{kept}");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn dismissing_the_last_red_run_tells_the_blocked_tasks_of_its_repo() {
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let at = |task: &str| peers::address(task, &name_of(&dir));
+        let red = red_watch(&dir, &at("billing"));
+        crate::ci::save(&state, &red).unwrap();
+        crate::ci::hold_red(&state, &red);
+        let blocked = messages::Report { state: "blocked".to_string(), next: "nothing".to_string(), head: None, after: Vec::new() };
+        messages::log_report(&at("copy"), &blocked, "waiting for main").unwrap();
+        dismiss_as(&state, &Caller::User, &dir, Some("billing"), Some("a flake")).unwrap();
+        let told: Vec<String> = messages::load().into_iter().filter(|message| message.to == at("copy")).map(|message| message.text).collect();
+        assert!(told.len() == 1 && told[0].starts_with("The user dismissed the red CI of") && told[0].contains("did not go green"), "{told:?}");
         cleanup(dir, origin, &slot);
     }
 
