@@ -59,7 +59,7 @@ pub(crate) use push_steps::step as push_step;
 pub(crate) use push::{DevicePush, after_ci, cancel as cancel_push, land, ordinal, place_in_line, push, push_as, rebase, tidy};
 pub(crate) use stage::{WAIT_CEILING as STAGE_WAIT, stage, staged, tick as stage_tick, unstage};
 pub(crate) use started::{link, started_items, started_links};
-pub(crate) use promise::{EVERY as PROMISES_EVERY, command as promise, list as promises, tick as promises_tick};
+pub(crate) use promise::{EVERY as PROMISES_EVERY, command as promise, first_prompt_line as promises_first_line, list as promises, tick as promises_tick};
 pub(crate) use waiting::{WaitsOn, command as wait, mark as mark_waits, tick as waiting_tick};
 
 use std::path::Path;

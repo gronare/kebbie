@@ -466,6 +466,15 @@ fn handover_prompt(file: &Path) -> String {
     format!("kebbie started you on a new conversation, as your last one's context was nearly full. Read your handover in {} before anything else and carry on from it.", file.display())
 }
 
+// A new conversation knows only its role and the vault, so it hears that promises wait for it.
+fn with_promises(first: Option<String>, new: bool) -> Option<String> {
+    let line = if new { state_dir().ok().and_then(|state| tasks::promises_first_line(&state)) } else { None };
+    match (first, line) {
+        (Some(first), Some(line)) => Some(format!("{first} {line}")),
+        (first, line) => first.or(line),
+    }
+}
+
 fn lead_lock() -> Result<crate::restart::SessionLock> {
     crate::restart::SessionLock::take(&state_dir()?, LEAD_LABEL).map_err(|_| refused("another kebbie is restarting the lead"))
 }
@@ -506,6 +515,7 @@ pub fn restart_refusal() -> Result<()> {
 
 fn restart_locked(anyway: bool, fresh: bool, handover: bool) -> Result<String> {
     let first = if handover { Some(handover_first()?) } else { None };
+    let first = with_promises(first, handover || fresh);
     let Some(Ready { lead, pane, running }) = ready(anyway)? else { return Ok("No lead is running, so there is nothing to restart.".to_string()) };
     let (session, how) = if handover {
         (Session::New(tasks::new_session_id()?), "with a new conversation that reads its handover first; its earlier one stays on disk")
@@ -520,7 +530,7 @@ fn restart_locked(anyway: bool, fresh: bool, handover: bool) -> Result<String> {
     close_messages(places(&lead)?.messages.as_deref())?;
     let how = match start_chat(&pane, session, first.as_deref()) {
         Err(error) if error.starts_with(crate::agent::claude::RESUME_FAILED) => {
-            start_chat(&pane, Session::New(tasks::new_session_id()?), None)?;
+            start_chat(&pane, Session::New(tasks::new_session_id()?), with_promises(None, true).as_deref())?;
             FRESH_AFTER_FAILED_RESUME
         }
         other => other.map(|()| how)?,
@@ -1199,6 +1209,7 @@ mod tests {
         let locked = &source[source.find("\nfn restart_locked(").unwrap()..];
         let locked = &locked[..locked.find("\n}\n").unwrap()];
         assert!(locked.contains("let first = if handover { Some(handover_first()?) } else { None };") && locked.find("handover_first()").unwrap() < locked.find("ready(anyway)").unwrap(), "no handover, no restart: refused before the lead's Claude is ended");
+        assert!(locked.contains("let first = with_promises(first, handover || fresh);") && locked.contains("with_promises(None, true)"), "every new conversation hears of the lead's open promises, a resumed one has them in its context");
         assert!(save_handover("  \n").unwrap_err().contains("give the handover on stdin"));
     }
 

@@ -352,6 +352,12 @@ pub(crate) fn listing_in(state: &Path, log: &[Message], now: u64) -> String {
     promises.iter().map(|promise| shown_line(promise, Some(&facts), now)).collect::<Vec<_>>().join("\n")
 }
 
+// The lead's command line carries its first prompt, so a new conversation hears how many promises wait and where to read them, not the promises themselves.
+pub(crate) fn first_prompt_line(state: &Path) -> Option<String> {
+    let count = all(state).len();
+    (count > 0).then(|| format!("You have {count} open promise{} that kebbie keeps for you: kebbie promises lists them, and kebbie reminds you when each is due.", if count == 1 { "" } else { "s" }))
+}
+
 pub fn list() -> Result<String> {
     Ok(listing_in(&crate::lead::state_dir()?, &messages::load(), messages::now()))
 }
@@ -567,6 +573,17 @@ mod tests {
         assert!(heard.len() == 1 && heard[0].starts_with("Promise 1 has waited for you since") && heard[0].contains("the user's board shows it as overdue until then"), "{heard:?}");
         assert!(overdue(&load(&state, 1).unwrap(), 1_000 + OVERDUE));
         assert!(reminded(&state, &none, &[], 1_000 + 2 * OVERDUE).is_empty(), "told once");
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_new_conversation_of_the_lead_hears_of_its_open_promises() {
+        let state = crate::sh::test_dir("promise-first");
+        assert_eq!(first_prompt_line(&state), None);
+        save(&state, &promise(1, &[], Some(900), None)).unwrap();
+        assert_eq!(first_prompt_line(&state).unwrap(), "You have 1 open promise that kebbie keeps for you: kebbie promises lists them, and kebbie reminds you when each is due.");
+        save(&state, &promise(2, &[], Some(900), None)).unwrap();
+        assert!(first_prompt_line(&state).unwrap().starts_with("You have 2 open promises"));
         fs::remove_dir_all(state).unwrap();
     }
 

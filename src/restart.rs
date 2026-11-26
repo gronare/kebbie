@@ -1429,7 +1429,7 @@ mod tests {
         let reasons = ["Claude Code 2.1.325 → 2.1.326".to_string()];
         assert_eq!(restarted_said("lead", Agent::Claude, &reasons, &tasks::Started::Ready, false), "Restarted lead with a new conversation, as it ran older code (Claude Code 2.1.325 → 2.1.326) and had none to resume.");
         let lead = include_str!("lead.rs").split("\n#[cfg(test)]").next().unwrap();
-        assert!(lead.contains("Err(error) if error.starts_with(crate::agent::claude::RESUME_FAILED) => {\n            start_chat(&pane, Session::New(tasks::new_session_id()?), None)?;"), "a lead whose resume falls back to its shell starts a new conversation in the same pane");
+        assert!(lead.contains("Err(error) if error.starts_with(crate::agent::claude::RESUME_FAILED) => {\n            start_chat(&pane, Session::New(tasks::new_session_id()?), with_promises(None, true).as_deref())?;"), "a lead whose resume falls back to its shell starts a new conversation in the same pane");
         std::fs::remove_dir_all(home).unwrap();
     }
 
