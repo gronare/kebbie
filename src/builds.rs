@@ -15,6 +15,7 @@ pub const HOLD: u64 = 180;
 const LINGER: u64 = 10;
 const UPDATE_HOLD: u64 = 30;
 const MAX_HOLD: u64 = 30 * 60;
+pub const HELD_AS_WORK: u64 = 2 * 60 * 60;
 const UPDATE_WAIT: Duration = Duration::from_secs(10 * 60);
 const KEEPER_QUIET: u64 = 60;
 pub const QUEUED_EXIT: u8 = 75;
@@ -99,6 +100,11 @@ impl Queue {
     // A task in line whose own disk is low gets no turn until space is freed, so it waits on the disk rather than on a slot.
     pub fn waits_for_slot(&self, address: &str) -> bool {
         self.place(address).is_some() && !self.low_disk.iter().any(|low| low == address)
+    }
+
+    // A build that holds a slot is the task's work under way, as its tests in the background; a holder older than HELD_AS_WORK, which no keeper pruned, is not.
+    pub fn holds(&self, address: &str, now: u64) -> bool {
+        self.holders.iter().any(|holder| holder.address == address && now.saturating_sub(holder.at) < HELD_AS_WORK)
     }
 
     fn commands(&self) -> Vec<String> {
@@ -295,6 +301,10 @@ pub fn place(address: &str) -> Option<usize> {
 
 pub fn waits_for_slot(address: &str) -> bool {
     dir().is_ok_and(|dir| load(&dir).waits_for_slot(address))
+}
+
+pub fn holds_slot(address: &str, now: u64) -> bool {
+    dir().is_ok_and(|dir| load(&dir).holds(address, now))
 }
 
 pub fn forget(address: &str) {
@@ -727,6 +737,16 @@ pub fn hook() -> String {
 #[cfg(test)]
 pub(crate) fn line_up(address: &str) {
     with_queue(&dir().unwrap(), |queue| queue.line.push(address.to_string())).unwrap();
+}
+
+#[cfg(test)]
+pub(crate) fn hold_slot(address: &str, at: u64) {
+    with_queue(&dir().unwrap(), |queue| queue.holders.push(Holder { address: address.to_string(), id: "held-in-test".to_string(), at })).unwrap();
+}
+
+#[cfg(test)]
+pub(crate) fn forget_holder(address: &str) {
+    with_queue(&dir().unwrap(), |queue| queue.holders.retain(|holder| holder.address != address)).unwrap();
 }
 
 #[cfg(test)]

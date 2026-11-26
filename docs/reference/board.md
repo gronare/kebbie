@@ -266,7 +266,7 @@ A task leaves Ready to push once it is on its way out, and nothing here waits on
 - its turn, as `2nd in line after <title>` while other pushes of its repo go first, and `kebbie pushes it now` at the head;
 - a fix for CI that failed after the push. A push that waits on its tests or a conflict stands under Working meanwhile.
 
-Each repo pushes one task at a time, in the order you pushed them, and rebases a task only when its turn comes. A head whose Claude works keeps its place for as long as it works, and for up to 30 minutes once another push waits behind it; time its build spends waiting for a build slot does not count. See [Pushing](../explanation/trunk-based.md#one-push-line-per-repo).
+Each repo pushes one task at a time, in the order you pushed them, and rebases a task only when its turn comes. A head whose Claude works keeps its place for as long as it works, and for up to 30 minutes once another push waits behind it; time its build spends waiting for a build slot, or running in one, as its tests in the background do, does not count, for up to 2 hours of a build. See [Pushing](../explanation/trunk-based.md#one-push-line-per-repo).
 
 ### CI running
 

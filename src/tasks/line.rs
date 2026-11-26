@@ -242,7 +242,7 @@ fn turn(state: &Path, head: &Intent, log: &[Message], now: u64, read: Read, work
         return Turn::Out(why);
     };
     let stamped;
-    let head = if crate::builds::waits_for_slot(&head.address) {
+    let head = if crate::builds::waits_for_slot(&head.address) || crate::builds::holds_slot(&head.address, now) {
         let Some(fresh) = intent::stamp_waited(state, &head.address, now) else { return Turn::Waits };
         stamped = fresh;
         &stamped
@@ -699,6 +699,32 @@ mod tests {
         assert!(driven.notes.is_empty() && load(&state, &first).is_some(), "the ceiling counts from when it last waited for a slot: {driven:?}");
         let driven = drive(&state, &dir, None, &[], slot_free + CEILING, &|_, _| None, &|_| false, &mut push);
         assert!(driven.notes[0].contains("its Claude did not report ready within 30 minutes"), "{driven:?}");
+        drop_worktree(&dir, &beta);
+        cleanup(dir, origin, &alpha);
+    }
+
+    #[test]
+    fn a_head_whose_build_holds_a_build_slot_keeps_its_place_while_it_runs_and_for_the_ceiling_after() {
+        let (dir, origin, alpha, _) = task_with_a_commit("alpha");
+        let beta = another_task(&dir, "beta", "e");
+        let state = crate::lead::state_dir().unwrap();
+        let (first, second) = (crate::peers::address("alpha", &name_of(&dir)), crate::peers::address("beta", &name_of(&dir)));
+        let _line = Line { state: state.clone(), addresses: vec![first.clone(), second.clone()] };
+        upstream_commit(&dir, "d", "theirs", "d on main");
+        super::super::push::join(&state, &Caller::User, &dir, &alpha, Through::All).unwrap();
+        super::super::push::join(&state, &Caller::User, &dir, &beta, Through::All).unwrap();
+        let (_, mut push) = real_push(&state);
+        drive(&state, &dir, None, &[], 1000, &|_, _| None, &|_| false, &mut push);
+        let handed = load(&state, &first).unwrap().at;
+        let testing = handed + CEILING / 2;
+        crate::builds::hold_slot(&first, testing);
+        let still = handed + 2 * CEILING;
+        let driven = drive(&state, &dir, None, &[], still, &|_, _| None, &|_| false, &mut push);
+        assert!(driven.notes.is_empty() && load(&state, &first).is_some_and(|head| head.waited == Some(still)), "its tests hold a build slot in the background, though its Claude's turn ended and a push waits behind it: {driven:?}");
+        let stale = testing + crate::builds::HELD_AS_WORK;
+        let driven = drive(&state, &dir, None, &[], stale + CEILING, &|_, _| None, &|_| false, &mut push);
+        assert!(driven.notes[0].contains("its Claude did not report ready within 30 minutes"), "a slot held past HELD_AS_WORK counts as work no more: {driven:?}");
+        crate::builds::forget_holder(&first);
         drop_worktree(&dir, &beta);
         cleanup(dir, origin, &alpha);
     }
