@@ -171,6 +171,10 @@ Enter picks the preselected row, and a line under the rows says why it is that o
 
 The old conversation stays on disk, where `claude --resume` still finds it. kebbie keeps the new one as the lead's, so later restarts resume that. On its own kebbie starts the lead fresh only with a handover, as the next section describes. The lead's role tells it that a fresh start reads only the role and the vault, so it keeps decisions, plans and where each task stands in the vault's notes as it goes.
 
+## The lead's promises outlast its conversation
+
+When the lead says it will do something once something else has happened, it registers the promise with [`kebbie promise`](../reference/commands.md#kebbie-promise) rather than keeping it in its chat. kebbie reminds it when the promise is due, and tells it at once when the promise can no longer come true. A new conversation of the lead hears how many promises wait for it. You see them only when one is left open two hours after it was due: one quiet line on the board's Work page.
+
 ## The lead never compacts
 
 kebbie starts the lead's Claude with Claude Code's `autoCompactEnabled` off, as a compacted conversation loses the lead's rules. `/compact` in its chat still works.

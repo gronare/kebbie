@@ -711,6 +711,8 @@ It is refused when the id is taken or config.toml does not parse.
 | `kebbie lead --restart --fresh` | Start the lead's Claude on a new conversation, with its role, settings and skills, in its folder. |
 | `kebbie lead --restart --handover` | Start the lead's Claude on a new conversation whose first prompt reads the handover it saved. |
 | `kebbie handover` | The lead saves its handover from stdin before kebbie starts it fresh. |
+| `kebbie promise "<text>" [--after <task>] [--at <time>] [--answered <task>]` | The lead's promise, kept by kebbie until it is done. See [below](#kebbie-promise). |
+| `kebbie promises` | The open promises, each with what it waits for, due since when, or why it cannot hold. |
 | `kebbie lead --first` | Only move the lead Space to the top of herdr's Spaces. |
 | `kebbie lead --revive-board` | Run by herdr's startup hook to bring the board back in the lead Space. |
 | `kebbie lead --toggle-chat` | Hide the lead's chat so the board takes the whole width, or show it again. |
@@ -744,6 +746,30 @@ It is refused when the id is taken or config.toml does not parse.
 `kebbie decide` closes the question on the board and records it, for your summary when you are away.
 
 `kebbie tell --force` clears the draft from the receiver's input box, logged word for word (`ctrl+y` in its pane brings it back). Then it types what is held for that session and the new message, in order, as one prompt.
+
+### `kebbie promise`
+
+A promise is something the lead will do itself once something else has happened, such as "once lint-before-push lands I set `tests.lint_command`". kebbie keeps it, so a restart or a fresh conversation does not lose it.
+
+```bash
+kebbie promise "set tests.lint_command" --after lint-before-push
+```
+
+| Option | The promise is due once |
+| --- | --- |
+| `--after <task[@repo]>` | that task has ended as done, with green CI where kebbie watches it. Repeat it for several. |
+| `--at <time>` | the time has come, in the words `kebbie start --at` takes. |
+| `--answered <task>` | you have answered the question that task has open on the board. |
+
+Every condition given must hold. Refused, with nothing written, without a condition, for a task that has landed already (do it now instead), for a name that is no task, such as a backlog note, and for `--answered` on a task with no open question.
+
+- Once it is due, the keeper reminds the lead once, as a message it acts on.
+- When a condition can no longer hold (the task was dropped, reset, landed with red CI or is gone, or its question closed without your answer), the lead hears that at once, to make it again or drop it. A broken promise is never overdue.
+- A due promise left open two hours is overdue: the lead hears once more, and the board's Work page shows one quiet line, `The lead's promise is overdue since 14:10 today: …`. A promise is never a task under Needs you, on the phone or in `notify.command`.
+- `kebbie promise done <n>` closes it, `kebbie promise drop <n> "<why>"` lets it go.
+- A new conversation of the lead, fresh or on its handover, opens with how many promises wait and `kebbie promises` to read them.
+
+Yours or the lead's; a task's own Claude cannot make or close one. Work a task does after another lands is a queued task (`kebbie start --after`), not a promise.
 
 ### `kebbie choose`
 

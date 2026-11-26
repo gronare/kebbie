@@ -20,6 +20,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task asks you whether its change works only once its push is out and green, and Verified closes it.
 - Backlog items whose questions wait on you show under Needs you on the Work and Backlog pages and in the Next window.
 - Red CI on main goes only to the task whose push made it red; tasks that pushed on top wait under CI running and close once the fix is green.
+- The lead's promises ("once that lands I set the lint command") are kept by kebbie: it reminds the lead when one is due, a fresh lead hears of them, and the board shows one only when it is overdue.
 
 ### Fixed
 - A message to the lead goes at once, mid-turn or while you talk with it, and no longer waits 3 quiet minutes or stays held after the lead went idle.
