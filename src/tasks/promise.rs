@@ -15,6 +15,7 @@ use super::slug;
 pub(crate) struct Asked {
     pub task: String,
     pub question: String,
+    pub seen: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -37,7 +38,7 @@ impl Promise {
         json!({
             "id": self.id, "text": self.text,
             "after": self.after.iter().map(|dep| json!({ "address": dep.address, "repo": dep.repo })).collect::<Vec<_>>(),
-            "at": self.at, "answered": self.answered.as_ref().map(|asked| json!({ "task": asked.task, "question": asked.question })),
+            "at": self.at, "answered": self.answered.as_ref().map(|asked| json!({ "task": asked.task, "question": asked.question, "seen": asked.seen })),
             "by": self.by, "made": self.made, "due": self.due, "broken": self.broken, "overdue_told": self.overdue_told, "gone_since": self.gone_since,
         })
     }
@@ -46,7 +47,7 @@ impl Promise {
         let after = value["after"].as_array()?.iter().map(|dep| Some(Dep { address: dep["address"].as_str()?.to_string(), repo: PathBuf::from(dep["repo"].as_str()?) })).collect::<Option<Vec<_>>>()?;
         let answered = match &value["answered"] {
             Value::Null => None,
-            asked => Some(Asked { task: asked["task"].as_str()?.to_string(), question: asked["question"].as_str()?.to_string() }),
+            asked => Some(Asked { task: asked["task"].as_str()?.to_string(), question: asked["question"].as_str()?.to_string(), seen: asked["seen"].as_bool().unwrap_or(false) }),
         };
         let at = value["at"].as_u64();
         Some(Promise {
@@ -146,7 +147,7 @@ fn open_question(log: &[Message], asked: &str) -> Result<Asked> {
     let open = crate::questions::open(log, |_| None);
     let found: Vec<&&Message> = open.iter().filter(|question| task_part(&question.from) == task && repo.is_none_or(|repo| question.from.split_once('@').map(|(_, name)| name) == Some(repo))).collect();
     match found[..] {
-        [question] => Ok(Asked { task: question.from.clone(), question: question.id.clone() }),
+        [question] => Ok(Asked { task: question.from.clone(), question: question.id.clone(), seen: false }),
         [] => Err(format!("{asked} has no question open to the user, so there is no answer to wait for")),
         _ => Err(format!("{asked} is a task in more than one repo with a question open; name it as task@repo")),
     }
@@ -195,6 +196,134 @@ pub(crate) fn close_in(state: &Path, caller: &Caller, id: &str, why: Option<&str
     forget(state, &promise);
     let headline = if why.is_some() { format!("Dropped promise {id}") } else { format!("Kept promise {id}") };
     Notice::new(Tone::Done, headline).detail("promise", &promise.text).detail("why", why.unwrap_or_default()).ok()
+}
+
+pub const EVERY: u64 = 60;
+pub(crate) const OVERDUE: u64 = 2 * 3600;
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum Next {
+    Wait,
+    Missing,
+    Due,
+    Broken(String),
+}
+
+// A task dropped, reset, landed with red CI or gone, or a question closed without the user's answer, will never make the promise come true as made, so the lead hears it rather than waiting for good.
+pub(crate) fn next(promise: &Promise, facts: &Facts, log: &[Message], now: u64) -> Next {
+    let states: Vec<(&Dep, DepState)> = promise.after.iter().map(|dep| (dep, facts.state(&dep.address, promise.made))).collect();
+    let gone_long = promise.gone_since.is_some_and(|since| now.saturating_sub(since) >= after::GRACE);
+    let mut lost: Vec<String> = states.iter().filter_map(|(dep, state)| match state {
+        DepState::Ended(how) => Some(format!("{} was {how}", dep.address)),
+        DepState::CiFailed => Some(format!("{} landed with red CI", dep.address)),
+        DepState::Gone if gone_long => Some(format!("{} is gone without being done", dep.address)),
+        _ => None,
+    }).collect();
+    let answer = promise.answered.as_ref().map(|asked| match asked.seen { true => Some(true), false => answer_in(asked, log) });
+    if let (Some(asked), Some(None)) = (&promise.answered, &answer) {
+        lost.push(format!("{}'s question closed without the user's answer", asked.task));
+    }
+    if !lost.is_empty() {
+        return Next::Broken(and_list(&lost));
+    }
+    if states.iter().any(|(_, state)| *state == DepState::Gone) {
+        return Next::Missing;
+    }
+    let landed = states.iter().all(|(_, state)| *state == DepState::Done);
+    let time = promise.at.is_none_or(|at| now >= at);
+    if landed && time && answer.flatten().is_none_or(|answered| answered) { Next::Due } else { Next::Wait }
+}
+
+// Some(true) once the user answered, Some(false) while it is open, None once it closed otherwise; a rotation of the log keeps open questions but drops answered ones, so the keeper records an answer on the promise the first time it sees it.
+fn answer_in(asked: &Asked, log: &[Message]) -> Option<bool> {
+    match log.iter().find(|message| message.id == asked.question).and_then(|message| message.question.as_ref()) {
+        Some(question) if question.answered => Some(true),
+        Some(_) if crate::questions::open(log, |_| None).iter().any(|open| open.id == asked.question) => Some(false),
+        _ => None,
+    }
+}
+
+fn reminder(promise: &Promise) -> String {
+    format!("Promise {id} is due: {text}. Do it now, then close it with kebbie promise done {id}; if it no longer makes sense, kebbie promise drop {id} \"<why>\".", id = promise.id, text = promise.text)
+}
+
+fn broken_text(promise: &Promise, why: &str) -> String {
+    format!("Promise {id} can no longer come true as made: {why}. It was: {text}. Make it again on what holds now with kebbie promise, or drop it with kebbie promise drop {id} \"<why>\".", id = promise.id, text = promise.text)
+}
+
+fn overdue_text(promise: &Promise, now: u64) -> String {
+    let since = crate::when::shown(promise.due.unwrap_or(now), now, &crate::recover::local_offset);
+    format!("Promise {id} has waited for you since {since} and is still open: {text}. Do it and close it with kebbie promise done {id}, or drop it with kebbie promise drop {id} \"<why>\"; the user's board shows it as overdue until then.", id = promise.id, text = promise.text)
+}
+
+pub(crate) fn overdue(promise: &Promise, now: u64) -> bool {
+    promise.due.is_some_and(|due| now.saturating_sub(due) >= OVERDUE)
+}
+
+pub(crate) fn tick_in(state: &Path, facts: &Facts, log: &[Message], now: u64, tell: &mut dyn FnMut(&str)) -> Vec<String> {
+    let Some(_lock) = Lock::in_dir(&dir(state), false) else { return Vec::new() };
+    let mut notes = Vec::new();
+    for promise in all(state) {
+        if promise.broken.is_some() {
+            continue;
+        }
+        let promise = match &promise.answered {
+            Some(asked) if !asked.seen && answer_in(asked, log) == Some(true) => {
+                let seen = Promise { answered: Some(Asked { seen: true, ..asked.clone() }), ..promise.clone() };
+                let _ = save(state, &seen);
+                seen
+            }
+            _ => promise,
+        };
+        if promise.due.is_some() {
+            if overdue(&promise, now) && !promise.overdue_told {
+                tell(&overdue_text(&promise, now));
+                notes.push(format!("promise {}: overdue", promise.id));
+                let _ = save(state, &Promise { overdue_told: true, ..promise });
+            }
+            continue;
+        }
+        match next(&promise, facts, log, now) {
+            Next::Wait if promise.gone_since.is_some() => {
+                let _ = save(state, &Promise { gone_since: None, ..promise });
+            }
+            Next::Wait => {}
+            Next::Missing if promise.gone_since.is_none() => {
+                let _ = save(state, &Promise { gone_since: Some(now), ..promise });
+            }
+            Next::Missing => {}
+            Next::Broken(why) => {
+                tell(&broken_text(&promise, &why));
+                notes.push(format!("promise {}: cannot hold", promise.id));
+                after::release_deps(state, promise.after.iter());
+                let _ = save(state, &Promise { broken: Some(why), ..promise });
+            }
+            Next::Due => {
+                tell(&reminder(&promise));
+                notes.push(format!("promise {}: due", promise.id));
+                let _ = save(state, &Promise { due: Some(now), ..promise });
+            }
+        }
+    }
+    notes
+}
+
+pub fn tick(state: &Path) -> Vec<String> {
+    tick_from(state, messages::now(), &mut |text| {
+        if let Err(error) = messages::to_lead(messages::ToLead::Promise, text) {
+            eprintln!("Could not remind the lead: {error}");
+        }
+    })
+}
+
+fn tick_from(state: &Path, now: u64, tell: &mut dyn FnMut(&str)) -> Vec<String> {
+    let promises = all(state);
+    if promises.is_empty() {
+        return Vec::new();
+    }
+    let log = messages::load_with_rotated_in(state);
+    let facts = Facts::with_repos(state, &log, &repos_of(&promises));
+    tick_in(state, &facts, &log, now, tell)
 }
 
 fn repos_of(promises: &[Promise]) -> Vec<PathBuf> {
@@ -320,7 +449,7 @@ mod tests {
         let log = [question("q1", "billing@web", 90, false)];
         let made = make_in(&state, &Caller::Lead, &making("tell billing which rounding", &[], None, Some("billing")), &known(&["billing@web"], &[]), &log, 100).unwrap();
         assert!(made.contains("once the user has answered billing@web's question"), "{made}");
-        assert_eq!(load(&state, 1).unwrap().answered, Some(Asked { task: "billing@web".to_string(), question: "q1".to_string() }));
+        assert_eq!(load(&state, 1).unwrap().answered, Some(Asked { task: "billing@web".to_string(), question: "q1".to_string(), seen: false }));
         fs::remove_dir_all(state).unwrap();
     }
 
@@ -334,6 +463,110 @@ mod tests {
         make_in(&state, &Caller::Lead, &making("x", &[], Some(5_000), None), &known, &[], 100).unwrap();
         assert!(close_in(&state, &Caller::Task("billing@web".to_string()), "1", None).is_err());
         assert!(load(&state, 1).is_some());
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    fn promise(id: u64, after: &[&str], at: Option<u64>, answered: Option<(&str, &str)>) -> Promise {
+        Promise { id, text: format!("promise {id}"), after: after.iter().map(|address| dep(address)).collect(), at, answered: answered.map(|(task, question)| Asked { task: task.to_string(), question: question.to_string(), seen: false }), by: "lead".to_string(), made: 100, due: None, broken: None, overdue_told: false, gone_since: None }
+    }
+
+    fn reminded(state: &Path, facts: &Facts, log: &[Message], now: u64) -> Vec<String> {
+        let mut heard = Vec::new();
+        tick_in(state, facts, log, now, &mut |text| heard.push(text.to_string()));
+        heard
+    }
+
+    #[test]
+    fn a_promise_is_due_once_every_condition_holds_and_the_lead_hears_it_once() {
+        let state = crate::sh::test_dir("promise-due");
+        save(&state, &promise(1, &["lint@kebbie"], Some(1_000), None)).unwrap();
+        let working = facts(&[], &["lint@kebbie"]);
+        assert!(reminded(&state, &working, &[], 2_000).is_empty(), "the task has not landed");
+        let landed = facts(&[end("lint@kebbie", 500, "done")], &[]);
+        assert!(reminded(&state, &landed, &[], 900).is_empty(), "landed, but its time has not come");
+        let heard = reminded(&state, &landed, &[], 1_000);
+        assert_eq!(heard, vec!["Promise 1 is due: promise 1. Do it now, then close it with kebbie promise done 1; if it no longer makes sense, kebbie promise drop 1 \"<why>\".".to_string()]);
+        assert_eq!(load(&state, 1).unwrap().due, Some(1_000));
+        assert!(reminded(&state, &landed, &[], 1_060).is_empty(), "reminded once");
+        let landed_before = facts(&[end("lint@kebbie", 50, "done")], &[]);
+        save(&state, &promise(2, &["lint@kebbie"], None, None)).unwrap();
+        assert!(reminded(&state, &landed_before, &[], 1_100).is_empty(), "an end before the promise was made is an earlier task by that name");
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_promise_that_can_no_longer_come_true_is_told_to_the_lead_at_once() {
+        let state = crate::sh::test_dir("promise-broken");
+        save(&state, &promise(1, &["lint@kebbie"], None, None)).unwrap();
+        let heard = reminded(&state, &facts(&[end("lint@kebbie", 200, "dropped")], &[]), &[], 300);
+        assert_eq!(heard.len(), 1);
+        assert!(heard[0].starts_with("Promise 1 can no longer come true as made: lint@kebbie was dropped. It was: promise 1."), "{}", heard[0]);
+        let kept = load(&state, 1).unwrap();
+        assert_eq!((kept.broken.as_deref(), kept.due), (Some("lint@kebbie was dropped"), None), "a broken promise is never due, so it is never overdue");
+        assert!(reminded(&state, &facts(&[], &[]), &[], 300 + 2 * OVERDUE).iter().all(|heard| !heard.contains("Promise 1")), "the lead hears of a broken promise once, never as overdue");
+        assert!(!overdue(&load(&state, 1).unwrap(), 300 + 2 * OVERDUE), "a broken promise is never overdue");
+        save(&state, &promise(2, &["red@kebbie"], None, None)).unwrap();
+        let mut red = facts(&[end("red@kebbie", 200, "done")], &[]);
+        red.ci.insert("red@kebbie".to_string(), false);
+        assert!(reminded(&state, &red, &[], 300)[0].contains("red@kebbie landed with red CI"));
+        save(&state, &promise(3, &["gone@kebbie"], None, None)).unwrap();
+        let gone = facts(&[], &[]);
+        assert!(reminded(&state, &gone, &[], 300).is_empty(), "a task missing for a moment gets the grace a wait gets");
+        assert!(reminded(&state, &gone, &[], 300 + after::GRACE)[0].contains("gone@kebbie is gone without being done"));
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_promise_on_an_answer_is_due_once_the_user_answers_that_question() {
+        let state = crate::sh::test_dir("promise-answer-due");
+        save(&state, &promise(1, &[], None, Some(("billing@web", "q1")))).unwrap();
+        let none = facts(&[], &["billing@web"]);
+        assert!(reminded(&state, &none, &[question("q1", "billing@web", 90, false)], 200).is_empty(), "still open");
+        assert!(reminded(&state, &none, &[question("q1", "billing@web", 90, true)], 200)[0].starts_with("Promise 1 is due"));
+        save(&state, &promise(2, &[], None, Some(("billing@web", "q2")))).unwrap();
+        let replaced = [question("q2", "billing@web", 90, false), Message { ended: true, to: "billing@web".to_string(), ..end("billing@web", 150, "dropped") }];
+        assert!(reminded(&state, &none, &replaced, 200)[0].contains("billing@web's question closed without the user's answer"));
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn an_answer_the_keeper_saw_holds_after_a_rotation_drops_the_question_from_the_log() {
+        let state = crate::sh::test_dir("promise-answer-kept");
+        save(&state, &promise(1, &[], Some(1_000), Some(("billing@web", "q1")))).unwrap();
+        let none = facts(&[], &["billing@web"]);
+        assert!(reminded(&state, &none, &[question("q1", "billing@web", 90, true)], 200).is_empty(), "answered, but its time has not come");
+        assert!(load(&state, 1).unwrap().answered.unwrap().seen, "the answer is kept on the promise");
+        assert_eq!(reminded(&state, &none, &[], 1_000).len(), 1);
+        assert!(load(&state, 1).unwrap().broken.is_none() && load(&state, 1).unwrap().due == Some(1_000), "due, not broken, with the question gone from the log");
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn the_keeper_reads_a_question_answered_before_the_log_rotated() {
+        let state = crate::sh::test_dir("promise-rotated");
+        let asked = crate::questions::parse(&["Yes: do it", "No: leave it"], Some("1"), false, "Should it?").unwrap();
+        messages::append_in(&state, &crate::questions::record("q1", 90, "billing@web", &asked, None, None), 1 << 20).unwrap();
+        messages::append_in(&state, &json!({ "id": "q1", "at": 95, "state": "answered" }), 1 << 20).unwrap();
+        messages::append_in(&state, &json!({ "id": "m1", "at": 96, "from": "kebbie", "to": "lead", "text": "later", "state": "delivered" }), 0).unwrap();
+        assert!(messages::load_in(&state).iter().all(|message| message.id != "q1"), "the rotation dropped the answered question from the current log");
+        save(&state, &promise(1, &[], None, Some(("billing@web", "q1")))).unwrap();
+        let mut heard = Vec::new();
+        tick_from(&state, 200, &mut |text| heard.push(text.to_string()));
+        assert!(heard.len() == 1 && heard[0].starts_with("Promise 1 is due"), "the keeper's round reads the rotated log too: {heard:?}");
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_due_promise_left_open_two_hours_is_overdue_and_the_lead_hears_once_more() {
+        let state = crate::sh::test_dir("promise-overdue");
+        save(&state, &Promise { due: Some(1_000), ..promise(1, &[], Some(900), None) }).unwrap();
+        let none = facts(&[], &[]);
+        assert!(!overdue(&load(&state, 1).unwrap(), 1_000 + OVERDUE - 1));
+        assert!(reminded(&state, &none, &[], 1_000 + OVERDUE - 1).is_empty());
+        let heard = reminded(&state, &none, &[], 1_000 + OVERDUE);
+        assert!(heard.len() == 1 && heard[0].starts_with("Promise 1 has waited for you since") && heard[0].contains("the user's board shows it as overdue until then"), "{heard:?}");
+        assert!(overdue(&load(&state, 1).unwrap(), 1_000 + OVERDUE));
+        assert!(reminded(&state, &none, &[], 1_000 + 2 * OVERDUE).is_empty(), "told once");
         fs::remove_dir_all(state).unwrap();
     }
 
