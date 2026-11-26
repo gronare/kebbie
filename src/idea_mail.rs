@@ -201,6 +201,9 @@ pub struct Reclaimed {
 // An item still in the other machine's inbox after WAIT is filed here; one gone from it was taken there. An inbox that cannot be read proves neither, so its item waits and the lead hears it once. An item is kept here before it leaves the inbox, so a failed save loses nothing.
 pub fn reclaim(store: &dyn Store, state: &Path, now: u64) -> Reclaimed {
     let mut lines = Reclaimed::default();
+    let (back, failed) = settle_held(store, state, true);
+    lines.back.extend(back);
+    lines.failed.extend(failed);
     let (mut settled, mut told) = (Vec::new(), Vec::new());
     for one in sent(state) {
         if now < one.mail.at + WAIT {
@@ -237,10 +240,10 @@ pub fn reclaim(store: &dyn Store, state: &Path, now: u64) -> Reclaimed {
                 settled.push(id);
             }
             Err(error) => {
-                if let Err(error) = drop_pending(state, std::slice::from_ref(&id)) {
+                if let Err(error) = hold(state, &one.to, std::slice::from_ref(&one.mail), true) {
                     lines.failed.push(error);
                 }
-                lines.failed.push(format!("\"{}\" waits in {}'s inbox, which was not written ({error})", one.mail.line, one.to));
+                lines.failed.push(format!("\"{}\" may still wait in {}'s inbox, which answered a write with an error ({error}); kebbie keeps its copy until a read of that inbox shows where it is", one.mail.line, one.to));
             }
         }
     }
@@ -280,12 +283,73 @@ fn drop_pending(state: &Path, ids: &[String]) -> Result<(), String> {
     save_pending(state, &all)
 }
 
+// A copy taken out of an inbox whose write answered with an error, which may have saved all the same.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct Held {
+    inbox: String,
+    mail: Mail,
+    #[serde(default)]
+    back: bool,
+}
+
+fn held_file(state: &Path) -> PathBuf {
+    state.join("idea-mail-held.json")
+}
+
+fn held(state: &Path) -> Vec<Held> {
+    std::fs::read_to_string(held_file(state)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+}
+
+fn save_held(state: &Path, all: &[Held]) -> Result<(), String> {
+    crate::state::write(&held_file(state), serde_json::to_string(all).unwrap_or_default())
+}
+
+// The copies move out of pending, where they would be filed now, only once they are saved here; a failed save leaves them pending, filed here rather than lost.
+fn hold(state: &Path, inbox: &str, mails: &[Mail], back: bool) -> Result<(), String> {
+    let mut all = held(state);
+    all.extend(mails.iter().filter(|mail| !all.iter().any(|one| one.mail.id == mail.id)).map(|mail| Held { inbox: inbox.to_string(), mail: mail.clone(), back }).collect::<Vec<_>>());
+    save_held(state, &all)?;
+    drop_pending(state, &mails.iter().map(|mail| mail.id.clone()).collect::<Vec<_>>())
+}
+
+// A held copy is let go only on a read of its inbox: one the inbox still has waits there, one gone from it left by the write that erred and is filed here; an unread inbox keeps it held.
+fn settle_held(store: &dyn Store, state: &Path, taken_back: bool) -> (Vec<String>, Vec<String>) {
+    let (mut back, mut failed, mut left) = (Vec::new(), Vec::new(), Vec::new());
+    let all = held(state);
+    if !all.iter().any(|one| one.back == taken_back) {
+        return (back, failed);
+    }
+    for one in all {
+        if one.back != taken_back {
+            left.push(one);
+            continue;
+        }
+        match read_inbox(store, &one.inbox, true) {
+            Ok((mails, _)) if mails.iter().any(|mail| mail.id == one.mail.id) => {}
+            Ok(_) => match keep_pending(state, std::slice::from_ref(&one.mail)) {
+                Ok(()) if one.back => back.push(format!("{} did not take \"{}\" within {} minutes: added here", one.inbox, one.mail.line, WAIT / 60)),
+                Ok(()) => {}
+                Err(error) => {
+                    failed.push(error);
+                    left.push(one);
+                }
+            },
+            Err(_) => left.push(one),
+        }
+    }
+    if let Err(error) = save_held(state, &left) {
+        failed.push(error);
+    }
+    (back, failed)
+}
+
 fn by_of(mail: &Mail) -> String {
     format!("{} on {}", mail.by, mail.from)
 }
 
 // The items in this machine's inbox are kept here before they leave it and until each is filed, so a failed save loses nothing and one the lead's inbox refused is filed again next round; the lines name those.
 pub fn receive(store: &dyn Store, state: &Path, me: &str, file: &dyn Fn(&Filing) -> Result<String, String>) -> Result<Vec<String>, String> {
+    let (_, mut lines) = settle_held(store, state, false);
     let (inbox, _) = read_inbox(store, me, false)?;
     if !inbox.is_empty() {
         keep_pending(state, &inbox)?;
@@ -293,13 +357,12 @@ pub fn receive(store: &dyn Store, state: &Path, me: &str, file: &dyn Fn(&Filing)
         match remove(store, me, false, &ids) {
             Ok(gone) => drop_pending(state, &gone)?,
             Err(error) => {
-                drop_pending(state, &ids)?;
+                hold(state, me, &inbox, false)?;
                 return Err(error);
             }
         }
     }
     let waiting = pending(state);
-    let mut lines = Vec::new();
     let mut left = Vec::new();
     for mail in waiting {
         let by = if mail.from.eq_ignore_ascii_case(me) { mail.by.clone() } else { by_of(&mail) };
@@ -499,6 +562,75 @@ mod tests {
         assert!(read_inbox(&vault, "devbox", true).unwrap().0.iter().any(|mail| mail.line == "Back"), "the sender left it in the inbox");
         std::fs::remove_dir_all(mac.join("idea-mail-pending.json")).unwrap();
         assert_eq!(reclaim(&vault, &mac, 100 + WAIT).back.len(), 1, "taken back once the save works");
+    }
+
+    struct Erring<'a> {
+        vault: &'a Vault,
+        saves: bool,
+        reads: std::cell::Cell<bool>,
+    }
+
+    impl Store for Erring<'_> {
+        fn read(&self, key: &str) -> Result<(String, String), String> {
+            if !self.reads.get() && key.contains("inbox-") {
+                return Err("timed out".to_string());
+            }
+            self.vault.read(key)
+        }
+        fn write(&self, key: &str, etag: &str, text: &str) -> Result<Wrote, String> {
+            if key.contains("inbox-") {
+                if self.saves {
+                    self.vault.write(key, etag, text)?;
+                }
+                return Err("timed out".to_string());
+            }
+            self.vault.write(key, etag, text)
+        }
+        fn close(&self, key: &str) -> Result<String, String> {
+            self.vault.close(key)
+        }
+    }
+
+    fn lines_filed(state: &Path, me: &str, vault: &Vault) -> Vec<String> {
+        let filed = std::cell::RefCell::new(Vec::new());
+        receive(vault, state, me, &|filing: &Filing| {
+            filed.borrow_mut().push(filing.line.to_string());
+            Ok(String::new())
+        }).unwrap();
+        filed.into_inner()
+    }
+
+    #[test]
+    fn a_take_back_whose_write_saved_but_answered_an_error_files_the_item_here_once_the_inbox_is_read() {
+        for saves in [true, false] {
+            let (vault, mac) = (Vault::default(), scratch(&format!("mac-erred-{saves}")));
+            vault.notes.borrow_mut().insert(crate::vault_machines::KEY.to_string(), (crate::vault_machines::render(&[machine("devbox", true, &[], 100)]), 1));
+            send_with(&vault, &mac, &machine("mac", false, &[], 100), &filing("Slow", ""), 100).unwrap().unwrap();
+            let store = Erring { vault: &vault, saves, reads: std::cell::Cell::new(true) };
+            let round = reclaim(&store, &mac, 100 + WAIT);
+            assert!(round.back.is_empty() && round.failed.len() == 1, "{round:?}");
+            assert!(lines_filed(&mac, "mac", &vault).is_empty(), "nothing is filed while it is unknown whether the write saved");
+            assert_eq!(read_inbox(&vault, "devbox", true).unwrap().0.is_empty(), saves);
+            store.reads.set(false);
+            assert!(reclaim(&store, &mac, 100 + WAIT + 30).back.is_empty(), "an unread inbox keeps the copy held");
+            let next = reclaim(&vault, &mac, 100 + WAIT + 60);
+            assert_eq!(next.back.len(), 1, "taken back once, whether the earlier write saved or not: {next:?}");
+            assert_eq!(lines_filed(&mac, "mac", &vault), ["Slow".to_string()], "saves={saves}");
+            assert!(read_inbox(&vault, "devbox", true).unwrap().0.is_empty() && sent(&mac).is_empty() && held(&mac).is_empty());
+        }
+    }
+
+    #[test]
+    fn a_receive_whose_write_saved_but_answered_an_error_files_the_item_once_the_inbox_is_read() {
+        for saves in [true, false] {
+            let (vault, devbox) = (Vault::default(), scratch(&format!("devbox-erred-{saves}")));
+            post(&vault, "devbox", &mail_of(&filing("Slow", ""), "mac", 5)).unwrap();
+            let store = Erring { vault: &vault, saves, reads: std::cell::Cell::new(true) };
+            assert!(receive(&store, &devbox, "devbox", &|_: &Filing| -> Result<String, String> { panic!("nothing is filed while the write is in doubt") }).is_err());
+            assert_eq!(held(&devbox).len(), 1, "its copy is held");
+            assert_eq!(lines_filed(&devbox, "devbox", &vault), ["Slow".to_string()], "filed once, whether the earlier write saved or not (saves={saves})");
+            assert!(lines_filed(&devbox, "devbox", &vault).is_empty() && held(&devbox).is_empty() && read_inbox(&vault, "devbox", true).unwrap().0.is_empty());
+        }
     }
 
     #[test]
