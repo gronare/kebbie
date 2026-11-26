@@ -20,6 +20,7 @@ The lead:
 - **answers why** from the notes: a question about why something was built a way starts in the task's note and the vault, archive included, never in the board's tasks, which say only what is going on,
 - **holds tasks to your rules** when the reviewer's rules check gives no verdict: it checks a ready task's commits against the rules skill, and approves them or sends back what to fix,
 - **relays** interface and contract changes between tasks, and puts what needs your decision on the board,
+- **follows each push out**: what stands under Going out leaves within minutes, a push that stalls comes before new work, and a blocked task hears from it the moment what blocked it clears through the lead,
 - **does small cross-cutting fixes** itself, such as a script or a rename across repos.
 
 It does not push, except tasks you gave it permission for.
@@ -47,7 +48,7 @@ The lead works without narrating its steps: Claude Code folds its tool calls, an
 - A fault you point out in kebbie, or in another tool whose repo is among your areas, gets a task that fixes it in code, started by the lead in the same turn.
 - A turn kebbie's messages started says what landed and, by title, what waits for you on the board; with nothing for you it is one line, such as "Noted: 3 updates, nothing for you."
 
-The lead asks you nothing in its chat. A question waits on the board, as a task's question or under Open questions on a backlog item; the only exception is a prompt on a task's own screen. Tasks waiting for work, and tasks left behind, the lead sorts out itself: it drops dead work and sets the rest going again.
+The lead names what waits for you from the board's live state, never from an earlier turn, and hands you no shell command for a step it can take: a step that needs your word waits for your decision, and the lead runs it once you give it. The lead asks you nothing in its chat. A question waits on the board, as a task's question or under Open questions on a backlog item; the only exception is a prompt on a task's own screen. Tasks waiting for work, and tasks left behind, the lead sorts out itself: it drops dead work and sets the rest going again.
 
 ## Questions about what are yours, questions about how are not
 

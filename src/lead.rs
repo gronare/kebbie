@@ -1093,6 +1093,16 @@ mod tests {
     }
 
     #[test]
+    fn the_leads_lessons_live_in_its_role_and_its_memory_holds_none() {
+        for propose in [true, false] {
+            let role = role_text(include_str!("../roles/lead.md"), "/opt/kebbie/kebbie", &[Source::Local], false, propose, "English");
+            for needed in ["- **No commands for the user**: never hand the user a shell command for a step you can take yourself", "you run it once they give it", "Name what waits for the user from its live state (`kebbie next`, `kebbie status --json`), never from an earlier turn", "What stands under Going out leaves within minutes: follow each push of yours through the line and CI to the default branch", "take up one that stalls (it left the line, a conflict, red CI) before you start new work", "a task blocked on anything else that clears through you", "a correction from the user of how you or kebbie work is a kebbie issue, by the skill `kebbie:propose-change`, and its fix, in kebbie's code, a skill or this role, is a task's", "What holds only for this user and their machines goes into the vault"] {
+                assert!(role.contains(needed), "propose {propose}: {needed}");
+            }
+        }
+    }
+
+    #[test]
     fn after_an_update_the_lead_says_it_restarts_once_idle_and_never_sends_the_user_to_another_pane() {
         let role = role_text(include_str!("../roles/lead.md"), "/opt/kebbie/kebbie", &[Source::Local], false, true, "English");
         for needed in ["kebbie restarts you itself, resuming this conversation on the new role, once the user is out of your pane and you are idle, or at once when they press `L` on the board and choose to resume", "with `restart.auto` off only `L` does", "Never ask the user to run `kebbie lead --restart` or to open another pane", "say in one line what your prompt says about the restart"] {

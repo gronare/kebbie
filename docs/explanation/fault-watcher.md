@@ -42,7 +42,7 @@ The issue's title and text, which may go to kebbie's maintainers when you send t
 
 ## The lead keeps no memory of its own
 
-kebbie refuses the lead writes to Claude Code's memory folder. A lesson about how kebbie or a lead works belongs in kebbie, where every lead after this one has it: the lead saves it as a kebbie issue, and the watcher queues its fix.
+kebbie refuses the lead writes to Claude Code's memory folder. A lesson about how kebbie or a lead works belongs in kebbie, where every lead after this one has it: the lead saves it as a kebbie issue, and the watcher queues its fix, in kebbie's code, a skill or the lead's role. What holds only for you and your machines goes into the vault.
 
 ## Turning it off
 
