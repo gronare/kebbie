@@ -38,6 +38,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Red CI on main stops holding its repo's pushes once a later run passes over it, also after its task is done or dropped.
 - kebbie ci dismiss ends the hold a done or dropped task's red CI left on its repo.
 - A task whose red CI another task fixed closes once its commits are on main.
+- A task blocked on main's red CI hears once that main is green again, also when kebbie retries a step.
 - The reviewer counts a test run for the commit it ran on, so testing each commit in turn satisfies it.
 - A build that waits for a build slot or a fuller disk says so on a line starting with error:, which an error filter keeps.
 - Closing or dropping a task whose worktree moved to another branch keeps the task's branch while it has commits not on the default branch.

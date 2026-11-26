@@ -890,7 +890,7 @@ pub(super) fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through
             return Ok(notice.detail("checkout", follow_upstream(repo, upstream, &super::stage::load(state, repo))?).to_string());
         }
         if let Some(check) = check {
-            let pushed = crate::ci::Pushed { pusher: pusher.to_string(), target: target.clone(), commits: pushed.clone(), note: note.clone(), logged: log.as_ref().map(|log| matches!(log, Ok(Some(_)))), check: Some(crate::ci::Check::new(&check)), stages: Vec::new(), deploy: None, window: None, held: None, refused: None, inherited: None };
+            let pushed = crate::ci::Pushed { pusher: pusher.to_string(), target: target.clone(), commits: pushed.clone(), note: note.clone(), logged: log.as_ref().map(|log| matches!(log, Ok(Some(_)))), check: Some(crate::ci::Check::new(&check)), stages: Vec::new(), deploy: None, window: None, held: None, refused: None, inherited: None, told: false };
             let watch = crate::ci::Watch { address: address.clone(), repo: repo.to_path_buf(), slug: String::new(), sha: sha.clone(), started_at: messages::now(), checked_at: None, close: true, runs: Vec::new(), state: crate::ci::State::Running, error: None, erring_since: None, following: None, pushed };
             match crate::ci::ask_check(state, &watch, &format!("{short} is on {target}"), messages::now()) {
                 Ok(_) => {
@@ -972,7 +972,7 @@ fn send(state: &Path, repo: &Path, slot: &Slot, upstream: &str, address: &str, t
     let touched = super::rollout::touched(state, &slot.path, upstream, address, went.shas.len());
     let (stages, stage_check, deploy) = super::rollout::for_watch(repo, &touched);
     let check = stage_check.clone().or_else(|| crate::report::check_in(state, address).filter(|_| !went.keep_open)).map(|check| crate::ci::Check::new(&check));
-    let told_ci = crate::ci::Pushed { pusher: pusher.to_string(), target: went.target.clone(), commits: went.pushed.clone(), note: went.note.clone(), logged: None, check, stages: stages.clone(), deploy, window: None, held: None, refused: None, inherited: None };
+    let told_ci = crate::ci::Pushed { pusher: pusher.to_string(), target: went.target.clone(), commits: went.pushed.clone(), note: went.note.clone(), logged: None, check, stages: stages.clone(), deploy, window: None, held: None, refused: None, inherited: None, told: false };
     let before = crate::ci::load(state, address);
     let phase_before = crate::phase::load(state, address);
     let watch = watch(state, repo, address, sha, !went.keep_open, told_ci);

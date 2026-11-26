@@ -82,6 +82,7 @@ pub struct Pushed {
     pub held: Option<u64>,
     pub refused: Option<u64>,
     pub inherited: Option<Inherited>,
+    pub told: bool,
 }
 
 // The push ran red on a job the nearest earlier run of its workflow on the branch already failed: the task that first made it red has the log, and this one waits for its fix.
@@ -268,7 +269,7 @@ impl Watch {
             "started_at": self.started_at, "checked_at": self.checked_at, "close": self.close,
             "runs": self.runs.iter().map(Run::to_json).collect::<Vec<_>>(),
             "state": state, "failed_at": failed_at, "failure": failure, "refused": matches!(self.state, State::Unknown { refused: true, .. }), "failure_url": failure_url, "error": self.error, "erring_since": self.erring_since, "following": self.following,
-            "pushed": { "pusher": self.pushed.pusher, "target": self.pushed.target, "commits": self.pushed.commits, "note": self.pushed.note, "logged": self.pushed.logged, "check": self.pushed.check.as_ref().map(Check::to_json), "stages": self.pushed.stages, "deploy": self.pushed.deploy, "window": self.pushed.window, "held": self.pushed.held, "refused": self.pushed.refused, "inherited": self.pushed.inherited.as_ref().map(Inherited::to_json) },
+            "pushed": { "pusher": self.pushed.pusher, "target": self.pushed.target, "commits": self.pushed.commits, "note": self.pushed.note, "logged": self.pushed.logged, "check": self.pushed.check.as_ref().map(Check::to_json), "stages": self.pushed.stages, "deploy": self.pushed.deploy, "window": self.pushed.window, "held": self.pushed.held, "refused": self.pushed.refused, "inherited": self.pushed.inherited.as_ref().map(Inherited::to_json), "told": self.pushed.told },
         })
     }
 
@@ -290,7 +291,7 @@ impl Watch {
             state, error: text("error"), erring_since: value["erring_since"].as_u64(), following: text("following"),
             pushed: Pushed { pusher: pushed_text("pusher"), target: pushed_text("target"), commits: pushed_text("commits"), note: pushed["note"].as_str().map(str::to_string), logged: pushed["logged"].as_bool(), check: Check::from_json(&pushed["check"]),
                 stages: pushed["stages"].as_array().map(|ids| ids.iter().filter_map(|id| id.as_str().map(str::to_string)).collect()).unwrap_or_default(), deploy: pushed["deploy"].as_str().map(str::to_string),
-                window: pushed["window"].as_str().map(str::to_string), held: pushed["held"].as_u64(), refused: pushed["refused"].as_u64(), inherited: Inherited::from_json(&pushed["inherited"]) },
+                window: pushed["window"].as_str().map(str::to_string), held: pushed["held"].as_u64(), refused: pushed["refused"].as_u64(), inherited: Inherited::from_json(&pushed["inherited"]), told: pushed["told"].as_bool().unwrap_or(false) },
         })
     }
 }
@@ -546,29 +547,47 @@ pub fn holding(state: &Path, repo: &Path, address: &str) -> Option<Watch> {
 }
 
 // Main is green again once a push on top of a red run passes: the red runs it went over end, except one whose own task still has the log to fix and another task pushed.
-pub(crate) fn release_red(state: &Path, green: &Watch) -> Vec<Watch> {
+fn ending_reds(state: &Path, green: &Watch) -> Vec<Watch> {
     let log = messages::load();
-    let mut ended = Vec::new();
-    for red in holds(state).into_iter().filter(|red| red.repo == green.repo) {
-        let over = crate::sh::succeeds("git", &["merge-base", "--is-ancestor", &red.sha, &green.sha], Some(&green.repo));
-        if over && (red.address == green.address || fixer_of(state, &red.address).as_deref() == Some(green.address.as_str()) || !task_open(&red, &log)) {
-            if red.address == green.address {
-                end_red(state, &red.address);
-            } else {
-                crate::tasks::red_ci_over(state, &red);
-            }
-            ended.push(red);
+    holds(state).into_iter().filter(|red| red.repo == green.repo).filter(|red| {
+        crate::sh::succeeds("git", &["merge-base", "--is-ancestor", &red.sha, &green.sha], Some(&green.repo))
+            && (red.address == green.address || fixer_of(state, &red.address).as_deref() == Some(green.address.as_str()) || !task_open(red, &log))
+    }).collect()
+}
+
+fn end_reds(state: &Path, green: &Watch, ending: &[Watch]) {
+    for red in ending {
+        if red.address == green.address {
+            end_red(state, &red.address);
+        } else {
+            crate::tasks::red_ci_over(state, red);
         }
     }
-    ended
+}
+
+#[cfg(test)]
+pub(crate) fn release_red(state: &Path, green: &Watch) -> Vec<Watch> {
+    let ending = ending_reds(state, green);
+    end_reds(state, green, &ending);
+    ending
+}
+
+// The tasks hear the news before the holds end and the watch records that they did, so a round that dies between them tells again rather than never, and one that retries a failed check ask never tells twice.
+fn release_and_tell(state: &Path, green: &Watch, tell: &mut dyn FnMut(&[Watch])) -> Watch {
+    let ending = ending_reds(state, green);
+    if green.pushed.told {
+        end_reds(state, green, &ending);
+        return green.clone();
+    }
+    tell(&ending);
+    let told = Watch { pushed: Pushed { told: true, ..green.pushed.clone() }, ..green.clone() };
+    let _ = save(state, &told);
+    end_reds(state, green, &ending);
+    told
 }
 
 pub(crate) fn held(state: &Path, address: &str) -> bool {
     hold_file(state, address).exists()
-}
-
-pub(crate) fn red_in(state: &Path, repo: &Path) -> bool {
-    holds(state).iter().any(|red| red.repo == repo)
 }
 
 // No other red run holds the repo, so ending this one makes main green for its pushes.
@@ -576,9 +595,14 @@ pub(crate) fn last_red(state: &Path, red: &Watch) -> bool {
     holds(state).iter().all(|other| other.repo != red.repo || other.address == red.address)
 }
 
-// The blocked tasks of the repo hear it once the last red run over main has ended.
+// A red run of the repo holds it still besides the ones ending, which may or may not have ended yet.
+fn red_left(state: &Path, repo: &Path, ending: &[Watch]) -> bool {
+    holds(state).iter().any(|red| red.repo == repo && !ending.iter().any(|end| end.address == red.address))
+}
+
+// The blocked tasks of the repo hear it once the last red run over main ends.
 fn tell_green(state: &Path, green: &Watch, ended: &[Watch]) -> Vec<String> {
-    if ended.is_empty() || red_in(state, &green.repo) {
+    if ended.is_empty() || red_left(state, &green.repo, ended) {
         return Vec::new();
     }
     crate::tasks::unblocked::tell(&green.repo, &green.address, &crate::tasks::unblocked::main_green(green, ended))
@@ -586,7 +610,7 @@ fn tell_green(state: &Path, green: &Watch, ended: &[Watch]) -> Vec<String> {
 
 // A green push that ended no red run is news of its own, to a task blocked waiting for it.
 fn tell_landed(state: &Path, green: &Watch, ended: &[Watch], ci: crate::tasks::unblocked::Ci) -> Vec<String> {
-    if !ended.is_empty() && !red_in(state, &green.repo) {
+    if !ended.is_empty() && !red_left(state, &green.repo, ended) {
         return tell_green(state, green, ended);
     }
     let target = if green.pushed.target.is_empty() { "the default branch" } else { &green.pushed.target };
@@ -933,8 +957,7 @@ fn unknown(state: &Path, watch: &mut Watch, now: u64, refused: bool) -> Event {
 
 // A task that named a check for after its push runs it now, and closes once it reports that the check held.
 fn green(state: &Path, watch: &Watch, what: String, ci: crate::tasks::unblocked::Ci, now: u64) -> Event {
-    let ended = release_red(state, watch);
-    tell_landed(state, watch, &ended, ci);
+    let watch = &release_and_tell(state, watch, &mut |ending| { tell_landed(state, watch, ending, ci); });
     if !watch.pushed.stages.is_empty() {
         return staged(state, watch, what, None, now);
     }
@@ -976,15 +999,13 @@ fn rolled_on(state: &Path, watch: &Watch, text: String) -> Event {
 
 // A repo without workflows has its push out as soon as it went: main is as green as it gets, and the stages go on from there.
 fn staged_without_ci(state: &Path, watch: &Watch, now: u64) -> Event {
-    let ended = release_red(state, watch);
-    tell_landed(state, watch, &ended, crate::tasks::unblocked::Ci::NoneRan);
+    let watch = &release_and_tell(state, watch, &mut |ending| { tell_landed(state, watch, ending, crate::tasks::unblocked::Ci::NoneRan); });
     staged(state, watch, format!("No CI ran for {}", watch.short()), Some("no CI ran for it"), now)
 }
 
 // The rest went green and no run of the deploy workflow showed up: the stages that wait on it fail, so nothing after them goes out on a deploy nobody saw.
 fn undeployed(state: &Path, watch: &Watch) -> Event {
-    let ended = release_red(state, watch);
-    tell_landed(state, watch, &ended, crate::tasks::unblocked::Ci::Green);
+    let watch = &release_and_tell(state, watch, &mut |ending| { tell_landed(state, watch, ending, crate::tasks::unblocked::Ci::Green); });
     let deploy = watch.pushed.deploy.clone().unwrap_or_default();
     let note = format!("no run of {deploy} on {} in {} min", watch.short(), UNSEEN_AFTER / 60);
     crate::tasks::rollout::failed(state, &watch.address, &watch.pushed.stages, &note, true);
@@ -1760,7 +1781,7 @@ mod tests {
         let mut watch = Watch {
             address: "billing@app".to_string(), repo: PathBuf::from("/src/app"), slug: "acme/app".to_string(), sha: "abcdef0123".to_string(),
             started_at: 100, checked_at: Some(130), close: true, runs: vec![run("in_progress", "")], state: State::Running, error: None, erring_since: None, following: None,
-            pushed: Pushed { pusher: "the user".to_string(), target: "main".to_string(), commits: "abc Add refunds".to_string(), note: Some("Projects/x.md".to_string()), logged: Some(true), check: Some(Check { what: "the old key gets 401".to_string(), asked: Some(120), passed: false }), stages: Vec::new(), deploy: None, window: None, held: None, refused: None, inherited: None },
+            pushed: Pushed { pusher: "the user".to_string(), target: "main".to_string(), commits: "abc Add refunds".to_string(), note: Some("Projects/x.md".to_string()), logged: Some(true), check: Some(Check { what: "the old key gets 401".to_string(), asked: Some(120), passed: false }), stages: Vec::new(), deploy: None, window: None, held: None, refused: None, inherited: None, told: true },
         };
         save(&state, &watch).unwrap();
         assert_eq!(load(&state, "billing@app").as_ref(), Some(&watch));
@@ -1981,6 +2002,27 @@ mod tests {
         end_red(&state, &at("gone"));
         assert!(holding(&state, &dir, &at("copy")).is_none() && held_red(&state, &at("gone")).is_none(), "green over it or the user's dismissal ends it");
         forget(&state, &at("billing"));
+        crate::tasks::test_support::cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn the_blocked_tasks_hear_main_is_green_while_the_hold_still_stands_and_a_retried_round_tells_them_nothing_more() {
+        let (dir, origin, slot, _) = crate::tasks::test_support::task_with_a_commit("billing");
+        let state = crate::tasks::test_support::state_of(&dir);
+        let at = |task: &str| crate::peers::address(task, &crate::repo::name_of(&dir));
+        let main = crate::repo::git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        let fixed = crate::repo::git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        let red = Watch { address: at("billing"), repo: dir.clone(), slug: "acme/app".to_string(), sha: main, started_at: 1, checked_at: None, close: true, runs: Vec::new(), state: State::Failed { at: 2, what: "ci · clippy".to_string(), url: String::new() }, error: None, erring_since: None, following: None, pushed: Pushed::default() };
+        save(&state, &red).unwrap();
+        hold_red(&state, &red);
+        let green = Watch { sha: fixed, state: State::Running, pushed: Pushed { check: Some(Check::new("the page loads")), ..Pushed::default() }, ..red.clone() };
+        save(&state, &green).unwrap();
+        let mut told = Vec::new();
+        let after = release_and_tell(&state, &green, &mut |ending| told.push((ending.len(), held(&state, &at("billing")))));
+        assert_eq!(told, [(1, true)], "the news goes out while the hold still stands, so a round dying before the hold ends loses none");
+        assert!(!held(&state, &at("billing")) && after.pushed.told && load(&state, &at("billing")).is_some_and(|watch| watch.pushed.told), "the hold ended and the watch says the tasks heard");
+        release_and_tell(&state, &load(&state, &at("billing")).unwrap(), &mut |_| told.push((9, false)));
+        assert_eq!(told.len(), 1, "a round retrying the check ask on the saved watch tells nothing again");
         crate::tasks::test_support::cleanup(dir, origin, &slot);
     }
 
