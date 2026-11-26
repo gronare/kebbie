@@ -22,7 +22,7 @@ The status line shows:
 | Marker | Means |
 | --- | --- |
 | `⚠N` on Routines | N routine runs wait for you with findings. |
-| Counts | What needs you (tasks, backlog items whose questions wait on you, and devices waiting for your approval), tasks that are working, are in review, are ready to push and wait for CI, and waiting questions. |
+| Counts | What needs you (tasks, backlog items you asked to start whose questions hold them, and devices waiting for your approval), tasks that are working, are in review, are ready to push and wait for CI, and waiting questions. |
 | `◆ N to accept`, yellow | N subtasks of tasks working in subtasks wait for you to accept them. |
 | `! N bugs to send` | Bugs and wishes about kebbie, saved here, wait for you to send them to its maintainers, on their row under Work, such as `! 1 bug and 2 wishes to send`; one alone is named, `! A wish to send: <title>`. |
 | Plan usage | How much of the plan is used. |
@@ -198,7 +198,7 @@ A listed test command inside a loop, a condition or `xargs` is not recorded eith
 
 | Group | Contains |
 | --- | --- |
-| Needs you | Tasks waiting on your answer or action, open questions first, then backlog items whose questions wait on you. |
+| Needs you | Tasks waiting on your answer or action, open questions first, then backlog items you asked to start whose questions wait on you. |
 | Working | Tasks at work since their prompt, their last report or your answer, fixing what a review asked, or running the tests and resolving a conflict a push needs. |
 | In review | Reported ready, while a reviewer reads it: `review running · waits on the reviewer`, or `review running · push not held` under `review.auto = "run"`. Its findings go to the lead and the task, never onto the row; `v` withdraws it to push without a pass. |
 | Ready to push | Reported ready with its commits, for you to push. A review is optional: `v` sends it to one, and it waits under In review while the reviewer reads. |
@@ -238,7 +238,7 @@ kebbie keeps one phase per task, and only what changes it writes it: its start, 
 - A task an API error stopped that kebbie will not resume, marked `stopped by <reason>: <Claude Code's words>`.
 - A task whose worktree git cannot read, such as one whose index names a missing object, marked `git cannot read its worktree: <git's error>`. The other tasks show as usual.
 
-After the tasks under Needs you, one row per backlog item whose questions block its start and wait on you, newest first, such as `? Links show used pages   1 question · answer on its card`. NEEDS YOU shows for them even when no task is there, and its count and the status line's `need you` count them. `↑` `↓` step onto them from the tasks, `⏎` opens the item's card, where you answer its questions, and `g` starts the item as on the Backlog page. A row leaves once its blocking questions are answered. A filter keeps the rows whose title or repo it matches.
+After the tasks under Needs you, one row per backlog item you asked to start once written whose questions block its start and wait on you, newest first, such as `? Links show used pages   1 question · answer on its card`. NEEDS YOU shows for them even when no task is there, and its count and the status line's `need you` count them. `↑` `↓` step onto them from the tasks, `⏎` opens the item's card, where you answer its questions, and `g` starts the item as on the Backlog page. A row leaves once its blocking questions are answered. A filter keeps the rows whose title or repo it matches. An item whose questions wait on you but that you have not asked to start stays off the Work page: it stands under Needs you on the Backlog page, and the Backlog tab shows `?N`.
 
 Two lines about the machine itself close the group, after these backlog rows, each marked `!`, and stand as a Needs you group of their own when no task needs you: the disk, when the keeper could not free enough room (see [Disk space](configuration.md#disk-space)), and the clock, when this machine's clock is more than a minute off the hub's, as in `! Clock: this machine runs 6h 28m behind the hub, so the phone's commands are refused as expired; set the clock, for example with sudo chronyc makestep`. The clock line goes with the keeper's next comparison, every five minutes, once the clock is set, and 15 minutes after the keeper stops.
 
@@ -535,7 +535,7 @@ The item's card shows its title, priority, repo, state, the day it was filed and
 | --- | --- | --- |
 | Approve or deny | A device on your account that sent this machine a command under [`hub.trust = "device"`](configuration.md#machine), waiting for you to let it make changes here. Its row says when `hub.auto_approve` lets it in. | The one that has waited longest first. |
 | Stopped on you | A task that stands still until you act: a question or a plan to approve, Claude's own prompt, a report that asks you something, a crash, a red CI only you can settle, a subtask to accept with `task.require_accept` on. | The one most tasks wait behind first, then the one that has waited longest. |
-| Questions on backlog items | A backlog item whose questions block its start and wait on you, `N questions · answer on its card`, the same items as the rows under Needs you. | The newest first. |
+| Questions on backlog items | A backlog item you asked to start whose questions block its start and wait on you, `N questions · answer on its card`, the same items as the rows under Needs you. | The newest first. |
 | Push, in this order | What is ready to push and not in the push line yet. A task whose ready report names another to push first (`kebbie report --after`) says `after <task>` while that task is open. | What other tasks wait on first, in any repo, queued or ready to push after it, then two tasks that change the same files in the order they were built, then the one that was ready first. |
 | To read | A task that reported ready with nothing to push, such as a research result. | The one a decision waits on first, then the oldest. |
 
