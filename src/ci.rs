@@ -552,9 +552,10 @@ pub(crate) fn release_red(state: &Path, green: &Watch) -> Vec<Watch> {
     for red in holds(state).into_iter().filter(|red| red.repo == green.repo) {
         let over = crate::sh::succeeds("git", &["merge-base", "--is-ancestor", &red.sha, &green.sha], Some(&green.repo));
         if over && (red.address == green.address || fixer_of(state, &red.address).as_deref() == Some(green.address.as_str()) || !task_open(&red, &log)) {
-            end_red(state, &red.address);
-            if red.address != green.address && load(state, &red.address).is_some_and(|watch| watch.sha == red.sha && matches!(watch.state, State::Failed { .. })) {
-                forget(state, &red.address);
+            if red.address == green.address {
+                end_red(state, &red.address);
+            } else {
+                crate::tasks::red_ci_over(state, &red);
             }
             ended.push(red);
         }
@@ -1980,6 +1981,24 @@ mod tests {
         end_red(&state, &at("gone"));
         assert!(holding(&state, &dir, &at("copy")).is_none() && held_red(&state, &at("gone")).is_none(), "green over it or the user's dismissal ends it");
         forget(&state, &at("billing"));
+        crate::tasks::test_support::cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_fixers_green_push_drops_the_push_the_red_task_waited_to_make_with_its_fix() {
+        let (dir, origin, slot, _) = crate::tasks::test_support::task_with_a_commit("billing");
+        let state = crate::tasks::test_support::state_of(&dir);
+        let at = |task: &str| crate::peers::address(task, &crate::repo::name_of(&dir));
+        let main = crate::repo::git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        let fixed = crate::repo::git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        let red = Watch { address: at("billing"), repo: dir.clone(), slug: "acme/app".to_string(), sha: main, started_at: 1, checked_at: None, close: true, runs: Vec::new(), state: State::Failed { at: 2, what: "ci · clippy".to_string(), url: String::new() }, error: None, erring_since: None, following: None, pushed: Pushed::default() };
+        save(&state, &red).unwrap();
+        hold_red(&state, &red);
+        crate::tasks::after_red_ci(&state, &dir, &at("billing"), crate::tasks::PushBy::User).unwrap();
+        crate::state::write(&fixer_file(&state, &at("billing")), at("fixer")).unwrap();
+        release_red(&state, &Watch { address: at("fixer"), sha: fixed, state: State::Running, ..red.clone() });
+        assert!(held_red(&state, &at("billing")).is_none() && load(&state, &at("billing")).is_none(), "the fix is green over the red run");
+        assert!(crate::tasks::pending_push(&state, &at("billing")).is_none(), "the red task's push waiting for its own fix goes too, so the task can close");
         crate::tasks::test_support::cleanup(dir, origin, &slot);
     }
 
