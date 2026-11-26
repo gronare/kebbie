@@ -68,10 +68,7 @@ pub fn tick(state: &Path) -> Vec<String> {
     }
     let now = crate::messages::now();
     let pending = super::pending(state);
-    for case in pending.iter().filter(|case| case.tries >= TRIES) {
-        let _ = super::settle(state, &case.id, &format!("the fault watcher gave no answer on it in {TRIES} runs"), None);
-        notes.push(format!("faults: {} dropped after {TRIES} runs without an answer", case.id));
-    }
+    notes.extend(drop_spent(state, &pending, tell_lead));
     let ids = due(&pending, last_run(state), now);
     if ids.is_empty() {
         return notes;
@@ -80,6 +77,17 @@ pub fn tick(state: &Path) -> Vec<String> {
     match begin(state, &ids.join(" "), &trusted_spawn::reviewer_env(std::env::vars())) {
         Ok(()) => notes.push(format!("faults: the fault watcher weighs {} {}", ids.len(), if ids.len() == 1 { "case" } else { "cases" })),
         Err(error) => notes.push(format!("faults: the fault watcher could not start ({error}); its cases wait")),
+    }
+    notes
+}
+
+pub fn drop_spent(state: &Path, pending: &[Case], tell: impl Fn(&str)) -> Vec<String> {
+    let mut notes = Vec::new();
+    for case in pending.iter().filter(|case| case.tries >= TRIES) {
+        let why = format!("the fault watcher gave no answer on it in {TRIES} runs");
+        let _ = super::settle(state, &case.id, &why, None);
+        tell(&unweighed(case, &why));
+        notes.push(format!("faults: {} dropped after {TRIES} runs without an answer", case.id));
     }
     notes
 }
@@ -117,18 +125,31 @@ pub fn run() -> Result<String> {
     let _ = fs::remove_file(file(&state, "claude"));
     let _ = fs::remove_file(file(&state, "running"));
     let answer = answer?;
-    let verdicts = parse(&answer);
     let checkout = kebbie_checkout();
+    let said = settle_all(&state, &cases, &answer, |case, verdict| act(&state, case, verdict, checkout.as_deref(), crate::messages::now()), tell_lead)?;
+    let _ = fs::remove_file(file(&state, "log"));
+    Ok(said)
+}
+
+pub fn settle_all(state: &Path, cases: &[Case], answer: &str, act: impl Fn(&Case, &Verdict) -> Result<(String, Option<String>)>, tell: impl Fn(&str)) -> Result<String> {
+    let verdicts = parse(answer);
     let mut said = Vec::new();
-    for case in &cases {
+    for case in cases {
         let outcome = match verdicts.iter().find(|verdict| verdict.case == case.id) {
-            Some(verdict) => act(&state, case, verdict, checkout.as_deref(), crate::messages::now()).unwrap_or_else(|error| (format!("not carried out: {error}"), None)),
-            None => ("the watcher gave no verdict on it".to_string(), None),
+            Some(verdict) => act(case, verdict).unwrap_or_else(|error| {
+                let why = format!("its verdict was not carried out: {error}");
+                tell(&unweighed(case, &why));
+                (why, None)
+            }),
+            None => {
+                let why = "the watcher gave no verdict on it".to_string();
+                tell(&unweighed(case, &why));
+                (why, None)
+            }
         };
-        super::settle(&state, &case.id, &outcome.0, outcome.1.as_deref())?;
+        super::settle(state, &case.id, &outcome.0, outcome.1.as_deref())?;
         said.push(format!("{}: {}", case.id, outcome.0));
     }
-    let _ = fs::remove_file(file(&state, "log"));
     Ok(said.join("\n"))
 }
 
@@ -400,6 +421,10 @@ pub fn fix_prompt(issue: &Issue, came_back: bool, quotes: &[String]) -> String {
         "{title}\n\nkebbie's fault watcher found this fault in kebbie and filed it as kebbie issue {id}.\n\n{body}{said}\n\nRoot cause: {cause}{files}{back}\n\nFix the cause, not the one case: {line}\n\nDone: the fix with a regression test that goes red if the fault returns, the docs the change touches, the related tests and lint green, ready. The issue closes itself once the keeper's recheck after a kebbie update finds the fix in the installed kebbie, and a later occurrence opens it again.",
         title = issue.title, id = issue.id, body = issue.body, cause = issue.cause.as_deref().unwrap_or("not named"), line = barrier_line(barrier),
     )
+}
+
+pub fn unweighed(case: &Case, why: &str) -> String {
+    format!("The fault watcher could not weigh case {} ({}, from {}): {why}. Their words: \"{}\". Weigh them yourself: when they point at a fault in kebbie, save it as a kebbie issue by the skill kebbie:propose-change.", case.id, case.source.word(), case.from, super::clipped(&case.words, 300))
 }
 
 fn tell_lead(text: &str) {

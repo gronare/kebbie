@@ -265,3 +265,26 @@ fn the_watchers_question_reaches_a_vault_backlog_and_a_local_one() {
         let _ = (fs::remove_dir_all(state), fs::remove_dir_all(dir));
     }
 }
+
+#[test]
+fn a_case_settled_without_a_verdict_goes_back_to_the_lead_with_the_users_words() {
+    let state = state("unweighed");
+    let said = case(&state, Source::Board, "billing@app", "this plan builds the instance, not the cause", 10);
+    let told = watch::unweighed(&said, "the watcher gave no verdict on it");
+    assert!(told.starts_with("The fault watcher could not weigh case c1 (the user's answer on the board, from billing@app): the watcher gave no verdict on it."), "{told}");
+    assert!(told.contains("\"this plan builds the instance, not the cause\"") && told.contains("kebbie:propose-change"), "{told}");
+    let heard = std::cell::RefCell::new(Vec::new());
+    let tell = |text: &str| heard.borrow_mut().push(text.to_string());
+    let cases = [said.clone(), case(&state, Source::Chat, "lead", "the push line stands still again", 20), case(&state, Source::Chat, "lead", "thanks, that looks right now", 30)];
+    let answer = "case: c1\nverdict: new\nreason: r\n\ncase: c3\nverdict: ignore\nreason: thanks\n";
+    let act = |case: &Case, _: &Verdict| if case.id == "c1" { Err("a new fault names no title".to_string()) } else { Ok(("no fault in kebbie: thanks".to_string(), None)) };
+    watch::settle_all(&state, &cases, answer, act, tell).unwrap();
+    assert!(pending(&state).is_empty());
+    let heard_of: Vec<bool> = cases.iter().map(|case| heard.borrow().iter().any(|text| text.contains(&format!("case {} (", case.id)))).collect();
+    assert_eq!(heard_of, [true, true, false], "a verdict not carried out and a missing verdict reach the lead, an ignore does not: {:?}", heard.borrow());
+    let spent = Case { tries: 2, ..case(&state, Source::Chat, "lead", "the board lost my answer again", 40) };
+    heard.borrow_mut().clear();
+    assert_eq!(watch::drop_spent(&state, std::slice::from_ref(&spent), tell).len(), 1);
+    assert!(pending(&state).is_empty() && heard.borrow()[0].contains("no answer on it in 2 runs") && heard.borrow()[0].contains("the board lost my answer again"), "{:?}", heard.borrow());
+    fs::remove_dir_all(state).unwrap();
+}
