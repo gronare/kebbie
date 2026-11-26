@@ -188,10 +188,9 @@ pub(crate) fn close_in(state: &Path, caller: &Caller, id: &str, why: Option<&str
     let id: u64 = id.trim().parse().map_err(|_| format!("\"{id}\" is not a promise's number; kebbie promises lists them"))?;
     let _lock = Lock::in_dir(&dir(state), true);
     let promise = load(state, id).ok_or_else(|| format!("No open promise {id}; kebbie promises lists them"))?;
-    if let Some(why) = why {
-        if why.trim().is_empty() {
-            return Err(format!("kebbie promise drop {id} needs why: kebbie promise drop {id} \"<why>\""));
-        }
+    if let Some(why) = why
+        && why.trim().is_empty() {
+        return Err(format!("kebbie promise drop {id} needs why: kebbie promise drop {id} \"<why>\""));
     }
     forget(state, &promise);
     let headline = if why.is_some() { format!("Dropped promise {id}") } else { format!("Kept promise {id}") };
