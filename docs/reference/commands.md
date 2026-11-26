@@ -361,7 +361,7 @@ A push with `--through` is watched too and leaves the task where it is. `done` c
 
 A red run that is not the code's (a push outside the deploy window, infrastructure, secrets, a flake) stops counting in two ways:
 
-- A later push to the default branch that carries the task's commits passes every workflow that failed on it: the red is superseded, and a task whose commits are on the default branch closes (see [`kebbie done`](#kebbie-done-name)).
+- A later push to the default branch that carries the task's commits passes every workflow that failed on it: the red is superseded, and a task whose commits are on the default branch closes (see [`kebbie done`](#kebbie-done-name)). The keeper asks this of a red run whose task is done or dropped too, so its hold on the repo's pushes ends the same way.
 - You dismiss it (below).
 
 ### `kebbie ci tick`
@@ -383,6 +383,7 @@ Yours alone, also `C` on the board: no Claude, the lead included, can run it.
 - The failed run is kept on record with the reason (`--why`, else the one its Claude gave), shown in `kebbie status --json` as `ci_dismissed`.
 - The watch and any push waiting for a fix are dropped, and a task queued after it only for that red waits again.
 - The task then closes once its commits are on the default branch.
+- It also takes a task that is done or dropped and whose red run still holds the repo's pushes: name it, and the hold ends.
 
 ### `kebbie comments [--json]`
 

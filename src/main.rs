@@ -396,7 +396,8 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   red on main the push line holds every push of the repo but the fix
   kebbie ci dismiss <task> [--why <reason>]
                                   yours alone (C on the board): keep the failed run on record with the reason, drop the
-                                  watch and the push waiting for a fix; the task closes once its commits are on main
+                                  watch and the push waiting for a fix; the task closes once its commits are on main;
+                                  also ends the hold a done or dropped task's red run left
   kebbie comments [--json]        colleagues' comments on commits kebbie pushed that wait for you, each read by a
                                   read-only Claude as holds, opinion, praise or unclear, with a reply to send; the
                                   keeper asks each such repo every 12 minutes for [comments] watch_days (7) days

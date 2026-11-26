@@ -450,13 +450,33 @@ pub(super) fn pass(state: &Path, world: &World, close: Close, tell: &mut dyn FnM
             }
         }
         if superseded(&watch, world.gh) {
-            crate::ci::end_red(state, &watch.address);
-            crate::ci::forget(state, &watch.address);
-            let waiting = super::after::red_ci_superseded(state, &watch.address);
-            notes.push(format!("landed: CI is green after {} on a later commit; {} waiting again", watch.address, if waiting.is_empty() { "nothing".to_string() } else { waiting.join(", ") }));
+            notes.push(red_over_on_main(state, &watch, tell));
+        }
+    }
+    for red in crate::ci::holds(state).into_iter().filter(|red| crate::ci::load(state, &red.address).is_none() && !crate::ci::task_open(red, world.log)) {
+        if !fetched.contains(&red.repo) {
+            fetched.push(red.repo.clone());
+            if stale(&red.repo) {
+                let _ = super::fetch(&red.repo);
+            }
+        }
+        if superseded(&red, world.gh) {
+            notes.push(red_over_on_main(state, &red, tell));
         }
     }
     notes
+}
+
+// A later run over the red commit passed: the blocked tasks hear it before the hold ends, so a round that dies between them tells again rather than never, and the lead, once asked for a fix task, hears none is needed.
+fn red_over_on_main(state: &Path, red: &crate::ci::Watch, tell: &mut dyn FnMut(&str)) -> String {
+    if crate::ci::held(state, &red.address) {
+        if crate::ci::last_red(state, red) {
+            super::unblocked::tell(&red.repo, &red.address, &super::unblocked::cleared(red));
+        }
+        tell(&format!("CI is green again over the red run of {} ({}) on a later commit, so its hold on {}'s pushes ended; it needs no fix task.", red.address, red.short(), name_of(&red.repo)));
+    }
+    let waiting = super::red_ci::over(state, red);
+    format!("landed: CI is green after {} on a later commit; {} waiting again", red.address, if waiting.is_empty() { "nothing".to_string() } else { waiting.join(", ") })
 }
 
 fn close_for_real(repo: &Path, task: &str) -> Result<Notice> {
@@ -1057,6 +1077,32 @@ mod tests {
         let seen = herdr(&slot, "idle");
         pass(&state, &world(&repos, &seen, &[], &green), &mut |_, _| Err("no".to_string()), &mut |_| {});
         assert!(crate::ci::load(&state, &address).is_some(), "the red stays on the row until the task really closes");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn the_hold_of_a_dropped_red_task_ends_once_a_later_run_over_it_passes() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        on_main(&dir, &slot, &upstream);
+        let landing = git(&dir, &["rev-parse", &upstream]).unwrap();
+        finish(&dir, &slot, &upstream, &state, None).unwrap();
+        upstream_commit(&dir, "fix", "toolchain", "fixed outside kebbie");
+        let later = git(&dir, &["rev-parse", &upstream]).unwrap();
+        let address = peers::address("billing", &name_of(&dir));
+        crate::ci::hold_red(&state, &red_watch(&dir, &address, &landing, false));
+        let blocked = messages::Report { state: "blocked".to_string(), next: "nothing".to_string(), head: None, after: Vec::new() };
+        messages::log_report(&peers::address("copy", &name_of(&dir)), &blocked, "waiting for main").unwrap();
+        let repos = [dir.clone()];
+        let seen = Seen2 { workspaces: Vec::new(), agents: Vec::new() };
+        pass(&state, &world(&repos, &seen, &[], &fake_gh(&dir, &format!("[{}]", run(&landing, "deploy", "failure", "push")))), &mut closing_by_finish(&state, &upstream), &mut |_| {});
+        assert!(crate::ci::holding(&state, &dir, "copy@app").is_some(), "still red: the hold stays without its watch");
+        let lead = RefCell::new(Vec::new());
+        pass(&state, &world(&repos, &seen, &[], &fake_gh(&dir, &format!("[{}]", run(&later, "deploy", "success", "push")))), &mut closing_by_finish(&state, &upstream), &mut |text| lead.borrow_mut().push(text.to_string()));
+        assert!(crate::ci::holding(&state, &dir, "copy@app").is_none(), "green over the red commit ends the hold its dropped task left");
+        assert!(lead.borrow().len() == 1 && lead.borrow()[0].contains("needs no fix task"), "the lead, asked for a fix task, hears none is needed: {:?}", lead.borrow());
+        let told: Vec<String> = messages::load().into_iter().filter(|message| message.to == peers::address("copy", &name_of(&dir))).map(|message| message.text).collect();
+        assert!(told.len() == 1 && told[0].starts_with("main is green again"), "the blocked task hears it once: {told:?}");
         cleanup(dir, origin, &slot);
     }
 

@@ -24,8 +24,12 @@ fn read(state: &Path, address: &str) -> Value {
     fs::read_to_string(file(state, address)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_else(|| json!({}))
 }
 
+// A hold whose watch is gone, as a done or dropped task leaves it, is still red until CI goes green over it or the user dismisses it.
 fn red(state: &Path, address: &str) -> Option<crate::ci::Watch> {
-    crate::ci::load(state, address).filter(crate::ci::Watch::dismissable)
+    match crate::ci::load(state, address) {
+        Some(watch) => Some(watch).filter(crate::ci::Watch::dismissable),
+        None => crate::ci::held_red(state, address),
+    }
 }
 
 // Main went green over the red run, or the user dismissed it: its hold ends, and with it the red watch, the push waiting for its fix and the waits it blocked.
@@ -79,8 +83,12 @@ pub fn outside(reason: &str) -> Result<String> {
 pub(crate) fn dismiss_as(state: &Path, caller: &Caller, cwd: &Path, name: Option<&str>, why: Option<&str>) -> Result<String> {
     crate::permit::user_only_as(caller, "dismissing a red CI")?;
     let repo = main_checkout(cwd)?;
-    let slot = find_task(&repo, name, cwd)?;
-    let task = task_of(&slot);
+    let (task, open) = match (find_task(&repo, name, cwd), name) {
+        (Ok(slot), _) => (task_of(&slot).to_string(), true),
+        (Err(_), Some(name)) if crate::ci::held(state, &peers::address(peers::task_part(name), &name_of(&repo))) => (peers::task_part(name).to_string(), false),
+        (Err(error), _) => return Err(error),
+    };
+    let task = task.as_str();
     let address = peers::address(task, &name_of(&repo));
     let Some(watch) = red(state, &address) else {
         return Notice::new(Tone::NotNow, "No red CI to dismiss").detail("task", task).err();
@@ -103,18 +111,21 @@ pub(crate) fn dismiss_as(state: &Path, caller: &Caller, cwd: &Path, name: Option
     archived.push(entry);
     record["dismissed"] = json!(archived);
     crate::state::write(&file(state, &address), record.to_string())?;
-    let held = crate::ci::held(state, &address);
-    crate::ci::end_red(state, &address);
-    if held && !crate::ci::red_in(state, &watch.repo) {
+    if crate::ci::held(state, &address) && crate::ci::last_red(state, &watch) {
         super::unblocked::tell(&watch.repo, &address, &super::unblocked::dismissed(&watch));
     }
+    over(state, &watch);
     crate::ci::forget(state, &address);
-    if intent::pending(state, &address).is_some_and(|pending| pending.work == Work::Ci) {
-        intent::forget(state, &address);
+    let then = if !open {
+        "Its task has ended, so nothing closes; the repo's pushes no longer wait on it."
+    } else if super::landed::kept_open(state, &address) {
+        "It stays open, as the user chose when pushing it."
+    } else {
+        "kebbie closes the task once its commits are on the default branch."
+    };
+    if open {
+        crate::phase::record(state, &address, "dismiss", &crate::phase::Event::Dismissed { kept_open: super::landed::kept_open(state, &address) });
     }
-    super::after::red_ci_superseded(state, &address);
-    crate::phase::record(state, &address, "dismiss", &crate::phase::Event::Dismissed { kept_open: super::landed::kept_open(state, &address) });
-    let then = if super::landed::kept_open(state, &address) { "It stays open, as the user chose when pushing it." } else { "kebbie closes the task once its commits are on the default branch." };
     let text = format!("The user dismissed the {named} CI of {address} on {}: {why}. {then}", watch.short());
     if let Err(error) = messages::to_lead(messages::ToLead::CiDismissed, &text) {
         eprintln!("Could not tell the lead: {error}");
@@ -179,6 +190,37 @@ mod tests {
         dismiss_as(&state, &Caller::User, &dir, Some("billing"), Some("a flake")).unwrap();
         let told: Vec<String> = messages::load().into_iter().filter(|message| message.to == at("copy")).map(|message| message.text).collect();
         assert!(told.len() == 1 && told[0].starts_with("The user dismissed the red CI of") && told[0].contains("did not go green"), "{told:?}");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn the_user_may_dismiss_the_hold_a_dropped_red_task_left() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let address = peers::address("billing", &name_of(&dir));
+        crate::repo::git(&slot.path, &["push", "--quiet", "origin", &format!("HEAD:{}", upstream.trim_start_matches("origin/"))]).unwrap();
+        crate::repo::git(&dir, &["fetch", "--quiet", "origin"]).unwrap();
+        super::super::finish::finish(&dir, &slot, &upstream, &state, None).unwrap();
+        crate::ci::hold_red(&state, &red_watch(&dir, &address));
+        assert!(crate::ci::holding(&state, &dir, "copy@app").is_some());
+        let said = dismiss_as(&state, &Caller::User, &dir, Some("billing"), Some("main fixed by hand")).unwrap();
+        assert!(said.contains("Dismissed the red CI"), "{said}");
+        assert!(crate::ci::holding(&state, &dir, "copy@app").is_none(), "the hold ends without a watch or a task");
+        assert_eq!(dismissed(&state, &address)[0]["why"].as_str(), Some("main fixed by hand"));
+        assert!(dismiss_as(&state, &Caller::User, &dir, Some("billing"), None).is_err(), "nothing left to dismiss");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_red_hold_under_a_running_fix_is_not_dismissed_and_its_watch_stays() {
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let address = peers::address("billing", &name_of(&dir));
+        crate::ci::hold_red(&state, &red_watch(&dir, &address));
+        crate::ci::save(&state, &crate::ci::Watch { sha: "fedcba9876".to_string(), state: crate::ci::State::Running, ..red_watch(&dir, &address) }).unwrap();
+        assert!(dismiss_as(&state, &Caller::User, &dir, Some("billing"), None).unwrap_err().contains("No red CI"), "the fix's CI is running");
+        assert!(outside_as(&state, &Caller::Task(address.clone()), "a flake").is_err());
+        assert!(crate::ci::load(&state, &address).is_some_and(|watch| watch.running()) && crate::ci::held(&state, &address), "the running watch and the hold stay");
         cleanup(dir, origin, &slot);
     }
 

@@ -483,7 +483,7 @@ fn orphaned(state: &Path, address: &str) {
     if fixer_of(state, address).is_some() || orphan_file(state, address).exists() || crate::state::write(&orphan_file(state, address), "").is_err() {
         return;
     }
-    let text = format!("CI is still red on main for {address} ({}), but kebbie no longer watches it for a fix: start a task to fix it, then run kebbie ci fixer {address} <that task>. Every other push of {} waits until main is green again; only the fix goes out.", red.short(), crate::repo::name_of(&red.repo));
+    let text = format!("CI is still red on main for {address} ({}), but kebbie no longer watches it for a fix: start a task to fix it, then run kebbie ci fixer {address} <that task>; the user may instead dismiss it with kebbie ci dismiss {}. Every other push of {} waits until main is green again; only the fix goes out.", red.short(), red.task(), crate::repo::name_of(&red.repo));
     if let Err(error) = messages::to_lead(messages::ToLead::RedCi, &text) {
         eprintln!("Could not tell the lead that red CI has no task: {error}");
     }
@@ -503,7 +503,7 @@ pub(crate) fn held_red(state: &Path, address: &str) -> Option<Watch> {
     Watch::from_json(&serde_json::from_str(&fs::read_to_string(hold_file(state, address)).ok()?).ok()?)
 }
 
-fn holds(state: &Path) -> Vec<Watch> {
+pub(crate) fn holds(state: &Path) -> Vec<Watch> {
     let Ok(entries) = fs::read_dir(dir(state)) else { return Vec::new() };
     let mut holds: Vec<Watch> = entries.flatten().filter_map(|entry| entry.file_name().to_str().and_then(|name| name.strip_prefix('.')?.strip_suffix(".red").map(str::to_string))).filter_map(|address| held_red(state, &address)).collect();
     holds.sort_by(|a, b| a.address.cmp(&b.address));
@@ -1058,7 +1058,7 @@ fn landed(state: &Path, watch: &Watch, what: String) -> Event {
 }
 
 // The task that pushed is still the one under its address: a later task by the same name never gets an ended one's red CI.
-fn task_open(watch: &Watch, log: &[messages::Message]) -> bool {
+pub(crate) fn task_open(watch: &Watch, log: &[messages::Message]) -> bool {
     crate::tasks::find_task(&watch.repo, Some(watch.task()), &watch.repo).is_ok()
         && !log.iter().any(|message| message.ended && message.to == watch.address && message.at >= watch.started_at)
 }
