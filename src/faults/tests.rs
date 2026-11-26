@@ -288,3 +288,9 @@ fn a_case_settled_without_a_verdict_goes_back_to_the_lead_with_the_users_words()
     assert!(pending(&state).is_empty() && heard.borrow()[0].contains("no answer on it in 2 runs") && heard.borrow()[0].contains("the board lost my answer again"), "{:?}", heard.borrow());
     fs::remove_dir_all(state).unwrap();
 }
+
+#[test]
+fn a_short_correction_is_weighed_and_a_one_word_answer_is_not() {
+    assert!(capture::worth("board is wrong") && capture::worth("fel igen"));
+    assert!(!capture::worth("ja") && !capture::worth("2") && !capture::worth("/clear now"));
+}

@@ -52,7 +52,7 @@ fn load(state: &Path) -> Option<Marks> {
 pub fn worth(text: &str) -> bool {
     let text = text.trim();
     let words = text.split_whitespace().count();
-    !text.is_empty() && text.chars().count() <= LONGEST && !text.starts_with('/') && (words >= 4 || text.contains('?') || text.contains('!'))
+    !text.is_empty() && text.chars().count() <= LONGEST && !text.starts_with('/') && (words >= 2 || text.contains('?') || text.contains('!'))
 }
 
 fn context(held: &Held) -> String {
