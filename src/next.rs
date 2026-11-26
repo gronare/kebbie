@@ -411,10 +411,15 @@ impl Next {
     }
 }
 
+// What N on the board and kebbie next list: the tasks, the backlog items whose questions hold a start the user asked for, and the devices waiting to pair.
+pub fn of_all(items: &[Item], backlog: &crate::backlog::Backlog, devices: &[crate::hub::devices::Request], now: u64) -> Next {
+    of(items).with_asks(backlog.start_asks().into_iter().map(|index| &backlog.entries[index])).with_devices(devices, now)
+}
+
 pub fn print() -> Result<String> {
     let now = crate::messages::now();
     let devices = crate::lead::state_dir().map(|state| crate::hub::devices::requests(&state, now)).unwrap_or_default();
-    Ok(of(&crate::status::gather()?).with_devices(&devices, now).text(now, &crate::recover::local_offset))
+    Ok(of_all(&crate::status::gather()?, &crate::backlog::load(), &devices, now).text(now, &crate::recover::local_offset))
 }
 
 // Each push in turn; the first that is refused stops the rest, which stay ready.
@@ -501,6 +506,16 @@ pub(crate) mod tests {
 
     fn order(items: &[Item]) -> Vec<String> {
         of(items).rows.iter().map(|row| row.name.clone()).collect()
+    }
+
+    #[test]
+    fn kebbie_next_lists_the_backlog_questions_that_hold_a_start_you_asked_for() {
+        let entry = |title: &str, start: bool, age: &str| crate::backlog::Entry { title: title.to_string(), reference: format!("Projects/{title}.md"), age: age.to_string(), shape: crate::backlog_file::Shape { waiting: 1, start, ..Default::default() }, ..Default::default() };
+        let backlog = crate::backlog::Backlog { updated: None, vault: Default::default(), entries: vec![entry("filed", false, "1 d"), entry("older", true, "5 d"), entry("newer", true, "2 d")] };
+        let next = of_all(&[], &backlog, &[], now());
+        assert_eq!(next.rows.iter().map(|row| (row.part, row.name.as_str())).collect::<Vec<_>>(), [(Part::Ask, "newer"), (Part::Ask, "older")], "only the items you asked to start, newest first");
+        assert!(next.text(now(), &|_| 0).contains("newer"), "kebbie next prints them");
+        assert!(include_str!("next.rs").contains("Ok(of_all(&crate::status::gather()?, &crate::backlog::load(), &devices, now)") && include_str!("board/next_window.rs").contains("next::of_all(&self.tasks, &self.backlog,"), "kebbie next and N build the list the same way");
     }
 
     #[test]

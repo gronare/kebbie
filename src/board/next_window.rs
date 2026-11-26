@@ -290,7 +290,7 @@ pub(super) fn draw_device(frame: &mut Frame, request: Option<&Request>, now: u64
 
 impl App {
     pub(super) fn next(&self) -> Next {
-        next::of(&self.tasks).with_asks(self.work_asks().into_iter().map(|index| &self.backlog.entries[index])).with_devices(&self.devices, crate::messages::now())
+        next::of_all(&self.tasks, &self.backlog, &self.devices, crate::messages::now())
     }
 
     pub(super) fn handle_device(&mut self, id: String, back: Window, key: KeyEvent, act: Option<Act>) {

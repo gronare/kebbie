@@ -36,6 +36,21 @@ pub enum VaultRead {
     Live,
 }
 
+impl Backlog {
+    // The items whose questions wait on the user, the newest first.
+    pub fn asks(&self) -> Vec<usize> {
+        let days = |entry: &Entry| entry.age.split_whitespace().next().and_then(|days| days.parse::<u64>().ok()).unwrap_or(u64::MAX);
+        let mut asks: Vec<usize> = (0..self.entries.len()).filter(|index| self.entries[*index].shape.waiting > 0).collect();
+        asks.sort_by_key(|index| days(&self.entries[*index]));
+        asks
+    }
+
+    // Of those, the ones the user asked to start, which their questions hold: only these stand under the Work page's Needs you and in Next.
+    pub fn start_asks(&self) -> Vec<usize> {
+        self.asks().into_iter().filter(|index| self.entries[*index].shape.start).collect()
+    }
+}
+
 pub const PRIORITIES: [&str; 5] = ["urgent", "high", "medium", "low", "none"];
 
 fn file() -> Result<PathBuf> {
