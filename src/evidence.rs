@@ -707,8 +707,15 @@ pub fn save(state: &Path, address: &str, run: &Run) -> Result<()> {
     let _lock = Lock::take(state, address)?;
     let mut runs = all_runs_in(state, address);
     runs.push(run.clone());
-    let start = runs.len().saturating_sub(KEPT);
-    let text: String = runs[start..].iter().map(|run| format!("{}\n", run.to_json())).collect();
+    let over = |lint: bool| runs.iter().filter(|run| run.lint == lint).count().saturating_sub(KEPT);
+    let (mut tests_over, mut lints_over) = (over(false), over(true));
+    runs.retain(|run| {
+        let over = if run.lint { &mut lints_over } else { &mut tests_over };
+        let dropped = *over > 0;
+        *over -= usize::from(dropped);
+        !dropped
+    });
+    let text: String = runs.iter().map(|run| format!("{}\n", run.to_json())).collect();
     crate::state::write(&file(state, address), text)
 }
 
@@ -1782,6 +1789,19 @@ mod tests {
         fs::write(&ran_first, format!("test result: ok. 3 passed; 0 failed\n{line}\n")).unwrap();
         assert_eq!(settled(&Run { command: "cargo test 2>&1 | tail -3; cargo clippy".to_string(), says: Some(Exit::Silent(OTHER)), ..background.clone() }, &End { ended: true, exit: Some(75), output: Some(ran_first) }, &list).result, Outcome::Passed, "in the background too a result line that counts tests outranks a queue line");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn lint_runs_keep_their_own_twenty_however_many_test_runs_follow() {
+        let state = crate::sh::test_dir("evidence-kept");
+        save(&state, "billing@app", &Run { command: "cargo clippy".to_string(), result: Outcome::Passed, lint: true, ..Run::default() }).unwrap();
+        for at in 0..(KEPT as u64 + 5) {
+            save(&state, "billing@app", &Run { command: "cargo test".to_string(), at, ..Run::default() }).unwrap();
+        }
+        assert_eq!(lint_runs_in(&state, "billing@app").len(), 1, "test runs on unchanged code never push out the green lint a gate needs");
+        assert_eq!(runs_in(&state, "billing@app").len(), KEPT);
+        assert_eq!(runs_in(&state, "billing@app")[0].at, 5, "the oldest test runs go");
+        fs::remove_dir_all(state).unwrap();
     }
 
     #[test]
