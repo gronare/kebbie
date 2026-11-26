@@ -96,7 +96,7 @@ A task whose prompt names files or modules that a running or queued task in the 
 - A task across repos is queued whole: when one half goes behind a task, every half waits for it.
 - `--now` starts it at once anyway; `kebbie after <name> --now` starts one already queued. `--from` skips the check too.
 - Only you and the lead queue a task, so when a task's own Claude starts one that would go behind another, the start is refused and names the files and `--now`.
-- The same check holds when the fault watcher queues a task to fix a fault. The investigator's task for an obstacle starts at once: the task that raised the obstacle waits for it.
+- The investigator's task for an obstacle starts at once: the task that raised the obstacle waits for it.
 - A start with no prompt, such as `--backlog <item>` alone, a start from the board's area page and a start of a found item are not checked.
 
 Prompts at the start:
@@ -1212,15 +1212,6 @@ Problems and wishes about kebbie itself, saved on this machine, one file each un
 | `kebbie issue send <id>` | Open a prefilled new issue on GitHub. Optional, and yours alone. See [below](#kebbie-issue-send). |
 
 `kebbie issues` shows each issue's id, kind, status, the version and commit it was filed on, the GitHub issue when linked, and the last line of its history, such as `fixed in 0.26.3 (a1b2c3d), checked automatically`.
-
-## kebbie faults
-
-The faults [the fault watcher](../explanation/fault-watcher.md) follows: the kebbie issues it filed from your own words and from incidents seen twice, and any issue it has seen happen.
-
-| Command | What it does |
-| --- | --- |
-| `kebbie faults [--json]` | Each fault's id, its state (`open`, `fixing in <task>`, `in use`, a closed status, with `came back` once it did), how often it happened and how often after its fix was in use, and its title; then how many cases wait to be weighed. |
-| `kebbie faults show <id>` | `kebbie issue show <id>`, with its root cause, barrier and fix task, then each time it happened with your own words, which stay on this machine. |
 
 `kebbie issue hold`:
 
