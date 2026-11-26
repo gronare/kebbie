@@ -91,7 +91,7 @@ With `--after` or `--at`:
 
 A task whose prompt names files or modules that a running or queued task in the same repo works on is queued behind that task, as with `--after`, and kebbie says why: `Queued behind board-colours@kebbie: both change src/status.rs`. The Queued row reads `Waits for Board colours (working): both change src/status.rs.` Two tasks on the same files would otherwise conflict at every rebase, and each push after the first would wait for its tests to run again.
 
-- A prompt names a file by its path (`src/status.rs`, `src/status.rs:42`), by its name alone (`status.rs`), by a folder (`docs/how-to/`) or, in a Rust repo, by a module path (`tasks::queue_as` names every file of `src/tasks`).
+- A prompt names a file by its path (`src/status.rs`, `src/status.rs:42`), by its name alone (`status.rs`), by a folder (`docs/how-to/`) or, in a Rust repo, by a module path (`tasks::queue_as` names every file of `src/tasks`). A word with a slash counts only when it has a file extension or starts in a folder the repo has, and a module path only when `src/` has that module, so `origin/main`, `and/or` and `std::fs` name no file.
 - A running task works on the files its branch changed since it left the default branch, the edits it has not committed, the files it added and what its own start prompt names, so a task started a minute ago counts too. A queued task works on what its prompt names.
 - A task across repos is queued whole: when one half goes behind a task, every half waits for it.
 - `--now` starts it at once anyway; `kebbie after <name> --now` starts one already queued. `--from` skips the check too.

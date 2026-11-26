@@ -534,6 +534,7 @@ pub(crate) struct Known {
     pub waits: Vec<Wait>,
     pub ends: HashMap<String, Message>,
     pub running: Vec<super::overlap::Running>,
+    pub tracked: HashMap<PathBuf, Vec<String>>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -616,7 +617,7 @@ pub(super) fn known(state: &Path, repos: &[PathBuf]) -> Known {
     every.sort();
     every.dedup();
     let open = every.iter().flat_map(|repo| open_in(repo).into_iter().map(|address| Dep { address, repo: repo.clone() })).collect();
-    Known { open, waits, ends: latest_ends(&messages::load()), running: Vec::new() }
+    Known { open, waits, ends: latest_ends(&messages::load()), running: Vec::new(), tracked: HashMap::new() }
 }
 
 #[derive(Clone, Copy)]
@@ -721,6 +722,7 @@ pub(crate) fn queue_as(caller: &Caller, repos: &[PathBuf], asked: &Asked) -> Res
     let mut known = known(&state, &repos);
     if asked.overlap && super::overlap::names_files(asked.prompt) {
         known.running = super::overlap::running(&repos);
+        known.tracked = super::overlap::tracked(&repos);
     }
     let title = asked.title.map(str::to_string).or_else(|| asked.backlog.and_then(crate::backlog::title_of));
     let why = asked.why.map(str::trim).filter(|why| !why.is_empty());
@@ -1030,7 +1032,7 @@ mod tests {
     }
 
     fn known(open: &[&str], waits: Vec<Wait>, ends: &[Message]) -> Known {
-        Known { open: open.iter().map(|address| dep(address)).collect(), waits, ends: latest_ends(ends), running: Vec::new() }
+        Known { open: open.iter().map(|address| dep(address)).collect(), waits, ends: latest_ends(ends), running: Vec::new(), tracked: Default::default() }
     }
 
     #[test]
@@ -1235,7 +1237,7 @@ mod tests {
         let state = state_of(&dir);
         let billing = peers::address("billing", &name_of(&dir));
         let before = slots(&dir).unwrap().len();
-        let known = Known { open: vec![Dep { address: billing.clone(), repo: dir.clone() }], waits: Vec::new(), ends: HashMap::new(), running: Vec::new() };
+        let known = Known { open: vec![Dep { address: billing.clone(), repo: dir.clone() }], waits: Vec::new(), ends: HashMap::new(), running: Vec::new(), tracked: Default::default() };
         let said = queue_in(&state, &Caller::User, std::slice::from_ref(&dir), &Asked { name: "search", prompt: "Search the invoices", after: &["billing"], mode: None, profile: None, backlog: None, title: None, why: None, starts_at: None, overlap: false }, &known, 100).unwrap().unwrap();
         assert!(said.contains("no worktree, Space or Claude"), "{said}");
         assert_eq!(slots(&dir).unwrap().len(), before, "no worktree is claimed or made");

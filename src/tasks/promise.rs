@@ -409,7 +409,7 @@ mod tests {
     }
 
     fn known(open: &[&str], ends: &[Message]) -> Known {
-        Known { open: open.iter().map(|address| dep(address)).collect(), waits: Vec::new(), ends: latest_ends(ends), running: Vec::new() }
+        Known { open: open.iter().map(|address| dep(address)).collect(), waits: Vec::new(), ends: latest_ends(ends), running: Vec::new(), tracked: Default::default() }
     }
 
     pub(super) fn end(address: &str, at: u64, how: &str) -> Message {

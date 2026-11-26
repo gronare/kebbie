@@ -2247,7 +2247,7 @@ mod tests {
         use crate::permit::Caller;
         let (dir, origin, slot, _) = task_with_a_commit("billing");
         let pushing = Pushing::new(&dir);
-        let known = super::super::after::Known { open: vec![super::super::after::Dep { address: "rounding@api".to_string(), repo: std::path::PathBuf::from("/repos/api") }], waits: Vec::new(), ends: Default::default(), running: Vec::new() };
+        let known = super::super::after::Known { open: vec![super::super::after::Dep { address: "rounding@api".to_string(), repo: std::path::PathBuf::from("/repos/api") }], waits: Vec::new(), ends: Default::default(), running: Vec::new(), tracked: Default::default() };
         let ask = super::super::waiting::Asked { address: &pushing.address, repo: &dir, on: &["rounding@api"], then: None };
         super::super::waiting::wait_in(&pushing.state, &Caller::User, &ask, &known, 100, &mut |_, _| {}).unwrap();
         let (typed, hand) = handed();

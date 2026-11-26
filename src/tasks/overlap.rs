@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::after::{Dep, Known};
@@ -40,13 +41,33 @@ fn mentions(prompt: &str) -> Vec<Mention> {
             let path = word.trim_start_matches("./").trim_end_matches('/');
             (!path.is_empty() && !path.starts_with('/') && !path.starts_with('~')).then(|| Mention::Path(path.to_string()))
         } else {
-            word.rsplit_once('.').filter(|(stem, ext)| stem.len() > 1 && !ext.is_empty() && ext.len() <= 5 && ext.chars().all(|character| character.is_ascii_alphabetic())).map(|_| Mention::Path(word.to_string()))
+            has_extension(word).then(|| Mention::Path(word.to_string()))
         };
         if let Some(mention) = mention.filter(|mention| !found.contains(mention)) {
             found.push(mention);
         }
     }
     found
+}
+
+// A git ref such as origin/main or prose such as and/or names no file: a slash word counts when it has an extension or starts in one of the repo's directories, a module when src/ has it.
+fn real(mention: &Mention, tracked: &[String]) -> bool {
+    match mention {
+        Mention::Path(path) if path.contains('/') => {
+            let (top, last) = (path.split('/').next().unwrap_or_default(), path.rsplit('/').next().unwrap_or_default());
+            has_extension(last) || tracked.iter().any(|file| file.starts_with(&format!("{top}/")))
+        }
+        Mention::Path(_) => true,
+        Mention::Module(module) => tracked.iter().any(|file| file == &format!("src/{module}.rs") || file.starts_with(&format!("src/{module}/"))),
+    }
+}
+
+fn has_extension(name: &str) -> bool {
+    name.rsplit_once('.').is_some_and(|(stem, ext)| stem.len() > 1 && !ext.is_empty() && ext.len() <= 5 && ext.chars().all(|character| character.is_ascii_alphabetic()))
+}
+
+fn real_mentions(prompt: &str, tracked: &[String]) -> Vec<Mention> {
+    mentions(prompt).into_iter().filter(|mention| real(mention, tracked)).collect()
 }
 
 fn module_of(path: &str) -> Option<String> {
@@ -82,8 +103,8 @@ fn shared_name(mine: &Mention, theirs: &Mention) -> Option<String> {
     }
 }
 
-fn shared(mine: &[Mention], files: &[String], prompt: &str) -> Vec<String> {
-    let theirs = mentions(prompt);
+fn shared(mine: &[Mention], files: &[String], prompt: &str, tracked: &[String]) -> Vec<String> {
+    let theirs = real_mentions(prompt, tracked);
     let mut shared: Vec<String> = files.iter().filter(|file| mine.iter().any(|mention| touches(mention, file))).cloned().collect();
     for name in mine.iter().flat_map(|mention| theirs.iter().filter_map(move |other| shared_name(mention, other))) {
         if !shared.iter().any(|known| path_meets(known, &name) || name.strip_suffix("::").is_some_and(|module| file_module(known).as_deref() == Some(module))) {
@@ -103,14 +124,15 @@ pub(crate) fn behind(me: &str, prompt: &str, repo: &Path, known: &Known) -> Vec<
     if known.open.iter().any(|dep| task_part(&dep.address) == mine) || known.waits.iter().any(|wait| wait.task == mine) {
         return Vec::new();
     }
-    let mentions = mentions(prompt);
+    let tracked = known.tracked.get(repo).map(Vec::as_slice).unwrap_or_default();
+    let mentions = real_mentions(prompt, tracked);
     if mentions.is_empty() {
         return Vec::new();
     }
     let running = known.running.iter().filter(|running| running.repo == repo && task_part(&running.address) != mine)
-        .map(|running| (Dep { address: running.address.clone(), repo: running.repo.clone() }, shared(&mentions, &running.files, &running.prompt)));
+        .map(|running| (Dep { address: running.address.clone(), repo: running.repo.clone() }, shared(&mentions, &running.files, &running.prompt, tracked)));
     let queued = known.waits.iter().filter(|wait| wait.repo == repo)
-        .map(|wait| (Dep { address: wait.address(), repo: wait.repo.clone() }, shared(&mentions, &[], &wait.prompt)));
+        .map(|wait| (Dep { address: wait.address(), repo: wait.repo.clone() }, shared(&mentions, &[], &wait.prompt, tracked)));
     running.chain(queued).filter(|(_, shared)| !shared.is_empty()).map(|(dep, shared)| Behind { dep, shared }).collect()
 }
 
@@ -149,6 +171,10 @@ pub(crate) fn running(repos: &[PathBuf]) -> Vec<Running> {
     found
 }
 
+pub(crate) fn tracked(repos: &[PathBuf]) -> HashMap<PathBuf, Vec<String>> {
+    repos.iter().map(|repo| (repo.clone(), crate::repo::git(repo, &["ls-files"]).unwrap_or_default().lines().map(str::to_string).collect())).collect()
+}
+
 fn changed_in(worktree: &Path, base: &str) -> Vec<String> {
     let git = |args: &[&str]| crate::repo::git(worktree, args).unwrap_or_default();
     let fork = git(&["merge-base", &crate::repo::tracking(base), "HEAD"]);
@@ -171,8 +197,10 @@ mod tests {
     }
 
     fn known(running: Vec<Running>) -> Known {
-        Known { open: running.iter().map(|running| Dep { address: running.address.clone(), repo: running.repo.clone() }).collect(), waits: Vec::new(), ends: HashMap::new(), running }
+        Known { open: running.iter().map(|running| Dep { address: running.address.clone(), repo: running.repo.clone() }).collect(), waits: Vec::new(), ends: HashMap::new(), running, tracked: HashMap::from([(PathBuf::from("/repos/kebbie"), TREE.map(String::from).to_vec())]) }
     }
+
+    const TREE: [&str; 7] = ["src/status.rs", "src/notify.rs", "src/board/view.rs", "src/tasks/mod.rs", "src/tasks/after.rs", "docs/tutorial.md", "docs/how-to/push.md"];
 
     fn addresses(found: &[Behind]) -> Vec<&str> {
         found.iter().map(|behind| behind.dep.address.as_str()).collect()
@@ -221,6 +249,17 @@ mod tests {
             assert!(behind("new@kebbie", prompt, Path::new("/repos/kebbie"), &known).is_empty(), "{prompt}");
         }
         assert!(!names_files("Make the board calmer, e.g. fewer colours."));
+    }
+
+    #[test]
+    fn a_git_ref_prose_with_a_slash_or_a_crate_outside_the_repo_names_no_file() {
+        let known = known(vec![running("first@kebbie", &[], "Rebase onto origin/main, and/or tidy the CI/CD notes; std::fs reads it, serde_json::Value too")]);
+        let behind_it = |prompt: &str| behind("second@kebbie", prompt, Path::new("/repos/kebbie"), &known);
+        for prompt in ["The main branch is origin/main", "Pick one and/or the other", "Fix the CI/CD line", "Read it with std::fs::read", "Parse it as serde_json::Value", "Keep upstream/main and refs/heads/main apart"] {
+            assert!(behind_it(prompt).is_empty(), "{prompt}");
+        }
+        assert_eq!(addresses(&behind("third@kebbie", "Rebase onto origin/main and fix docs/how-to/ and crate::tasks", Path::new("/repos/kebbie"), &self::known(vec![running("first@kebbie", &[], "Fix docs/how-to/ on origin/main")]))), ["first@kebbie"], "a directory the repo has still counts");
+        assert_eq!(why(&behind("third@kebbie", "Fix docs/how-to/ on origin/main", Path::new("/repos/kebbie"), &self::known(vec![running("first@kebbie", &[], "Fix docs/how-to/ on origin/main")]))), "both change docs/how-to");
     }
 
     #[test]
