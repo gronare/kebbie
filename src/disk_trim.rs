@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::disk::{Limit, Space};
-use crate::phase::Phase;
+use crate::phase::{Phase, Why};
 
 pub const EVERY: u64 = 120;
 const RECORD: &str = "disk.json";
@@ -28,15 +28,19 @@ pub struct Seen {
     pub rank: Rank,
 }
 
-// A task is trimmed only when its Claude is known not to be working and its phase is known to be past the work; anything unread keeps it.
+// A task is trimmed only when its Claude is known not to be working and its phase is known to be past the work; anything unread keeps it, as does a task that may go back to its work: Idle (a blocked report among them) and every needs-you but a report, a check or nothing to push.
 pub fn rank_of(phase: Option<&Phase>, agent: Option<&str>) -> Option<Rank> {
     if !matches!(agent, Some("idle" | "done" | "blocked")) {
         return None;
     }
     match phase? {
-        Phase::Starting | Phase::Working | Phase::Closing => None,
+        Phase::Starting | Phase::Working | Phase::Closing | Phase::Idle => None,
         Phase::Ready { .. } | Phase::Staged { .. } | Phase::Pushing { .. } | Phase::CiRunning { .. } => Some(Rank::WaitsForPush),
-        Phase::Idle | Phase::NeedsYou(_) | Phase::CiRed { .. } => Some(Rank::Finished),
+        Phase::CiRed { .. } => Some(Rank::Finished),
+        Phase::NeedsYou(why) => match why {
+            Why::Report | Why::Verify | Why::NothingToPush => Some(Rank::Finished),
+            Why::Question | Why::Unreported | Why::Stopped | Why::Failed | Why::Unreadable | Why::LeftLine | Why::NotStaged | Why::Unseen | Why::Cancelled => None,
+        },
     }
 }
 
@@ -201,7 +205,6 @@ pub fn tick(state: &Path) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::phase::Why;
 
     fn seen(label: &str, address: Option<&str>, rank: Rank) -> Seen {
         Seen { path: PathBuf::from(format!("/p/{label}")), repo: PathBuf::from("/p/app"), label: label.to_string(), address: address.map(str::to_string), rank }
@@ -224,8 +227,16 @@ mod tests {
         for phase in [Phase::Ready { head: None }, Phase::Staged { head: None }, Phase::Pushing { ahead: 1 }, Phase::CiRunning { sha: "a".into() }] {
             assert_eq!(rank_of(Some(&phase), Some("done")), Some(Rank::WaitsForPush), "{phase:?}");
         }
-        for phase in [Phase::Idle, Phase::NeedsYou(Why::Report), Phase::CiRed { sha: "a".into() }] {
+        for phase in [Phase::NeedsYou(Why::Report), Phase::NeedsYou(Why::Verify), Phase::NeedsYou(Why::NothingToPush), Phase::CiRed { sha: "a".into() }] {
             assert_eq!(rank_of(Some(&phase), Some("idle")), Some(Rank::Finished), "{phase:?}");
+        }
+    }
+
+    #[test]
+    fn a_task_waiting_mid_work_on_an_answer_a_decision_or_a_fix_keeps_its_build() {
+        assert_eq!(rank_of(Some(&Phase::Idle), Some("blocked")), None, "a blocked report waits on an obstacle's decision or the lead, mid-work");
+        for why in Why::ALL.into_iter().filter(|why| !matches!(why, Why::Report | Why::Verify | Why::NothingToPush)) {
+            assert_eq!(rank_of(Some(&Phase::NeedsYou(why)), Some("idle")), None, "{why:?}");
         }
     }
 

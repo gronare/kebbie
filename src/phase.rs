@@ -23,7 +23,7 @@ pub enum Why {
 }
 
 impl Why {
-    const ALL: [Why; 12] = [Why::Report, Why::Question, Why::NothingToPush, Why::Unreported, Why::Stopped, Why::Failed, Why::Unreadable, Why::LeftLine, Why::NotStaged, Why::Unseen, Why::Cancelled, Why::Verify];
+    pub(crate) const ALL: [Why; 12] = [Why::Report, Why::Question, Why::NothingToPush, Why::Unreported, Why::Stopped, Why::Failed, Why::Unreadable, Why::LeftLine, Why::NotStaged, Why::Unseen, Why::Cancelled, Why::Verify];
 
     fn key(self) -> &'static str {
         match self {

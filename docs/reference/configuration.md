@@ -380,11 +380,12 @@ On Linux, every 2 minutes, when the free space is below `disk.trim_below`, the k
 
 1. Free worktrees in a repo's pool.
 2. Tasks waiting for a push: ready, staged, pushing, or with CI running.
-3. Tasks whose Claude has finished: idle, or waiting for you.
+3. Tasks whose Claude has finished: waiting for you to read its report, to check its work, or with nothing to push, and tasks whose CI went red.
 
 It skips a worktree when any of these holds:
 
 - its task's Claude is working, or herdr cannot say;
+- its task waits mid-work: blocked on an obstacle, the lead or another task, on an answer to its question, kept open after its push, or stopped or failed;
 - its task holds a build slot, has a turn, or waits in line for one;
 - a process works inside it other than its Claude or Codex, their shells, kebbie, and the tools the agent starts itself such as its MCP servers, so a build or a dev server started through a shell or in the task's pane keeps it; or a program built in it runs;
 - for a free worktree, any process works inside it.
