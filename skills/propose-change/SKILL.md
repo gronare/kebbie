@@ -9,7 +9,7 @@ description: Save what kebbie itself cost in this session (an error, a workaroun
 
 kebbie issues are problems and wishes about kebbie itself, kept on this machine so they survive the session that found them: after `kebbie update` the keeper rechecks each open one against the new commits on its own and closes the ones they plainly fix. Logging one with `kebbie issue add` is the whole job. A bug reaches kebbie's maintainers only through the hub report the user approves, in the board's bugs to send or with `kebbie issue report <id>`: never run or suggest it, and never create a GitHub issue for kebbie, not with `kebbie issue send`, not with `gh issue create`, not by suggesting one. A saved issue is the keeper's to look after, and the user sees it on the board's bugs to send: kebbie issues stay out of briefings, summaries and the lists of what the user is to decide or answer.
 
-A fault the user points out in kebbie, when kebbie's repo is among the lead's areas, is a task that fixes it in code, as the lead role's Faults the user points out says; this skill saves the rest.
+A fault the user points out in kebbie goes as the lead role's Faults the user points out says: to kebbie's fault watcher, which files the issue with its root cause and queues the task that fixes it, or, with proposing kebbie issues off, to a fix task when kebbie's repo is among the lead's areas. This skill saves what kebbie cost you that the user did not point out.
 
 Your role says whether you save one unasked. When it says proposing kebbie issues is off (`[issues] propose = false`), skip **When to save**: save, reopen or list a kebbie issue only when the user asks you to, by the steps below.
 

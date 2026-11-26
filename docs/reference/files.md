@@ -166,6 +166,15 @@ A `routines/` file holds when the scheduler first saw the routine, when its last
 | `issues/held` | The one line held with `kebbie issue hold`, removed when it is taken or an issue is saved or reopened. |
 | `issues/recheck/` | The rechecks under way, per issue, by extension below, and `dismissed`, when you last cleared the board's line. |
 
+`faults/` holds [the fault watcher](../explanation/fault-watcher.md)'s files.
+
+| Entry | Holds |
+| --- | --- |
+| `faults/cases.json` | The cases waiting to be weighed and the last ones settled, each with your words or the incident, what was said around it and its outcome; and when each fix task of the last two days starts, for the limit of three a day. |
+| `faults/read.json` | How far each chat has been read. |
+| `faults/occurrences/<id>.jsonl` | Each time issue `<id>` happened, with your words, and whether its fix was in use then. Never sent. |
+| `faults/watch.run`, `.running`, `.claude`, `.log`, `.last` | The watcher run under way, its Claude's process group, its output until it answers, and when the last run started. |
+
 | `issues/recheck/` file | Holds |
 | --- | --- |
 | `.wanted` | The build it waits to be checked on. |
@@ -285,7 +294,7 @@ What happened: …
 | `kind` | `bug` or `wish`. |
 | `status` | `open`, `retry`, `fixed`, `wontfix` or `duplicate`. |
 | `version`, `commit` | The kebbie it was filed on. `commit` is empty for a build outside git. |
-| `by` | `user`, `lead`, or `report` for one filed from a report. |
+| `by` | `user`, `lead`, `fault watcher`, or `report` for one filed from a report. |
 | `github` | The linked GitHub issue. Optional. |
 | `sent` | The date of the last `kebbie issue send` or `kebbie issue report`. Optional. |
 | `report` | The report id it went to kebbie's maintainers under. Set once; the issue is never sent again. Optional. |
@@ -293,6 +302,9 @@ What happened: …
 | `source` | `report <id>` for an issue the keeper filed from a report another install sent, under the id `r<id>`. Optional. |
 | `rechecked` | The last recheck after an update: the build's commit, the verdict, when, and the build's version. Optional. |
 | `history` | What happened to it since it was filed, oldest first. Optional. |
+| `cause` | The root cause the fault watcher named. Optional. |
+| `barrier` | `code`, `role` or `skill`: what its fix changes. `code` once a fault came back. Optional. |
+| `fix` | The task that fixes it, queued by the fault watcher. Optional. |
 
 - `id`: the `kebbie-issue: <id>` line in a sent issue is how `kebbie update` finds it on GitHub.
 - `source`: such an issue shows as `[report <id>, untrusted]`, its text fenced. It is never offered for sending, and never rechecked after an update.

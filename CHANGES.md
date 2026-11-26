@@ -22,6 +22,8 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task asks you whether its change works only once its push is out and green, and Verified closes it.
 - Backlog items whose questions wait on you show under Needs you on the Work and Backlog pages and in the Next window.
 - Red CI on main goes only to the task whose push made it red; tasks that pushed on top wait under CI running and close once the fix is green.
+- A fault you point out, in a chat or on the board, becomes a kebbie issue with its root cause and a queued fix task, without the lead; kebbie faults shows whether each came back once its fix was in use, and a fault that comes back after a text fix gets a code barrier.
+- The lead keeps no memory of its own: a lesson about how kebbie or a lead works is a kebbie issue.
 - The lead's promises ("once that lands I set the lint command") are kept by kebbie: it reminds the lead when one is due, a fresh lead hears of them, and the board shows one only when it is overdue.
 - After review findings, a task reports ready only once a test run passed on its latest code; a reworded commit keeps that run.
 - After the push line rebases a task onto a moved default branch, it pushes only once a test run and the repo's lint passed on the rebased code, even when no file overlaps.

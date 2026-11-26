@@ -1199,6 +1199,15 @@ Problems and wishes about kebbie itself, saved on this machine, one file each un
 
 `kebbie issues` shows each issue's id, kind, status, the version and commit it was filed on, the GitHub issue when linked, and the last line of its history, such as `fixed in 0.26.3 (a1b2c3d), checked automatically`.
 
+## kebbie faults
+
+The faults [the fault watcher](../explanation/fault-watcher.md) follows: the kebbie issues it filed from your own words, and any issue it has seen happen.
+
+| Command | What it does |
+| --- | --- |
+| `kebbie faults [--json]` | Each fault's id, its state (`open`, `fixing in <task>`, `in use`, a closed status, with `came back` once it did), how often it happened and how often after its fix was in use, and its title; then how many cases wait to be weighed. |
+| `kebbie faults show <id>` | `kebbie issue show <id>`, with its root cause, barrier and fix task, then each time it happened with your own words, which stay on this machine. |
+
 `kebbie issue hold`:
 
 - One line is held at a time: a new one replaces it. kebbie answers `Held for a calm moment: <line>`, adding `· it replaces: <earlier line>` when it did.

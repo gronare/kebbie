@@ -15,6 +15,8 @@ Keep what kebbie got wrong, or could not do, on your machine, and send it to keb
 | `kebbie issue add --kind bug\|wish --title <title> [<text>\|-]` | Saves a bug or a wish on this machine. |
 | `kebbie issues [--all]` | Lists the open ones, or every status. |
 | `kebbie issue show <id>` | Prints one. |
+| `kebbie faults [--json]` | Lists the faults the fault watcher follows: each one's fix task, how often it happened, and whether it came back once its fix was in use. |
+| `kebbie faults show <id>` | Prints one, with each time it happened in your own words, kept on this machine only. |
 | `kebbie issue report <id>` | Shows a bug or wish as it would go to kebbie's maintainers and sends it on your `y`. |
 | `kebbie issue report --all` | Shows every bug and wish waiting to go and sends them all on one `y`. |
 | `kebbie issue report --always` \| `--ask` | Sends each saved bug and wish without asking, or asks again. |
@@ -30,13 +32,13 @@ On the board, the bugs and wishes to send wait under Work in one row; `⏎` on i
 
 When kebbie costs something in a session (an error, a workaround, a missing capability), the lead saves it as an issue with a text about kebbie alone, asks you nothing about it, and carries on with your work. It waits in the board's bugs to send until you send it.
 
-When you point out a fault in kebbie yourself and kebbie's repo is among your areas, the lead starts a task that fixes it in code instead.
+When you point out a fault in kebbie yourself, in the lead's chat, a task's chat or an answer on the board, [the fault watcher](../explanation/fault-watcher.md) saves it as an issue with its root cause and, with kebbie's repo in your worktree pool, queues the task that fixes it. `kebbie faults` lists the faults it follows.
 
 A task tells the lead instead of asking you. Once saved, an issue is the keeper's to look after: the lead leaves kebbie issues out of its briefings and of what it asks you to decide, and takes up closing or retrying one when you ask about it.
 
 ### Stop the lead saving them
 
-Set this in config.toml. It takes effect when the lead next restarts (`L` on the board), and the lead then saves one only when you ask it to.
+Set this in config.toml. It takes effect when the lead next restarts (`L` on the board), and the lead then saves one only when you ask it to. It turns the fault watcher off too, and the lead then starts a fix task for a fault you point out in kebbie when kebbie's repo is among its areas.
 
 ```toml
 [issues]
