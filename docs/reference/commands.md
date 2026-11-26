@@ -766,7 +766,7 @@ It is refused when the id is taken or config.toml does not parse.
 
 ### `kebbie promise`
 
-A promise is something the lead will do itself once something else has happened, such as "once lint-before-push lands I set `tests.lint_command`". kebbie keeps it, so a restart or a fresh conversation does not lose it.
+A promise is something the lead will do itself, now or once something else has happened, such as "once lint-before-push lands I set `tests.lint_command`" or "I run the review now". kebbie keeps it, so a restart or a fresh conversation does not lose it.
 
 ```bash
 kebbie promise "set tests.lint_command" --after lint-before-push
@@ -778,13 +778,13 @@ kebbie promise "set tests.lint_command" --after lint-before-push
 | `--at <time>` | the time has come, in the words `kebbie start --at` takes. |
 | `--answered <task>` | you have answered the question that task has open on the board. |
 
-Every condition given must hold. Refused, with nothing written, without a condition, for a task that has landed already (do it now instead), for a name that is no task, such as a backlog note, and for `--answered` on a task with no open question.
+Every condition given must hold. A promise with no condition, on tasks that have all landed already, or at a time already past is due at once: kebbie keeps it like any due promise. Refused, with nothing written, without the text, for a name that is no task, such as a backlog note (promise it with no condition instead), and for `--answered` on a task with no open question.
 
 - Once it is due, the keeper reminds the lead once, as a message it acts on.
 - When a condition can no longer hold (the task was dropped, reset, landed with red CI or is gone, or its question closed without your answer), the lead hears that at once, to make it again or drop it. A broken promise is never overdue.
 - A due promise left open two hours is overdue: the lead hears once more, and the board's Work page shows one quiet line, `The lead's promise is overdue since 14:10 today: …`. A promise is never a task under Needs you, on the phone or in `notify.command`.
 - `kebbie promise done <n>` closes it, `kebbie promise drop <n> "<why>"` lets it go.
-- A new conversation of the lead, fresh or on its handover, opens with how many promises wait and `kebbie promises` to read them.
+- A new conversation of the lead, fresh or on its handover, opens with how many promises wait, `kebbie promises` to read them, and the text of each one already due.
 
 Yours or the lead's; a task's own Claude cannot make or close one. Work a task does after another lands is a queued task (`kebbie start --after`), not a promise.
 

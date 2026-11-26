@@ -242,7 +242,7 @@ pub fn handover_written(state: &Path) -> Option<u64> {
 }
 
 pub fn handover_request(kebbie: &str, used: f64) -> String {
-    format!("Your context is {used:.0}% full, and you never compact, so kebbie starts you on a new conversation once you are idle and the user is out of your pane. Write your handover now with {} <<'EOF' … EOF: where each task stands, the decisions since your last vault note, and what waits on the user. Leave your promises out: kebbie keeps them for your next conversation. Then end your turn.", crate::lead::handover_command(kebbie))
+    format!("Your context is {used:.0}% full, and you never compact, so kebbie starts you on a new conversation once you are idle and the user is out of your pane. Write your handover now with {} <<'EOF' … EOF: where each task stands, the decisions since your last vault note, and what waits on the user. Anything you said you would do and have not done goes to {kebbie} promise before the handover, with no condition when it is due now, since the handover is never checked against what was done; leave registered promises out, kebbie keeps them for your next conversation. Then end your turn.", crate::lead::handover_command(kebbie))
 }
 
 pub fn handover_said(used: f64) -> String {
@@ -402,7 +402,7 @@ mod tests {
     #[test]
     fn the_request_names_what_the_handover_holds_and_the_board_hears_one_line() {
         let asked = handover_request("/opt/kebbie/kebbie", 78.4);
-        assert!(asked.starts_with("Your context is 78% full") && asked.contains("/opt/kebbie/kebbie handover <<'EOF'") && asked.contains("where each task stands, the decisions since your last vault note, and what waits on the user") && asked.contains("Leave your promises out: kebbie keeps them for your next conversation."), "{asked}");
+        assert!(asked.starts_with("Your context is 78% full") && asked.contains("/opt/kebbie/kebbie handover <<'EOF'") && asked.contains("where each task stands, the decisions since your last vault note, and what waits on the user") && asked.contains("Anything you said you would do and have not done goes to /opt/kebbie/kebbie promise before the handover, with no condition when it is due now, since the handover is never checked against what was done; leave registered promises out, kebbie keeps them for your next conversation."), "{asked}");
         assert_eq!(handover_said(78.4), "Restarted the lead on a new conversation that reads its handover first, as its context was 78% full.");
     }
 

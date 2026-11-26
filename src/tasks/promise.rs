@@ -53,7 +53,7 @@ impl Promise {
         Some(Promise {
             id: value["id"].as_u64()?,
             text: value["text"].as_str().filter(|text| !text.trim().is_empty())?.to_string(),
-            after: Some(after).filter(|after| !after.is_empty() || at.is_some() || answered.is_some())?,
+            after,
             at,
             answered,
             by: value["by"].as_str().filter(|by| matches!(*by, "user" | "lead"))?.to_string(),
@@ -157,18 +157,11 @@ pub(crate) fn make_in(state: &Path, caller: &Caller, making: &Making, known: &Kn
     let by = promiser(caller)?;
     let text = making.text.trim();
     if text.is_empty() {
-        return Err("kebbie promise needs what you will do: kebbie promise \"<what you will do>\" --after <task[@repo]> | --at \"<time>\" | --answered <task>".to_string());
-    }
-    if making.after.is_empty() && making.at.is_none() && making.answered.is_none() {
-        return Err("kebbie promise needs a condition: --after <task[@repo]> (it has landed), --at \"<time>\" or --answered <task> (the user answered its question)".to_string());
+        return Err("kebbie promise needs what you will do: kebbie promise \"<what you will do>\" [--after <task[@repo]>] [--at \"<time>\"] [--answered <task>]".to_string());
     }
     let mut deps: Vec<Dep> = Vec::new();
     for asked in making.after {
-        let found = after::resolve("lead", &[asked], known)?;
-        if found.is_empty() {
-            return Notice::new(Tone::NotNow, format!("{asked} has landed already")).next(format!("Do it now: {text}")).err();
-        }
-        for dep in found {
+        for dep in after::resolve("lead", &[asked], known)? {
             if !deps.contains(&dep) {
                 deps.push(dep);
             }
@@ -176,11 +169,14 @@ pub(crate) fn make_in(state: &Path, caller: &Caller, making: &Making, known: &Kn
     }
     let answered = making.answered.map(|asked| open_question(log, asked)).transpose()?;
     let _lock = Lock::in_dir(&dir(state), true);
-    let promise = Promise { id: next_id(state), text: text.to_string(), after: deps, at: making.at, answered, by: by.to_string(), made: now, due: None, broken: None, overdue_told: false, gone_since: None };
+    let due_now = deps.is_empty() && making.at.is_none_or(|at| at <= now) && answered.is_none();
+    let promise = Promise { id: next_id(state), text: text.to_string(), after: deps, at: making.at.filter(|_| !due_now), answered, by: by.to_string(), made: now, due: due_now.then_some(now), broken: None, overdue_told: false, gone_since: None };
     save(state, &promise)?;
-    Notice::new(Tone::Done, format!("Promise {} is kept by kebbie", promise.id))
-        .next(format!("kebbie reminds you {}. Once it is done: kebbie promise done {}.", promise.conditions(None, now), promise.id))
-        .detail("promise", text).ok()
+    let next = match due_now {
+        true => format!("It is due now: do it, then kebbie promise done {id}. Until then kebbie lists it to every new conversation of yours and shows it as overdue on the board after two hours.", id = promise.id),
+        false => format!("kebbie reminds you {}. Once it is done: kebbie promise done {}.", promise.conditions(None, now), promise.id),
+    };
+    Notice::new(Tone::Done, format!("Promise {} is kept by kebbie", promise.id)).next(next).detail("promise", text).ok()
 }
 
 pub(crate) fn close_in(state: &Path, caller: &Caller, id: &str, why: Option<&str>) -> Result<String> {
@@ -365,12 +361,18 @@ pub(crate) fn listing_in(state: &Path, log: &[Message], now: u64) -> String {
     promises.iter().map(|promise| shown_line(promise, Some(&facts), now)).collect::<Vec<_>>().join("\n")
 }
 
-// The lead's command line carries its first prompt, so a new conversation hears how many promises wait and where to read them, not the promises themselves.
+// The lead's command line carries its first prompt, so a new conversation hears how many promises wait and where to read them, and the text only of those already due, which no reminder repeats until they are overdue.
 pub(crate) const FIRST_LINE_KEEPS: &str = " that kebbie keeps for you: kebbie promises lists them, and kebbie reminds you when each is due.";
 
 pub(crate) fn first_prompt_line(state: &Path) -> Option<String> {
-    let count = all(state).len();
-    (count > 0).then(|| format!("You have {count} open promise{}{FIRST_LINE_KEEPS}", if count == 1 { "" } else { "s" }))
+    let promises = all(state);
+    let count = promises.len();
+    let due: Vec<String> = promises.iter().filter(|promise| promise.due.is_some() && promise.broken.is_none()).map(|promise| format!("{}. {}", promise.id, promise.text)).collect();
+    let due = match due.is_empty() {
+        true => String::new(),
+        false => format!(" Due now and not yet done: {}.", due.join("; ")),
+    };
+    (count > 0).then(|| format!("You have {count} open promise{}{FIRST_LINE_KEEPS}{due}", if count == 1 { "" } else { "s" }))
 }
 
 pub fn list() -> Result<String> {
@@ -451,16 +453,36 @@ mod tests {
     }
 
     #[test]
-    fn a_promise_needs_a_condition_that_can_still_come_true() {
+    fn a_promise_needs_what_you_will_do_and_conditions_that_can_still_come_true() {
         let state = crate::sh::test_dir("promise-refused");
         let landed = known(&[], &[end("bug-triage@kebbie", 50, "done")]);
         assert!(make_in(&state, &Caller::Lead, &making("", &[], Some(5_000), None), &landed, &[], 100).unwrap_err().contains("needs what you will do"));
-        assert!(make_in(&state, &Caller::Lead, &making("start the review", &[], None, None), &landed, &[], 100).unwrap_err().contains("needs a condition"));
-        let done = make_in(&state, &Caller::Lead, &making("start the review", &["bug-triage"], None, None), &landed, &[], 100).unwrap_err();
-        assert!(done.contains("bug-triage has landed already") && done.contains("Do it now: start the review"), "{done}");
         assert!(make_in(&state, &Caller::Lead, &making("start the review", &["fable-review"], None, None), &landed, &[], 100).unwrap_err().contains("no task, queued task or task done by that name"), "a backlog note is not a task");
         assert!(make_in(&state, &Caller::Lead, &making("ask again", &[], None, Some("billing")), &landed, &[], 100).unwrap_err().contains("billing has no question open"));
         assert!(all(&state).is_empty(), "a refusal writes nothing");
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_promise_due_at_once_is_kept_until_closed_and_named_to_a_new_conversation() {
+        let state = crate::sh::test_dir("promise-now");
+        let landed = known(&[], &[end("bug-triage@kebbie", 50, "done")]);
+        let made = make_in(&state, &Caller::Lead, &making("run the fable review", &[], None, None), &landed, &[], 100).unwrap();
+        assert!(made.contains("Promise 1 is kept by kebbie") && made.contains("It is due now") && made.contains("kebbie promise done 1"), "{made}");
+        let on_landed = make_in(&state, &Caller::Lead, &making("start the review", &["bug-triage"], None, None), &landed, &[], 100).unwrap();
+        assert!(on_landed.contains("Promise 2 is kept by kebbie") && on_landed.contains("It is due now"), "a task landed already makes the promise due, not refused: {on_landed}");
+        let past = make_in(&state, &Caller::Lead, &making("tidy the notes", &[], Some(90), None), &landed, &[], 100).unwrap();
+        assert!(past.contains("It is due now"), "{past}");
+        assert_eq!(all(&state).iter().map(|promise| (promise.id, promise.due, promise.after.is_empty(), promise.at)).collect::<Vec<_>>(), vec![(1, Some(100), true, None), (2, Some(100), true, None), (3, Some(100), true, None)], "read back from disk, none dropped for want of a condition");
+        let first = first_prompt_line(&state).unwrap();
+        assert!(first.starts_with("You have 3 open promises") && first.contains(FIRST_LINE_KEEPS) && first.ends_with(" Due now and not yet done: 1. run the fable review; 2. start the review; 3. tidy the notes."), "{first}");
+        assert!(listing_in(&state, &[], 200).contains("1. run the fable review — due since "));
+        let none = facts(&[], &[]);
+        assert!(reminded(&state, &none, &[], 100 + OVERDUE - 1).is_empty(), "the lead heard it when it made it");
+        assert_eq!(reminded(&state, &none, &[], 100 + OVERDUE).len(), 3, "left undone, it turns overdue like any due promise");
+        assert_eq!(overdue_now(&state, 100 + OVERDUE).len(), 3);
+        close_in(&state, &Caller::Lead, "1", None).unwrap();
+        assert!(!first_prompt_line(&state).unwrap().contains("run the fable review"), "done closes it");
         fs::remove_dir_all(state).unwrap();
     }
 
