@@ -65,6 +65,7 @@ pub struct Run {
     pub read_to: u64,
     pub sandboxed: bool,
     pub in_line: usize,
+    pub line: usize,
     pub lint: bool,
 }
 
@@ -73,7 +74,7 @@ impl Run {
         json!({
             "command": self.command, "runner": self.runner, "result": self.result.name(), "ok": self.result == Outcome::Passed, "why": self.why, "exit": self.exit, "duration_ms": self.duration_ms,
             "summary": self.summary, "sha": self.sha, "dirty": self.dirty, "code": self.code, "at": self.at,
-            "background": self.background, "transcript": self.transcript, "says": self.says.map(Exit::key), "worktree": self.worktree, "read_to": self.read_to, "sandboxed": self.sandboxed, "in_line": self.in_line, "lint": self.lint,
+            "background": self.background, "transcript": self.transcript, "says": self.says.map(Exit::key), "worktree": self.worktree, "read_to": self.read_to, "sandboxed": self.sandboxed, "in_line": self.in_line, "line": self.line, "lint": self.lint,
         })
     }
 
@@ -102,6 +103,7 @@ impl Run {
             worktree: value["worktree"].as_str().unwrap_or_default().to_string(),
             read_to: value["read_to"].as_u64().unwrap_or(0),
             in_line: value["in_line"].as_u64().map_or(1, |count| count as usize),
+            line: value["line"].as_u64().or(value["in_line"].as_u64()).map_or(1, |count| count as usize),
             sandboxed: value["sandboxed"].as_bool().unwrap_or(true),
             lint: value["lint"].as_bool().unwrap_or(false),
         })
@@ -761,6 +763,7 @@ pub struct Ended {
     pub says: Exit,
     pub background: Option<String>,
     pub in_line: usize,
+    pub line: usize,
     pub queued: bool,
 }
 
@@ -786,7 +789,7 @@ pub fn outcome(input: &Value, listed: &[String]) -> Vec<Ended> {
             None => (exit, finished, one.exit),
         };
         Ended {
-            command: command.to_string(), runner: one.runner.to_string(), exit, finished, says, background: background.clone(), in_line: found_count, queued, output: part,
+            command: command.to_string(), runner: one.runner.to_string(), exit, finished, says, background: background.clone(), in_line: found_count, line: found_count, queued, output: part,
         }
     }).collect()
 }
@@ -874,12 +877,13 @@ fn tail_of(path: &Path) -> String {
 // The run's result once its background command ended, from the exit and the output the notification names.
 pub fn settled(run: &Run, end: &End, listed: &[String]) -> Run {
     let output = end.output.as_deref().map(tail_of).unwrap_or_default();
-    let summary = (run.in_line <= 1).then(|| summary(&output)).flatten();
-    let own = (run.in_line <= 1).then(|| own_exit(&find_all(&run.command, listed), 0, &output)).flatten();
+    let alone = run.in_line <= 1 && run.line <= 1;
+    let summary = (if run.lint { alone } else { run.in_line <= 1 }).then(|| summary(&output)).flatten();
+    let own = alone.then(|| own_exit(&find_all(&run.command, listed), 0, &output)).flatten();
     let says = own.map(|(_, says)| says).or(run.says).or_else(|| find(&run.command, listed).map(|found| found.exit)).unwrap_or(Exit::Silent(OTHER));
     let exit = own.map(|(code, _)| code).or(end.exit);
     let (result, why) = match (end.ended, exit) {
-        (true, _) if summary.as_ref().is_none_or(|summary| summary.ran_none) && own.map_or(run.in_line <= 1 && crate::builds::queued_in(&output), |(code, _)| code == i64::from(crate::builds::QUEUED_EXIT)) => (Outcome::Unknown, QUEUED),
+        (true, _) if summary.as_ref().is_none_or(|summary| summary.ran_none) && own.map_or(alone && crate::builds::queued_in(&output), |(code, _)| code == i64::from(crate::builds::QUEUED_EXIT)) => (Outcome::Unknown, QUEUED),
         (false, _) => match summary.as_ref() { Some(summary) if summary.failed => (Outcome::Failed, ""), _ => (Outcome::Unknown, "stopped before it ended") },
         (true, None) => judged(false, Exit::Silent("ended without an exit code"), summary.as_ref()),
         (true, Some(exit)) => judged(exit == 0, says, summary.as_ref()),
@@ -951,19 +955,19 @@ pub fn record_with_lint(state: &Path, address: &str, worktree: &Path, listed: &[
     let ended = outcome(input, listed);
     let lints = ended.iter().filter(|ended| is_lint(&ended.runner, lint)).count();
     let tests = ended.len() - lints;
-    ended.into_iter().map(|ended| { let in_line = if is_lint(&ended.runner, lint) { lints } else { tests }; Ended { in_line, ..ended } })
+    ended.into_iter().map(|ended| { let in_line = if is_lint(&ended.runner, lint) { lints } else { tests }; Ended { in_line, line: lints + tests, ..ended } })
         .filter_map(|ended| record_one(state, address, worktree, input, ended, at, lint)).collect()
 }
 
 fn record_one(state: &Path, address: &str, worktree: &Path, input: &Value, ended: Ended, at: u64, lint: Option<&str>) -> Option<Run> {
-    let Ended { command, runner, exit, finished, output, says, background, in_line, queued } = ended;
+    let Ended { command, runner, exit, finished, output, says, background, in_line, line, queued } = ended;
     let lint = is_lint(&runner, lint);
     let summary = if background.is_some() { None } else { summary(&output) };
     let (result, why) = if background.is_some() { (Outcome::Unknown, IN_BACKGROUND) } else if queued && summary.as_ref().is_none_or(|summary| summary.ran_none) { (Outcome::Unknown, QUEUED) } else { judged(finished, says, summary.as_ref()) };
     let (sha, dirty, code) = snapshot(worktree).ok()?;
     let command = if command.chars().count() > COMMAND_LIMIT { format!("{}…", command.chars().take(COMMAND_LIMIT).collect::<String>()) } else { command };
     let transcript = if background.as_deref().is_some_and(|id| !id.is_empty()) { input["transcript_path"].as_str().unwrap_or_default().to_string() } else { String::new() };
-    let run = Run { command, runner, result, why: why.to_string(), exit, duration_ms: input["duration_ms"].as_u64(), summary: summary.map(|summary| summary.text).unwrap_or_default(), sha, dirty, code, at, background: background.unwrap_or_default(), transcript, says: Some(says), worktree: worktree.to_string_lossy().into_owned(), read_to: 0, sandboxed: crate::sandbox::marked(state, worktree), in_line, lint };
+    let run = Run { command, runner, result, why: why.to_string(), exit, duration_ms: input["duration_ms"].as_u64(), summary: summary.map(|summary| summary.text).unwrap_or_default(), sha, dirty, code, at, background: background.unwrap_or_default(), transcript, says: Some(says), worktree: worktree.to_string_lossy().into_owned(), read_to: 0, sandboxed: crate::sandbox::marked(state, worktree), in_line, line, lint };
     if run.why != QUEUED {
         save(state, address, &run).ok()?;
     }
@@ -1596,7 +1600,7 @@ mod tests {
         let list = listed(&[]);
         let run = record_in(&state, "billing@app", &dir, &list, &passed("cargo test"), 100).remove(0);
         let head = git(&dir, &["rev-parse", "HEAD"]).unwrap();
-        assert_eq!(run, Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result: Outcome::Passed, why: String::new(), exit: Some(0), duration_ms: Some(4187), summary: "2 passed".to_string(), sha: head.clone(), dirty: false, code: head, at: 100, background: String::new(), transcript: String::new(), says: Some(Exit::Speaks), worktree: dir.to_string_lossy().into_owned(), read_to: 0, sandboxed: false, in_line: 1, lint: false });
+        assert_eq!(run, Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result: Outcome::Passed, why: String::new(), exit: Some(0), duration_ms: Some(4187), summary: "2 passed".to_string(), sha: head.clone(), dirty: false, code: head, at: 100, background: String::new(), transcript: String::new(), says: Some(Exit::Speaks), worktree: dir.to_string_lossy().into_owned(), read_to: 0, sandboxed: false, in_line: 1, line: 1, lint: false });
         assert_eq!(runs_in(&state, "billing@app"), [run]);
         let broke = record_in(&state, "billing@app", &dir, &list, &failed("npm test"), 200).remove(0);
         assert!(broke.result == Outcome::Failed && broke.exit == Some(1) && broke.runner == "npm test");
@@ -1777,6 +1781,41 @@ mod tests {
         let ran_first = dir.join("bg2.out");
         fs::write(&ran_first, format!("test result: ok. 3 passed; 0 failed\n{line}\n")).unwrap();
         assert_eq!(settled(&Run { command: "cargo test 2>&1 | tail -3; cargo clippy".to_string(), says: Some(Exit::Silent(OTHER)), ..background.clone() }, &End { ended: true, exit: Some(75), output: Some(ran_first) }, &list).result, Outcome::Passed, "in the background too a result line that counts tests outranks a queue line");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_red_lint_in_a_background_line_with_green_tests_is_never_saved_green() {
+        let dir = repo();
+        let state = dir.join("state");
+        let lint = "cargo clippy --locked --all-targets -- -D warnings";
+        let list = listed(&[lint]);
+        let transcript = dir.join("session.jsonl");
+        fs::write(&transcript, "").unwrap();
+        let mut both = passed(&format!("{lint}; cargo test"));
+        both["tool_input"]["run_in_background"] = json!(true);
+        both["tool_response"] = json!({ "stdout": "", "stderr": "", "interrupted": false, "backgroundTaskId": "bl1" });
+        both["transcript_path"] = json!(transcript.to_str().unwrap());
+        assert_eq!(record_with_lint(&state, "billing@app", &dir, &list, Some(lint), &both, 1).len(), 2);
+        let output = dir.join("bl1.output");
+        fs::write(&output, "error: unused variable: `x`
+error: could not compile `kebbie` due to 1 previous error
+test result: ok. 3 passed; 0 failed; 0 ignored
+").unwrap();
+        fs::write(&transcript, notification("bl1", &output, "completed", "Background command completed (exit code 0)")).unwrap();
+        settle(&state, "billing@app", &list, 10);
+        let lints = lint_runs_in(&state, "billing@app");
+        assert_eq!(lints.len(), 1);
+        assert_ne!(lints[0].result, Outcome::Passed, "the tests' result line is not the lint's, and the line's exit is cargo test's");
+        let mut red = both.clone();
+        red["tool_input"]["command"] = json!(format!("cargo test; {lint}"));
+        red["tool_response"]["backgroundTaskId"] = json!("bl2");
+        record_with_lint(&state, "billing@app", &dir, &list, Some(lint), &red, 2);
+        let output = dir.join("bl2.output");
+        fs::write(&output, "test result: FAILED. 2 passed; 1 failed; 0 ignored\n").unwrap();
+        fs::write(&transcript, notification("bl2", &output, "completed", "Background command completed (exit code 0)")).unwrap();
+        settle(&state, "billing@app", &list, 10);
+        assert_eq!(runs_in(&state, "billing@app").last().unwrap().result, Outcome::Failed, "the test run of the line still reads its own result lines");
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -2020,7 +2059,7 @@ mod tests {
 
     #[test]
     fn the_reviewer_reads_every_run_on_the_reviewed_code_one_line_per_command_and_older_ones_only_without_them() {
-        let run = |at: u64, command: &str, ok: bool, code: &str| Run { command: command.to_string(), runner: "cargo test".to_string(), result: if ok { Outcome::Passed } else { Outcome::Failed }, why: String::new(), exit: Some(0), duration_ms: None, summary: "3 passed".to_string(), sha: format!("{at}abcdef0123"), dirty: at == 9, code: code.to_string(), at, background: String::new(), transcript: String::new(), says: None, worktree: String::new(), read_to: 0, sandboxed: true, in_line: 1, lint: false };
+        let run = |at: u64, command: &str, ok: bool, code: &str| Run { command: command.to_string(), runner: "cargo test".to_string(), result: if ok { Outcome::Passed } else { Outcome::Failed }, why: String::new(), exit: Some(0), duration_ms: None, summary: "3 passed".to_string(), sha: format!("{at}abcdef0123"), dirty: at == 9, code: code.to_string(), at, background: String::new(), transcript: String::new(), says: None, worktree: String::new(), read_to: 0, sandboxed: true, in_line: 1, line: 1, lint: false };
         let mut runs = vec![run(1, "cargo test", false, "old")];
         for at in 2..9 {
             runs.push(run(at, "cargo test --lib evidence", at != 4, "reviewed"));
@@ -2045,7 +2084,7 @@ mod tests {
 
     #[test]
     fn a_run_without_a_result_reads_as_unknown_and_counts_as_no_run_for_the_reviewer() {
-        let run = Run { command: "cargo test | tail -3".to_string(), runner: "cargo test".to_string(), result: Outcome::Unknown, why: "piped".to_string(), exit: Some(0), duration_ms: None, summary: String::new(), sha: "abcdef0123".to_string(), dirty: false, code: "reviewed".to_string(), at: 1, background: String::new(), transcript: String::new(), says: Some(Exit::Silent(PIPED)), worktree: String::new(), read_to: 0, sandboxed: true, in_line: 1, lint: false };
+        let run = Run { command: "cargo test | tail -3".to_string(), runner: "cargo test".to_string(), result: Outcome::Unknown, why: "piped".to_string(), exit: Some(0), duration_ms: None, summary: String::new(), sha: "abcdef0123".to_string(), dirty: false, code: "reviewed".to_string(), at: 1, background: String::new(), transcript: String::new(), says: Some(Exit::Silent(PIPED)), worktree: String::new(), read_to: 0, sandboxed: true, in_line: 1, line: 1, lint: false };
         let judge = |run: &Run| shown(run, |code| code == "reviewed", true);
         assert_eq!(judge(&run).line(), "? cargo test result unknown, piped · at abcdef0", "not a pass even on the code as it is");
         assert_eq!(Run::from_json(&run.to_json()), Some(run.clone()));

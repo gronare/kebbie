@@ -823,7 +823,7 @@ mod tests {
 
     #[test]
     fn a_ready_report_over_a_red_run_names_its_cause_and_one_over_a_green_run_names_none() {
-        let run = |result: crate::evidence::Outcome| crate::evidence::Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result, why: String::new(), exit: None, duration_ms: None, summary: String::new(), sha: "abcdef0".to_string(), dirty: false, code: String::new(), at: 1, background: String::new(), transcript: String::new(), says: None, worktree: String::new(), read_to: 0, sandboxed: true, in_line: 1, lint: false };
+        let run = |result: crate::evidence::Outcome| crate::evidence::Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result, why: String::new(), exit: None, duration_ms: None, summary: String::new(), sha: "abcdef0".to_string(), dirty: false, code: String::new(), at: 1, background: String::new(), transcript: String::new(), says: None, worktree: String::new(), read_to: 0, sandboxed: true, in_line: 1, line: 1, lint: false };
         let red = [run(crate::evidence::Outcome::Passed), run(crate::evidence::Outcome::Failed)];
         let refused = red_gate(&red, None).unwrap_err();
         assert!(refused.contains("`cargo test` failed at abcdef0") && refused.contains("kebbie obstacle") && refused.contains("--red-cause"), "{refused}");
