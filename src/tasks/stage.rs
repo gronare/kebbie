@@ -491,7 +491,7 @@ pub(super) fn unstage_in(state: &Path, caller: &Caller, repo: &Path, slot: &Slot
 fn may_unstage(caller: &Caller, address: &str, repo: &Path) -> std::result::Result<(), String> {
     match caller {
         Caller::User => Ok(()),
-        Caller::Lead => crate::permit::lead_may_push(crate::permit::of(address, &name_of(repo)), true),
+        Caller::Lead => crate::permit::lead_may_push(crate::permit::of(address, &name_of(repo))),
         _ => Err("only the user, or the lead for a task the user gave push permission".to_string()),
     }
 }

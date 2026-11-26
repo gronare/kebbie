@@ -290,7 +290,7 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::New, on: &[Areas], help: "new task in its repo, with its notes", hint: Hint::No },
     Binding { act: Act::AreaRefresh, on: &[Areas], help: "ask the lead to refresh its backlog", hint: Hint::No },
     Binding { act: Act::Log, on: &[Areas], help: "its vault log", hint: Hint::No },
-    Binding { act: Act::Permit, on: &[Areas], help: "let the lead push the repo's reviewed tasks, or take that back", hint: Hint::No },
+    Binding { act: Act::Permit, on: &[Areas], help: "let the lead push the repo's ready tasks, or take that back", hint: Hint::No },
     Binding { act: Act::Push, on: &[Areas], help: "push main when it is ahead (asks first)", hint: Hint::No },
     Binding { act: Act::New, on: &[Routines], help: "new routine: five steps, then the table it adds to config.toml", hint: Hint::No },
     Binding { act: Act::Go, on: &[Routines], help: "run the routine now, unless its last run's task is still open", hint: Hint::No },

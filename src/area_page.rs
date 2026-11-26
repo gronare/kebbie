@@ -365,7 +365,7 @@ impl Page {
             choices.push(if area.repo_name().is_some_and(|repo| permit::repo_permitted(&repo)) {
                 choice(Act::Permit, "Take back the lead's push permission", "the lead pushes only tasks you gave their own permission")
             } else {
-                choice(Act::Permit, "Let the lead push reviewed tasks", "the lead may push any task here once its reviewer passed its current code")
+                choice(Act::Permit, "Let the lead push ready tasks", "the lead may push any ready task here once its rules check passed; a review is optional")
             });
         }
         let refresh = backlog::refresh_label(&self.sources);

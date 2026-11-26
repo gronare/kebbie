@@ -127,7 +127,7 @@ fn rules_fact(item: &Item) -> Option<String> {
 pub(super) fn permit_chip(permit: Option<Permit>) -> Option<(String, Color)> {
     match permit? {
         Permit::Task => Some(("lead may push".to_string(), GREEN)),
-        Permit::Repo => Some(("lead may push once reviewed (repo)".to_string(), TEAL)),
+        Permit::Repo => Some(("lead may push (repo)".to_string(), TEAL)),
     }
 }
 

@@ -202,7 +202,7 @@ pub fn print() -> Result<String> {
         }
         facts.push(format!("{} open, {} backlog", area.open.len(), area.backlog.len()));
         if area.repo_name().is_some_and(|repo| crate::permit::repo_permitted(&repo)) {
-            facts.push("you may push its reviewed tasks".to_string());
+            facts.push("you may push its ready tasks".to_string());
         }
         if !area.sandbox {
             facts.push("task sandbox off".to_string());

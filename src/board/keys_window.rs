@@ -205,7 +205,7 @@ const AREAS: Sheet = Sheet {
             Item { on: On::Own("A–Z"), wide: "the repo's own actions", narrow: "repo's own" },
         ]),
         group("PUSH", &[
-            bind(&[Act::Permit], "let the lead push its reviewed tasks", "lead may push"),
+            bind(&[Act::Permit], "let the lead push its ready tasks", "lead may push"),
             bind(&[Act::Push], "push main when it is ahead", "push main"),
         ]),
     ],

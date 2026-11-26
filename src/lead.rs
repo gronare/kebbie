@@ -1129,7 +1129,7 @@ mod tests {
     #[test]
     fn the_lead_role_carries_the_push_permission_the_vault_log_after_a_push_and_away_mode() {
         let role = role_text(include_str!("../roles/lead.md"), "/opt/kebbie/kebbie", &[Source::Vault], false, true, "English");
-        for needed in ["push_permission", "kebbie -C <repo> push <task>", "once its reviewer passed its current code", "log_append", "with those shas", "kebbie away on|off", "kebbie decide <task>", "kebbie defer <task>", "The user is back", "Tell the user in 1 to 3 lines what landed and which calls you made for them; the kept questions wait for them on the board"] {
+        for needed in ["push_permission", "kebbie -C <repo> push <task>", "a review is not required", "log_append", "with those shas", "kebbie away on|off", "kebbie decide <task>", "kebbie defer <task>", "The user is back", "Tell the user in 1 to 3 lines what landed and which calls you made for them; the kept questions wait for them on the board"] {
             assert!(role.contains(needed), "{needed}");
         }
         assert!(!role.contains("Nobody pushes without the user: not you"), "the lead pushes under the user's permission");

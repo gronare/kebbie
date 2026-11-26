@@ -531,7 +531,7 @@ mod tests {
         assert_eq!(permit_chip(item.permit), Some(("lead may push".to_string(), GREEN)));
         item.permit = Some(Permit::Repo);
         assert_eq!(permission(&item).as_deref(), Some("Let the lead push it"), "the repo's permission is switched on the Areas page");
-        assert_eq!(permit_chip(item.permit), Some(("lead may push once reviewed (repo)".to_string(), TEAL)));
+        assert_eq!(permit_chip(item.permit), Some(("lead may push (repo)".to_string(), TEAL)));
         assert_eq!(permit_chip(None), None);
         let mut session = item.clone();
         session.git = None;

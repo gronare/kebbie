@@ -363,8 +363,8 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   a worktree of kebbie's own, and keeps the task open; its worktree, HEAD and uncommitted
                                   work stay as they are, and its Claude rebases onto the new default branch itself, told
                                   so after the push or before it when its tests or a conflict need it); the user's step, or the lead's for a task the
-                                  user gave push permission on the board (a), or in a repo they did on the Areas page (a)
-                                  once its reviewer passed its current code; the lead is told what landed
+                                  user gave push permission on the board (a), or in a repo they did on the Areas page (a);
+                                  the lead is told what landed
   kebbie try [name]               put a ready task's commits on the main checkout's local default branch, unpushed, to
                                   try them there (repos with worktree.stage_on_main only); several go on in the order
                                   staged, a conflict goes to its Claude and leaves main as it was; the task stays open

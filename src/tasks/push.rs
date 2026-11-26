@@ -433,7 +433,7 @@ pub(super) fn authorize_as(caller: &Caller, repo: &Path, slot: &Slot, upstream: 
         return Notice::new(Tone::NotNow, format!("{refused}: {why}")).next("It stays under Ready to push while the assessor reads it; push it again once the board shows its word.").detail("task", task).err();
     }
     crate::review::gate(shown.as_ref(), covered).map_err(|why| Notice::new(Tone::NotNow, format!("{refused}: {why}")).detail("task", task).to_string())?;
-    let check = Pusher { caller: caller.clone(), permit: crate::permit::of(&address, &name_of(repo)), reviewed: shown.as_ref().is_some_and(|shown| !shown.pending()) || state_dir().is_ok_and(|state| crate::assessment::no_review_now(&state, &address, &slot.path, upstream)), approved: approved(&slot.path, upstream, &address) };
+    let check = Pusher { caller: caller.clone(), permit: crate::permit::of(&address, &name_of(repo)), approved: approved(&slot.path, upstream, &address) };
     check.allowed().map_err(|why| Notice::new(Tone::Failed, format!("{refused}: {} may not push it", crate::permit::describe(&check.caller))).detail("task", task).detail("why", why).to_string())
 }
 
@@ -1052,7 +1052,6 @@ fn capitalized(text: &str) -> String {
 struct Pusher {
     caller: crate::permit::Caller,
     permit: Option<crate::permit::Permit>,
-    reviewed: bool,
     approved: bool,
 }
 
@@ -1063,7 +1062,7 @@ impl Pusher {
             Caller::User => Ok("the user".to_string()),
             Caller::Hub { name, .. } => Ok(format!("{HUB_PUSHER}{name}")),
             Caller::Lead => {
-                crate::permit::lead_may_push(self.permit, self.reviewed)?;
+                crate::permit::lead_may_push(self.permit)?;
                 if !self.approved {
                     return Err("its commits have no rules approval that matches them: wait for the reviewer's rules check, or check them and run kebbie approve".to_string());
                 }
@@ -1144,16 +1143,16 @@ mod tests {
     #[test]
     fn only_the_user_pushes_freely_the_lead_with_permission_and_its_approval_and_no_agent_at_all() {
         use crate::permit::{Caller, Permit};
-        let check = |caller: Caller, permit: Option<Permit>, reviewed: bool, approved: bool| Pusher { caller, permit, reviewed, approved }.allowed();
-        assert_eq!(check(Caller::User, None, false, false), Ok("the user".to_string()));
-        assert_eq!(check(Caller::hub("acc_01"), None, false, false), Ok("the user from your kebbie hub account".to_string()), "the hub pushes as the user, named");
-        assert_eq!(check(Caller::Lead, Some(Permit::Task), false, true), Ok("the lead".to_string()));
-        assert!(check(Caller::Lead, None, true, true).unwrap_err().contains("no push permission"));
-        assert!(check(Caller::Lead, Some(Permit::Task), true, false).unwrap_err().contains("kebbie approve"));
-        assert!(check(Caller::Lead, Some(Permit::Repo), false, true).unwrap_err().contains("reviewer passed"));
-        assert_eq!(check(Caller::Lead, Some(Permit::Repo), true, true), Ok("the lead".to_string()));
+        let check = |caller: Caller, permit: Option<Permit>, approved: bool| Pusher { caller, permit, approved }.allowed();
+        assert_eq!(check(Caller::User, None, false), Ok("the user".to_string()));
+        assert_eq!(check(Caller::hub("acc_01"), None, false), Ok("the user from your kebbie hub account".to_string()), "the hub pushes as the user, named");
+        assert_eq!(check(Caller::Lead, Some(Permit::Task), true), Ok("the lead".to_string()));
+        assert!(check(Caller::Lead, None, true).unwrap_err().contains("no push permission"));
+        assert!(check(Caller::Lead, Some(Permit::Task), false).unwrap_err().contains("kebbie approve"));
+        assert!(check(Caller::Lead, Some(Permit::Repo), false).unwrap_err().contains("kebbie approve"));
+        assert_eq!(check(Caller::Lead, Some(Permit::Repo), true), Ok("the lead".to_string()), "the repo's permission needs no review");
         for agent in [Caller::Task("billing@app".to_string()), Caller::Agent] {
-            assert!(check(agent, Some(Permit::Task), true, true).unwrap_err().contains("no agent pushes"), "a permission is the lead's, never a task's");
+            assert!(check(agent, Some(Permit::Task), true).unwrap_err().contains("no agent pushes"), "a permission is the lead's, never a task's");
         }
     }
 
@@ -2325,7 +2324,7 @@ mod tests {
     }
 
     #[test]
-    fn the_repos_permission_lets_the_lead_push_a_task_its_assessor_said_needs_no_review() {
+    fn the_repos_permission_lets_the_lead_push_a_ready_task_reviewed_or_not() {
         use crate::assessment::{Assessment, settle};
         use crate::config::ReviewAuto;
         use crate::permit::Caller;
@@ -2334,7 +2333,7 @@ mod tests {
         let address = crate::peers::address("billing", &name_of(&dir));
         crate::permit::set_repo_in(&state, &name_of(&dir), true).unwrap();
         record_approval(&state, &address, &fingerprint(&slot.path, &upstream).unwrap(), crate::tasks::ApprovedBy::Reviewer).unwrap();
-        assert!(authorize(&Caller::Lead, &dir, &slot, &upstream, Through::All).unwrap_err().contains("reviewer passed"), "without a word the repo's permission waits for a review");
+        assert_eq!(authorize(&Caller::Lead, &dir, &slot, &upstream, Through::All), Ok("the lead".to_string()), "a review is optional under the repo's permission");
         let assess = |needed: bool| {
             crate::assessment::ask(&state, &address, &slot.path, ReviewAuto::Suggest).unwrap();
             settle(&state, &address, &slot.path, ReviewAuto::Suggest, Some(&Assessment { needed, reason: "wording".to_string() }));
@@ -2343,9 +2342,10 @@ mod tests {
         assert_eq!(authorize(&Caller::Lead, &dir, &slot, &upstream, Through::All), Ok("the lead".to_string()), "no review and a rules approval: the repo's permission covers it");
         commit(&slot.path, "e", "fifth");
         record_approval(&state, &address, &fingerprint(&slot.path, &upstream).unwrap(), crate::tasks::ApprovedBy::Reviewer).unwrap();
-        assert!(authorize(&Caller::Lead, &dir, &slot, &upstream, Through::All).is_err(), "a commit after the word needs a new one");
         assess(true);
-        assert!(authorize(&Caller::Lead, &dir, &slot, &upstream, Through::All).is_err(), "a word that asks for review covers nothing");
+        assert_eq!(authorize(&Caller::Lead, &dir, &slot, &upstream, Through::All), Ok("the lead".to_string()), "a suggested review holds nothing");
+        commit(&slot.path, "f", "sixth");
+        assert!(authorize(&Caller::Lead, &dir, &slot, &upstream, Through::All).unwrap_err().contains("rules approval"), "a commit without a rules approval does");
         crate::permit::set_repo_in(&state, &name_of(&dir), false).unwrap();
         crate::assessment::forget_in(&state, &address);
         cleanup(dir, origin, &slot);

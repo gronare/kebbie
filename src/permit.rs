@@ -5,7 +5,7 @@ use crate::lead::state_dir;
 use crate::messages::{self, Message};
 use crate::sh::Result;
 
-// The user's word that the lead may push: one task, or every task in a repo whose current code its reviewer passed or its assessor said needs no review.
+// The user's word that the lead may push: one task, or every ready task in a repo.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Permit {
     Task,
@@ -81,13 +81,13 @@ pub fn toggle_task(address: &str) -> Result<String> {
     Ok(shown)
 }
 
-// The Areas page's key: the lead may push any task in the repo whose current code its reviewer passed or its assessor said needs no review.
+// The Areas page's key: the lead may push any ready task in the repo.
 pub fn toggle_repo(repo: &str) -> Result<String> {
     let state = state_dir()?;
     let on = !repo_file(&state, repo).exists();
     set_repo_in(&state, repo, on)?;
     let (told, shown) = if on {
-        (format!("The user gave you push permission for the repo {repo}: you may push any task in it whose current code its reviewer passed (kebbie review, verdict ok) or its assessor said needs no review (assessment \"no review\"), once a rules approval matches its commits."), format!("The lead may push tasks in {repo} that were reviewed or need no review now."))
+        (format!("The user gave you push permission for the repo {repo}: you may push any ready task in it once a rules approval matches its commits and it is through any review it is in; a review is not required."), format!("The lead may push ready tasks in {repo}."))
     } else {
         (format!("The user took back push permission for the repo {repo}; tasks with their own permission keep it."), format!("Only you push {repo}'s tasks now, but those you gave their own permission."))
     };
@@ -101,12 +101,10 @@ fn tell_lead(what: messages::ToLead, text: &str) {
     }
 }
 
-// A task's permission covers it outright; the repo's covers only code as it is now that its reviewer passed or its assessor said needs no review.
-pub fn lead_may_push(permit: Option<Permit>, reviewed: bool) -> std::result::Result<(), String> {
+// Either permission covers the task outright; review is optional, and a review it is in still holds the push through the review gate.
+pub fn lead_may_push(permit: Option<Permit>) -> std::result::Result<(), String> {
     match permit {
-        Some(Permit::Task) => Ok(()),
-        Some(Permit::Repo) if reviewed => Ok(()),
-        Some(Permit::Repo) => Err("the repo's push permission covers a task only once its reviewer passed its current code or its assessor said it needs no review: send it to review (kebbie review) and push after a verdict ok".to_string()),
+        Some(Permit::Task | Permit::Repo) => Ok(()),
         None => Err("the user has given no push permission for it or its repo: it waits for the user under Ready to push".to_string()),
     }
 }
@@ -440,11 +438,10 @@ mod tests {
     }
 
     #[test]
-    fn the_lead_pushes_a_permitted_task_and_under_the_repos_permission_only_reviewed_code() {
-        assert_eq!(lead_may_push(Some(Permit::Task), false), Ok(()));
-        assert_eq!(lead_may_push(Some(Permit::Repo), true), Ok(()));
-        assert!(lead_may_push(Some(Permit::Repo), false).unwrap_err().contains("reviewer passed its current code"));
-        assert!(lead_may_push(None, true).unwrap_err().contains("no push permission"));
+    fn the_lead_pushes_a_task_under_its_own_or_its_repos_permission_reviewed_or_not() {
+        assert_eq!(lead_may_push(Some(Permit::Task)), Ok(()));
+        assert_eq!(lead_may_push(Some(Permit::Repo)), Ok(()), "the repo's permission needs no review");
+        assert!(lead_may_push(None).unwrap_err().contains("no push permission"));
     }
 
     #[test]

@@ -669,9 +669,9 @@ impl Item {
         self.report.as_ref()?.next_for_you().map(str::to_string)
     }
 
-    // The lead holds push permission for it, so accepting and pushing it are the lead's unless task.require_accept leaves accepting to the user.
+    // The lead holds push permission for it, so accepting and pushing it are the lead's unless task.require_accept leaves accepting to the user; a held review not passed yet refuses its push.
     pub fn lead_pushes(&self) -> bool {
-        self.permit.is_some() && self.to_accept.is_none()
+        self.permit.is_some() && self.to_accept.is_none() && !self.awaiting_review()
     }
 
     // A task that reported ready is pushed whole, so without task.require_accept nothing in it waits on accepting.
@@ -832,7 +832,7 @@ impl Item {
             "follows_main": self.follows,
             "bypass_permissions": self.bypass,
             "profile": self.profile,
-            "push_permission": self.permit.map(|permit| match permit { crate::permit::Permit::Task => "task", crate::permit::Permit::Repo => "repo, once reviewed" }),
+            "push_permission": self.permit.map(|permit| match permit { crate::permit::Permit::Task => "task", crate::permit::Permit::Repo => "repo" }),
             "report": self.report.as_ref().and_then(|message| Some(json!({
                 "state": message.report.as_ref()?.state, "next": message.report.as_ref()?.next, "summary": message.text, "age": messages::age(message.at),
             }))),
@@ -1627,6 +1627,19 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_ready_task_under_either_permission_goes_out_with_the_lead_unless_a_held_review_has_not_passed() {
+        for permit in [crate::permit::Permit::Task, crate::permit::Permit::Repo] {
+            let mut item = task(Some("idle"), Some("ready"), 2);
+            item.permit = Some(permit);
+            assert!(item.group() == Group::GoingOut && item.summary().ends_with(LEAD_PUSHES), "{permit:?}: no review needed");
+            item.verdict = Some(in_review(true, 0, true, false));
+            assert!(item.group() == Group::ReadyToPush, "{permit:?}: the gate refuses a held review on older code, so the lead does not push it");
+            item.verdict = Some(in_review(true, 0, false, false));
+            assert!(item.group() == Group::GoingOut, "{permit:?}: passed");
+        }
+    }
+
+    #[test]
     fn a_review_that_asks_for_changes_puts_the_task_under_working_until_it_reports_ready_again() {
         let mut item = task(Some("idle"), Some("ready"), 2);
         item.report.as_mut().unwrap().at = 100;
@@ -2314,7 +2327,7 @@ pub(crate) mod tests {
     fn the_json_names_the_permission_and_the_question_the_user_has_to_settle() {
         let mut item = task(Some("idle"), Some("ready"), 2);
         item.permit = Some(crate::permit::Permit::Repo);
-        assert_eq!(item.to_json()["push_permission"], "repo, once reviewed");
+        assert_eq!(item.to_json()["push_permission"], "repo");
         item.permit = Some(crate::permit::Permit::Task);
         assert_eq!(item.to_json()["push_permission"], "task");
         item.question = Some(Message {
