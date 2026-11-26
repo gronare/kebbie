@@ -224,7 +224,7 @@ pub fn reclaim(store: &dyn Store, state: &Path, now: u64) -> Reclaimed {
             settled.push(id);
             continue;
         }
-        if let Err(error) = keep_pending(state, std::slice::from_ref(&one.mail)) {
+        if let Err(error) = take(state, std::slice::from_ref(&one.mail)) {
             lines.failed.push(error);
             continue;
         }
@@ -281,6 +281,15 @@ fn drop_pending(state: &Path, ids: &[String]) -> Result<(), String> {
     let mut all = pending(state);
     all.retain(|mail| !ids.contains(&mail.id));
     save_pending(state, &all)
+}
+
+// Mail read from its inbox here is pending, so a copy still held from an earlier erring write would file it a second time.
+fn take(state: &Path, mails: &[Mail]) -> Result<(), String> {
+    keep_pending(state, mails)?;
+    let mut all = held(state);
+    let count = all.len();
+    all.retain(|one| !mails.iter().any(|mail| mail.id == one.mail.id));
+    if all.len() == count { Ok(()) } else { save_held(state, &all) }
 }
 
 // A copy taken out of an inbox whose write answered with an error, which may have saved all the same.
@@ -352,7 +361,7 @@ pub fn receive(store: &dyn Store, state: &Path, me: &str, file: &dyn Fn(&Filing)
     let (_, mut lines) = settle_held(store, state, false);
     let (inbox, _) = read_inbox(store, me, false)?;
     if !inbox.is_empty() {
-        keep_pending(state, &inbox)?;
+        take(state, &inbox)?;
         let ids: Vec<String> = inbox.iter().map(|mail| mail.id.clone()).collect();
         match remove(store, me, false, &ids) {
             Ok(gone) => drop_pending(state, &gone)?,
@@ -631,6 +640,60 @@ mod tests {
             assert_eq!(lines_filed(&devbox, "devbox", &vault), ["Slow".to_string()], "filed once, whether the earlier write saved or not (saves={saves})");
             assert!(lines_filed(&devbox, "devbox", &vault).is_empty() && held(&devbox).is_empty() && read_inbox(&vault, "devbox", true).unwrap().0.is_empty());
         }
+    }
+
+    struct FirstReadFails<'a> {
+        vault: &'a Vault,
+        failing: std::cell::Cell<u32>,
+    }
+
+    impl Store for FirstReadFails<'_> {
+        fn read(&self, key: &str) -> Result<(String, String), String> {
+            if key.contains("inbox-") && self.failing.get() > 0 {
+                self.failing.set(self.failing.get() - 1);
+                return Err("timed out".to_string());
+            }
+            self.vault.read(key)
+        }
+        fn write(&self, key: &str, etag: &str, text: &str) -> Result<Wrote, String> {
+            self.vault.write(key, etag, text)
+        }
+        fn close(&self, key: &str) -> Result<String, String> {
+            self.vault.close(key)
+        }
+    }
+
+    fn filed_through(store: &dyn Store, state: &Path, me: &str) -> Vec<String> {
+        let filed = std::cell::RefCell::new(Vec::new());
+        receive(store, state, me, &|filing: &Filing| {
+            filed.borrow_mut().push(filing.line.to_string());
+            Ok(String::new())
+        }).unwrap();
+        filed.into_inner()
+    }
+
+    #[test]
+    fn a_held_copy_goes_once_the_usual_round_takes_the_same_item() {
+        let (vault, devbox) = (Vault::default(), scratch("devbox-held-taken"));
+        post(&vault, "devbox", &mail_of(&filing("Slow", ""), "mac", 5)).unwrap();
+        let erring = Erring { vault: &vault, saves: false, reads: std::cell::Cell::new(true) };
+        assert!(receive(&erring, &devbox, "devbox", &|_: &Filing| -> Result<String, String> { panic!("nothing is filed while the write is in doubt") }).is_err());
+        assert_eq!(held(&devbox).len(), 1);
+        let flaky = FirstReadFails { vault: &vault, failing: std::cell::Cell::new(1) };
+        assert_eq!(filed_through(&flaky, &devbox, "devbox"), ["Slow".to_string()], "the held copy's read failed, the round's own read took it");
+        assert!(held(&devbox).is_empty(), "the copy it held goes with it");
+        assert!(lines_filed(&devbox, "devbox", &vault).is_empty(), "filed once");
+
+        let (vault, mac) = (Vault::default(), scratch("mac-held-taken"));
+        vault.notes.borrow_mut().insert(crate::vault_machines::KEY.to_string(), (crate::vault_machines::render(&[machine("devbox", true, &[], 100)]), 1));
+        send_with(&vault, &mac, &machine("mac", false, &[], 100), &filing("Back", ""), 100).unwrap().unwrap();
+        let erring = Erring { vault: &vault, saves: false, reads: std::cell::Cell::new(true) };
+        assert_eq!(reclaim(&erring, &mac, 100 + WAIT).failed.len(), 1);
+        let flaky = FirstReadFails { vault: &vault, failing: std::cell::Cell::new(1) };
+        assert_eq!(reclaim(&flaky, &mac, 100 + WAIT + 30).back.len(), 1, "taken back by the round's own read");
+        assert!(held(&mac).is_empty(), "the copy it held goes with it");
+        assert!(reclaim(&vault, &mac, 100 + WAIT + 60).back.is_empty(), "not taken back twice");
+        assert_eq!(lines_filed(&mac, "mac", &vault), ["Back".to_string()], "filed once");
     }
 
     #[test]
