@@ -14,6 +14,7 @@ pub const EVERY: u64 = 30;
 const READ_AT_MOST: u64 = 8 * 1024 * 1024;
 const LONGEST: usize = 4_000;
 const REPLY_CHARS: usize = 700;
+const KEPT_UNLISTED: u64 = 30 * super::DAY;
 pub const CORRECTING: [&str; 3] = ["Ask for changes", "Reject with a comment", "Something is wrong"];
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -155,7 +156,8 @@ pub fn tick(state: &Path) -> Vec<String> {
 pub fn tick_in(state: &Path, chats: &[Chat], now: u64) -> Vec<String> {
     let Marks { started, marks } = load(state).unwrap_or(Marks { started: now, marks: BTreeMap::new() });
     let mut added = 0;
-    let mut kept: BTreeMap<String, Mark> = marks.into_iter().filter(|(key, _)| changed(Path::new(key)).is_some_and(|at| now.saturating_sub(at) < super::DAY)).collect();
+    let listed = |key: &str| chats.iter().any(|chat| chat.path.display().to_string() == key);
+    let mut kept: BTreeMap<String, Mark> = marks.into_iter().filter(|(key, _)| listed(key) || changed(Path::new(key)).is_some_and(|at| now.saturating_sub(at) < KEPT_UNLISTED)).collect();
     for chat in chats {
         let key = chat.path.display().to_string();
         let Ok((mark, found)) = read_on(kept.remove(&key), &chat.path, started) else { continue };

@@ -151,6 +151,25 @@ fn a_chat_that_began_after_the_watcher_first_looked_is_read_from_its_first_words
 }
 
 #[test]
+fn a_chat_still_a_day_after_its_last_words_is_never_read_again() {
+    let state = state("still-chat");
+    let user = |text: &str| serde_json::json!({ "type": "user", "uuid": "u", "timestamp": "2026-11-26T08:00:00.000Z", "message": { "role": "user", "content": text } }).to_string();
+    let end = serde_json::json!({ "type": "system", "subtype": "turn_duration", "timestamp": "2026-11-26T08:00:06.000Z" }).to_string();
+    let now = crate::messages::now();
+    assert!(capture::tick_in(&state, &[], now - 60).is_empty());
+    let task = state.join("waiting-task.jsonl");
+    fs::write(&task, format!("{}\n{end}\n", user("the board shows this task as done but it is still running"))).unwrap();
+    let chat = [capture::Chat { from: "billing@app".to_string(), path: task, kebbie_typed: Vec::new() }];
+    assert_eq!(capture::tick_in(&state, &chat, now), ["faults: 1 of the user's words to weigh"]);
+    settle(&state, "c1", "no fault in kebbie", None).unwrap();
+    assert!(capture::tick_in(&state, &chat, now + DAY + 1).is_empty(), "a task that waited a day keeps its place in its chat");
+    assert!(capture::tick_in(&state, &[], now + DAY + 31).is_empty());
+    assert!(capture::tick_in(&state, &chat, now + DAY + 61).is_empty(), "a still chat missing from one tick keeps its place too");
+    assert!(pending(&state).is_empty());
+    fs::remove_dir_all(state).unwrap();
+}
+
+#[test]
 fn the_prompts_kebbie_types_into_a_new_chat_are_never_the_users_words() {
     let state = state("start-prompt");
     let user = |text: &str| serde_json::json!({ "type": "user", "uuid": "u", "timestamp": "2026-11-26T08:00:00.000Z", "message": { "role": "user", "content": text } }).to_string();
