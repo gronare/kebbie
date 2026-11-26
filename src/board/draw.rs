@@ -23,7 +23,7 @@ use super::{App, Column, Hit, Mode, Page};
 use super::options::draw_options;
 use super::push::draw_push;
 use super::keys_window;
-use super::status_bar::{hint_hits, hint_lines, status_line};
+use super::status_bar::{hint_hits, hint_lines, status_lines};
 use super::widgets::{MAUVE, MUTED, PEACH, RED, TEXT, YELLOW, modal, render_column, style};
 
 pub(super) fn draw(frame: &mut Frame, app: &mut App) {
@@ -37,13 +37,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     let hub_line = app.hub_banner.clone().filter(|_| app.page == Page::Work).map(|refusal| format!("{refusal} · {} hub", keys::map().label(keys::Act::Hub)));
     let context_line = app.context_line_for(area.width as usize).filter(|_| app.page == Page::Work);
     let banners = [lead_line.map(|line| (line, MAUVE, keys::Act::RestartLead)), context_line.map(|line| (line, PEACH, keys::Act::RestartLead)), hub_line.map(|line| (line, YELLOW, keys::Act::Hub))].into_iter().flatten().collect::<Vec<_>>();
-    let [top, _, lead_area, body, messages_area, bottom] = Layout::vertical([
-        Constraint::Length(1), Constraint::Length(1), Constraint::Length(if banners.is_empty() { 0 } else { banners.len() as u16 + 1 }), Constraint::Min(3), Constraint::Length(messages_height(fold, full.height)), Constraint::Length(1),
-    ]).areas(area);
-    let (line, tabs) = header(app, top.width);
-    frame.render_widget(Paragraph::new(line), top);
-    let tab_hits: Vec<(Rect, Hit)> = tabs.into_iter().map(|(x, width, page)| (Rect::new(top.x + x, top.y, width, 1), Hit::Tab(page))).collect();
-    app.beside.shown = matches!(app.page, Page::Work | Page::Backlog) && app.error.is_none() && app.loaded && app.column != Column::Backlog && body.width >= 86;
+    app.beside.shown = matches!(app.page, Page::Work | Page::Backlog) && app.error.is_none() && app.loaded && app.column != Column::Backlog && area.width >= 86;
     let (full_hints, short_hints) = match app.page {
         Page::Work | Page::Backlog => hint_lines(app.ctx(), app.selected_s_opens(), app.lead_chat.is_some(), app.selected_steps(), &app.pane_hints()),
         Page::Areas => area_page::Page::hint_lines(),
@@ -51,10 +45,22 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Page::Settings => app.settings.hint_lines(),
     };
     let updates: &[(String, String)] = if app.page == Page::Work { &app.updates } else { &[] };
-    let status = match app.leaving_line().or_else(|| app.notice.as_ref().filter(|(_, at)| at.elapsed() < Duration::from_secs(3)).map(|(text, _)| text.clone())) {
-        Some(text) => Line::from(Span::styled(text, style(PEACH))),
-        None => app.subtask_keys().filter(|_| app.page == Page::Work).unwrap_or_else(|| status_line(full_hints, short_hints, updates, app.usage.as_ref(), bottom.width as usize, super::clock::now())),
+    let (full_hints, short_hints) = match app.subtask_keys().filter(|_| app.page == Page::Work) {
+        Some(inside) => (inside.clone(), inside),
+        None => (full_hints, short_hints),
     };
+    let mut status = status_lines(full_hints, short_hints, updates, app.usage.as_ref(), area.width as usize, super::clock::now());
+    if let Some(text) = app.leaving_line().or_else(|| app.notice.as_ref().filter(|(_, at)| at.elapsed() < Duration::from_secs(3)).map(|(text, _)| text.clone()))
+        && let Some(last) = status.last_mut()
+    {
+        *last = Line::from(Span::styled(text, style(PEACH)));
+    }
+    let [top, _, lead_area, body, messages_area, bottom] = Layout::vertical([
+        Constraint::Length(1), Constraint::Length(1), Constraint::Length(if banners.is_empty() { 0 } else { banners.len() as u16 + 1 }), Constraint::Min(3), Constraint::Length(messages_height(fold, full.height)), Constraint::Length(status.len() as u16),
+    ]).areas(area);
+    let (line, tabs) = header(app, top.width);
+    frame.render_widget(Paragraph::new(line), top);
+    let tab_hits: Vec<(Rect, Hit)> = tabs.into_iter().map(|(x, width, page)| (Rect::new(top.x + x, top.y, width, 1), Hit::Tab(page))).collect();
     if app.page == Page::Areas {
         frame.render_widget(Paragraph::new(status), bottom);
         app.areas.draw(frame, body);

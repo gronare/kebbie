@@ -1,6 +1,6 @@
 use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::Color;
 use ratatui::text::{Line, Span};
 
 use crate::keys::{self, Act, Ctx};
@@ -40,7 +40,12 @@ pub(super) fn hint_lines(ctx: Ctx, opens: Option<&'static str>, lead: bool, step
     (status_hints(&full), status_hints(&short))
 }
 
-pub(super) fn hint_hits(line: &Line, area: Rect, ctx: Ctx, opens: Option<&'static str>, lead: bool, steps: bool, panes: &Hints) -> Vec<(Rect, Hit)> {
+pub(super) fn hint_hits(lines: &[Line], area: Rect, ctx: Ctx, opens: Option<&'static str>, lead: bool, steps: bool, panes: &Hints) -> Vec<(Rect, Hit)> {
+    lines.iter().enumerate().filter(|(row, _)| (*row as u16) < area.height)
+        .flat_map(|(row, line)| row_hits(line, Rect { y: area.y + row as u16, height: 1, ..area }, ctx, opens, lead, steps, panes)).collect()
+}
+
+fn row_hits(line: &Line, area: Rect, ctx: Ctx, opens: Option<&'static str>, lead: bool, steps: bool, panes: &Hints) -> Vec<(Rect, Hit)> {
     let text = line.to_string();
     let mut hits = Vec::new();
     let update = keys::map().code(Act::Update);
@@ -123,33 +128,95 @@ fn short_update_hint() -> String {
     format!("↑ update · {}", keys::key(Act::Update))
 }
 
-pub(super) fn status_line(full: Line<'static>, short: Line<'static>, updates: &[(String, String)], usage: Option<&Usage>, width: usize, now: u64) -> Line<'static> {
-    let right = |wide: bool| usage.map(|usage| usage_spans(usage, wide, now)).unwrap_or_default();
-    let width_of = |spans: &[Span]| spans.iter().map(|span| span.width()).sum::<usize>();
-    let left_width = |line: &Line| line.width() - line.spans.last().map_or(0, |span| span.content.len() - span.content.trim_end().len());
+pub(super) fn status_lines(full: Line<'static>, short: Line<'static>, updates: &[(String, String)], usage: Option<&Usage>, width: usize, now: u64) -> Vec<Line<'static>> {
     let notices: Vec<Vec<Span<'static>>> = if updates.is_empty() { Vec::new() } else { vec![update_notice(updates, true), update_notice(updates, false)] };
-    let short_text = short.to_string();
-    let shortest = Line::from(Span::styled(short_text.rsplit_once(" · ").map_or(short_text.as_str(), |(kept, _)| kept).to_string(), short.spans.first().map_or_else(Style::new, |span| span.style)));
+    let right = |wide: bool| usage.map(|usage| usage_spans(usage, wide, now)).unwrap_or_default();
     let combos = [(&full, true), (&short, true), (&full, false), (&short, false)];
-    let with_notice: Vec<((&Line, bool), Vec<Span>)> = combos[..2].iter().flat_map(|combo| notices.iter().map(move |notice| (*combo, notice.clone())))
-        .chain(notices.last().map(|notice| ((&shortest, true), notice.clone())))
-        .chain(combos[2..].iter().flat_map(|combo| notices.iter().map(move |notice| (*combo, notice.clone())))).collect();
-    let tries = with_notice.into_iter().chain(combos.iter().map(|combo| (*combo, Vec::new())));
+    let tries = combos.iter().flat_map(|combo| notices.iter().map(move |notice| (*combo, notice.clone()))).chain(combos.iter().map(|combo| (*combo, Vec::new())));
     for ((left, wide), notice) in tries {
-        let spans = right(wide);
-        let used = left_width(left) + width_of(&notice) + width_of(&spans);
-        if used + 2 <= width || spans.is_empty() && used <= width {
-            let mut line: Vec<Span> = left.spans.clone();
-            if let Some(last) = line.last_mut() {
-                last.content = last.content.trim_end().to_string().into();
-            }
-            line.extend(notice);
-            line.push(Span::raw(" ".repeat(width.saturating_sub(used))));
-            line.extend(spans);
-            return Line::from(line);
+        if let Some(line) = beside(left, notice, right(wide), width) {
+            return vec![line];
         }
     }
-    short
+    let mut rows = wrapped(&full, width);
+    if rows.len() > 2 {
+        rows = wrapped(&short, width);
+    }
+    let with_notice: Vec<_> = notices.iter().flat_map(|notice| [true, false].map(|wide| (notice.clone(), right(wide)))).collect();
+    let groups = [with_notice, [true, false].map(|wide| (Vec::new(), right(wide))).to_vec()];
+    let empty = Line::default();
+    for tails in groups {
+        let tails: Vec<_> = tails.into_iter().filter(|(notice, spans)| !notice.is_empty() || !spans.is_empty()).collect();
+        if let Some(last) = rows.last_mut()
+            && let Some(line) = tails.iter().find_map(|(notice, spans)| beside(last, notice.clone(), spans.clone(), width))
+        {
+            *last = line;
+            return rows;
+        }
+        if let Some(line) = tails.iter().find_map(|(notice, spans)| beside(&empty, trimmed(notice.clone()), spans.clone(), width)) {
+            rows.push(line);
+            return rows;
+        }
+    }
+    rows
+}
+
+fn trimmed(mut notice: Vec<Span<'static>>) -> Vec<Span<'static>> {
+    if notice.first().is_some_and(|span| span.content.trim().is_empty()) {
+        notice.remove(0);
+    }
+    notice
+}
+
+// The hints at the left and the usage at the right edge, when both fit the width with room between them.
+fn beside(left: &Line<'static>, notice: Vec<Span<'static>>, spans: Vec<Span<'static>>, width: usize) -> Option<Line<'static>> {
+    let width_of = |spans: &[Span]| spans.iter().map(|span| span.width()).sum::<usize>();
+    let left_width = left.width() - left.spans.last().map_or(0, |span| span.content.len() - span.content.trim_end().len());
+    let used = left_width + width_of(&notice) + width_of(&spans);
+    if used + 2 > width && !(spans.is_empty() && used <= width) {
+        return None;
+    }
+    let mut line: Vec<Span> = left.spans.clone();
+    if let Some(last) = line.last_mut() {
+        last.content = last.content.trim_end().to_string().into();
+    }
+    line.extend(notice);
+    line.push(Span::raw(" ".repeat(width.saturating_sub(used))));
+    line.extend(spans);
+    Some(Line::from(line))
+}
+
+// The hints broken between whole hints onto as many rows as the width needs, never cut inside one, each keeping its own styles.
+fn wrapped(line: &Line<'static>, width: usize) -> Vec<Line<'static>> {
+    if line.width() <= width {
+        return vec![line.clone()];
+    }
+    let mut hints: Vec<Vec<Span<'static>>> = vec![Vec::new()];
+    let mut separator = Span::raw(" · ");
+    for span in &line.spans {
+        for (index, piece) in span.content.split(" · ").enumerate() {
+            if index > 0 {
+                separator = Span::styled(" · ", span.style);
+                hints.push(Vec::new());
+            }
+            if let Some(hint) = hints.last_mut()
+                && !piece.is_empty()
+            {
+                hint.push(Span::styled(piece.to_string(), span.style));
+            }
+        }
+    }
+    let width_of = |spans: &[Span]| spans.iter().map(Span::width).sum::<usize>();
+    let mut rows: Vec<Vec<Span<'static>>> = Vec::new();
+    for hint in hints.into_iter().filter(|hint| width_of(hint) > 0) {
+        if let Some(row) = rows.last_mut().filter(|row| width_of(row) + separator.width() + width_of(&hint) <= width) {
+            row.push(separator.clone());
+            row.extend(hint);
+        } else {
+            rows.push(hint);
+        }
+    }
+    rows.into_iter().map(Line::from).collect()
 }
 
 #[cfg(test)]
@@ -245,14 +312,118 @@ mod tests {
         let (ux, _) = find(&rows[28..29], "U updates")[0];
         assert_eq!(app.hit_at(ux as u16, 28), Some(Hit::Key(KeyCode::Char('U'))));
         let (rows, _) = render(&mut app, 112, 30);
-        assert!(rows[28].trim_start().starts_with("⏎ options · i inbox   ↑ update · U") && rows[28].contains("session ━━━━━━━━ 23% resets") && rows[28].contains("week ━━━━━━━━ 71% resets"), "the herdr popup keeps the bars, ? keys makes room: {}", rows[28]);
+        assert!(rows[28].trim_start().starts_with("→ card · ⏎ options · tab lead · i inbox · m messages · ? keys   ↑ update · U") && rows[28].trim_end().ends_with("5h 23% · 7d 71%"), "the herdr popup keeps every key and the notice, with the usage short: {}", rows[28]);
         let (x, _) = find(&rows[28..29], "↑ update · U")[0];
         assert_eq!(app.hit_at(x as u16, 28), Some(Hit::Key(KeyCode::Char('U'))));
         let (rows, _) = render(&mut app, 40, 30);
-        assert!(rows[28].trim_start().starts_with("⏎ options · i inbox · ? keys"), "too narrow for it, the hints stay: {}", rows[28]);
+        let shown = footer(&rows).join("\n");
+        assert!(shown.contains("⏎ options") && shown.contains("? keys") && rows[28].trim_end().ends_with("5h 23% · 7d 71%"), "too narrow for the notice, every key and the usage stay: {shown}");
         app.page = Page::Areas;
         let (rows, _) = render(&mut app, 170, 30);
         assert!(!rows[28].contains("updates") && !rows[28].contains("↑ update"), "the Work page only: {}", rows[28]);
+    }
+
+    fn subtask_task_with_usage() -> crate::board::App {
+        crate::board::clock::pin(NOON, 0);
+        let mut item = crate::board::steps::tests::stepped(crate::board::steps::tests::stripe());
+        item.path = Some(std::path::PathBuf::from("/work/wt1.billing"));
+        let mut app = test_app(vec![item]);
+        app.usage = Some(Usage {
+            session: Some(usage::Window { used: 23.0, resets_at: NOON + 600 }), week: Some(usage::Window { used: 71.4, resets_at: NOON + 3 * 86_400 }), seen_at: NOON,
+        });
+        app
+    }
+
+    fn footer(rows: &[String]) -> Vec<String> {
+        let last = rows.len() - 2;
+        let first = (0..=last).rev().take_while(|row| rows[*row].contains(" · ") && !rows[*row].contains('│')).last().unwrap_or(last);
+        rows[first..=last].to_vec()
+    }
+
+    #[test]
+    fn in_a_narrow_pane_the_keys_break_onto_two_rows_whole_and_the_usage_stays_at_the_bottom() {
+        let mut app = subtask_task_with_usage();
+        let (rows, _) = render(&mut app, 60, 30);
+        let bottom = footer(&rows);
+        let shown = bottom.join("\n");
+        assert!(app.selected_steps(), "the cursor is on a task with subtask rows");
+        let hints = work_hints(Ctx::Work, app.selected_s_opens(), false, true, &app.pane_hints()).0;
+        for (key, label, _) in &hints {
+            assert!(bottom.iter().any(|row| row.contains(&format!("{key} {label}"))), "{key} {label} shows whole on one row: {shown}");
+        }
+        assert!(shown.contains("? keys") && shown.contains("space subtasks"), "{shown}");
+        assert!(bottom.last().is_some_and(|row| row.trim_end().ends_with("5h 23% · 7d 71%")), "the usage closes the last row: {shown}");
+        assert!(bottom.len() <= 3, "{shown}");
+        let (x, y) = find(&rows, "? keys")[0];
+        assert_eq!(app.hit_at(x as u16, y as u16), Some(Hit::Key(keys::map().code(Act::Help))), "a key on a wrapped row is clicked where it shows");
+        let usage_row = rows.iter().position(|row| row.contains("5h 23%")).expect("usage shows");
+        assert_eq!(usage_row, 28, "the usage sits on the last row, whatever the list holds");
+    }
+
+    #[test]
+    fn where_the_keys_break_the_short_usage_closes_their_last_row_before_the_bars_take_a_row_of_their_own() {
+        let mut app = subtask_task_with_usage();
+        for width in 66..=72 {
+            let (rows, _) = render(&mut app, width, 30);
+            let bottom = footer(&rows);
+            assert_eq!(bottom.len(), 2, "two rows at {width} columns: {bottom:?}");
+            assert!(rows[28].contains("? keys") && rows[28].trim_end().ends_with("5h 23% · 7d 71%"), "at {width} columns: {}", rows[28]);
+        }
+    }
+
+    #[test]
+    fn a_waiting_update_closes_the_last_key_row_in_its_short_form_before_it_takes_a_row_of_its_own() {
+        let mut app = subtask_task_with_usage();
+        app.updates = vec![("kebbie".to_string(), "0.18.2".to_string())];
+        for width in 62..=69 {
+            let (rows, _) = render(&mut app, width, 30);
+            let bottom = footer(&rows);
+            assert_eq!(bottom.len(), 2, "two rows at {width} columns: {bottom:?}");
+            assert!(rows[28].contains("? keys") && rows[28].contains("↑ ") && rows[28].trim_end().ends_with("5h 23% · 7d 71%"), "at {width} columns: {}", rows[28]);
+        }
+    }
+
+    #[test]
+    fn on_a_wide_board_the_keys_and_the_usage_share_one_row_on_a_task_with_subtasks() {
+        let mut app = subtask_task_with_usage();
+        let (rows, _) = render(&mut app, 170, 30);
+        let bottom = footer(&rows);
+        assert_eq!(bottom.len(), 1, "{bottom:?}");
+        assert!(bottom[0].contains("↑ ↓ task · space subtasks") && bottom[0].contains("? keys") && bottom[0].contains("session ━━━━━━━━ 23% resets 12:10"), "{}", bottom[0]);
+    }
+
+    #[test]
+    fn inside_a_task_the_usage_stays_beside_the_subtask_keys() {
+        let mut app = subtask_task_with_usage();
+        crate::board::test_support::press(&mut app, crate::board::test_support::key(KeyCode::Char(' ')));
+        let (rows, _) = render(&mut app, 60, 30);
+        let shown = footer(&rows).join("\n");
+        assert!(shown.contains("↑ ↓ subtask") && shown.contains("task") && rows[28].contains("5h 23% · 7d 71%"), "{shown}");
+        let (rows, buffer) = render(&mut app, 60, 30);
+        let bottom = footer(&rows);
+        assert!(bottom.len() > 1, "the subtask keys break at 60 columns: {bottom:?}");
+        let first = 29 - bottom.len();
+        let (x, y) = find(&rows[first..29], "↑ ↓ subtask")[0];
+        assert_eq!((buffer[(x as u16, (first + y) as u16)].fg, buffer[(x as u16 + 4, (first + y) as u16)].fg), (crate::board::widgets::MAUVE, MUTED), "a wrapped key keeps its colour apart from its label");
+        let (x, y) = find(&rows[first + 1..29], "esc")[0];
+        assert_eq!(buffer[(x as u16, (first + 1 + y) as u16)].fg, crate::board::widgets::MAUVE, "on the second row too");
+        let (rows, _) = render(&mut app, 170, 30);
+        assert!(rows[28].contains("↑ ↓ subtask · ⏎ options") && rows[28].contains("session ━━━━━━━━ 23%"), "{}", rows[28]);
+    }
+
+    #[test]
+    fn a_waiting_update_stays_when_the_keys_break_and_a_toast_keeps_the_rows() {
+        let mut app = subtask_task_with_usage();
+        app.updates = vec![("kebbie".to_string(), "0.18.2".to_string())];
+        let (rows, _) = render(&mut app, 60, 30);
+        let bottom = footer(&rows);
+        let shown = bottom.join("\n");
+        assert!(bottom.len() > 1 && shown.contains("↑ ") && shown.contains("U update") && shown.contains("? keys") && rows[28].trim_end().ends_with("5h 23% · 7d 71%"), "the notice, every key and the usage: {shown}");
+        let before = bottom.len();
+        app.notice = Some(("Copied the link".to_string(), std::time::Instant::now()));
+        let (rows, _) = render(&mut app, 60, 30);
+        assert!(rows[28].contains("Copied the link"), "the toast takes the last row: {}", rows[28]);
+        assert!(rows[29 - before].contains("space subtasks"), "the rows above keep their keys, so the list does not jump: {}", rows.join("\n"));
     }
 
     #[test]

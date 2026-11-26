@@ -15,6 +15,7 @@ A board you quit in the lead Space starts again the next time you press `prefix+
 | Work, left | Tasks from every repo with a worktree pool, grouped, in the order of [`board.groups`](configuration.md). |
 | Card, right | The [card](#the-card-beside-the-tasks) of the task under the cursor, or of the subtask while one is highlighted. |
 | Messages, bottom | What sessions tell each other, newest last. |
+| Keys line, last | The keys that act where the cursor is, with the plan usage at the right edge. It stays put while the list scrolls above it. When the keys and the usage do not fit one row, the keys break between whole keys onto a second row and the usage closes the last row, or takes a row of its own. |
 
 The status line shows:
 
