@@ -1179,15 +1179,68 @@ fn hook_in(state: &Path, address: &str, seen: &Seen) -> Hook {
     }
 }
 
+// A commit under review, with whether it ends a part: the last of its subtask's commits in branch order, or the branch's last.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Reviewed {
+    pub sha: String,
+    pub subject: String,
+    pub ends_part: bool,
+}
+
 // A run counts for the review when it ran on the reviewed commit's tree, so a reworded commit keeps it; uncommitted work since does not make it stale, as the reviewer reads commits.
-pub fn brief_for(state: &Path, address: &str, worktree: &Path, sha: &str) -> String {
+pub fn brief_for(state: &Path, address: &str, worktree: &Path, sha: &str, commits: &[Reviewed]) -> String {
     let seen = seen_in(state, address);
     let listed = listed_in(worktree);
     settle(state, address, &listed, crate::messages::now());
     let unrecorded: Vec<String> = seen.unrecorded.iter().filter(|command| recognise(command, &listed).is_none()).cloned().collect();
+    let runs = runs_in(state, address);
     let reviewed = tree_of(worktree, sha);
     let current = |code: &str| code == sha || (reviewed.is_some() && tree_of(worktree, code) == reviewed);
-    brief(&runs_in(state, address), |run| current(&run.code), |run| on_reviewed(shown(run, current, true), run), hook_in(state, address, &seen), &unrecorded)
+    let trees: Vec<(String, Option<String>)> = commits.iter().map(|commit| (commit.sha.clone(), tree_of(worktree, &commit.sha))).collect();
+    let covered = |run: &Run| {
+        let tree = tree_of(worktree, &run.code);
+        trees.iter().filter(|(commit, own)| *commit == run.code || (own.is_some() && *own == tree)).map(|(commit, _)| commit.clone()).collect::<Vec<_>>()
+    };
+    let judge = |run: &Run| match covered(run).first() {
+        Some(commit) if !current(&run.code) && run.result == Outcome::Passed => on_commit(run, commit),
+        _ => on_reviewed(shown(run, current, true), run),
+    };
+    let mut text = brief(&runs, |run| current(&run.code), judge, hook_in(state, address, &seen), &unrecorded);
+    if commits.len() > 1 {
+        text.push('\n');
+        text.push_str(&each_commit(&runs, commits, |run| covered(run)));
+    }
+    text
+}
+
+// One line per commit under review with the newest result of each command that ran on its code, so per-commit runs read as covering their own commit.
+pub fn each_commit(runs: &[Run], commits: &[Reviewed], covered: impl Fn(&Run) -> Vec<String>) -> String {
+    let owners: Vec<Vec<String>> = runs.iter().map(&covered).collect();
+    let mut lines = vec!["Each commit under review, oldest first, with the newest result of each test command kebbie recorded on its own code (✓ passed, ✗ failed, ? result unknown). A passing run is needed on each commit that ends a part, the last of its subtask's commits and the branch's last; a commit inside a part needs none:".to_string()];
+    for commit in commits {
+        let mut seen: Vec<(&str, &str)> = Vec::new();
+        let mut results = Vec::new();
+        for (run, owner) in runs.iter().zip(&owners).rev() {
+            if !owner.contains(&commit.sha) || seen.contains(&(run.command.as_str(), run.runner.as_str())) {
+                continue;
+            }
+            seen.push((&run.command, &run.runner));
+            let symbol = match run.result { Outcome::Passed => "✓", Outcome::Failed => "✗", Outcome::Unknown => "?" };
+            results.push(format!("{symbol} `{}`{}", run.command, with_changes(run)));
+        }
+        let part = if commit.ends_part { " · ends a part" } else { "" };
+        let passed = runs.iter().zip(&owners).any(|(run, owner)| owner.contains(&commit.sha) && run.result == Outcome::Passed);
+        let results = if results.is_empty() { "no run on its code".to_string() } else if passed { results.join(", ") } else { format!("{}, none passed", results.join(", ")) };
+        lines.push(format!("- {} {}{part}: {results}", &commit.sha[..7.min(commit.sha.len())], commit.subject));
+    }
+    lines.join("\n")
+}
+
+// A passing run on an earlier commit under review covers that commit, not the branch's last.
+fn on_commit(run: &Run, commit: &str) -> Shown {
+    let counts = if run.summary.is_empty() { String::new() } else { format!(" · {}", run.summary) };
+    let unverified = if run.sandboxed { "" } else { UNVERIFIED };
+    Shown { mark: Mark::Stale, text: format!("{}{counts} · covers commit {} under review, not the last{unverified}", run.runner, &commit[..7.min(commit.len())]) }
 }
 
 // In the brief a run on the reviewed code says so, since its own sha may be an older commit that holds the same tree.
@@ -1908,12 +1961,59 @@ mod tests {
         git(&dir, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend", "-m", "the change, reworded"]).unwrap();
         let reworded = git(&dir, &["rev-parse", "HEAD"]).unwrap();
         assert_ne!(reworded, run.sha);
-        let text = brief_for(&state, "billing@app", &dir, &reworded);
+        let text = brief_for(&state, "billing@app", &dir, &reworded, &[]);
         assert!(text.contains("✓ cargo test · 2 passed · covers the reviewed code") && !text.contains(&run.sha[..7]), "a reworded commit holds the same code, so the run covers it: {text}");
         fs::write(dir.join("a"), "three\n").unwrap();
         commit_all(&dir, "more");
-        let text = brief_for(&state, "billing@app", &dir, &git(&dir, &["rev-parse", "HEAD"]).unwrap());
-        assert!(text.contains("No test run kebbie recorded ran on the code under review"), "other code is not covered: {text}");
+        let head = git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        let text = brief_for(&state, "billing@app", &dir, &head, &[reviewed(&reworded, "the change", false), reviewed(&head, "more", true)]);
+        assert!(text.contains("No test run kebbie recorded ran on the code under review"), "the last commit's code is not covered: {text}");
+        assert!(text.contains(&format!("○ cargo test · 2 passed · covers commit {} under review, not the last", &reworded[..7])), "the run still covers the commit it ran on: {text}");
+        assert!(text.contains(&format!("- {} more · ends a part: no run on its code", &head[..7])), "{text}");
+        fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    fn reviewed(sha: &str, subject: &str, ends_part: bool) -> Reviewed {
+        Reviewed { sha: sha.to_string(), subject: subject.to_string(), ends_part }
+    }
+
+    #[test]
+    fn a_run_at_each_commit_covers_its_own_commit_in_the_reviewers_brief_whichever_ran_last() {
+        let dir = repo();
+        let state = crate::sh::test_dir("evidence-per-commit");
+        let list = listed(&[]);
+        fs::write(dir.join("a"), "two\n").unwrap();
+        commit_all(&dir, "the model");
+        let first = git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        fs::write(dir.join("a"), "three\n").unwrap();
+        commit_all(&dir, "the view");
+        let second = git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        record_in(&state, "billing@app", &dir, &list, &passed("cargo test"), 1);
+        git(&dir, &["reset", "--quiet", "--keep", &first]).unwrap();
+        record_in(&state, "billing@app", &dir, &list, &passed("cargo test"), 2);
+        git(&dir, &["reset", "--quiet", "--keep", &second]).unwrap();
+        let commits = [reviewed(&first, "the model", true), reviewed(&second, "the view", true)];
+        let text = brief_for(&state, "billing@app", &dir, &second, &commits);
+        assert!(text.contains("- `cargo test` ✓ cargo test · 2 passed · covers the reviewed code"), "the last commit's section holds its own run only: {text}");
+        assert!(!text.contains("No test run kebbie recorded ran on the code under review") && !text.contains("code changed since"), "the last commit's own run covers it although a run on the first came later: {text}");
+        assert!(text.contains(&format!("- {} the model · ends a part: ✓ `cargo test`", &first[..7])), "the first commit's run counts for it: {text}");
+        assert!(text.contains(&format!("- {} the view · ends a part: ✓ `cargo test`", &second[..7])), "{text}");
+        let inside = brief_for(&state, "billing@app", &dir, &second, &[reviewed(&first, "the model", false), reviewed(&second, "the view", true)]);
+        assert!(inside.contains(&format!("- {} the model: ✓", &first[..7])), "a commit inside a part is not marked as ending one: {inside}");
+        git(&dir, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--allow-empty", "-m", "the same tree"]).unwrap();
+        let same = git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        git(&dir, &["reset", "--quiet", "--keep", &first]).unwrap();
+        record_in(&state, "billing@app", &dir, &list, &failed("cargo test"), 3);
+        git(&dir, &["reset", "--quiet", "--keep", &same]).unwrap();
+        fs::write(dir.join("a"), "four\n").unwrap();
+        commit_all(&dir, "the broken one");
+        let broken = git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        record_in(&state, "billing@app", &dir, &list, &failed("cargo test"), 4);
+        let text = brief_for(&state, "billing@app", &dir, &broken, &[reviewed(&first, "the model", true), reviewed(&second, "the view", false), reviewed(&same, "the same tree", true), reviewed(&broken, "the broken one", true)]);
+        assert!(text.contains(&format!("- {} the view: ✓ `cargo test`", &second[..7])) && text.contains(&format!("- {} the same tree · ends a part: ✓ `cargo test`", &same[..7])), "a run counts for every commit with its tree: {text}");
+        assert!(text.contains(&format!("- {} the model · ends a part: ✗ `cargo test`\n", &first[..7])), "the newest result on a commit shows, and an older pass still counts: {text}");
+        assert!(text.contains(&format!("- {} the broken one · ends a part: ✗ `cargo test`, none passed", &broken[..7])), "{text}");
         fs::remove_dir_all(dir).unwrap();
         fs::remove_dir_all(state).unwrap();
     }

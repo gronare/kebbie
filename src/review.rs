@@ -662,7 +662,8 @@ fn review(repo: &Path, slot: &Slot, address: &str, state: &Path, which: Which, s
     let rules = &settings.rules_skill.value;
     let rules_file = self::rules_file(rules, &slot.path, &kebbie);
     let quoted = quoted_rules(rules);
-    let tests = with_test_commands(&crate::evidence::brief_for(state, address, &slot.path, &sha), &settings.test_commands.value, settings.tests_lint_command.value.as_deref());
+    let reviewed = reviewed_commits(&slot.path, &crate::repo::tracking(&upstream), &sha, &tasks::subtasks_for(&slot.path, true).items);
+    let tests = with_test_commands(&crate::evidence::brief_for(state, address, &slot.path, &sha, &reviewed), &settings.test_commands.value, settings.tests_lint_command.value.as_deref());
     let docs = if settings.docs_required.value { Some(docs_brief(&slot.path, &upstream, &sha, &kebbie.join(KEEP_DOCS))?) } else { None };
     let card = crate::report::card_in(state, address).map(|card| card.text);
     let focus = subtask.and_then(|id| subtask_focus(&slot.path, id));
@@ -1235,6 +1236,15 @@ fn with_test_commands(tests: &str, commands: &[String], lint: Option<&str>) -> S
     [Some(tests.to_string()).filter(|tests| !tests.is_empty()), own, lint].into_iter().flatten().collect::<Vec<_>>().join("\n\n")
 }
 
+// The commits under review, oldest first, each marked when it ends a part: the last of its subtask's commits in branch order, or the branch's last.
+fn reviewed_commits(worktree: &Path, base: &str, sha: &str, subtasks: &[tasks::Subtask]) -> Vec<crate::evidence::Reviewed> {
+    let log = git(worktree, &["log", "--reverse", "--format=%H %s", &format!("{base}..{sha}")]).unwrap_or_default();
+    let shas: Vec<(String, String)> = log.lines().filter_map(|line| line.split_once(' ').map(|(sha, subject)| (sha.to_string(), subject.to_string())).or_else(|| (!line.is_empty()).then(|| (line.to_string(), String::new())))).collect();
+    let ends: Vec<usize> = subtasks.iter().filter_map(|subtask| subtask.head().filter(|head| !head.is_empty()).and_then(|head| shas.iter().position(|(sha, _)| sha.starts_with(head)))).collect();
+    let last = shas.len().saturating_sub(1);
+    shas.into_iter().enumerate().map(|(at, (sha, subject))| crate::evidence::Reviewed { sha, subject, ends_part: at == last || ends.contains(&at) }).collect()
+}
+
 // The user sent one subtask to review from the phone: its commits are the ones to review, the rest of the branch the context they sit in.
 fn subtask_focus(worktree: &Path, id: &str) -> Option<String> {
     let subtasks = tasks::subtasks_for(worktree, true);
@@ -1511,6 +1521,30 @@ mod tests {
         assert!(skill.contains(&format!("- {CONFIRM} ")), "the reviewer is told the mark kebbie reads");
         assert_eq!(confirmation("**confirm:** src/a.rs:1 — the intent"), Some("src/a.rs:1 — the intent"));
         assert_eq!(confirmation("src/a.rs:1 — confirm: nothing"), None);
+    }
+
+    #[test]
+    fn the_commits_under_review_mark_each_subtasks_last_commit_and_the_branchs_last_as_ending_a_part() {
+        let dir = crate::sh::test_dir("review-parts");
+        let git = |args: &[&str]| {
+            let out = Command::new("git").args(["-c", "user.name=t", "-c", "user.email=t@t"]).args(args).current_dir(&dir).output().unwrap();
+            assert!(out.status.success(), "{args:?}");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "base"]);
+        let mut shas = Vec::new();
+        for subject in ["Add the model", "Name the model", "Add the view", "Tidy the view"] {
+            git(&["commit", "-q", "--allow-empty", "-m", subject]);
+            shas.push(git(&["rev-parse", "HEAD"]));
+        }
+        let part = |id: &str, commits: &[&String]| tasks::Subtask { id: id.to_string(), number: 1, title: id.to_string(), state: tasks::SubtaskState::InProgress, commits: commits.iter().map(|sha| tasks::SubtaskCommit { sha: sha[..7].to_string(), subject: String::new(), accepted: false }).collect(), pushed: Vec::new(), extra: false, added: None, contiguous: true, waits_for: None };
+        let parts = [part("model", &[&shas[0], &shas[1]]), part("view", &[&shas[2]])];
+        let reviewed = reviewed_commits(&dir, "main~4", &shas[3], &parts);
+        let ends: Vec<(&str, bool)> = reviewed.iter().map(|commit| (commit.subject.as_str(), commit.ends_part)).collect();
+        assert_eq!(ends, [("Add the model", false), ("Name the model", true), ("Add the view", true), ("Tidy the view", true)], "the last commit of each subtask ends a part, and so does the branch's last");
+        assert_eq!(reviewed[0].sha, shas[0], "the full sha, so the brief can match runs by it");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

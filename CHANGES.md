@@ -29,6 +29,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task reports ready with its lint red when the error came from main and main has fixed it since.
 
 ### Fixed
+- The reviewer counts a test run for the commit it ran on, so testing each commit in turn satisfies it.
 - A build that waits for a build slot or a fuller disk says so on a line starting with error:, which an error filter keeps.
 - Closing or dropping a task whose worktree moved to another branch keeps the task's branch while it has commits not on the default branch.
 - A backlog item sent to another machine is kept when the vault answers a write with an error, until a read shows where it went.
