@@ -246,6 +246,11 @@ pub fn queued_in(output: &str) -> bool {
     })
 }
 
+// Whether that line is the one a disk too full prints, so the task is told to free space rather than wait for a turn.
+pub fn disk_refused_in(output: &str) -> bool {
+    output.lines().any(|line| line.trim().strip_prefix("error: ").unwrap_or(line.trim()).starts_with("kebbie: ") && line.contains(NO_DISK))
+}
+
 pub fn board_note(place: usize) -> String {
     format!("waiting for a build slot, {}", crate::tasks::ordinal(place))
 }

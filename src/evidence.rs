@@ -669,10 +669,14 @@ pub fn lint_runs_in(state: &Path, address: &str) -> Vec<Run> {
     all_runs_in(state, address).into_iter().filter(|run| run.lint).collect()
 }
 
-// A run that waited for a build slot never ran, so it is no run, whatever an older kebbie saved of it.
+// A run that waited for a build slot or met a disk too full never ran, so it is no run, whatever an older kebbie saved of it.
+fn never_ran(run: &Run) -> bool {
+    run.why == QUEUED || run.why == LOW_DISK
+}
+
 fn all_runs_in(state: &Path, address: &str) -> Vec<Run> {
     fs::read_to_string(file(state, address)).unwrap_or_default().lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok()).filter_map(|value| Run::from_json(&value)).filter(|run| run.why != QUEUED).collect()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok()).filter_map(|value| Run::from_json(&value)).filter(|run| !never_ran(run)).collect()
 }
 
 fn lock_file(state: &Path, address: &str) -> PathBuf {
@@ -840,6 +844,7 @@ fn ending(input: &Value) -> Option<(Option<i64>, bool, String, Option<String>)> 
 const IN_BACKGROUND: &str = "still running in the background";
 const RAN_NONE: &str = "it ran no tests";
 const QUEUED: &str = "it waited for a build slot and never ran";
+const LOW_DISK: &str = "the disk under the worktree was too full for a build, so it never ran";
 const NEVER_ENDED: &str = "kebbie never saw it end";
 const BACKGROUND_GIVE_UP: u64 = 24 * 60 * 60;
 const UNVERIFIED: &str = " · unverified: recorded without a sandbox";
@@ -890,7 +895,7 @@ pub fn settled(run: &Run, end: &End, listed: &[String]) -> Run {
     let says = own.map(|(_, says)| says).or(run.says).or_else(|| find(&run.command, listed).map(|found| found.exit)).unwrap_or(Exit::Silent(OTHER));
     let exit = own.map(|(code, _)| code).or(end.exit);
     let (result, why) = match (end.ended, exit) {
-        (true, _) if summary.as_ref().is_none_or(|summary| summary.ran_none) && own.map_or(alone && crate::builds::queued_in(&output), |(code, _)| code == i64::from(crate::builds::QUEUED_EXIT)) => (Outcome::Unknown, QUEUED),
+        (true, _) if summary.as_ref().is_none_or(|summary| summary.ran_none) && own.map_or(alone && crate::builds::queued_in(&output), |(code, _)| code == i64::from(crate::builds::QUEUED_EXIT)) => (Outcome::Unknown, held_back(&output)),
         (false, _) => match summary.as_ref() { Some(summary) if summary.failed => (Outcome::Failed, ""), _ => (Outcome::Unknown, "stopped before it ended") },
         (true, None) => judged(false, Exit::Silent("ended without an exit code"), summary.as_ref()),
         (true, Some(exit)) => judged(exit == 0, says, summary.as_ref()),
@@ -970,12 +975,12 @@ fn record_one(state: &Path, address: &str, worktree: &Path, input: &Value, ended
     let Ended { command, runner, exit, finished, output, says, background, in_line, line, queued } = ended;
     let lint = is_lint(&runner, lint);
     let summary = if background.is_some() { None } else { summary(&output) };
-    let (result, why) = if background.is_some() { (Outcome::Unknown, IN_BACKGROUND) } else if queued && summary.as_ref().is_none_or(|summary| summary.ran_none) { (Outcome::Unknown, QUEUED) } else { judged(finished, says, summary.as_ref()) };
+    let (result, why) = if background.is_some() { (Outcome::Unknown, IN_BACKGROUND) } else if queued && summary.as_ref().is_none_or(|summary| summary.ran_none) { (Outcome::Unknown, held_back(&output)) } else { judged(finished, says, summary.as_ref()) };
     let (sha, dirty, code) = snapshot(worktree).ok()?;
     let command = if command.chars().count() > COMMAND_LIMIT { format!("{}…", command.chars().take(COMMAND_LIMIT).collect::<String>()) } else { command };
     let transcript = if background.as_deref().is_some_and(|id| !id.is_empty()) { input["transcript_path"].as_str().unwrap_or_default().to_string() } else { String::new() };
     let run = Run { command, runner, result, why: why.to_string(), exit, duration_ms: input["duration_ms"].as_u64(), summary: summary.map(|summary| summary.text).unwrap_or_default(), sha, dirty, code, at, background: background.unwrap_or_default(), transcript, says: Some(says), worktree: worktree.to_string_lossy().into_owned(), read_to: 0, sandboxed: crate::sandbox::marked(state, worktree), in_line, line, lint };
-    if run.why != QUEUED {
+    if !never_ran(&run) {
         save(state, address, &run).ok()?;
     }
     Some(run)
@@ -1031,7 +1036,15 @@ fn recorded(address: &str, cwd: &Path, listed: &[String], lint: Option<&str>, in
     record_with_lint(&state, address, Path::new(&top), listed, lint, input, crate::messages::now())
 }
 
+// Why a build held back never ran: a disk too full when its refusal says so, else its place in the build line.
+fn held_back(output: &str) -> &'static str {
+    if crate::builds::disk_refused_in(output) { LOW_DISK } else { QUEUED }
+}
+
 fn unknown_context(run: &Run) -> String {
+    if run.why == LOW_DISK {
+        return format!("kebbie recorded `{}` without a result: {LOW_DISK}; free space on that disk, then run it again.", run.runner);
+    }
     if run.why == QUEUED {
         return format!("kebbie recorded `{}` without a result: {QUEUED}. Run it again once kebbie tells you a build slot is free.", run.runner);
     }
@@ -1758,10 +1771,13 @@ mod tests {
         let full = crate::builds::disk_refusal(Some(crate::disk::Space { free: 1, total: 100 }), Some(crate::disk::Limit::Percent(5))).unwrap();
         let mut no_room = failed("cargo test --locked");
         no_room["error"] = json!(format!("Exit code 75\n{full}"));
-        assert_eq!(record_in(&state, "billing@app", &dir, &list, &no_room, 1).remove(0).why, QUEUED, "a build the disk refused never ran either");
+        let refused = record_in(&state, "billing@app", &dir, &list, &no_room, 1).remove(0);
+        assert_eq!(refused.why, LOW_DISK, "a build the disk refused never ran either");
+        let told = unknown_context(&refused);
+        assert!(told.contains("free space") && !told.contains("build slot is free"), "a task the disk held back is not told to wait for a turn that never comes: {told}");
         let mut piped = passed("cargo test 2>&1 | tail -3");
         piped["tool_response"]["stdout"] = json!(full);
-        assert_eq!(record_in(&state, "billing@app", &dir, &list, &piped, 1).remove(0).why, QUEUED, "its line says so behind a pipe too");
+        assert_eq!(record_in(&state, "billing@app", &dir, &list, &piped, 1).remove(0).why, LOW_DISK, "its line says so behind a pipe too");
         assert!(runs_in(&state, "billing@app").is_empty());
         let mut grepped = passed("cargo test 2>&1 | grep -E 'test result|no build slot'");
         grepped["tool_response"]["stdout"] = json!(line);
