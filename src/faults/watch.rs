@@ -58,7 +58,7 @@ pub fn tick(state: &Path) -> Vec<String> {
         return Vec::new();
     }
     let mut notes = Vec::new();
-    if file(state, "running").exists() {
+    if is_running(state) {
         if alive(state) {
             return notes;
         }
@@ -117,18 +117,29 @@ pub fn run() -> Result<String> {
     let presented = trusted_spawn::presented();
     let state = crate::lead::state_dir()?;
     let ids = claim(&state, &crate::permit::caller(), &presented)?;
-    crate::state::write(&file(&state, "running"), std::process::id().to_string())?;
-    super::tried(&state, &ids)?;
     let root = crate::lead::install_root()?;
-    let cases: Vec<Case> = super::pending(&state).into_iter().filter(|case| ids.contains(&case.id)).collect();
-    let answer = ask(&state, &root, &cases);
-    let _ = fs::remove_file(file(&state, "claude"));
-    let _ = fs::remove_file(file(&state, "running"));
-    let answer = answer?;
     let checkout = kebbie_checkout();
-    let said = settle_all(&state, &cases, &answer, |case, verdict| act(&state, case, verdict, checkout.as_deref(), crate::messages::now()), tell_lead)?;
+    let said = run_with(&state, &ids, |cases| ask(&state, &root, cases), |case, verdict| act(&state, case, verdict, checkout.as_deref(), crate::messages::now()), tell_lead)?;
     let _ = fs::remove_file(file(&state, "log"));
     Ok(said)
+}
+
+// The running mark stays until every verdict is carried out, so no tick starts a second watcher on the same cases meanwhile.
+pub fn run_with(state: &Path, ids: &[String], ask: impl FnOnce(&[Case]) -> Result<String>, act: impl Fn(&Case, &Verdict) -> Result<(String, Option<String>)>, tell: impl Fn(&str)) -> Result<String> {
+    crate::state::write(&file(state, "running"), std::process::id().to_string())?;
+    let said = (|| {
+        super::tried(state, ids)?;
+        let cases: Vec<Case> = super::pending(state).into_iter().filter(|case| ids.contains(&case.id)).collect();
+        let answer = ask(&cases);
+        let _ = fs::remove_file(file(state, "claude"));
+        settle_all(state, &cases, &answer?, act, tell)
+    })();
+    let _ = fs::remove_file(file(state, "running"));
+    said
+}
+
+pub fn is_running(state: &Path) -> bool {
+    file(state, "running").exists()
 }
 
 pub fn settle_all(state: &Path, cases: &[Case], answer: &str, act: impl Fn(&Case, &Verdict) -> Result<(String, Option<String>)>, tell: impl Fn(&str)) -> Result<String> {

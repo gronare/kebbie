@@ -294,3 +294,20 @@ fn a_short_correction_is_weighed_and_a_one_word_answer_is_not() {
     assert!(capture::worth("board is wrong") && capture::worth("fel igen"));
     assert!(!capture::worth("ja") && !capture::worth("2") && !capture::worth("/clear now"));
 }
+
+#[test]
+fn the_running_mark_stays_until_every_verdict_is_carried_out() {
+    let state = state("running");
+    let said = case(&state, Source::Chat, "lead", "the push line stands still again", 10);
+    let ids = [said.id.clone()];
+    let act = |_: &Case, _: &Verdict| {
+        assert!(watch::is_running(&state), "a tick while the verdicts are carried out sees the watcher running");
+        Ok(("no fault in kebbie: r".to_string(), None))
+    };
+    watch::run_with(&state, &ids, |_| Ok("case: c1\nverdict: ignore\nreason: r\n".to_string()), act, |_| {}).unwrap();
+    assert!(!watch::is_running(&state) && pending(&state).is_empty());
+    let again = case(&state, Source::Chat, "lead", "and the board is wrong too", 20);
+    assert!(watch::run_with(&state, &[again.id], |_| Err("claude timed out".to_string()), |_: &Case, _: &Verdict| unreachable!(), |_| {}).is_err());
+    assert!(!watch::is_running(&state), "a run that failed leaves no mark behind");
+    fs::remove_dir_all(state).unwrap();
+}
