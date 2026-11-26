@@ -279,7 +279,7 @@ A push whose CI failed on a job the branch was already red on stays here, marked
 ### Waiting for work
 
 - Started without a prompt, or its start never reached its Claude.
-- Reported blocked on something outside you.
+- Reported blocked on something outside you. A pushed task that reported blocked still moves to Needs you when its CI is cancelled, cannot be read, or shows no run, and a blocked report after that keeps it there.
 - Pushed in part with `keep open` and nothing left on top.
 - Kept open and its red CI dismissed.
 

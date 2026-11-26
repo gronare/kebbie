@@ -215,6 +215,7 @@ pub fn next(current: Option<&Phase>, event: &Event) -> Option<Phase> {
             ("needs-you", _) => Phase::NeedsYou(Why::Report),
             _ if *pushing => Phase::Pushing { ahead: match current { Some(Phase::Pushing { ahead }) => *ahead, _ => 0 } },
             (_, Some(Phase::Closing)) => return None,
+            ("blocked", Some(Phase::NeedsYou(Why::Cancelled | Why::Unreadable | Why::Unseen))) => return None,
             ("blocked", _) => Phase::Idle,
             (_, Some(Phase::CiRunning { .. })) => return None,
             ("working", _) => Phase::Working,
@@ -245,15 +246,15 @@ pub fn next(current: Option<&Phase>, event: &Event) -> Option<Phase> {
         Event::CiRed { pushing: true, .. } => Phase::Pushing { ahead: 0 },
         Event::CiRed { sha, .. } => Phase::CiRed { sha: sha.to_string() },
         Event::CiUnreadable => match current {
-            Some(Phase::CiRunning { .. }) => Phase::NeedsYou(Why::Unreadable),
+            Some(Phase::CiRunning { .. } | Phase::Idle) => Phase::NeedsYou(Why::Unreadable),
             _ => return None,
         },
         Event::CiCancelled => match current {
-            Some(Phase::CiRunning { .. }) => Phase::NeedsYou(Why::Cancelled),
+            Some(Phase::CiRunning { .. } | Phase::Idle) => Phase::NeedsYou(Why::Cancelled),
             _ => return None,
         },
         Event::CiUnseen => match current {
-            Some(Phase::CiRunning { .. }) => Phase::NeedsYou(Why::Unseen),
+            Some(Phase::CiRunning { .. } | Phase::Idle) => Phase::NeedsYou(Why::Unseen),
             _ => return None,
         },
         Event::VerifyAsked => Phase::NeedsYou(Why::Verify),
@@ -439,6 +440,12 @@ mod tests {
         assert_eq!(reported(ci.clone(), "working", false, false), None);
         assert_eq!(reported(ci.clone(), "blocked", false, false), Some(Phase::Idle));
         assert_eq!(reported(ci, "needs-you", false, false), Some(Phase::NeedsYou(Why::Report)));
+        for (event, why) in [(Event::CiCancelled, Why::Cancelled), (Event::CiUnreadable, Why::Unreadable), (Event::CiUnseen, Why::Unseen)] {
+            let waiting = reported(Phase::CiRunning { sha: "abc".to_string() }, "blocked", false, false);
+            assert_eq!(next(waiting.as_ref(), &event), Some(Phase::NeedsYou(why)), "a pushed task that reported blocked still hears its CI: {event:?}");
+            assert_eq!(next(Some(&Phase::Working), &event), None, "a kept-open task at work is not taken off it: {event:?}");
+            assert_eq!(reported(Phase::NeedsYou(why), "blocked", false, false), None, "a blocked report after it leaves the CI's word for the user standing: {why:?}");
+        }
         assert_eq!(reported(Phase::Closing, "ready", false, false), None);
         assert_eq!(reported(Phase::Working, "ready", true, true), Some(Phase::Pushing { ahead: 0 }), "a push waits for it");
         assert_eq!(reported(Phase::Pushing { ahead: 2 }, "ready", true, true), Some(Phase::Pushing { ahead: 2 }), "a report keeps its place in the push line");
