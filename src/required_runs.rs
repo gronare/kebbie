@@ -245,7 +245,7 @@ fn from_main(worktree: &Path, head: &str, lints: &[Run], lint: &Required) -> Opt
     if on_base == Some(Outcome::Passed) || on_main.as_ref().is_some_and(|(_, result)| *result == Outcome::Failed) {
         return None;
     }
-    let fixed = on_main.map(|(commit, _)| commit);
+    let fixed = on_main.filter(|(_, result)| *result == Outcome::Passed).map(|(commit, _)| commit);
     Some(FromMain { lint: lint.command.clone(), upstream, base, shown: on_base == Some(Outcome::Failed) && fixed.is_some(), fixed })
 }
 
@@ -412,6 +412,8 @@ mod tests {
         assert!(owing.from_main.is_none() && refusal.contains(&format!("`git restore --source={} --staged --worktree :/`", &base[..7])) && refusal.contains(&format!("--source={upstream}")) && refusal.contains("each step as a command of its own") && refusal.contains("never check out another commit"), "the refusal says how to show it: {refusal}");
         ran(&base, Outcome::Failed);
         assert!(owed(&slot.path, &address, None).gap.is_some(), "red on the base alone does not say main fixed it");
+        crate::evidence::save(&state, &address, &Run { command: cmd.to_string(), runner: cmd.to_string(), result: Outcome::Unknown, why: "piped".to_string(), sha: tip.clone(), code: tip.clone(), lint: true, ..Run::default() }).unwrap();
+        assert!(owed(&slot.path, &address, None).gap.is_some_and(|gap| gap.from_main.is_some_and(|from_main| !from_main.shown && from_main.fixed.is_none())), "a lint run on main whose result kebbie could not read shows nothing fixed");
         ran(&tip, Outcome::Passed);
         let owing = owed(&slot.path, &address, None);
         assert!(owing.gap.is_none(), "red on HEAD and on the base, green on the tip: the error came from main");
