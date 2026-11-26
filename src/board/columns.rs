@@ -11,7 +11,7 @@ use super::detail::unfolded_lines;
 use super::steps::{accept_wanted, cursor_line, step_lines, to_accept_note};
 use crate::config::OngoingAt;
 use super::{App, BacklogRow, Column, Hit, item_card};
-use super::widgets::{BLUE, FAINT, GREEN, MAUVE, MUTED, PEACH, RED, SUBTEXT, SURFACE, TEAL, TEXT, YELLOW, bold, card_text, chips, column_title, cut, group_line, options_hint, plural, row, style, wrap};
+use super::widgets::{BLUE, FAINT, GREEN, LAVENDER, MAUVE, MUTED, PEACH, RED, SUBTEXT, SURFACE, TEAL, TEXT, YELLOW, bold, card_text, chips, column_title, cut, group_line, options_hint, plural, row, style, wrap};
 
 pub(super) fn group_color(group: Group) -> Color {
     match group {
@@ -78,6 +78,7 @@ pub(super) fn row_facts(item: &Item, pushing: Option<String>) -> String {
     let Some(git) = &item.git else { return String::new() };
     let mut parts: Vec<String> = absence(item).map(str::to_string).into_iter().collect();
     parts.extend(item.git_error().map(|_| crate::status::GIT_UNREAD.to_string()));
+    parts.extend(item.back_to_work());
     parts.extend(item.ci_note());
     parts.extend(item.recover_note());
     parts.extend(pushing.or_else(|| item.push_note()));
@@ -357,6 +358,9 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
         let mut line = row(selected, focused, status_icon(item), &item.titled(), place, &facts, width.saturating_sub(if dot { 2 } else { 0 } + marker.chars().count()));
         if let Some(to_accept) = to_accept_note(item) {
             tint(&mut line, &to_accept, YELLOW);
+        }
+        if let Some(back) = item.back_to_work() {
+            tint(&mut line, &back, LAVENDER);
         }
         if let Some(pushing) = &pushing {
             tint(&mut line, pushing, BLUE);
@@ -689,6 +693,20 @@ mod tests {
     fn a_suggested_name_keeps_letters_with_diacritics() {
         assert_eq!(suggested_name("kebbie – återanvänd worktree tar med förra uppgiftens databas"), "kebbie-ateranvand-worktree-tar");
         assert_eq!(crate::tasks::slug("Föräldraledighet över jul").unwrap(), "foraldraledighet-over-jul");
+    }
+
+    #[test]
+    fn a_task_moved_back_under_working_says_why_in_lavender_on_the_board_and_the_phone() {
+        let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 2);
+        item.report.as_mut().unwrap().at = 0;
+        item.verdict = Some(crate::review::Shown { at: crate::messages::now(), ..crate::status::tests::in_review(false, 2, false, false) });
+        let back = "back in Working: its review asked for changes";
+        assert!(item.summary_on(crate::status::Surface::User).contains(back), "the phone's row carries the same sentence");
+        let mut app = test_app(vec![item]);
+        let (rows, buffer) = render(&mut app, 140, 30);
+        let found = find(&rows, back);
+        let (x, y) = *found.first().unwrap_or_else(|| panic!("{}", rows.join("\n")));
+        assert!(coloured(&buffer[(x as u16, y as u16)], (0xb4, 0xbe, 0xfe)) && !coloured(&buffer[(x as u16, y as u16)], (0xf9, 0xe2, 0xaf)), "lavender, never yellow: nothing waits on you");
     }
 
     #[test]

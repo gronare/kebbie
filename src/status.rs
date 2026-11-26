@@ -112,6 +112,8 @@ impl RulesShown {
     }
 }
 
+pub const BACK_SHOWN_FOR: u64 = 30 * 60;
+
 pub const FIXING_FINDINGS: &str = "fixing what its review asks";
 
 pub const NO_VERDICT: &str = "its review gave no verdict: send it again with v, or withdraw it to push without a pass";
@@ -348,6 +350,25 @@ impl Item {
         self.git.as_ref().is_some_and(|git| git.ahead > 0) && self.verdict.as_ref().is_some_and(|shown| shown.held && !shown.running && shown.verdict.is_none())
     }
 
+    // A ready task kebbie moved back under Working says why for half an hour after the move, on the board and the phone alike.
+    pub fn back_to_work(&self) -> Option<String> {
+        self.back_to_work_at(messages::now())
+    }
+
+    pub(crate) fn back_to_work_at(&self, now: u64) -> Option<String> {
+        if self.group() != Group::Working {
+            return None;
+        }
+        let (why, at) = if self.fixing_findings() {
+            ("its review asked for changes", self.verdict.as_ref().map_or(0, |shown| shown.at))
+        } else if self.push_fixing() && let Some(pending) = &self.push_waits {
+            (if pending.work == tasks::PushWork::Conflict { "its rebase onto main conflicted" } else { "main changed its files, so it runs the tests again" }, pending.at)
+        } else {
+            return None;
+        };
+        (now.saturating_sub(at) < BACK_SHOWN_FOR).then(|| format!("back in Working: {why}"))
+    }
+
     // A push that waits on its agent to run the tests or resolve a conflict is work, not yet going out.
     fn push_fixing(&self) -> bool {
         self.push_waits.as_ref().is_some_and(|pending| matches!(pending.work, tasks::PushWork::Tests | tasks::PushWork::Conflict) && !self.reported_since(pending.at, "ready"))
@@ -369,7 +390,7 @@ impl Item {
             _ if shown.running => "review running · waits on the reviewer".to_string(),
             Some(_) if shown.stale => "review stale".to_string(),
             Some(verdict) if verdict.ok => "reviewed".to_string(),
-            Some(_) if self.fixing_findings() => FIXING_FINDINGS.to_string(),
+            Some(_) if self.fixing_findings() && self.back_to_work().is_none() => FIXING_FINDINGS.to_string(),
             _ => return None,
         })
     }
@@ -769,7 +790,7 @@ impl Item {
             let dirty = if git.uncommitted > 0 { format!(" · {}", plural(git.uncommitted, "uncommitted file")) } else { String::new() };
             return format!("{} · ready to push{dirty}{behind}{review}{turn}", plural(git.ahead, "commit"));
         }
-        let mut parts: Vec<String> = self.git_error().map(|_| GIT_UNREAD.to_string()).into_iter().chain(self.build_wait.map(crate::builds::board_note)).chain(self.obstacle.as_ref().filter(|_| surface == Surface::Lead).map(crate::obstacle::Shown::note)).chain(crate::tasks::rollout::note(&self.subtasks.stages)).chain(self.staged.then(|| STAGED.to_string())).chain(self.phase_note()).chain(self.ci_note()).chain(self.recover_note()).chain(self.push_note()).chain(self.landed.filter(|why| !why.waits_for_you()).and(self.landed_note())).collect();
+        let mut parts: Vec<String> = self.git_error().map(|_| GIT_UNREAD.to_string()).into_iter().chain(self.back_to_work()).chain(self.build_wait.map(crate::builds::board_note)).chain(self.obstacle.as_ref().filter(|_| surface == Surface::Lead).map(crate::obstacle::Shown::note)).chain(crate::tasks::rollout::note(&self.subtasks.stages)).chain(self.staged.then(|| STAGED.to_string())).chain(self.phase_note()).chain(self.ci_note()).chain(self.recover_note()).chain(self.push_note()).chain(self.landed.filter(|why| !why.waits_for_you()).and(self.landed_note())).collect();
         if git.ahead > 0 {
             parts.push(plural(git.ahead, "commit"));
         }
@@ -1657,6 +1678,27 @@ pub(crate) mod tests {
         item.report.as_mut().unwrap().at = 100;
         item.verdict = Some(crate::review::Shown { at: 200, ..in_review(false, 2, true, false) });
         assert!(item.group() == Group::ReadyToPush, "findings on older commits ask nothing of this code");
+    }
+
+    #[test]
+    fn a_task_kebbie_moved_back_under_working_says_why_for_half_an_hour() {
+        let mut item = task(Some("idle"), Some("ready"), 2);
+        item.report.as_mut().unwrap().at = 100;
+        item.verdict = Some(crate::review::Shown { at: 200, ..in_review(false, 2, false, false) });
+        assert_eq!(item.back_to_work_at(200 + BACK_SHOWN_FOR - 1).as_deref(), Some("back in Working: its review asked for changes"));
+        assert_eq!(item.back_to_work_at(200 + BACK_SHOWN_FOR), None, "half an hour on, the plain note stands");
+        item.verdict = None;
+        item.phase = Some(crate::phase::Record { phase: Phase::Pushing { ahead: 0 }, since: 100, by: "push".to_string(), from: None });
+        for (work, why) in [(tasks::PushWork::Conflict, "back in Working: its rebase onto main conflicted"), (tasks::PushWork::Tests, "back in Working: main changed its files, so it runs the tests again")] {
+            item.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work, at: 300, ahead: 0, after: None });
+            assert_eq!(item.back_to_work_at(310).as_deref(), Some(why), "{work:?}");
+        }
+        item.question = Some(item.report.clone().unwrap());
+        assert_eq!((item.group(), item.back_to_work_at(310)), (Group::NeedsYou, None), "a task that waits on you is not back at work");
+        item.question = None;
+        item.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work: tasks::PushWork::Turn, at: 300, ahead: 0, after: None });
+        assert_eq!(item.back_to_work_at(310), None, "its turn in the line is no move back");
+        assert_eq!(task(Some("working"), Some("working"), 2).back_to_work_at(0), None, "a task at work on its own says nothing");
     }
 
     #[test]
