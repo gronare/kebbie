@@ -161,11 +161,32 @@ fn go() -> Result<String> {
 fn settings(kebbie: &str) -> String {
     let allow = ["peers", "tell", "release", "answered", "messages", "status", "next", "areas", "approve", "review", "land", "push", "try", "stage", "unstage", "decide", "defer", "notify", "issues", "issue", "handover", "promise", "promises"].map(|command| format!("Bash({kebbie} {command}:*)"));
     let settings = json!({
-        "hooks": { "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": format!("{} messages --unread", crate::sh::quote(kebbie)) }] }] },
+        "hooks": {
+            "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": format!("{} messages --unread", crate::sh::quote(kebbie)) }] }],
+            "PreToolUse": [{ "matcher": MEMORY_TOOLS, "hooks": [{ "type": "command", "command": format!("{} hook lead-memory", crate::sh::quote(kebbie)) }] }],
+        },
         "permissions": { "allow": allow },
         "autoCompactEnabled": false,
     });
     crate::inbox::with_inbox(&settings.to_string(), kebbie, LEAD_LABEL)
+}
+
+const MEMORY_TOOLS: &str = "Write|Edit|MultiEdit|NotebookEdit";
+
+pub fn in_claude_memory(home: &Path, file: &Path) -> bool {
+    let mut parts = file.strip_prefix(home.join("projects")).ok().into_iter().flat_map(Path::components);
+    parts.next().is_some() && parts.next().is_some_and(|part| part.as_os_str() == "memory")
+}
+
+pub fn memory_hook(input: &str) -> String {
+    memory_answer(crate::agent::claude::home().as_deref(), input)
+}
+
+pub fn memory_answer(home: Option<&Path>, input: &str) -> String {
+    let payload = crate::hooks::Payload::parse(input);
+    let file = payload.tool_input()["file_path"].as_str().or_else(|| payload.tool_input()["notebook_path"].as_str()).map(Path::new);
+    let refused = file.zip(home).filter(|(file, home)| in_claude_memory(home, file)).map(|_| "The lead keeps no memory of its own: a lesson about how kebbie or a lead works belongs in kebbie, so every lead after you has it. Save it as a kebbie issue with kebbie issue add by the skill kebbie:propose-change, and a fact about the user's machines or setup goes into the vault.".to_string());
+    crate::hooks::Answer::deny_if(refused).render()
 }
 
 // Claude Code never remembers trust for the home directory, so the lead gets a directory of its own.
@@ -885,6 +906,16 @@ pub fn chat_hidden(board_pane: &str) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_lead_cannot_write_claude_codes_memory_for_itself() {
+        let denied = |path: &str| memory_answer(Some(Path::new("/home/ada/.claude")), &serde_json::json!({ "hook_event_name": "PreToolUse", "tool_name": "Write", "tool_input": { "file_path": path, "content": "x" } }).to_string());
+        assert!(denied("/home/ada/.claude/projects/-home-ada--local-state-kebbie-lead/memory/short-replies.md").contains("kebbie issue add"));
+        assert!(denied("/home/ada/.claude/projects/-home-ada--local-state-kebbie-lead/memory/MEMORY.md").contains("\"deny\""));
+        assert_eq!(denied("/home/ada/projects/app/memory/cache.rs"), "", "a repo's own memory folder is no Claude memory");
+        assert_eq!(denied("/home/ada/.claude/projects/-home-ada--local-state-kebbie-lead/notes.md"), "");
+        assert_eq!(denied("/home/ada/notes.md"), "");
+    }
 
     #[test]
     fn a_board_started_after_the_build_is_renewed_when_it_runs_another_kebbie_than_the_installed_one() {

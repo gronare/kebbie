@@ -825,6 +825,9 @@ fn run(arguments: &Arguments) -> Result<String> {
             if name == Some("evidence") {
                 return Ok(arguments.positional(2).map(|address| evidence::hook(address, &input)).unwrap_or_default());
             }
+            if name == Some("lead-memory") {
+                return Ok(lead::memory_hook(&input));
+            }
             if name == Some("builds") {
                 return Ok(builds::hook());
             }
