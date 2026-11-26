@@ -21,7 +21,8 @@ The lead:
 - **holds tasks to your rules** when the reviewer's rules check gives no verdict: it checks a ready task's commits against the rules skill, and approves them or sends back what to fix,
 - **relays** interface and contract changes between tasks, and puts what needs your decision on the board,
 - **follows each push out**: what stands under Going out leaves within minutes, a push that stalls comes before new work, and a blocked task hears from it the moment what blocked it clears through the lead,
-- **does small cross-cutting fixes** itself, such as a script or a rename across repos.
+- **does small cross-cutting fixes** itself when you ask for them, such as a script or a rename across repos,
+- **files what its own reviews and research turn up** as backlog items, with what needs your decision under Open questions, and starts a task from one only on your word.
 
 It does not push, except tasks you gave it permission for.
 

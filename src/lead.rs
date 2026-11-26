@@ -1187,6 +1187,16 @@ mod tests {
     }
 
     #[test]
+    fn the_lead_files_what_its_own_review_turns_up_and_starts_it_only_on_the_users_word() {
+        let role = role_text(include_str!("../roles/lead.md"), "kebbie", &[Source::Vault], true, true, "English");
+        let rule = role.lines().find(|line| line.starts_with("- **What your own work turns up**")).expect("the lead has a rule for its own findings");
+        for needed in ["review, research or a subagent", "a repo outside the work at hand", "file it as a backlog item", "Open questions", "A task starts from it only on the user's word", "Doing it yourself waits for that word too"] {
+            assert!(rule.contains(needed), "{needed}");
+        }
+        assert!(role.contains("(a script, a config, a rename across repos) the user asked for you may do directly"), "a fix of the lead's own finding is no fix the user asked for");
+    }
+
+    #[test]
     fn the_lead_plans_a_task_by_the_playbook_and_answers_why_from_the_notes() {
         let role = include_str!("../roles/lead.md");
         for needed in ["run the skill `kebbie:playbook`", "--recipe \"<recipe>: <why>\"", "- **Why questions**", "starts in the notes", "archive included", "never why"] {
