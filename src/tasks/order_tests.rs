@@ -79,7 +79,7 @@ fn a_move_is_refused_while_a_push_of_the_task_waits_in_line_or_tracked_files_are
     let dirty = move_as(&state, &task, &fifth, "top", "first").unwrap_err();
     assert!(dirty.contains("Not moved: it has 1 uncommitted file"), "{dirty}");
     git(&slot.path, &["checkout", "--", "d"]).unwrap();
-    let intent = super::super::intent::Intent { by: super::super::intent::By::User, work: super::super::intent::Work::Turn, address: "billing@app".to_string(), repo: dir.clone(), task: "billing".to_string(), fingerprint: "x".to_string(), through: super::super::intent::Through::All, at: 1, seen: None, hand: None, queued: Some(1), waited: None };
+    let intent = super::super::intent::Intent { by: super::super::intent::By::User, work: super::super::intent::Work::Turn, address: "billing@app".to_string(), repo: dir.clone(), task: "billing".to_string(), fingerprint: "x".to_string(), through: super::super::intent::Through::All, at: 1, seen: None, hand: None, queued: Some(1), waited: None, to: None };
     super::super::intent::save(&state, &intent).unwrap();
     let frozen = move_as(&state, &task, &fifth, "top", "first").unwrap_err();
     assert!(frozen.contains("push of billing@app waits in line") && frozen.contains("kebbie push billing --cancel"), "{frozen}");

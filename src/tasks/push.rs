@@ -351,7 +351,7 @@ pub fn tidy(cwd: &Path, name: Option<&str>, note: &str) -> Result<String> {
 }
 
 // Pushes the task's commits through `through` (all of them without it) to the default branch, then closes the task, or with keep_open leaves the rest of its branch on top of what was pushed.
-pub fn push(cwd: &Path, name: Option<&str>, through: Option<&str>, keep_open: bool, anyway: bool) -> Result<String> {
+pub fn push(cwd: &Path, name: Option<&str>, through: Option<&str>, keep_open: bool, anyway: bool, to: Option<&str>) -> Result<String> {
     let repo = main_checkout(cwd)?;
     let slot = find_task(&repo, name, cwd)?;
     if !anyway {
@@ -359,7 +359,7 @@ pub fn push(cwd: &Path, name: Option<&str>, through: Option<&str>, keep_open: bo
     }
     let upstream = default_branch(&repo)?;
     let through = chosen(&slot, &upstream, through, keep_open)?;
-    push_task(&crate::permit::caller(), &repo, &slot, through)
+    push_task(&crate::permit::caller(), &repo, &slot, through, to)
 }
 
 // The commit the user picked, as a count of the task's commits, so it survives the rebase push starts with.
@@ -534,7 +534,7 @@ pub(super) fn device_push(state: &Path, caller: &Caller, repo: &Path, slot: &Slo
                 Ok(short) => DevicePush::Pushed { short, main: branch },
                 Err(_) => DevicePush::Failed(said),
             },
-            _ => match push_target(repo, &upstream, task) {
+            _ => match push_target(repo, &upstream, task, None) {
                 Ok(Some(target)) => match git(repo, &["rev-parse", "--short=7", &remote_branch(&target.branch)]) {
                     Ok(short) => DevicePush::Pushed { short, main: target.branch },
                     Err(_) => DevicePush::Failed(said),
@@ -549,10 +549,10 @@ pub(super) fn device_push(state: &Path, caller: &Caller, repo: &Path, slot: &Slo
     }
 }
 
-pub(super) fn push_task(caller: &Caller, repo: &Path, slot: &Slot, through: Through) -> Result<String> {
+fn push_task(caller: &Caller, repo: &Path, slot: &Slot, through: Through, to: Option<&str>) -> Result<String> {
     let state = state_dir()?;
     let address = peers::address(task_of(slot), &name_of(repo));
-    join(&state, caller, repo, slot, through)?;
+    join_to(&state, caller, repo, slot, through, to)?;
     let (read, working) = super::line::live_claude();
     let mut push = live_push(&state);
     let driven = super::line::drive(&state, repo, Some(&address), &messages::load(), messages::now(), &read, &working, &mut push);
@@ -561,7 +561,7 @@ pub(super) fn push_task(caller: &Caller, repo: &Path, slot: &Slot, through: Thro
 
 pub(super) fn live_push(state: &Path) -> impl FnMut(&Intent, &Slot) -> Result<Sent> + '_ {
     move |intent: &Intent, slot: &Slot| {
-        push_task_with(state, &intent.by.caller(), &intent.repo, slot, intent.through, intent.queued, &hand_over, &mut |pusher, out| deliver(&intent.repo, slot, &default_branch(&intent.repo)?, intent.through, out, pusher, state, &crate::ci::begin))
+        push_task_with(state, &intent.by.caller(), &intent.repo, slot, (intent.through, intent.queued, intent.to.as_deref()), &hand_over, &mut |pusher, out| deliver(&intent.repo, slot, &default_branch(&intent.repo)?, intent.through, out, pusher, state, &crate::ci::begin))
     }
 }
 
@@ -604,12 +604,17 @@ pub(crate) fn ordinal(number: usize) -> String {
 
 // What a caller may push is checked here, once, and again when its turn comes; a push already in line keeps its place.
 pub(super) fn join(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Through) -> Result<()> {
+    join_to(state, caller, repo, slot, through, None)
+}
+
+// `to` is the branch the user picked for this push, by its template, or the default branch; none follows the repo's push.branch.
+pub(super) fn join_to(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Through, to: Option<&str>) -> Result<()> {
     let seen = messages::latest_reports(&messages::load()).get(&peers::address(task_of(slot), &name_of(repo))).map(|report| report.id.clone());
-    join_on(state, caller, repo, slot, through, seen)
+    join_on(state, caller, repo, slot, through, seen, to)
 }
 
 // `seen` is the task's latest report, which this push uses up whoever asked for it, so kebbie never queues it again for that report.
-pub(super) fn join_on(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Through, seen: Option<String>) -> Result<()> {
+pub(super) fn join_on(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Through, seen: Option<String>, to: Option<&str>) -> Result<()> {
     let task = task_of(slot).to_string();
     let upstream = default_branch(repo)?;
     let address = peers::address(&task, &name_of(repo));
@@ -623,7 +628,10 @@ pub(super) fn join_on(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, t
     if rebase_in_progress(&slot.path) {
         return Notice::new(Tone::NotNow, "Not pushed: a rebase is under way in its worktree").next("Push it once the rebase is finished.").detail("task", &task).err();
     }
-    if let Some(target) = push_target(repo, &upstream, &task)?.filter(|target| target.per_task) {
+    if to == Some(crate::push_target::DEFAULT_BRANCH) && !By::of(caller).is_some_and(|by| by.is_user()) {
+        return Notice::new(Tone::Failed, format!("Not pushed: only you push this task to {}", main_of(&upstream))).next("Its repo sets push.branch, so a push goes to the default branch only when you pick it.").detail("task", &task).err();
+    }
+    if let Some(target) = push_target(repo, &upstream, &task, to)?.filter(|target| target.per_task) {
         fast_forwards(&slot.path, &target.branch, &through_sha(&slot.path, &upstream, through)?, &task)?;
     }
     authorize(caller, repo, slot, &upstream, through)?;
@@ -634,7 +642,7 @@ pub(super) fn join_on(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, t
     }
     let now = messages::now();
     let queued = waiting.and_then(|waiting| waiting.queued).unwrap_or(now);
-    intent::save(state, &Intent { by: by.clone(), work: Work::Turn, address: address.clone(), repo: repo.to_path_buf(), task, fingerprint: pushed_fingerprint(&slot.path, &upstream, through)?, through, at: now, seen: seen.clone(), hand: None, queued: Some(queued), waited: None })?;
+    intent::save(state, &Intent { by: by.clone(), work: Work::Turn, address: address.clone(), repo: repo.to_path_buf(), task, fingerprint: pushed_fingerprint(&slot.path, &upstream, through)?, through, at: now, seen: seen.clone(), hand: None, queued: Some(queued), waited: None, to: to.map(str::to_string) })?;
     intent::forget_left(state, &address);
     if by.is_user() {
         intent::forget_left_count(state, &address);
@@ -697,11 +705,11 @@ pub(super) enum Sent {
 
 // Someone else's push can land between the fetch and this push; then it fetches, rebases and decides again, so shared files still go to the task's Claude.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn push_task_with(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Through, queued: Option<u64>, hand_over: HandOver, send: &mut dyn FnMut(&str, &Out) -> Result<String>) -> Result<Sent> {
+pub(super) fn push_task_with(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, (through, queued, to): (Through, Option<u64>, Option<&str>), hand_over: HandOver, send: &mut dyn FnMut(&str, &Out) -> Result<String>) -> Result<Sent> {
     let mut tried = 0;
     loop {
         tried += 1;
-        match prepare(state, caller, repo, slot, through, queued, hand_over)? {
+        match prepare(state, caller, repo, slot, through, queued, hand_over, to)? {
             Prepared::Handed(said) => return Ok(Sent::Handed(said)),
             Prepared::Push(pusher, out) => match send(&pusher, &out) {
                 Err(error) if rejected(&error) && tried < PUSH_TRIES => {}
@@ -733,7 +741,8 @@ pub(super) enum Prepared {
 pub(super) type HandOver<'a> = &'a dyn Fn(&Slot, &str) -> std::result::Result<(), String>;
 
 // Only the head of a repo's line gets here: it fetches and rebases onto origin's default branch, never the local one; a push of the first commits rebases them elsewhere and leaves the task's worktree alone.
-fn prepare(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Through, queued: Option<u64>, hand_over: HandOver) -> Result<Prepared> {
+#[allow(clippy::too_many_arguments)]
+fn prepare(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Through, queued: Option<u64>, hand_over: HandOver, chosen: Option<&str>) -> Result<Prepared> {
     let task = task_of(slot).to_string();
     let upstream = default_branch(repo)?;
     let address = peers::address(&task, &name_of(repo));
@@ -749,10 +758,10 @@ fn prepare(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Thr
     let rule = crate::push_target::rule(repo)?;
     super::push_steps::step(&task, &rule.as_ref().map_or_else(|| format!("rebasing onto {}", main_of(&upstream)), |rule| format!("checking {}", rule.branch.replace(config::TASK_PLACE, &task))));
     fetch(repo)?;
-    let target = push_target(repo, &upstream, &task)?;
+    let target = push_target(repo, &upstream, &task, chosen)?;
     let recorded = pushed_fingerprint(&slot.path, &upstream, through)?;
     let seen = messages::latest_reports(&messages::load()).get(&address).map(|report| report.id.clone());
-    let record = |work: Work, fingerprint: String| intent::save(state, &Intent { by: by.clone(), work, address: address.clone(), repo: repo.to_path_buf(), task: task.clone(), fingerprint, through, at: messages::now(), seen: seen.clone(), hand: None, queued, waited: None });
+    let record = |work: Work, fingerprint: String| intent::save(state, &Intent { by: by.clone(), work, address: address.clone(), repo: repo.to_path_buf(), task: task.clone(), fingerprint, through, at: messages::now(), seen: seen.clone(), hand: None, queued, waited: None, to: chosen.map(str::to_string) });
     let mut shared = None;
     let (updated, out) = match (target, through) {
         (Some(target), _) if target.per_task => {
@@ -1166,11 +1175,28 @@ fn pushable_through(path: &Path, upstream: &str, rev: &str, keep_open: bool) -> 
     Ok(sha)
 }
 
+// The branches the board's push window offers for the task in this worktree; none for a repo without push.branch. Reads origin's refs and may run push.version.command, so never on the board's own thread.
+pub fn push_offers(path: &Path) -> Vec<crate::push_target::Offer> {
+    let found = main_checkout(path).and_then(|repo| Ok((find_task(&repo, None, path)?, default_branch(&repo)?, crate::push_target::rule(&repo)?, repo)));
+    match found {
+        Ok((slot, upstream, Some(rule), repo)) => crate::push_target::offers(&repo, &upstream, &rule, task_of(&slot)),
+        _ => Vec::new(),
+    }
+}
+
 // Where the repo's push.branch sends this task's push; none pushes to the default branch, and a rule kebbie cannot follow pushes nowhere.
-pub(crate) fn push_target(repo: &Path, upstream: &str, task: &str) -> Result<Option<crate::push_target::Target>> {
+pub(crate) fn push_target(repo: &Path, upstream: &str, task: &str, chosen: Option<&str>) -> Result<Option<crate::push_target::Target>> {
     let Some(rule) = crate::push_target::rule(repo)? else { return Ok(None) };
-    let refused = |error: String| Notice::new(Tone::You, format!("Not pushed: push.branch {:?} names no branch kebbie can push to", rule.branch)).you("Fix push.branch in the repo's config, or push the branch it names to origin first.").detail("task", task).detail("error", error).to_string();
-    let target = crate::push_target::resolve(repo, upstream, &rule, &rule.branch, task).map_err(refused)?;
+    let template = match chosen {
+        Some(crate::push_target::DEFAULT_BRANCH) => return Ok(None),
+        Some(chosen) if chosen != rule.branch && !rule.choices.iter().any(|choice| choice == chosen) => {
+            return Notice::new(Tone::You, format!("Not pushed: the repo offers no branch {chosen:?}")).you(format!("Pick one of push.branch and push.choices: {}.", rule.offered().join(", "))).detail("task", task).err();
+        }
+        Some(chosen) => chosen,
+        None => rule.branch.as_str(),
+    };
+    let refused = |error: String| Notice::new(Tone::You, format!("Not pushed: {template:?} names no branch kebbie can push to")).you("Fix push.branch or push.choices in the repo's config, or push the branch it names to origin first.").detail("task", task).detail("error", error).to_string();
+    let target = crate::push_target::resolve(repo, upstream, &rule, template, task).map_err(refused)?;
     if target.branch == main_of(upstream) {
         return Err(refused(format!("it names {}, the default branch", target.branch)));
     }
@@ -1723,7 +1749,7 @@ mod tests {
         let through = chosen(&slot, &upstream, Some(&fourth), true).unwrap();
         join(&pushing.state, &Caller::User, &dir, &slot, through).unwrap();
         let (texts, hand) = handed();
-        let Prepared::Push(pusher, out) = prepare(&pushing.state, &Caller::User, &dir, &slot, through, None, &hand).unwrap() else { panic!("a clean rebase pushes") };
+        let Prepared::Push(pusher, out) = prepare(&pushing.state, &Caller::User, &dir, &slot, through, None, &hand, None).unwrap() else { panic!("a clean rebase pushes") };
         assert!(out.rebased && out.sha != fourth && pusher == "the user" && texts.borrow().is_empty(), "{out:?}");
         assert_eq!(git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), fifth, "HEAD stays where its Claude left it");
         assert_eq!(std::fs::read_to_string(slot.path.join("e")).unwrap(), "the next step, half done", "and so does its uncommitted work");
@@ -1752,7 +1778,7 @@ mod tests {
         upstream_commit(&dir, "elsewhere", "x", "someone else's work");
         let through = chosen(&slot, &upstream, Some(&fourth), true).unwrap();
         let (_, hand) = handed();
-        let Prepared::Push(_, out) = prepare(&pushing.state, &Caller::User, &dir, &slot, through, None, &hand).unwrap() else { panic!("a clean rebase pushes") };
+        let Prepared::Push(_, out) = prepare(&pushing.state, &Caller::User, &dir, &slot, through, None, &hand, None).unwrap() else { panic!("a clean rebase pushes") };
         deliver(&dir, &slot, &upstream, through, &out, "the user", &state_of(&dir), &crate::ci::begin).unwrap();
         assert_eq!(git(&slot.path, &["rev-list", "--count", &format!("{upstream}..HEAD")]).unwrap(), "3", "its Claude has not rebased: the branch still holds fourth");
         let listed: Vec<String> = crate::tasks::commits(&slot.path).unwrap().into_iter().map(|commit| commit.sha).collect();
@@ -1764,13 +1790,13 @@ mod tests {
         let rest = chosen(&slot, &upstream, Some(&fifth), true).unwrap();
         assert_eq!(rest, Through::First { count: 1, of: 2 }, "the count starts at the first commit really unpushed");
         assert_eq!(through_sha(&slot.path, &upstream, rest).unwrap(), fifth);
-        let Prepared::Push(_, out) = prepare(&pushing.state, &Caller::User, &dir, &slot, rest, None, &hand).unwrap() else { panic!("the rest pushes") };
+        let Prepared::Push(_, out) = prepare(&pushing.state, &Caller::User, &dir, &slot, rest, None, &hand, None).unwrap() else { panic!("the rest pushes") };
         deliver(&dir, &slot, &upstream, rest, &out, "the user", &state_of(&dir), &crate::ci::begin).unwrap();
         let branch = upstream.trim_start_matches("origin/");
         assert_eq!(git(&origin, &["log", "--format=%s", "-3", branch]).unwrap(), "fifth\nfourth\nsomeone else's work", "fifth went out once, fourth not twice");
         assert_eq!(git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), sixth, "the worktree is still the Claude's");
         let all = chosen(&slot, &upstream, None, false).unwrap();
-        assert!(matches!(prepare(&pushing.state, &Caller::User, &dir, &slot, all, None, &hand), Ok(Prepared::Push(..))), "the rebased rest goes out with no test run first");
+        assert!(matches!(prepare(&pushing.state, &Caller::User, &dir, &slot, all, None, &hand, None), Ok(Prepared::Push(..))), "the rebased rest goes out with no test run first");
         assert_eq!(git(&slot.path, &["log", "--format=%s", &format!("{upstream}..HEAD")]).unwrap(), "sixth", "a full push rebases the worktree as ever, and the pushed ones drop out");
         cleanup(dir, origin, &slot);
     }
@@ -1785,7 +1811,7 @@ mod tests {
         std::fs::write(slot.path.join("d"), "uncommitted").unwrap();
         let through = chosen(&slot, &upstream, Some(&fourth), true).unwrap();
         let (_, hand) = handed();
-        assert_eq!(prepare(&pushing.state, &Caller::User, &dir, &slot, through, None, &hand).unwrap(), Prepared::Push("the user".to_string(), Out { sha: fourth.clone(), rebased: false, to: None }));
+        assert_eq!(prepare(&pushing.state, &Caller::User, &dir, &slot, through, None, &hand, None).unwrap(), Prepared::Push("the user".to_string(), Out { sha: fourth.clone(), rebased: false, to: None }));
         let state = state_of(&dir);
         let said = deliver(&dir, &slot, &upstream, through, &Out { sha: fourth.clone(), rebased: false, to: None }, "the user", &state, &crate::ci::begin).unwrap();
         assert!(said.contains("It stays open with 1 commit on top"), "{said}");
@@ -1828,12 +1854,12 @@ mod tests {
         let first = git(&slot.path, &["rev-list", "--reverse", &format!("{upstream}..HEAD")]).unwrap().lines().nth(1).unwrap().to_string();
         let through = chosen(&slot, &upstream, Some(&first), true).unwrap();
         let (texts, hand) = handed();
-        assert!(matches!(prepare(&pushing.state, &Caller::User, &dir, &slot, through, None, &hand).unwrap(), Prepared::Push(_, Out { rebased: true, .. })), "main changed m too, and the clean rebase goes out with no test run first");
+        assert!(matches!(prepare(&pushing.state, &Caller::User, &dir, &slot, through, None, &hand, None).unwrap(), Prepared::Push(_, Out { rebased: true, .. })), "main changed m too, and the clean rebase goes out with no test run first");
         assert!(texts.borrow().is_empty(), "nothing goes to its Claude: {:?}", texts.borrow());
         assert_eq!((git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), std::fs::read_to_string(slot.path.join("e")).unwrap()), (head.clone(), "half done".to_string()));
         assert!(intent::load(&pushing.state, &pushing.address).is_none(), "no push waits on its Claude");
         upstream_commit(&dir, "d", "theirs", "d on main");
-        assert!(matches!(prepare(&pushing.state, &Caller::User, &dir, &slot, through, None, &hand).unwrap(), Prepared::Handed(said) if said.contains("conflicts with")));
+        assert!(matches!(prepare(&pushing.state, &Caller::User, &dir, &slot, through, None, &hand, None).unwrap(), Prepared::Handed(said) if said.contains("conflicts with")));
         let typed = texts.borrow()[0].clone();
         assert!(typed.contains("kebbie changed nothing in your worktree") && typed.contains("resolve the conflict in them") && typed.contains("with no test run first"), "{typed}");
         assert_eq!((git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebase_in_progress(&slot.path), worktrees_of(&dir)), (head, false, 2), "the conflict was kebbie's own, aborted elsewhere");
@@ -1867,14 +1893,14 @@ mod tests {
                 upstream_commit(&dir, "elsewhere", "x", "someone else's work");
             }
             let (texts, hand) = handed();
-            let prepared = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand);
+            let prepared = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand, None);
             assert!(matches!(&prepared, Ok(Prepared::Push(..))), "runs {runs}, overlapping {overlapping}: the rebased task goes out with no test or lint run first, as CI tests it: {prepared:?}");
             assert!(texts.borrow().is_empty() && intent::load(&pushing.state, &pushing.address).is_none(), "nothing goes back to its Claude: {:?}", texts.borrow());
             join(&pushing.state, &Caller::User, &dir, &slot, Through::All).expect("the push joins the line on the rebased code, with no run on it");
             intent::forget(&pushing.state, &pushing.address);
             if !overlapping {
                 commit(&slot.path, "e", "fifth");
-                assert!(matches!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::First { count: 1, of: 2 }, None, &hand), Ok(Prepared::Push(..))), "a push of the first commits needs no run where it ends either");
+                assert!(matches!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::First { count: 1, of: 2 }, None, &hand, None), Ok(Prepared::Push(..))), "a push of the first commits needs no run where it ends either");
             }
             let _ = std::fs::remove_file(file);
             cleanup(dir, origin, &slot);
@@ -2000,7 +2026,7 @@ mod tests {
         let pushing = Pushing::new(&dir);
         text_on_both_sides(&dir, &slot, &upstream, false);
         let (texts, hand) = handed();
-        let outcome = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap();
+        let outcome = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand, None).unwrap();
         assert!(matches!(&outcome, Prepared::Push(..)) && texts.borrow().is_empty(), "{outcome:?}");
         cleanup(dir, origin, &slot);
     }
@@ -2188,12 +2214,12 @@ mod tests {
         std::fs::write(slot.path.join("notes.txt"), "scratch").unwrap();
         assert_eq!(ahead_behind(&slot.path, &upstream).unwrap(), (1, 1));
         let (texts, hand) = handed();
-        let prepared = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap();
+        let prepared = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand, None).unwrap();
         assert_eq!(ahead_behind(&slot.path, &upstream).unwrap(), (1, 0), "rebased, ready for the push");
         assert_eq!(prepared, Prepared::Push("the user".to_string(), Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false, to: None }), "it goes at once, with no test run on the rebased code");
         assert!(texts.borrow().is_empty());
         std::fs::write(slot.path.join("d"), "half done").unwrap();
-        let dirty = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap_err();
+        let dirty = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand, None).unwrap_err();
         assert!(dirty.contains("1 uncommitted file") && dirty.contains("files: d"), "{dirty}");
         cleanup(dir, origin, &slot);
     }
@@ -2207,7 +2233,7 @@ mod tests {
         upstream_commit(&dir, "m", "1\n2\n3\n4\n5\n6\n7\n8\n9\nten\n", "last line of m");
         let (texts, hand) = handed();
         let sends = std::cell::Cell::new(0);
-        let said = push_task_with(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand, &mut |_, out| {
+        let said = push_task_with(&pushing.state, &Caller::User, &dir, &slot, (Through::All, None, None), &hand, &mut |_, out| {
             sends.set(sends.get() + 1);
             if sends.get() == 1 {
                 upstream_commit(&dir, "m", "1\n2\n3\n4\n5\n6\n7\n8\nnine\nten\n", "another line of m");
@@ -2232,7 +2258,7 @@ mod tests {
         record_approval(&pushing.state, &pushing.address, &fingerprint(&slot.path, &upstream).unwrap(), crate::tasks::ApprovedBy::Reviewer).unwrap();
         let (texts, hand) = handed();
         for caller in [Caller::Agent, Caller::Task(pushing.address.clone()), Caller::Lead] {
-            let refused = prepare(&pushing.state, &caller, &dir, &slot, Through::All, None, &hand).unwrap_err();
+            let refused = prepare(&pushing.state, &caller, &dir, &slot, Through::All, None, &hand, None).unwrap_err();
             assert!(refused.contains("no agent pushes") || refused.contains("no push permission"), "{refused}");
             assert_eq!(git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), head, "refused before the rebase");
             assert!(intent::load(&pushing.state, &pushing.address).is_none() && texts.borrow().is_empty());
@@ -2250,7 +2276,7 @@ mod tests {
         crate::permit::set_task_in(&pushing.state, &pushing.address, true).unwrap();
         record_approval(&pushing.state, &pushing.address, &fingerprint(&slot.path, &upstream).unwrap(), crate::tasks::ApprovedBy::Reviewer).unwrap();
         let (texts, hand) = handed();
-        let prepared = prepare(&pushing.state, &Caller::Lead, &dir, &slot, Through::All, Some(7), &hand).unwrap();
+        let prepared = prepare(&pushing.state, &Caller::Lead, &dir, &slot, Through::All, Some(7), &hand, None).unwrap();
         assert_eq!(prepared, Prepared::Push("the lead".to_string(), Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false, to: None }), "main changed m too, and the clean rebase goes out at once");
         assert!(texts.borrow().is_empty() && intent::load(&pushing.state, &pushing.address).is_none(), "nothing went to its Claude: {:?}", texts.borrow());
         assert!(approved(&slot.path, &upstream, &pushing.address), "the clean rebase kept the approval");
@@ -2260,7 +2286,7 @@ mod tests {
     fn device_pushes<'a>(state: &'a std::path::Path, hand: &'a dyn Fn(&Slot, &str) -> std::result::Result<(), String>) -> impl FnMut(&Intent, &Slot) -> Result<Sent> + 'a {
         move |intent: &Intent, slot: &Slot| {
             let upstream = default_branch(&intent.repo)?;
-            push_task_with(state, &intent.by.caller(), &intent.repo, slot, intent.through, intent.queued, hand, &mut |_, out| push_prefix(&slot.path, &upstream, &out.sha, state).map(|count| format!("pushed {count}")))
+            push_task_with(state, &intent.by.caller(), &intent.repo, slot, (intent.through, intent.queued, intent.to.as_deref()), hand, &mut |_, out| push_prefix(&slot.path, &upstream, &out.sha, state).map(|count| format!("pushed {count}")))
         }
     }
 
@@ -2386,7 +2412,7 @@ mod tests {
         upstream_commit(&dir, "d", "theirs", "d on main");
         let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
         let (texts, hand) = handed();
-        let Prepared::Handed(said) = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap() else { panic!("the rebase conflicts") };
+        let Prepared::Handed(said) = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand, None).unwrap() else { panic!("the rebase conflicts") };
         assert!(said.contains("conflicts with") && said.contains("then kebbie pushes it"), "{said}");
         assert!(Notice::read(&said, false).details.contains(&("files".to_string(), "d".to_string())), "the notice names the conflicting file: {said}");
         assert_eq!(git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), head);
@@ -2395,7 +2421,7 @@ mod tests {
         let recorded = intent::load(&pushing.state, &pushing.address).unwrap();
         assert_eq!((recorded.by.clone(), recorded.work, recorded.fingerprint), (By::User, Work::Conflict, fingerprint(&slot.path, &upstream).unwrap()));
         let failing = |_: &Slot, _: &str| Err("the log is locked".to_string());
-        let refused = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &failing).unwrap_err();
+        let refused = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &failing, None).unwrap_err();
         assert!(refused.contains("could not pass the rebase to its Claude") && refused.contains("error: the log is locked") && Notice::read(&refused, true).details.contains(&("files".to_string(), "d".to_string())), "{refused}");
         assert!(intent::load(&pushing.state, &pushing.address).is_none(), "a push nobody works on is not shown as under way");
         cleanup(dir, origin, &slot);
@@ -2601,7 +2627,7 @@ mod tests {
         let (texts, hand) = handed();
         let unwatched = |_: &Path, _: &Path, _: &str, _: &str, _: bool, _: crate::ci::Pushed| crate::ci::Begin::Off;
         let own = |exists: bool| Some(crate::push_target::Target { branch: "feature/billing".to_string(), version: None, exists, per_task: true });
-        assert_eq!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap(), Prepared::Push("the user".to_string(), Out { sha: first.clone(), rebased: false, to: own(false) }), "main moved, yet nothing is rebased");
+        assert_eq!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand, None).unwrap(), Prepared::Push("the user".to_string(), Out { sha: first.clone(), rebased: false, to: own(false) }), "main moved, yet nothing is rebased");
         let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: first.clone(), rebased: false, to: own(false) }, "the user", &pushing.state, &unwatched).unwrap();
         assert!(said.contains("to feature/billing") && said.contains("On branch, waiting for"), "{said}");
         assert_eq!(git(&origin, &["rev-parse", "feature/billing"]).unwrap(), first, "the task's commits are on its branch");
@@ -2609,19 +2635,54 @@ mod tests {
         assert_eq!(crate::phase::load(&pushing.state, &pushing.address).map(|record| record.phase), Some(crate::phase::Phase::OnBranch { sha: first.clone(), branch: "feature/billing".to_string() }));
         assert!(find_task(&dir, Some("billing"), &dir).is_ok(), "the task stays open");
         assert!(texts.borrow().is_empty());
-        let again = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap_err();
+        let again = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand, None).unwrap_err();
         assert!(again.contains("Nothing new to push: feature/billing on origin already holds it"), "{again}");
         let second = commit(&slot.path, "e", "more work");
         tested(&pushing, &slot);
-        assert_eq!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap(), Prepared::Push("the user".to_string(), Out { sha: second.clone(), rebased: false, to: own(true) }));
+        assert_eq!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand, None).unwrap(), Prepared::Push("the user".to_string(), Out { sha: second.clone(), rebased: false, to: own(true) }));
         let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: second.clone(), rebased: false, to: own(true) }, "the user", &pushing.state, &unwatched).unwrap();
         assert!(said.starts_with("Pushed 1 commit to feature/billing") || said.contains("Pushed 1 commit to feature/billing"), "only the new commit goes: {said}");
         assert_eq!(git(&origin, &["rev-parse", "feature/billing"]).unwrap(), second, "a fast-forward of the branch");
         git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend", "-m", "more work, reworded"]).unwrap();
         tested(&pushing, &slot);
-        let rewritten = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap_err();
+        let rewritten = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand, None).unwrap_err();
         assert!(rewritten.contains("feature/billing on origin has commits this task's branch does not hold"), "never a force push: {rewritten}");
         assert_eq!(git(&origin, &["rev-parse", "feature/billing"]).unwrap(), second);
+        crate::phase::forget(&pushing.state, &pushing.address);
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_push_goes_to_a_branch_the_repo_offers_and_to_main_only_when_the_user_picks_it() {
+        use crate::permit::Caller;
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let main = upstream.trim_start_matches("origin/").to_string();
+        require_accept(&dir, "[push]\nbranch = \"release/{next}\"\nchoices = [\"feature/{task}\"]\n[push.version]\ncommand = \"echo 3.5\"\n");
+        let target = |chosen: Option<&str>| push_target(&dir, &upstream, "billing", chosen);
+        assert_eq!(target(None).unwrap().map(|to| to.branch), Some("release/3.5".to_string()), "the repo's rule by default");
+        assert_eq!(target(Some("feature/{task}")).unwrap().map(|to| (to.branch, to.per_task)), Some(("feature/billing".to_string(), true)));
+        assert_eq!(target(Some(crate::push_target::DEFAULT_BRANCH)).unwrap(), None, "the default branch, picked");
+        let unoffered = target(Some("hotfix/{task}")).unwrap_err();
+        assert!(unoffered.contains("the repo offers no branch \"hotfix/{task}\"") && unoffered.contains("release/{next}, feature/{task}"), "{unoffered}");
+        let shown: Vec<String> = crate::push_target::offers(&dir, &upstream, &crate::push_target::rule(&dir).unwrap().unwrap(), "billing").into_iter().map(|offer| offer.shown).collect();
+        assert_eq!(shown, ["release/3.5 · new: kebbie creates it from ".to_string() + &main, "feature/billing".to_string(), format!("{main} · the default branch, only because you pick it")]);
+        let pushing = Pushing::new(&dir);
+        tested(&pushing, &slot);
+        let lead = join_on(&pushing.state, &Caller::Lead, &dir, &slot, Through::All, None, Some(crate::push_target::DEFAULT_BRANCH)).unwrap_err();
+        assert!(lead.contains(&format!("only you push this task to {main}")), "{lead}");
+        join_on(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, Some("feature/{task}")).unwrap();
+        assert_eq!(intent::load(&pushing.state, &pushing.address).and_then(|waiting| waiting.to).as_deref(), Some("feature/{task}"), "the push line keeps what the user picked");
+        let (_, hand) = handed();
+        let picked = intent::load(&pushing.state, &pushing.address).and_then(|waiting| waiting.to);
+        for _ in 0..2 {
+            let Prepared::Push(_, out) = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand, picked.as_deref()).unwrap() else { panic!("pushed") };
+            assert_eq!(out.to.map(|to| to.branch), Some("feature/billing".to_string()), "prepare follows the pick, not the rule, also when a rejected push tries again");
+        }
+        intent::forget(&pushing.state, &pushing.address);
+        join_on(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, Some(crate::push_target::DEFAULT_BRANCH)).unwrap();
+        let Prepared::Push(_, out) = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand, Some(crate::push_target::DEFAULT_BRANCH)).unwrap() else { panic!("pushed") };
+        assert_eq!(out.to, None, "picked, it goes to the default branch");
+        intent::forget(&pushing.state, &pushing.address);
         crate::phase::forget(&pushing.state, &pushing.address);
         cleanup(dir, origin, &slot);
     }
@@ -2637,13 +2698,13 @@ mod tests {
         let pushing = Pushing::new(&dir);
         commit(&slot.path, "d", "d, again");
         tested(&pushing, &slot);
-        let Prepared::Push(pusher, out) = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap() else { panic!("pushed") };
+        let Prepared::Push(pusher, out) = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand, None).unwrap() else { panic!("pushed") };
         deliver(&dir, &slot, &upstream, Through::All, &out, &pusher, &pushing.state, &unwatched).unwrap();
-        let again = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap_err();
+        let again = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand, None).unwrap_err();
         assert!(again.contains("Nothing new to push: release/3.5 on origin already holds it"), "two commits on one file, both out: {again}");
         commit(&slot.path, "d", "d, a third time");
         tested(&pushing, &slot);
-        let Prepared::Push(pusher, out) = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap() else { panic!("pushed") };
+        let Prepared::Push(pusher, out) = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand, None).unwrap() else { panic!("pushed") };
         let said = deliver(&dir, &slot, &upstream, Through::All, &out, &pusher, &pushing.state, &unwatched).unwrap();
         assert!(said.contains("Pushed 1 commit to release/3.5"), "only the new commit goes: {said}");
         let log: Vec<String> = git(&origin, &["log", "--reverse", "--format=%s", &format!("{main}..release/3.5")]).unwrap().lines().map(str::to_string).collect();
@@ -2664,12 +2725,12 @@ mod tests {
         let pushing = Pushing::new(&dir);
         tested(&pushing, &slot);
         require_accept(&dir, "[push]\nbranch = \"release/{next}\"\nprepare = \"echo cannot >&2; exit 4\"\n[push.version]\nfile = \"package.json\"\n");
-        let failed = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap_err();
+        let failed = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand, None).unwrap_err();
         assert!(failed.contains("push.prepare failed, so kebbie did not create release/3.5") && failed.contains("exited 4: cannot"), "{failed}");
         assert!(git(&origin, &["rev-parse", "--verify", "--quiet", "release/3.5"]).is_err(), "a failed preparation creates no branch");
         require_accept(&dir, "[push]\nbranch = \"release/{next}\"\nprepare = \"printf '{\\\"version\\\": \\\"%s\\\"}\\\\n' \\\"$KEBBIE_VERSION\\\" > package.json\"\n[push.version]\nfile = \"package.json\"\n");
         let main_before = git(&origin, &["rev-parse", &main]).unwrap();
-        let Prepared::Push(pusher, out) = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap() else { panic!("pushed") };
+        let Prepared::Push(pusher, out) = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand, None).unwrap() else { panic!("pushed") };
         assert_eq!(out.to.as_ref().map(|to| (to.branch.as_str(), to.exists)), Some(("release/3.5", false)), "3.4.3 on main counts up to 3.5");
         let said = deliver(&dir, &slot, &upstream, Through::All, &out, &pusher, &pushing.state, &unwatched).unwrap();
         assert!(said.contains("Pushed 1 commit to release/3.5"), "{said}");
@@ -2680,7 +2741,7 @@ mod tests {
         let state = crate::lead::state_dir().unwrap();
         let head = git(&other.path, &["rev-parse", "HEAD"]).unwrap();
         crate::evidence::save(&state, &address, &crate::evidence::Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result: crate::evidence::Outcome::Passed, sha: head.clone(), code: head, ..Default::default() }).unwrap();
-        let Prepared::Push(pusher, out) = prepare(&state, &Caller::User, &dir, &other, Through::All, None, &hand).unwrap() else { panic!("pushed") };
+        let Prepared::Push(pusher, out) = prepare(&state, &Caller::User, &dir, &other, Through::All, None, &hand, None).unwrap() else { panic!("pushed") };
         assert_eq!(out.to.as_ref().map(|to| (to.branch.as_str(), to.exists)), Some(("release/3.5", true)), "main still says 3.4.3, so the second task goes to the same branch");
         deliver(&dir, &other, &upstream, Through::All, &out, &pusher, &state, &unwatched).unwrap();
         let log: Vec<String> = git(&origin, &["log", "--reverse", "--format=%s", &format!("{main}..release/3.5")]).unwrap().lines().map(str::to_string).collect();
@@ -2711,7 +2772,7 @@ mod tests {
         git(&dir, &["reset", "--quiet", "--hard", "HEAD~1"]).unwrap();
         let main_before = git(&origin, &["rev-parse", &main]).unwrap();
         let own = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
-        let Prepared::Push(pusher, out) = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap() else { panic!("pushed") };
+        let Prepared::Push(pusher, out) = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand, None).unwrap() else { panic!("pushed") };
         assert_eq!((out.rebased, out.to.as_ref().map(|to| (to.branch.as_str(), to.exists, to.per_task))), (true, Some(("release/3.5", true, false))), "the open release branch is next");
         let said = deliver(&dir, &slot, &upstream, Through::All, &out, &pusher, &pushing.state, &unwatched).unwrap();
         assert!(said.contains("Pushed 1 commit to release/3.5"), "{said}");
@@ -2724,14 +2785,14 @@ mod tests {
         let state = crate::lead::state_dir().unwrap();
         let head = git(&other.path, &["rev-parse", "HEAD"]).unwrap();
         crate::evidence::save(&state, &address, &crate::evidence::Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result: crate::evidence::Outcome::Passed, sha: head.clone(), code: head.clone(), ..Default::default() }).unwrap();
-        let Prepared::Push(pusher, out) = prepare(&state, &Caller::User, &dir, &other, Through::All, None, &hand).unwrap() else { panic!("pushed") };
+        let Prepared::Push(pusher, out) = prepare(&state, &Caller::User, &dir, &other, Through::All, None, &hand, None).unwrap() else { panic!("pushed") };
         deliver(&dir, &other, &upstream, Through::All, &out, &pusher, &state, &unwatched).unwrap();
         let log: Vec<String> = git(&origin, &["log", "--reverse", "--format=%s", &format!("{main}..release/3.5")]).unwrap().lines().map(str::to_string).collect();
         assert_eq!(log, ["3.5", "fourth", "invoices"], "the branch's own commit first, then each task in the order it went out");
         assert_eq!(git(&origin, &["rev-parse", &main]).unwrap(), main_before, "main is untouched");
         assert_eq!(git(&other.path, &["rev-parse", "HEAD"]).unwrap(), head);
         assert!(texts.borrow().is_empty(), "nothing was handed to a Claude");
-        let again = prepare(&state, &Caller::User, &dir, &other, Through::All, None, &hand).unwrap_err();
+        let again = prepare(&state, &Caller::User, &dir, &other, Through::All, None, &hand, None).unwrap_err();
         assert!(again.contains("Nothing new to push: release/3.5 on origin already holds it"), "{again}");
         assert!(!crate::tasks::landed::landed(&slot.path, &upstream).unwrap());
         git(&dir, &["push", "--quiet", "origin", &format!("refs/remotes/origin/release/3.5:refs/heads/{main}")]).unwrap();

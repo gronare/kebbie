@@ -376,7 +376,9 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   (--through <sha> pushes its commits up to that one, rebased onto the default branch in
                                   a worktree of kebbie's own, and keeps the task open; its worktree, HEAD and uncommitted
                                   work stay as they are, and its Claude rebases onto the new default branch itself, told
-                                  so after the push or before it when its tests or a conflict need it); the user's step, or the lead's for a task the
+                                  so after the push or before it when its tests or a conflict need it)
+                                  (--to <template> in a repo with push.branch pushes to one of push.choices instead, and
+                                  --to {default} to the default branch, which only the user may pick); the user's step, or the lead's for a task the
                                   user gave push permission on the board (a), or in a repo they did on the Areas page (a);
                                   the lead is told what landed
   kebbie try [name]               put a ready task's commits on the main checkout's local default branch, unpushed, to
@@ -586,7 +588,7 @@ impl Arguments {
                 arguments.positionals.extend(input.by_ref());
                 break;
             }
-            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--after-push", "--verify-after-push", "--profile", "--why", "--name", "--until", "--recipe", "--step", "--on", "--id", "--subtask", "--because", "--prepares", "--before", "--verify", "--stage", "--red-cause", "--search", "--send", "--fetch", "--out", "--answered", "--note"].contains(&argument.as_str()) {
+            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--to", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--after-push", "--verify-after-push", "--profile", "--why", "--name", "--until", "--recipe", "--step", "--on", "--id", "--subtask", "--because", "--prepares", "--before", "--verify", "--stage", "--red-cause", "--search", "--send", "--fetch", "--out", "--answered", "--note"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
                 arguments.flags.push(argument);
@@ -885,7 +887,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("promises") => arguments.only("promises", &[]).and_then(|_| tasks::promises()),
         Some("wait") => tasks::wait(&cwd, name, &arguments.values_of("--on"), arguments.flag("--off"), arguments.rest(2)),
         Some("push") if arguments.flag("--cancel") => tasks::cancel_push(&cwd, name),
-        Some("push") => tasks::push(&cwd, name, arguments.value("--through"), arguments.value("--through").is_some(), arguments.flag("--anyway")),
+        Some("push") => tasks::push(&cwd, name, arguments.value("--through"), arguments.value("--through").is_some(), arguments.flag("--anyway"), arguments.value("--to")),
         Some("try") if arguments.flag("--off") => tasks::unstage(&cwd, name),
         Some("try") => tasks::stage(&cwd, name, true),
         Some(old @ ("stage" | "unstage")) => {

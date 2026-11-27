@@ -33,7 +33,21 @@ pub(crate) struct Marks {
     run: bool,
     working: bool,
     bound: Option<usize>,
-    waits: Option<Box<str>>,
+    before: Option<Box<Before>>,
+}
+
+// What the window says above the commits: what the task waits for, and where the push goes.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Before {
+    waits: Option<String>,
+    to: Option<To>,
+}
+
+// The branches a repo with push.branch offers, and the one picked.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct To {
+    offers: Vec<crate::push_target::Offer>,
+    at: usize,
 }
 
 impl Marks {
@@ -49,14 +63,40 @@ impl Marks {
             run: subtasks.listed(),
             accepted,
             working: false,
-            waits: None,
+            before: None,
             bound: commits.iter().position(|commit| subtasks.order.iter().find(|row| row.sha == commit.sha).and_then(|row| row.stage.as_deref()).is_some_and(|stage| tasks::rollout::held_by(&subtasks.stages, stage).is_some()) || subtasks.out_of_stage.as_deref() == Some(commit.sha.as_str())),
         }
     }
 
     // A task that waits for another is pushed from this window ahead of it, so the window says what it waits for before y or p.
     pub(super) fn waiting(self, waits: Option<String>) -> Self {
-        Self { waits: waits.map(String::into_boxed_str), ..self }
+        let before = Before { waits, ..self.before.map(|before| *before).unwrap_or_default() };
+        Self { before: Some(Box::new(before)), ..self }
+    }
+
+    // A repo with push.branch names where the push goes before y or p, its rule first.
+    pub(super) fn to(self, offers: Vec<crate::push_target::Offer>) -> Self {
+        let before = Before { to: (!offers.is_empty()).then_some(To { offers, at: 0 }), ..self.before.map(|before| *before).unwrap_or_default() };
+        Self { before: Some(Box::new(before)), ..self }
+    }
+
+    fn offered(&self) -> Option<&To> {
+        self.before.as_ref().and_then(|before| before.to.as_ref())
+    }
+
+    // t moves to the next branch the repo offers.
+    pub(super) fn next_target(self) -> Self {
+        let before = self.before.map(|before| Box::new(Before { to: before.to.map(|to| To { at: (to.at + 1) % to.offers.len(), ..to }), ..*before }));
+        Self { before, ..self }
+    }
+
+    // None follows the repo's rule; only a branch picked with t goes as its template.
+    pub(super) fn chosen(&self) -> Option<String> {
+        self.offered().filter(|to| to.at > 0).and_then(|to| to.offers.get(to.at)).map(|offer| offer.template.clone())
+    }
+
+    pub(super) fn picks_target(&self) -> bool {
+        self.offered().is_some_and(|to| to.offers.len() > 1)
     }
 
     // While its agent works, the window pushes only the accepted run and rewrites nothing.
@@ -231,10 +271,23 @@ pub(super) fn push_lines(card: Option<&(report::Card, bool)>, tests: Option<&evi
         lines.push(indented(Line::from(tests_spans(tests, width.saturating_sub(4))), 2));
         lines.push(Line::default());
     }
-    if let Some(waits) = &marks.waits {
+    if let Some(waits) = marks.before.as_ref().and_then(|before| before.waits.as_ref()) {
         lines.push(section_header("WAITS", Vec::new(), width));
         let said = format!("{waits} Pushing it now puts it out before them.");
         lines.extend(wrap(&said, width.saturating_sub(2), 6).into_iter().map(|part| Line::from(vec![Span::raw("  "), Span::styled(part, style(YELLOW))])));
+        lines.push(Line::default());
+    }
+    if let Some(to) = marks.offered() {
+        lines.push(section_header("TO", Vec::new(), width));
+        for (index, offer) in to.offers.iter().enumerate() {
+            let picked = index == to.at;
+            let (branch, about) = offer.shown.split_once(" · ").map_or((offer.shown.as_str(), None), |(branch, about)| (branch, Some(about)));
+            let mut spans = vec![Span::raw(if picked { "▸ " } else { "  " }), Span::styled(branch.to_string(), if picked { bold(MAUVE) } else { style(TEXT) })];
+            if let Some(about) = about {
+                spans.push(Span::styled(format!("  {about}"), style(if picked && index + 1 == to.offers.len() { YELLOW } else { MUTED })));
+            }
+            lines.push(fit(spans, width));
+        }
         lines.push(Line::default());
     }
     lines.push(section_header("COMMITS", vec![Span::styled(commits.len().to_string(), style(MUTED))], width));
@@ -318,7 +371,7 @@ fn opening(path: &Path, busy: bool, turn: bool, held: bool, waits: Option<String
         Ok(commits) => commits,
         Err(error) => return Opening::Said(Err(error)),
     };
-    let marks = Marks::read(path, &commits, turn).while_working(busy).waiting(waits);
+    let marks = Marks::read(path, &commits, turn).while_working(busy).waiting(waits).to(tasks::push_offers(path));
     if busy && marks.through().is_none() {
         return Opening::Said(Notice::new(Tone::NotNow, "Not yet: its Claude is still working").next("This opens once it reports, or once you accept its first subtask.").ok());
     }
@@ -373,8 +426,10 @@ impl App {
                 let name = self.tasks.iter().find(|item| item.path.as_deref() == Some(path.as_path())).map_or_else(|| crate::repo::name_of(&path), |item| item.name.clone());
                 let label = self.push_label(&name);
                 let pushed = path.clone();
-                self.push_in_background(label, vec![(name, path)], move |pusher| pusher(&pushed, Some(&through), keep_open));
+                let to = marks.chosen();
+                self.push_in_background(label, vec![(name, path)], move |pusher| pusher(&pushed, Some(&through), keep_open, to.as_deref()));
             }
+            KeyCode::Char('t') if marks.picks_target() => self.mode = Mode::ConfirmPush { path, commits, selected, card, tests, marks: marks.next_target(), scroll },
             KeyCode::Up | KeyCode::Char('k') => self.mode = Mode::ConfirmPush { path, commits, selected: selected.saturating_sub(1), card, tests, marks, scroll: scroll.follow() },
             KeyCode::Down | KeyCode::Char('j') => {
                 let selected = (selected + 1).min(marks.last_pushable(commits.len()));
@@ -444,7 +499,10 @@ pub(super) fn draw_push(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit)> {
     let keys_rows = |scrolls: bool| Paragraph::new(push_keys(commits.len(), end, marks.through, scrolls, marks.working, marks.pushes_run())).wrap(Wrap { trim: false }).line_count(inner_width) as u16;
     let room = frame.area().height.saturating_sub(4);
     let scrolls = body_rows + 1 + keys_rows(false) > room;
-    let keys = push_keys(commits.len(), end, marks.through, scrolls, marks.working, marks.pushes_run());
+    let mut keys = push_keys(commits.len(), end, marks.through, scrolls, marks.working, marks.pushes_run());
+    if marks.picks_target() {
+        keys.spans.push(Span::styled(" · t branch", style(MUTED)));
+    }
     let foot_rows = keys_rows(scrolls);
     let area = centered(frame.area(), width, body_rows + 1 + foot_rows + 2);
     let block = modal_block("push".to_string());
@@ -537,6 +595,25 @@ mod tests {
         let wide = |head: &str| format!("{head} {}", "─".repeat(100 - head.chars().count() - 1));
         assert!(screen.starts_with(&format!("{}\n  Waits for Rounding field (ready to push). Pushing it now puts it out before them.\n\n{}", wide("WAITS"), wide("COMMITS 1"))), "a task that waits says so before its commits: {screen}");
         assert_eq!(first, 4, "the commits move down under it");
+    }
+
+    #[test]
+    fn a_repo_with_push_branch_names_where_the_push_goes_and_t_picks_another() {
+        let text = |lines: &[Line]| lines.iter().map(|line| line.spans.iter().map(|span| span.content.to_string()).collect::<String>()).collect::<Vec<_>>().join("\n");
+        let commits = vec![tasks::Commit { sha: "1111111aaaa".to_string(), message: "Add refunds".to_string() }];
+        let offer = |template: &str, shown: &str| crate::push_target::Offer { template: template.to_string(), shown: shown.to_string() };
+        let marks = Marks::default().to(vec![offer("release/{next}", "release/3.5 · new: kebbie creates it from master, push.prepare first"), offer("feature/{task}", "feature/billing"), offer(crate::push_target::DEFAULT_BRANCH, "master · the default branch, only because you pick it")]);
+        let (lines, first) = push_lines(None, None, &commits, &marks, 0, 90);
+        let screen = text(&lines);
+        assert!(screen.starts_with("TO ") && screen.contains("\n▸ release/3.5  new: kebbie creates it from master, push.prepare first\n  feature/billing\n  master  the default branch, only because you pick it\n\nCOMMITS"), "{screen}");
+        assert_eq!((first, marks.chosen(), marks.picks_target()), (6, None, true), "the rule needs no pick");
+        let picked = marks.next_target();
+        assert_eq!(picked.chosen().as_deref(), Some("feature/{task}"));
+        let main = picked.next_target();
+        assert_eq!(main.chosen().as_deref(), Some(crate::push_target::DEFAULT_BRANCH));
+        assert_eq!(main.next_target().chosen(), None, "t wraps round to the rule");
+        let (lines, _) = push_lines(None, None, &commits, &Marks::default(), 0, 90);
+        assert!(!text(&lines).contains("TO "), "a repo that pushes to main names nothing");
     }
 
     #[test]

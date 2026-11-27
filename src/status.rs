@@ -143,6 +143,7 @@ pub struct Git {
     pub head: Option<String>,
     pub error: Option<String>,
     pub uncommitted_files: Vec<String>,
+    pub push_to: Option<String>,
 }
 
 // How a prompt in the agent's own pane is answered, which the board shows while it waits there.
@@ -811,7 +812,8 @@ impl Item {
             let behind = if git.behind > 0 { format!(" · {} behind {}", git.behind, git.upstream.trim_start_matches("origin/")) } else { String::new() };
             let turn = if self.turn_under_way() { format!(" · its {} is taking a turn", self.agent_name()) } else { String::new() };
             let dirty = if git.uncommitted > 0 { format!(" · {}", plural(git.uncommitted, "uncommitted file")) } else { String::new() };
-            return format!("{} · ready to push{dirty}{behind}{review}{turn}", plural(git.ahead, "commit"));
+            let to = git.push_to.as_ref().map(|branch| format!(" to {branch}")).unwrap_or_default();
+            return format!("{} · ready to push{to}{dirty}{behind}{review}{turn}", plural(git.ahead, "commit"));
         }
         let mut parts: Vec<String> = self.git_error().map(|_| GIT_UNREAD.to_string()).into_iter().chain(self.back_to_work()).chain(self.build_wait.map(crate::builds::board_note)).chain(self.obstacle.as_ref().filter(|_| surface == Surface::Lead).map(crate::obstacle::Shown::note)).chain(crate::tasks::rollout::note(&self.subtasks.stages)).chain(self.staged.then(|| STAGED.to_string())).chain(self.phase_note()).chain(self.ci_note()).chain(self.recover_note()).chain(self.push_note()).chain(self.landed.filter(|why| !why.waits_for_you()).and(self.landed_note())).collect();
         if git.ahead > 0 {
@@ -1087,6 +1089,14 @@ pub(crate) fn committed_at(path: &Path) -> bool {
     own_commits(path, &upstream).is_ok_and(|ahead| ahead > 0) && uncommitted(path).is_ok_and(|files| files.is_empty())
 }
 
+// Where a push of the repo's rule goes, read once per refresh; a rule kebbie cannot resolve, or one a command answers, shows as its template.
+fn push_to(repo: &Path, upstream: &str, rule: &crate::push_target::Rule, task: &str) -> String {
+    match rule.source {
+        crate::push_target::Source::Command(_) => rule.branch.replace(crate::config::TASK_PLACE, task),
+        _ => crate::push_target::resolve(repo, upstream, rule, &rule.branch, task).map_or_else(|_| rule.branch.replace(crate::config::TASK_PLACE, task), |target| target.branch),
+    }
+}
+
 fn plural(count: usize, noun: &str) -> String {
     if count == 1 { format!("1 {noun}") } else { format!("{count} {noun}s") }
 }
@@ -1224,6 +1234,8 @@ fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>,
         let tips = crate::repo::branch_tips(repo, &upstream).ok();
         let config = crate::config::resolve(Some(repo)).ok();
         let steps_on = config.as_ref().is_some_and(|config| config.settings.steps.value);
+        let rule = config.as_ref().and_then(|config| crate::push_target::Rule::of(&config.settings));
+        let shared_to = rule.as_ref().filter(|rule| !rule.branch.contains(crate::config::TASK_PLACE)).map(|rule| push_to(repo, &upstream, rule, ""));
         let configured_profile = config.and_then(|config| config.settings.profile.value);
         configured_profiles.insert(repo.clone(), configured_profile.clone());
         let upstream_sha = tips.as_ref().filter(|_| steps_on).map(|(sha, _)| sha.clone());
@@ -1278,7 +1290,7 @@ fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>,
                 path: Some(slot.path.clone()),
                 workspace,
                 agent,
-                git: Some(Git { upstream: upstream.clone(), ahead, behind, changed, uncommitted, approved, approved_by, head, error, uncommitted_files }),
+                git: Some(Git { upstream: upstream.clone(), ahead, behind, changed, uncommitted, approved, approved_by, head, error, uncommitted_files, push_to: shared_to.clone().or_else(|| rule.as_ref().map(|rule| push_to(repo, &upstream, rule, &task))) }),
                 report: reports.get(&address).map(|report| messages::shown_report(&log, report)),
                 question: questions.iter().find(|question| question.from == address).or_else(|| questions.iter().find(|question| crate::questions::kebbies_about(question, &address))).map(|question| (*question).clone()),
                 asked: asked_since_start(&log, &address),
@@ -1438,7 +1450,7 @@ pub(crate) mod tests {
         let mut item = Item {
             review: None, verdict: None, second: None, rules: None, permit: None, follows: false, bypass: false, profile: Some(crate::profiles::TASK.to_string()), server: false, worker: false, url: None, name: "billing".to_string(), title: None, place: "web".to_string(), repo: None, path: None, workspace: None,
             agent: status.map(|status| Agent { pane: "w1:p1".to_string(), status: status.to_string(), title: String::new(), context: None, answer: answer_in_space(crate::agent::Agent::Claude), kind: crate::agent::Agent::Claude }),
-            git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0, uncommitted: 0, approved: true, approved_by: None, head: None, error: None, uncommitted_files: Vec::new() }),
+            git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0, uncommitted: 0, approved: true, approved_by: None, head: None, error: None, uncommitted_files: Vec::new(), push_to: None }),
             report: report.map(|state| Message {
                 id: "1".to_string(), at: 0, from: "billing@web".to_string(), to: LEAD_LABEL.to_string(), text: "plan written".to_string(), held: false,
                 report: Some(Report { state: state.to_string(), next: "nothing".to_string(), head: None, after: Vec::new() }), ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false, fyi: false,
@@ -1805,6 +1817,8 @@ pub(crate) mod tests {
         item.git.as_mut().unwrap().approved = true;
         assert_eq!(item.summary(), "2 commits · ready to push", "a pass of the reviewer's stays quiet");
         assert_eq!(item.rules_shown(), Some(RulesShown::Ok));
+        item.git.as_mut().unwrap().push_to = Some("release/3.5".to_string());
+        assert_eq!(item.summary(), "2 commits · ready to push to release/3.5", "a repo with push.branch names where the push goes");
     }
 
     #[test]

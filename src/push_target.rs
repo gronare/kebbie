@@ -4,6 +4,9 @@ use crate::config::{self, Bump, Settings, CURRENT_PLACE, NEXT_PLACE, TASK_PLACE}
 use crate::repo::{git, tracking};
 use crate::sh::Result;
 
+// What a push picks for the default branch, which a repo with push.branch takes only on the user's explicit word.
+pub const DEFAULT_BRANCH: &str = "{default}";
+
 const COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 #[derive(Clone, Debug, PartialEq)]
@@ -32,6 +35,11 @@ impl Rule {
             (None, None) => Source::Branches,
         };
         Some(Rule { branch, choices: settings.push_choices.value.clone(), prepare: settings.push_prepare.value.clone(), source, bump: settings.push_version_bump.value })
+    }
+
+    // Every branch a push may pick, its rule first.
+    pub fn offered(&self) -> Vec<String> {
+        std::iter::once(self.branch.clone()).chain(self.choices.iter().filter(|choice| **choice != self.branch).cloned()).collect()
     }
 }
 
@@ -64,6 +72,29 @@ pub fn resolve(repo: &Path, upstream: &str, rule: &Rule, template: &str, task: &
     }
     let exists = crate::sh::succeeds("git", &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/origin/{branch}")], Some(repo));
     Ok(Target { branch, version, exists, per_task: template.contains(TASK_PLACE) })
+}
+
+// What the push window offers: each branch the repo names, as it resolves now, and last the default branch, which a push takes only when picked.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Offer {
+    pub template: String,
+    pub shown: String,
+}
+
+pub fn offers(repo: &Path, upstream: &str, rule: &Rule, task: &str) -> Vec<Offer> {
+    let main = upstream.trim_start_matches("origin/");
+    let mut offers: Vec<Offer> = rule.offered().into_iter().map(|template| {
+        let shown = match resolve(repo, upstream, rule, &template, task) {
+            Ok(target) if target.branch == main => format!("{} · the default branch, which push.branch may not name", target.branch),
+            Ok(target) if target.exists || target.per_task => target.branch,
+            Ok(target) if rule.prepare.is_some() => format!("{} · new: kebbie creates it from {main}, push.prepare first", target.branch),
+            Ok(target) => format!("{} · new: kebbie creates it from {main}", target.branch),
+            Err(error) => format!("{template} · cannot push: {error}"),
+        };
+        Offer { template, shown }
+    }).collect();
+    offers.push(Offer { template: DEFAULT_BRANCH.to_string(), shown: format!("{main} · the default branch, only because you pick it") });
+    offers
 }
 
 fn current(repo: &Path, named: &str) -> Result<String> {

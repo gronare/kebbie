@@ -14,7 +14,7 @@ pub(super) type Join<'a> = &'a mut dyn FnMut(&Path, &Slot, &str) -> Result<()>;
 // Each round, a ready task under the user's push permission joins its repo's push line as kebbie's own push, once per ready report and while it left the line no more than REPUSHES times; the line's own checks decide whether its commits may go.
 pub(crate) fn tick(state: &Path) -> Vec<String> {
     let reports = messages::latest_reports(&messages::load());
-    let mut join = |repo: &Path, slot: &Slot, seen: &str| super::push::join_on(state, &Caller::Keeper, repo, slot, Through::All, Some(seen.to_string()));
+    let mut join = |repo: &Path, slot: &Slot, seen: &str| super::push::join_on(state, &Caller::Keeper, repo, slot, Through::All, Some(seen.to_string()), None);
     let mut notes = Vec::new();
     for repo in crate::repo::pooled_checkouts() {
         let Ok(found) = slots(&repo) else { continue };
@@ -105,7 +105,7 @@ mod tests {
         let state = state_of(&dir);
         let address = peers::address("billing", &name_of(&dir));
         crate::permit::set_task_in(&state, &address, true).unwrap();
-        crate::tasks::push::join_on(&state, &Caller::User, &dir, &slot, Through::All, Some("u1".to_string())).unwrap();
+        crate::tasks::push::join_on(&state, &Caller::User, &dir, &slot, Through::All, Some("u1".to_string()), None).unwrap();
         intent::forget(&state, &address);
         let mut joined = 0;
         assert_eq!(consider(&state, &dir, &slot, &ready_of(&address, "u1", "ready"), &mut |_, _, _| { joined += 1; Ok(()) }), None, "the user took it out of the line, or it left it, on this same report");

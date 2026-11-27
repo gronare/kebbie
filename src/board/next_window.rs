@@ -403,7 +403,7 @@ impl App {
         let order: Vec<(String, PathBuf)> = order.into_iter().take(if only_first { 1 } else { usize::MAX }).map(|push| (push.name, push.path)).collect();
         let label = if order.len() == 1 { self.push_label(&order[0].0) } else { format!("Pushing {} tasks in order", order.len()) };
         let pushed = order.clone();
-        self.push_in_background(label, order, move |pusher| next::push_in_order(&pushed, |path| pusher(path, None, false)));
+        self.push_in_background(label, order, move |pusher| next::push_in_order(&pushed, |path| pusher(path, None, false, None)));
     }
 }
 
@@ -561,7 +561,7 @@ mod tests {
         let mut app = app_with(a_day());
         let tried = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let seen = tried.clone();
-        app.pusher = std::sync::Arc::new(move |path, _, _| {
+        app.pusher = std::sync::Arc::new(move |path, _, _, _| {
             seen.lock().unwrap().push(path.to_path_buf());
             if path.ends_with("fix-grid") { Err("Not pushed: rules not checked".to_string()) } else { Ok(String::new()) }
         });

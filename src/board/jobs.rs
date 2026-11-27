@@ -18,10 +18,10 @@ use super::notices::{self, Subject, tone_color};
 use super::widgets::{MANTLE, MUTED, TEXT, bold, cut, style};
 use super::{App, Mode, Page};
 
-pub(super) type Pusher = Arc<dyn Fn(&Path, Option<&str>, bool) -> Result<String> + Send + Sync>;
+pub(super) type Pusher = Arc<dyn Fn(&Path, Option<&str>, bool, Option<&str>) -> Result<String> + Send + Sync>;
 
 pub(super) fn live_pusher() -> Pusher {
-    Arc::new(|path, through, keep_open| tasks::push(path, None, through, keep_open, true))
+    Arc::new(|path, through, keep_open, to| tasks::push(path, None, through, keep_open, true, to))
 }
 
 pub(super) type Dropper = Arc<dyn Fn(&Path, bool) -> Result<String> + Send + Sync>;
@@ -284,7 +284,7 @@ mod tests {
         let wait = Arc::new(Mutex::new(wait));
         let calls = Arc::new(Mutex::new(Vec::new()));
         let seen = calls.clone();
-        app.pusher = Arc::new(move |path, through, keep_open| {
+        app.pusher = Arc::new(move |path, through, keep_open, _| {
             seen.lock().unwrap().push((path.to_path_buf(), through.map(str::to_string), keep_open));
             crate::tasks::push_step("billing", "rebasing onto main");
             let _ = wait.lock().unwrap().recv();

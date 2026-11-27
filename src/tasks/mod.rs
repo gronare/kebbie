@@ -62,7 +62,7 @@ pub(crate) use pool::{Slot, clean_build_output, find_task, list, move_work, slot
 pub(crate) use push_steps::watched as push_watched;
 #[cfg(test)]
 pub(crate) use push_steps::step as push_step;
-pub(crate) use push::{DevicePush, after_ci, for_by as push_for, given as push_given, cancel as cancel_push, land, ordinal, place_in_line, push, push_as, rebase, tidy};
+pub(crate) use push::{DevicePush, after_ci, for_by as push_for, given as push_given, cancel as cancel_push, land, ordinal, place_in_line, push, push_as, push_offers, rebase, tidy};
 pub(crate) use stage::{WAIT_CEILING as STAGE_WAIT, stage, staged, tick as stage_tick, unstage};
 pub(crate) use started::{link, started_items, started_links};
 pub(crate) use promise::{EVERY as PROMISES_EVERY, command as promise, first_prompt_line as promises_first_line, FIRST_LINE_KEEPS as PROMISES_KEEP, list as promises, overdue_line as promises_overdue_line, overdue_now as promises_overdue, tick as promises_tick};
@@ -173,7 +173,7 @@ mod tests {
         for call in ["tasks::done(", "tasks::reset(", "tasks::push(", "tasks::start(", "tasks::rebase("] {
             for (at, _) in board.match_indices(call) {
                 let line = board[..at].rsplit('\n').next().unwrap_or_default();
-                assert!(line.contains("move ||") || line.contains("sender.send(") || line.contains("Arc::new(|path, through, keep_open|"), "{call} runs on the board's thread: {line}");
+                assert!(line.contains("move ||") || line.contains("sender.send(") || line.contains("Arc::new(|path, through, keep_open, to|"), "{call} runs on the board's thread: {line}");
             }
         }
         let handed: Vec<&str> = board.lines().filter(|line| line.contains("self.pusher")).collect();

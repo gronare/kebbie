@@ -584,7 +584,7 @@ mod tests {
         (typed, move |intent: &Intent, slot: &Slot| {
             let hand = |_: &Slot, text: &str| { kept.borrow_mut().push(text.to_string()); Ok(()) };
             let upstream = default_branch(&intent.repo)?;
-            super::super::push::push_task_with(state, &intent.by.caller(), &intent.repo, slot, intent.through, intent.queued, &hand, &mut |_, out| {
+            super::super::push::push_task_with(state, &intent.by.caller(), &intent.repo, slot, (intent.through, intent.queued, intent.to.as_deref()), &hand, &mut |_, out| {
                 super::super::push::push_prefix(&slot.path, &upstream, &out.sha, state).map(|count| format!("pushed {count}"))
             })
         })

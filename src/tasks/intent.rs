@@ -104,6 +104,7 @@ pub(super) struct Intent {
     pub hand: Option<String>,
     pub queued: Option<u64>,
     pub waited: Option<u64>,
+    pub to: Option<String>,
 }
 
 impl Intent {
@@ -115,7 +116,7 @@ impl Intent {
         let mut value = json!({
             "by": self.by.key(), "work": self.work.key(),
             "address": self.address, "repo": self.repo, "task": self.task, "fingerprint": self.fingerprint,
-            "through": through, "at": self.at, "seen": self.seen, "hand": self.hand, "queued": self.queued, "waited": self.waited,
+            "through": through, "at": self.at, "seen": self.seen, "hand": self.hand, "queued": self.queued, "waited": self.waited, "to": self.to,
         });
         if let By::Hub { account, name } = &self.by {
             value["hub"] = json!({ "account": account, "name": name });
@@ -156,6 +157,7 @@ impl Intent {
             hand: value["hand"].as_str().map(str::to_string),
             queued,
             waited: value["waited"].as_u64(),
+            to: value["to"].as_str().map(str::to_string),
         })
     }
 }
@@ -267,7 +269,7 @@ pub(crate) fn after_red_ci(state: &Path, repo: &Path, address: &str, by: By) -> 
     let task = crate::peers::task_part(address).to_string();
     let log = messages::load();
     let seen = messages::latest_reports(&log).get(address).map(|report| report.id.clone());
-    save(state, &Intent { by, work: Work::Ci, address: address.to_string(), repo: repo.to_path_buf(), task, fingerprint: String::new(), through: Through::All, at: messages::now(), seen, hand: last_hand_over(&log, address), queued: None, waited: None })
+    save(state, &Intent { by, work: Work::Ci, address: address.to_string(), repo: repo.to_path_buf(), task, fingerprint: String::new(), through: Through::All, at: messages::now(), seen, hand: last_hand_over(&log, address), queued: None, waited: None, to: None })
 }
 
 fn last_hand_over(log: &[Message], address: &str) -> Option<String> {
@@ -376,7 +378,7 @@ pub(super) mod tests {
     }
 
     pub(in crate::tasks) fn intent(by: By, repo: &Path, fingerprint: &str) -> Intent {
-        Intent { by, work: Work::Tests, address: format!("billing@{}", crate::repo::name_of(repo)), repo: repo.to_path_buf(), task: "billing".to_string(), fingerprint: fingerprint.to_string(), through: Through::All, at: 100, seen: Some("before".to_string()), hand: None, queued: Some(100), waited: None }
+        Intent { by, work: Work::Tests, address: format!("billing@{}", crate::repo::name_of(repo)), repo: repo.to_path_buf(), task: "billing".to_string(), fingerprint: fingerprint.to_string(), through: Through::All, at: 100, seen: Some("before".to_string()), hand: None, queued: Some(100), waited: None, to: None }
     }
 
     #[test]
@@ -386,6 +388,10 @@ pub(super) mod tests {
         let written = intent(By::User, Path::new("/repos/app"), "abc");
         save(&state, &written).unwrap();
         assert_eq!(stamp_waited(&state, "billing@app", 500), Some(Intent { waited: Some(500), ..written.clone() }));
+        let picked = Intent { to: Some("feature/{task}".to_string()), ..written.clone() };
+        save(&state, &picked).unwrap();
+        assert_eq!(load(&state, "billing@app"), Some(picked), "the branch the user picked is kept with the push");
+        save(&state, &Intent { waited: Some(500), ..written.clone() }).unwrap();
         assert_eq!(load(&state, "billing@app").and_then(|intent| intent.waited), Some(500));
         forget(&state, "billing@app");
         assert_eq!(stamp_waited(&state, "billing@app", 600), None);
