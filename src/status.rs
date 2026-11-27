@@ -191,6 +191,7 @@ pub struct Item {
     pub git: Option<Git>,
     pub report: Option<Message>,
     pub question: Option<Message>,
+    pub asked: String,
     pub ci: Option<crate::ci::Watch>,
     pub recover: Option<crate::recover::Record>,
     pub routine: Option<String>,
@@ -258,7 +259,7 @@ impl Item {
         Item {
             review: None, verdict: None, second: None, rules: None, permit: None, follows: false, bypass: false, profile: Some(crate::profiles::chosen(wait.profile.as_deref(), None, configured).to_string()), server: false, worker: false, url: None,
             name: wait.task.clone(), title, place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
-            report: None, question: None, ci: None, recover: None, routine: None, push_waits: None,
+            report: None, question: None, asked: String::new(), ci: None, recover: None, routine: None, push_waits: None,
             queued: Some(Queued { after, blocked: wait.blocked.clone(), waiting, names, base, at, backlog: wait.backlog.is_some(), notes: wait.notes.clone() }),
             held_by_draft: None, held_messages: 0, unsent_start: false, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), unrecorded: None, push_left: None, left_times: 0, staged: false, subtasks: tasks::Subtasks::default(), to_accept: None, parked: None, assessment: None, recipe: None, obstacle: None, built: Built::default(), build_wait: None, waits_on: None, blocks: Vec::new(),
         }
@@ -1127,6 +1128,12 @@ fn held_messages(log: &[Message], address: &str) -> usize {
     log.iter().filter(|message| message.held && message.to == address && message.kind.as_deref() != Some(messages::NOTICE_KIND)).count()
 }
 
+// What this task asked the user since it last started, answered or not, so a link a question carried stays among the row's links.
+pub(crate) fn asked_since_start(log: &[Message], address: &str) -> String {
+    let start = log.iter().rposition(|message| message.ended && message.to == address).map_or(0, |at| at + 1);
+    log[start..].iter().filter(|message| message.from == address && message.question.is_some()).map(|message| message.text.as_str()).collect::<Vec<_>>().join("\n")
+}
+
 // Messages that wait because the task's input box holds the user's own text: the row says what clears the way.
 pub(crate) fn held_by_draft(log: &[Message], task: &str, address: &str) -> Option<String> {
     let held: Vec<&Message> = log.iter().filter(|message| message.held && message.to == address && message.kind.as_deref() != Some(messages::NOTICE_KIND)).collect();
@@ -1263,6 +1270,7 @@ fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>,
                 git: Some(Git { upstream: upstream.clone(), ahead, behind, changed, uncommitted, approved, approved_by, head, error, uncommitted_files }),
                 report: reports.get(&address).map(|report| messages::shown_report(&log, report)),
                 question: questions.iter().find(|question| question.from == address).or_else(|| questions.iter().find(|question| crate::questions::kebbies_about(question, &address))).map(|question| (*question).clone()),
+                asked: asked_since_start(&log, &address),
                 ci: state.as_deref().and_then(|state| crate::ci::load(state, &address)),
                 recover: state.as_deref().and_then(|state| crate::recover::load(state, &address)),
                 routine: state.as_deref().and_then(|state| crate::routines::run_of(state, &address)).map(|(id, _)| id),
@@ -1344,6 +1352,7 @@ fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>,
             git: None,
             report: None,
             question: None,
+            asked: String::new(),
             ci: None,
             recover: None,
             routine: None,
@@ -1424,6 +1433,7 @@ pub(crate) mod tests {
                 report: Some(Report { state: state.to_string(), next: "nothing".to_string(), head: None, after: Vec::new() }), ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false, fyi: false,
             }),
             question: None,
+            asked: String::new(),
             ci: None,
             recover: None,
             routine: None,
@@ -2711,4 +2721,17 @@ pub(crate) mod tests {
         assert_eq!(shown(&items).0, Some((2, 1, 1)), "a moved default branch is read afresh");
         cleanup(dir, origin, &slot);
     }
+
+    #[test]
+    fn what_a_task_asked_since_it_last_started_carries_its_links_answered_or_not() {
+        let log = messages::fold(&[
+            r#"{"id":"q1","at":1,"from":"pay@web","to":"you","text":"Old run: https://old.example/mock","state":"asked","question":{"options":[{"label":"Yes","meaning":"y","comment":false}],"recommend":1,"answered":true}}"#,
+            r#"{"id":"e1","at":2,"from":"kebbie","to":"pay@web","text":"pay ended (done)","state":"ended"}"#,
+            r#"{"id":"q2","at":3,"from":"pay@web","to":"you","text":"Approve the mock?\n\nMockup: https://claude.ai/artifact/abc123","state":"asked","question":{"options":[{"label":"Yes","meaning":"y","comment":false}],"recommend":1,"answered":true}}"#,
+            r#"{"id":"q3","at":4,"from":"search@web","to":"you","text":"Other: https://other.example","state":"asked","question":{"options":[{"label":"Yes","meaning":"y","comment":false}],"recommend":1}}"#,
+        ].join("\n"));
+        assert!(include_str!("status.rs").contains(concat!("asked: asked_since_start(&log, ", "&address),")), "gather gives each task what it asked");
+        assert_eq!(asked_since_start(&log, "pay@web"), "Approve the mock?\n\nMockup: https://claude.ai/artifact/abc123", "an answered question counts, one from before its last end and another task's do not");
+    }
+
 }

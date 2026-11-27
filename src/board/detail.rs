@@ -304,10 +304,10 @@ fn state_spans(app: &App, item: &Item) -> Vec<Span<'static>> {
     spans
 }
 
-// Addresses the card and the last report name, such as a mock, a preview or a pull request, once each.
+// Addresses the card, the last report and the questions the task asked since it started name, such as a mock, a preview or a pull request, once each.
 pub(super) fn named_urls(item: &Item, card: Option<&report::Card>) -> Vec<String> {
     let report = item.report.as_ref().map(|message| [message.text.as_str(), message.report.as_ref().map_or("", |report| report.next.as_str())].join(" ")).unwrap_or_default();
-    let text = [card.map_or("", |card| card.text.as_str()), report.as_str()].join(" ");
+    let text = [card.map_or("", |card| card.text.as_str()), report.as_str(), item.asked.as_str()].join(" ");
     let mut urls: Vec<String> = Vec::new();
     for word in text.split(|character: char| character.is_whitespace() || "()<>[]\"'`".contains(character)) {
         let url = word.trim_end_matches(['.', ',', ';', ':', '!', '?']);
@@ -546,6 +546,15 @@ mod tests {
     use crate::board::images::{Graphics, spawn_decoder};
     use crate::board::push::push_lines;
     use crate::board::widgets::{BLUE, GREEN, MUTED, PEACH, RED, YELLOW};
+
+    #[test]
+    fn a_link_the_task_asked_the_user_about_stays_among_its_links_after_the_answer() {
+        let mut item = served("search-filters");
+        assert!(!named_urls(&item, None).iter().any(|url| url.contains("artifact")));
+        item.asked = "Approve this mockup of the filters.\n\nMockup: https://claude.ai/artifact/abc123".to_string();
+        assert_eq!(named_urls(&item, None), ["https://claude.ai/artifact/abc123"]);
+        assert!(task_urls(&item, None, None).contains(&("Open the mock".to_string(), "https://claude.ai/artifact/abc123".to_string())), "the row's links, and the phone's");
+    }
 
     #[test]
     fn an_unfolded_row_adds_only_where_the_task_lives_its_links_and_what_s_gives() {
