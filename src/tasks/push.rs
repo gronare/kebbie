@@ -81,15 +81,38 @@ pub(super) enum Updated {
     Conflict(Vec<String>),
 }
 
-// Rebases onto upstream, already fetched; a conflict is aborted, and a rebase git refuses to start is an error with git's own reason.
+// Rebases onto upstream, already fetched; a conflict is aborted, and a rebase git refuses to start is an error that names where git's own words are kept.
 pub(super) fn update(path: &Path, upstream: &str) -> Result<Updated> {
     update_in(path, upstream, &[], None)
+}
+
+// A rebase that stops on a git error rather than a conflict, as when a hook stages files while it replays commits, is aborted and run again with hooks off.
+const REBASE_TRIES: usize = 3;
+
+enum Attempt {
+    Done,
+    Conflict(Vec<String>),
+    Failed(String),
 }
 
 // With from, only the commits after it go onto upstream, as git rebase --onto takes them.
 fn update_in(path: &Path, upstream: &str, options: &[&str], from: Option<&str>) -> Result<Updated> {
     let _alone = rebase_alone(path)?;
     let touched = overlap(path, upstream, from)?;
+    let unhooked: Vec<&str> = options.iter().copied().chain(UNHOOKED).collect();
+    for tried in 1..=REBASE_TRIES {
+        match rebase_once(path, upstream, if tried == 1 { options } else { &unhooked }, from)? {
+            Attempt::Done if touched.is_empty() => return Ok(Updated::Clean),
+            Attempt::Done => return Ok(Updated::Overlap(touched)),
+            Attempt::Conflict(files) => return Ok(Updated::Conflict(files)),
+            Attempt::Failed(error) if tried == REBASE_TRIES => return Err(refused(path, upstream, &error, tried)),
+            Attempt::Failed(_) => std::thread::sleep(std::time::Duration::from_millis(300)),
+        }
+    }
+    unreachable!("the last try returns")
+}
+
+fn rebase_once(path: &Path, upstream: &str, options: &[&str], from: Option<&str>) -> Result<Attempt> {
     let tracked = crate::repo::tracking(upstream);
     let rebase: Vec<&str> = match from {
         Some(from) => vec!["rebase", "--quiet", "--onto", &tracked, from],
@@ -99,18 +122,15 @@ fn update_in(path: &Path, upstream: &str, options: &[&str], from: Option<&str>) 
     while rebased.is_err() && rebase_in_progress(path) && union_release_notes(path, options) {
         rebased = rebase_writing(path, options, &["-c", "core.editor=true", "rebase", "--continue"]);
     }
-    match rebased {
-        Ok(_) if touched.is_empty() => Ok(Updated::Clean),
-        Ok(_) => Ok(Updated::Overlap(touched)),
-        Err(error) if rebase_in_progress(path) => {
-            let unmerged = git(path, &["diff", "--name-only", "--diff-filter=U"]).unwrap_or_default();
-            if let Err(abort) = git_writing(path, &[options, &["rebase", "--abort"]].concat()) {
-                return Err(refused(path, upstream, &format!("{error}; git rebase --abort then failed: {abort}")));
-            }
-            if unmerged.is_empty() { Err(refused(path, upstream, &error)) } else { Ok(Updated::Conflict(unmerged.lines().map(str::to_string).collect())) }
-        }
-        Err(error) => Err(refused(path, upstream, &error)),
+    let Err(error) = rebased else { return Ok(Attempt::Done) };
+    if !rebase_in_progress(path) {
+        return Ok(Attempt::Failed(error));
     }
+    let unmerged = git(path, &["diff", "--name-only", "--diff-filter=U"]).unwrap_or_default();
+    if let Err(abort) = git_writing(path, &[options, &["rebase", "--abort"]].concat()) {
+        return Err(refused(path, upstream, &format!("{error}; git rebase --abort then failed: {abort}"), 1));
+    }
+    Ok(if unmerged.is_empty() { Attempt::Failed(error) } else { Attempt::Conflict(unmerged.lines().map(str::to_string).collect()) })
 }
 
 const RELEASE_NOTES: &str = crate::changes::FILE;
@@ -221,13 +241,21 @@ fn push_place(sha: &str) -> Result<std::path::PathBuf> {
     super::launch::scratch_dir(&format!("push-{}-{}", std::process::id(), &sha[..12.min(sha.len())]))
 }
 
-fn refused(path: &Path, upstream: &str, error: &str) -> String {
-    let said = Notice::new(Tone::Failed, format!("git would not rebase it onto {}", main_of(upstream))).detail("folder", path.display().to_string()).detail("error", error);
-    match hidden_from_status(path) {
+// git's own words go to a file the notice names, so the push dialog says in one line what happened and what to do.
+fn refused(path: &Path, upstream: &str, error: &str, tried: usize) -> String {
+    let kept = git(path, &["rev-parse", "--path-format=absolute", "--git-path", "kebbie-rebase-error.txt"]).ok().filter(|file| std::fs::write(file, format!("{error}\n")).is_ok());
+    let tries = if tried > 1 { format!(" kebbie tried {tried} times, the last {} with hooks off.", plural(tried - 1, "time").trim_start_matches("1 ")) } else { String::new() };
+    let said = Notice::new(Tone::Failed, format!("Not rebased: git stopped the rebase onto {} on an error, not a conflict", main_of(upstream)));
+    let said = match hidden_from_status(path) {
         Ok(hidden) if !hidden.is_empty() => said
-            .you("Unhide the files below with git update-index --no-skip-worktree or --no-assume-unchanged, commit or stash them, then try again.")
-            .detail("hidden", format!("{} (skip-worktree or assume-unchanged)", hidden.join(", "))).to_string(),
-        _ => said.to_string(),
+            .you("Unhide the files below with git update-index --no-skip-worktree or --no-assume-unchanged, commit or stash them, then push again.")
+            .detail("hidden", format!("{} (skip-worktree or assume-unchanged)", hidden.join(", "))),
+        _ => said.next(format!("Nothing was pushed; try again, with p on the board for a push.{tries}")),
+    };
+    let said = said.detail("folder", path.display().to_string());
+    match kept {
+        Some(file) => said.detail("git said", file).to_string(),
+        None => said.detail("error", error.lines().next().unwrap_or_default()).to_string(),
     }
 }
 
@@ -1953,37 +1981,63 @@ mod tests {
     }
 
     #[test]
-    fn a_rebase_git_refuses_to_start_reports_gits_reason_and_the_hidden_files_and_is_no_conflict() {
+    fn a_rebase_git_refuses_to_start_names_the_hidden_files_keeps_gits_reason_in_a_file_and_is_no_conflict() {
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         git(&slot.path, &["update-index", "--skip-worktree", "a"]).unwrap();
         std::fs::write(slot.path.join("a"), "local only").unwrap();
         assert!(uncommitted(&slot.path).unwrap().is_empty(), "git status does not show it");
         upstream_commit(&dir, "a", "theirs", "a on main");
         let refused = update(&slot.path, &upstream).unwrap_err();
-        assert!(refused.contains("would be overwritten") || refused.contains("overwritten"), "git's own reason: {refused}");
         assert!(refused.contains("skip-worktree") && refused.contains("hidden: a ("), "{refused}");
-        assert!(!refused.contains("no rebase in progress") && !rebase_in_progress(&slot.path), "{refused}");
+        assert!(!refused.contains("overwritten"), "git's own words stay out of the notice: {refused}");
+        assert!(kept_error(&slot).contains("overwritten"), "git's own reason is kept in the file the notice names");
+        assert!(!rebase_in_progress(&slot.path), "{refused}");
         cleanup(dir, origin, &slot);
     }
 
     #[test]
     fn a_rebase_whose_abort_fails_too_still_reports_gits_first_error() {
         let source = include_str!("push.rs");
-        let update = &source[source.find("fn update_in(").unwrap()..];
-        let update = &update[..update.find("\n}\n").unwrap()];
-        assert!(update.contains("if let Err(abort) = git_writing(path, &[options, &[\"rebase\", \"--abort\"]].concat())") && update.contains("refused(path, upstream, &format!(\"{error}; git rebase --abort then failed: {abort}\"))"), "\"no rebase in progress\" from the abort never stands in for why the rebase stopped");
+        let once = &source[source.find("fn rebase_once(").unwrap()..];
+        let once = &once[..once.find("\n}\n").unwrap()];
+        assert!(once.contains("if let Err(abort) = git_writing(path, &[options, &[\"rebase\", \"--abort\"]].concat())") && once.contains("refused(path, upstream, &format!(\"{error}; git rebase --abort then failed: {abort}\"), 1)"), "\"no rebase in progress\" from the abort never stands in for why the rebase stopped");
     }
 
     #[test]
-    fn a_rebase_git_stops_without_a_conflicted_file_reports_gits_reason_and_is_no_conflict() {
+    fn a_rebase_git_stops_without_a_conflicted_file_is_tried_again_with_hooks_off_then_said_in_one_line() {
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         upstream_commit(&dir, "elsewhere", "x", "someone else's work");
         let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
         git(&dir, &["config", "--unset", "user.email"]).unwrap();
         let refused = update(&slot.path, &upstream).unwrap_err();
-        assert!(refused.contains(&format!("git would not rebase it onto {}", main_of(&upstream))) && refused.contains("no email was given"), "git's own reason: {refused}");
+        let notice = crate::notice::Notice::parse(&refused).expect("a notice");
+        assert_eq!(notice.headline, format!("Not rebased: git stopped the rebase onto {} on an error, not a conflict", main_of(&upstream)), "{refused}");
+        assert!(notice.next.as_deref().is_some_and(|next| next.contains("try again, with p on the board for a push") && next.contains("tried 3 times, the last 2 times with hooks off")), "{refused}");
+        assert!(!refused.contains("no email was given") && kept_error(&slot).contains("no email was given"), "git's own words go to the file, not the dialog: {refused}");
         assert!(!rebase_in_progress(&slot.path) && git(&slot.path, &["rev-parse", "HEAD"]).unwrap() == head, "the stopped rebase is aborted and leaves the branch as it was");
         cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_rebase_a_hook_stops_goes_through_on_the_try_with_hooks_off() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        commit(&slot.path, "e", "fifth");
+        upstream_commit(&dir, "elsewhere", "x", "someone else's work");
+        let hooks = slot.path.join("../hooks-of-billing");
+        std::fs::create_dir_all(&hooks).unwrap();
+        crate::executable::write(hooks.join("pre-rebase"), "#!/bin/sh\necho 'a hook holds the index' >&2\nexit 1\n").unwrap();
+        git(&slot.path, &["config", "core.hooksPath", &hooks.to_string_lossy()]).unwrap();
+        assert!(git(&slot.path, &["rebase", "--quiet", &upstream]).is_err(), "the hook stops a rebase with hooks on");
+        assert_eq!(update(&slot.path, &upstream).unwrap(), Updated::Clean, "the hook stopped the first try; the second ran without hooks");
+        assert_eq!(git(&slot.path, &["log", "--format=%s", "-3"]).unwrap(), "fifth\nfourth\nsomeone else's work");
+        assert!(!rebase_in_progress(&slot.path), "the rebase finished");
+        git(&slot.path, &["config", "--unset", "core.hooksPath"]).unwrap();
+        let _ = std::fs::remove_dir_all(hooks);
+        cleanup(dir, origin, &slot);
+    }
+
+    fn kept_error(slot: &Slot) -> String {
+        std::fs::read_to_string(git(&slot.path, &["rev-parse", "--path-format=absolute", "--git-path", "kebbie-rebase-error.txt"]).unwrap()).unwrap_or_default()
     }
 
     struct Pushing {

@@ -13,6 +13,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The lead takes a colleague's comment on a commit to you, with who wrote it and on which commit, and changes your rules, roles or CLAUDE.md only on your word.
 - A push of a ready task only rebases and pushes: it runs no test and waits on no test run, also when main moved or changed the task's files, and CI tests what lands. Only a conflict goes to the task's Claude, and the resolved commits go out without a test run.
 - Test and lint runs from before a clean rebase still count for the next ready report.
+- A rebase that git stops on an error rather than a conflict is tried again twice with hooks off, and the push says so in one line instead of showing git's output.
 
 ## 0.42.0
 

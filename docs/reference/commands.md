@@ -274,6 +274,7 @@ How far the task is behind the default branch does not matter. The rebase at its
 | --- | --- |
 | Clean | kebbie pushes, also when the new upstream commits changed files the task changes too. It runs no test and waits on no test run: the task's tests and lint ran before its ready report, and CI tests what lands. |
 | Conflict | kebbie aborts the rebase and hands it to the task's Claude, which resolves it, asks you when the conflict is a choice between two behaviours, and reports ready. |
+| Stopped on a git error, not a conflict | kebbie aborts it and tries twice more with hooks off; when it still fails, the push says so in one line and keeps git's words in a file it names. |
 
 - A rebase that stops only on `CHANGES.md` is no conflict: kebbie keeps both sides' lines under their heading and goes on. It stays a conflict when a side changed or removed a line already there, when the merge would repeat a heading, or when another file conflicts too. `land`, `rebase` and `follow` rebase the same way.
 - After a conflict, the task's ready report is taken with no test run, and the resolved commits need a rules check; then kebbie pushes for whoever asked: you, or the lead under its permission.
