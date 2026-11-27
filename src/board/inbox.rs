@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
@@ -168,10 +169,14 @@ fn answers(message: &Message) -> Vec<Answer> {
     answers
 }
 
-fn plan_file(message: &Message) -> Option<PathBuf> {
+// What o opens: a vault plan's note in Obsidian, a file plan's kept copy.
+fn plan_target(message: &Message) -> Option<OsString> {
     let plan = message.question.as_ref()?.plan.as_deref()?;
+    if let Some(key) = plan.strip_prefix(questions::VAULT_PLAN) {
+        return Some(super::detail::obsidian_url(key).into());
+    }
     let file = PathBuf::from(plan);
-    (!plan.starts_with(questions::VAULT_PLAN) && file.is_file()).then_some(file)
+    file.is_file().then(|| file.into_os_string())
 }
 
 impl App {
@@ -262,8 +267,8 @@ impl App {
                 }
             }
             _ if open => {
-                if let Some(file) = self.questions.get(window.selected).and_then(plan_file) {
-                    self.open_file(&file);
+                if let Some(target) = self.questions.get(window.selected).and_then(plan_target) {
+                    self.open_file(&target);
                 }
             }
             _ => {}
@@ -588,7 +593,7 @@ pub(super) fn draw_questions(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit
     if let Some((ok, notice)) = &window.notice {
         keys.push(Span::styled(format!("{} {} · ", if *ok { "✓" } else { "!" }, notice.split_whitespace().collect::<Vec<_>>().join(" ")), style(if *ok { GREEN } else { RED })));
     }
-    let open = viewer && plan_file(message).is_some();
+    let open = viewer && plan_target(message).is_some();
     keys.push(Span::styled(question_keys(window.typing, planned, tab && questions.len() > 1, open), style(MUTED)));
     frame.render_widget(Paragraph::new(fit(keys, foot.width as usize)), foot);
     hits
@@ -1141,6 +1146,19 @@ mod tests {
         press(&mut app, KeyCode::PageDown);
         let screen = render(&mut app, 60, 30).0.join("\n");
         assert!(!screen.contains("PLAN 0% ─") && screen.contains("taking the comment in"), "pgdn scrolls the plan and keeps the answer: {screen}");
+    }
+
+    #[test]
+    fn o_opens_a_vault_plan_in_obsidian_and_its_window_says_so() {
+        let asked = questions::parse(&[], None, true, "Approve the test plan for the recent fixes.").unwrap();
+        let question = messages::fold(&questions::record("q9", 20, "verify@kebbie", &asked, Some("vault:Projects/kebbie-verify recent.md"), None).to_string()).remove(0);
+        assert_eq!(plan_target(&question), Some(OsString::from("obsidian://open?file=Projects%2Fkebbie-verify%20recent.md")));
+        let mut app = test_app(Vec::new());
+        app.viewer = Some("xdg-open");
+        app.questions = vec![question];
+        app.open_questions(Some(0));
+        let screen = render(&mut app, 170, 40).0.join("\n");
+        assert!(screen.contains("o open the plan"), "{screen}");
     }
 
     #[test]
