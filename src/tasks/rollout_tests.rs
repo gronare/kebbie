@@ -211,7 +211,7 @@ fn a_column_rename_goes_out_in_three_stages_through_ci_a_not_yet_something_wrong
     assert!(past.contains("Not pushed: Backfill waits until Add the column is met"), "{past}");
 
     let first = open()[0].clone();
-    deliver(&dir, &slot, &upstream, Through::First { count: 1, of: 3 }, &Out { sha: first.clone(), rebased: false }, "the user", &state, &watching).unwrap();
+    deliver(&dir, &slot, &upstream, Through::First { count: 1, of: 3 }, &Out { sha: first.clone(), rebased: false, to: None }, "the user", &state, &watching).unwrap();
     assert_eq!(git(&origin, &["rev-parse", "HEAD"]).unwrap(), first, "the first stage went out alone");
     assert_eq!((states()[0], crate::ci::load(&state, &address).map(|watch| watch.pushed.stages)), (StageState::Pushed, Some(vec!["add-column".to_string()])), "CI is followed for the stage");
     assert!(crate::ci::tick_with(&state, &gh, later()).is_empty() || states()[0] == StageState::Pushed, "no run yet: the stage waits");
@@ -221,7 +221,7 @@ fn a_column_rename_goes_out_in_three_stages_through_ci_a_not_yet_something_wrong
     assert!(crate::ci::load(&state, &address).is_none(), "and the watch is done");
 
     let second = open()[0].clone();
-    deliver(&dir, &slot, &upstream, Through::First { count: 1, of: 2 }, &Out { sha: second.clone(), rebased: false }, "the user", &state, &watching).unwrap();
+    deliver(&dir, &slot, &upstream, Through::First { count: 1, of: 2 }, &Out { sha: second.clone(), rebased: false, to: None }, "the user", &state, &watching).unwrap();
     assert!(crate::kebbie_questions::load(&state).is_empty(), "the verification waits for the stage to be out");
     green(&dir, &second);
     crate::ci::tick_with(&state, &gh, later());
@@ -250,7 +250,7 @@ fn a_column_rename_goes_out_in_three_stages_through_ci_a_not_yet_something_wrong
     let moved = read();
     assert_eq!((moved.out_of_stage.clone(), moved.pushable.map(|run| run.count)), (None, Some(1)), "moved up, the fix is the stage's own to push");
     let fixed = open()[0].clone();
-    deliver(&dir, &slot, &upstream, Through::First { count: 1, of: 2 }, &Out { sha: fixed.clone(), rebased: false }, "the user", &state, &watching).unwrap();
+    deliver(&dir, &slot, &upstream, Through::First { count: 1, of: 2 }, &Out { sha: fixed.clone(), rebased: false, to: None }, "the user", &state, &watching).unwrap();
     assert_eq!((states()[1], read().stages[1].note.clone()), (StageState::Pushed, None), "the fix's push asks for the stage's requirement again");
     green(&dir, &fixed);
     crate::ci::tick_with(&state, &gh, later());
@@ -261,7 +261,7 @@ fn a_column_rename_goes_out_in_three_stages_through_ci_a_not_yet_something_wrong
     assert_eq!(states(), [StageState::Met, StageState::Met, StageState::Open]);
 
     let last = open()[0].clone();
-    let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: last.clone(), rebased: false }, "the user", &state, &watching).unwrap();
+    let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: last.clone(), rebased: false, to: None }, "the user", &state, &watching).unwrap();
     assert!(said.contains("closes the task once every stage is met"), "{said}");
     let watch = crate::ci::load(&state, &address).unwrap();
     assert_eq!((watch.close, watch.pushed.check.as_ref().map(|check| check.what.as_str())), (true, Some("no query reads users.mail")), "the last stage's check rides on the watch");

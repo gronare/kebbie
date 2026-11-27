@@ -529,16 +529,22 @@ pub(super) fn device_push(state: &Path, caller: &Caller, repo: &Path, slot: &Slo
         Some(Work::Conflict) => DevicePush::Conflict { files: files(), main },
         Some(Work::Tests) => DevicePush::Tests { files: files(), main },
         Some(Work::Turn | Work::Ci) => DevicePush::Queued(said),
-        None => match own_branch(repo, task) {
-            Ok(Some(branch)) => match git(repo, &["rev-parse", "--short=7", &remote_branch(&branch)]) {
+        None => match crate::phase::load(state, &address).map(|record| record.phase) {
+            Some(crate::phase::Phase::OnBranch { branch, .. }) => match git(repo, &["rev-parse", "--short=7", &remote_branch(&branch)]) {
                 Ok(short) => DevicePush::Pushed { short, main: branch },
                 Err(_) => DevicePush::Failed(said),
             },
-            Ok(None) => match git(repo, &["rev-parse", "--short=7", &crate::repo::tracking(&upstream)]) {
-                Ok(short) => DevicePush::Pushed { short, main },
+            _ => match push_target(repo, &upstream, task) {
+                Ok(Some(target)) => match git(repo, &["rev-parse", "--short=7", &remote_branch(&target.branch)]) {
+                    Ok(short) => DevicePush::Pushed { short, main: target.branch },
+                    Err(_) => DevicePush::Failed(said),
+                },
+                Ok(None) => match git(repo, &["rev-parse", "--short=7", &crate::repo::tracking(&upstream)]) {
+                    Ok(short) => DevicePush::Pushed { short, main },
+                    Err(_) => DevicePush::Failed(said),
+                },
                 Err(_) => DevicePush::Failed(said),
             },
-            Err(_) => DevicePush::Failed(said),
         },
     }
 }
@@ -617,8 +623,8 @@ pub(super) fn join_on(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, t
     if rebase_in_progress(&slot.path) {
         return Notice::new(Tone::NotNow, "Not pushed: a rebase is under way in its worktree").next("Push it once the rebase is finished.").detail("task", &task).err();
     }
-    if let Some(branch) = own_branch(repo, &task)? {
-        fast_forwards(&slot.path, &branch, &through_sha(&slot.path, &upstream, through)?, &task)?;
+    if let Some(target) = push_target(repo, &upstream, &task)?.filter(|target| target.per_task) {
+        fast_forwards(&slot.path, &target.branch, &through_sha(&slot.path, &upstream, through)?, &task)?;
     }
     authorize(caller, repo, slot, &upstream, through)?;
     let by = By::of(caller).ok_or_else(|| Notice::new(Tone::Failed, format!("Not pushed: {} may not push it", crate::permit::describe(caller))).detail("task", &task).to_string())?;
@@ -715,6 +721,7 @@ pub(super) fn rejected(error: &str) -> bool {
 pub(super) struct Out {
     pub sha: String,
     pub rebased: bool,
+    pub to: Option<crate::push_target::Target>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -739,27 +746,29 @@ fn prepare(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Thr
     super::stage::refuse_push(state, repo, &address, &task)?;
     let pusher = authorize(caller, repo, slot, &upstream, through)?;
     let by = By::of(caller).ok_or_else(|| Notice::new(Tone::Failed, format!("Not pushed: {} may not push it", crate::permit::describe(caller))).detail("task", &task).to_string())?;
-    let branch = own_branch(repo, &task)?;
-    super::push_steps::step(&task, &branch.as_ref().map_or_else(|| format!("rebasing onto {}", main_of(&upstream)), |branch| format!("checking {branch}")));
+    let rule = crate::push_target::rule(repo)?;
+    super::push_steps::step(&task, &rule.as_ref().map_or_else(|| format!("rebasing onto {}", main_of(&upstream)), |rule| format!("checking {}", rule.branch.replace(config::TASK_PLACE, &task))));
     fetch(repo)?;
+    let target = push_target(repo, &upstream, &task)?;
     let recorded = pushed_fingerprint(&slot.path, &upstream, through)?;
     let seen = messages::latest_reports(&messages::load()).get(&address).map(|report| report.id.clone());
     let record = |work: Work, fingerprint: String| intent::save(state, &Intent { by: by.clone(), work, address: address.clone(), repo: repo.to_path_buf(), task: task.clone(), fingerprint, through, at: messages::now(), seen: seen.clone(), hand: None, queued, waited: None });
-    let (updated, out) = match (&branch, through) {
-        (Some(branch), _) => {
+    let (updated, out) = match (target, through) {
+        (Some(target), _) if target.per_task => {
             let sha = through_sha(&slot.path, &upstream, through)?;
-            fast_forwards(&slot.path, branch, &sha, &task)?;
-            (Updated::Clean, Some(Out { sha, rebased: false }))
+            fast_forwards(&slot.path, &target.branch, &sha, &task)?;
+            (Updated::Clean, Some(Out { sha, rebased: false, to: Some(target) }))
         }
+        (Some(target), _) => (Updated::Clean, Some(onto_shared(&slot.path, &upstream, through, target, &task)?)),
         (None, Through::All) => (update(&slot.path, &upstream)?, None),
         (None, Through::First { .. }) => {
             let sha = through_sha(&slot.path, &upstream, through)?;
             if crate::sh::succeeds("git", &["merge-base", "--is-ancestor", &crate::repo::tracking(&upstream), &sha], Some(&slot.path)) {
-                (Updated::Clean, Some(Out { sha, rebased: false }))
+                (Updated::Clean, Some(Out { sha, rebased: false, to: None }))
             } else {
                 let first = open_shas(&slot.path, &upstream)?.into_iter().next().unwrap_or_else(|| sha.clone());
                 let (updated, built) = rebased_elsewhere(&slot.path, &format!("{first}^"), &sha, &upstream)?;
-                (updated, Some(Out { sha: built, rebased: true }))
+                (updated, Some(Out { sha: built, rebased: true, to: None }))
             }
         }
     };
@@ -782,7 +791,7 @@ fn prepare(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Thr
     let pusher = authorize(caller, repo, slot, &upstream, through)?;
     let out = match out {
         Some(out) => out,
-        None => Out { sha: git(&slot.path, &["rev-parse", "HEAD"])?, rebased: false },
+        None => Out { sha: git(&slot.path, &["rev-parse", "HEAD"])?, rebased: false, to: None },
     };
     Ok(Prepared::Push(pusher, out))
 }
@@ -814,8 +823,8 @@ fn went_out(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Ou
 pub(super) fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out, pusher: &str, state: &Path, watch: Watch) -> Result<String> {
     let task = task_of(slot).to_string();
     let address = peers::address(&task, &name_of(repo));
-    if let Some(branch) = own_branch(repo, &task)? {
-        return deliver_to_branch(repo, slot, upstream, out, pusher, state, &branch);
+    if let Some(target) = &out.to {
+        return deliver_to_branch(repo, slot, upstream, through, out, pusher, state, target);
     }
     let mut went = went_out(repo, slot, upstream, through, out)?;
     went.keep_open &= !(went.rest == 0 && crate::verify_after::load(state, &address).is_some());
@@ -1152,11 +1161,48 @@ fn pushable_through(path: &Path, upstream: &str, rev: &str, keep_open: bool) -> 
     Ok(sha)
 }
 
-// The branch of its own the repo's push.branch names for this task; none pushes to the default branch, and a config kebbie cannot read pushes nowhere.
-pub(crate) fn own_branch(repo: &Path, task: &str) -> Result<Option<String>> {
+// Where the repo's push.branch sends this task's push; none pushes to the default branch, and a rule kebbie cannot follow pushes nowhere.
+pub(crate) fn push_target(repo: &Path, upstream: &str, task: &str) -> Result<Option<crate::push_target::Target>> {
     let Some(rule) = crate::push_target::rule(repo)? else { return Ok(None) };
-    let upstream = default_branch(repo)?;
-    crate::push_target::resolve(repo, &upstream, &rule, &rule.branch, task).map(|target| Some(target.branch)).map_err(|error| format!("Not pushed: push.branch {:?}: {error}", rule.branch))
+    let refused = |error: String| Notice::new(Tone::You, format!("Not pushed: push.branch {:?} names no branch kebbie can push to", rule.branch)).you("Fix push.branch in the repo's config, or push the branch it names to origin first.").detail("task", task).detail("error", error).to_string();
+    let target = crate::push_target::resolve(repo, upstream, &rule, &rule.branch, task).map_err(refused)?;
+    if target.branch == main_of(upstream) {
+        return Err(refused(format!("it names {}, the default branch", target.branch)));
+    }
+    Ok(Some(target))
+}
+
+// Without git cherry the commits an earlier push put on the branch, rebased under other shas, are replayed onto it again and conflict with themselves.
+fn past_what_went_out(path: &Path, remote: &str, base: &str, sha: &str) -> Result<String> {
+    let marked = git(path, &["cherry", remote, sha, base])?;
+    match marked.lines().find_map(|line| line.strip_prefix("+ ")) {
+        Some(first) => Ok(format!("{first}^")),
+        None => Ok(sha.to_string()),
+    }
+}
+
+fn onto_shared(path: &Path, upstream: &str, through: Through, target: crate::push_target::Target, task: &str) -> Result<Out> {
+    let branch = target.branch.clone();
+    if !target.exists {
+        return Notice::new(Tone::You, format!("Not pushed: {branch} is not on origin yet")).you(format!("Push {branch} to origin first, then push this task again.")).detail("task", task).err();
+    }
+    let sha = through_sha(path, upstream, through)?;
+    let first = open_shas(path, upstream)?.into_iter().next().unwrap_or_else(|| sha.clone());
+    let onto = format!("origin/{branch}");
+    let from = past_what_went_out(path, &remote_branch(&branch), &format!("{first}^"), &sha)?;
+    if from == sha {
+        return Notice::new(Tone::NotNow, format!("Nothing new to push: {branch} on origin already holds it")).next(format!("It waits under On branch until its commits reach {}.", main_of(upstream))).detail("task", task).err();
+    }
+    let (updated, built) = rebased_elsewhere(path, &from, &sha, &onto)?;
+    if let Updated::Conflict(files) = updated {
+        return Notice::new(Tone::You, format!("Not pushed: it conflicts with what is on {branch}"))
+            .you(format!("Its commits do not apply on top of {branch}; settle the conflict on {branch} yourself, or push it once {branch} has reached {}.", main_of(upstream)))
+            .detail("task", task).detail("files", files.join(" · ")).err();
+    }
+    if git(path, &["rev-list", "--count", &format!("{}..{built}", remote_branch(&branch))])? == "0" {
+        return Notice::new(Tone::NotNow, format!("Nothing new to push: {branch} on origin already holds it")).next(format!("It waits under On branch until its commits reach {}.", main_of(upstream))).detail("task", task).err();
+    }
+    Ok(Out { sha: built, rebased: true, to: Some(target) })
 }
 
 fn remote_branch(branch: &str) -> String {
@@ -1188,14 +1234,17 @@ fn fast_forwards(path: &Path, branch: &str, sha: &str, task: &str) -> Result<()>
 }
 
 // A push to the task's own branch: nothing is rebased or watched, and the task stays open until its commits reach the default branch, where the keeper's landed round closes it.
-fn deliver_to_branch(repo: &Path, slot: &Slot, upstream: &str, out: &Out, pusher: &str, state: &Path, branch: &str) -> Result<String> {
+#[allow(clippy::too_many_arguments)]
+fn deliver_to_branch(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out, pusher: &str, state: &Path, target: &crate::push_target::Target) -> Result<String> {
+    let branch = target.branch.as_str();
     let task = task_of(slot).to_string();
     let address = peers::address(&task, &name_of(repo));
     let sha = out.sha.clone();
     let base = branch_base(&slot.path, upstream, branch);
     let pushed = git(&slot.path, &["log", "--reverse", "--format=%h %s", &format!("{base}..{sha}")])?;
     let shas: Vec<String> = git(&slot.path, &["rev-list", "--reverse", &format!("{base}..{sha}")])?.lines().map(str::to_string).collect();
-    let rest = git(&slot.path, &["rev-list", "--count", &format!("{sha}..HEAD")])?.parse::<usize>().unwrap_or(0);
+    let own = through_sha(&slot.path, upstream, through)?;
+    let rest = git(&slot.path, &["rev-list", "--count", &format!("{own}..HEAD")])?.parse::<usize>().unwrap_or(0);
     super::push_steps::step(&task, &format!("pushing to {branch}"));
     crate::repo::push_from(&slot.path, &[&format!("{sha}:refs/heads/{branch}")], state)
         .map_err(|error| Notice::new(Tone::Failed, "Not pushed: git refused the push").detail("task", &task).detail("error", error).to_string())?;
@@ -1203,8 +1252,8 @@ fn deliver_to_branch(repo: &Path, slot: &Slot, upstream: &str, out: &Out, pusher
     let went = Went { sha: sha.clone(), keep_open: false, rest, pushed: pushed.clone(), shas, note, target: branch.to_string() };
     let (_, log) = after_push(state, repo, slot, &address, &task, &went, &crate::vault_cli::detect);
     let head = git(&slot.path, &["rev-parse", "HEAD"]).ok();
-    let steps_left = super::plan::left_at(state, &slot.path, &address, &sha);
-    let event = if rest == 0 && !steps_left { crate::phase::Event::BranchOut { sha: &sha, branch } } else { crate::phase::Event::KeptOpen { rest, steps_left, clean: true, head: head.as_deref() } };
+    let steps_left = super::plan::left_at(state, &slot.path, &address, &own);
+    let event = if rest == 0 && !steps_left { crate::phase::Event::BranchOut { sha: &own, branch } } else { crate::phase::Event::KeptOpen { rest, steps_left, clean: true, head: head.as_deref() } };
     crate::phase::record(state, &address, "push", &event);
     crate::report::forget_card_in(state, &address);
     let (count, short, main) = (pushed.lines().count(), &sha[..7.min(sha.len())], main_of(upstream));
@@ -1219,11 +1268,19 @@ fn deliver_to_branch(repo: &Path, slot: &Slot, upstream: &str, out: &Out, pusher
     if let Err(error) = messages::to_lead(if logged == Some(true) { messages::ToLead::Landed } else { messages::ToLead::PushToLog }, &lead) {
         eprintln!("Could not tell the lead about the push: {error}");
     }
-    let told = format!(
-        "{} pushed {} of this task, through {short}, to {branch} on origin; nothing was rebased. They reach {main} only when someone merges {branch}, and kebbie closes this task once they are on {main}. \
-         Never rebase, amend or reorder the pushed commits: the next push of this task must add to {branch}, never rewrite it. Put new work in commits on top.",
-        pushed_by(pusher), plural(count, "commit")
-    );
+    let told = if target.per_task {
+        format!(
+            "{} pushed {} of this task, through {short}, to {branch} on origin; nothing was rebased. They reach {main} only when someone merges {branch}, and kebbie closes this task once they are on {main}. \
+             Never rebase, amend or reorder the pushed commits: the next push of this task must add to {branch}, never rewrite it. Put new work in commits on top.",
+            pushed_by(pusher), plural(count, "commit")
+        )
+    } else {
+        format!(
+            "{} pushed {} of this task to {branch} on origin, rebased onto {branch} in a worktree of kebbie's, through {short} there; your branch is as it was, on {main}. They reach {main} when {branch} is merged, and kebbie closes this task once they are on {main}. \
+             Never rebase, amend or reorder the pushed commits: put new work in commits on top, and kebbie rebases only those onto {branch} at the next push.",
+            pushed_by(pusher), plural(count, "commit")
+        )
+    };
     if let Err(error) = messages::notify(&address, &told) {
         eprintln!("Could not tell {address} about the push: {error}");
     }
@@ -1365,7 +1422,7 @@ mod tests {
         let state = state_of(&dir);
         let address = crate::peers::address("billing", &name_of(&dir));
         let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
-        deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head, rebased: false }, "the user", &state, &watching).unwrap();
+        deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head, rebased: false, to: None }, "the user", &state, &watching).unwrap();
         let told = told_lead(&address);
         assert_eq!(told.len(), 1, "{told:?}");
         assert!(told[0].fyi && told[0].kind.is_none() && told[0].text.starts_with(&format!("The user pushed {address}: 1 commit to {}. kebbie watches CI", upstream.trim_start_matches("origin/"))), "the push under CI watch is a notice for the digest, not a turn of the lead's: {:?}", told[0]);
@@ -1393,7 +1450,7 @@ mod tests {
         let dirty = agent_worktree(&dir, &upstream, "agent-dirty");
         std::fs::write(dirty.join("draft"), "draft").unwrap();
         let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
-        let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head, rebased: false }, "the user", &state, &watching).unwrap();
+        let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head, rebased: false, to: None }, "the user", &state, &watching).unwrap();
         assert!(said.contains("removed target/ (1.5 MB), .claude/worktrees/agent-done (") && said.contains("; kept .claude/worktrees/agent-dirty (uncommitted changes)"), "CI still runs, but the build is not needed past the push: {said}");
         assert!(!slot.path.join("target").exists() && !done.exists());
         crate::ci::forget(&state, &crate::peers::address("billing", &name_of(&dir)));
@@ -1405,7 +1462,7 @@ mod tests {
         std::fs::write(slot.path.join("more"), "more").unwrap();
         git(&slot.path, &["add", "more"]).unwrap();
         git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "-m", "more"]).unwrap();
-        let said = deliver(&dir, &slot, &upstream, Through::First { count: 1, of: 2 }, &Out { sha: first, rebased: false }, "the user", &state, &watching).unwrap();
+        let said = deliver(&dir, &slot, &upstream, Through::First { count: 1, of: 2 }, &Out { sha: first, rebased: false, to: None }, "the user", &state, &watching).unwrap();
         assert!(!said.contains("removed"), "{said}");
         assert!(slot.path.join("target/debug/app").exists(), "the task builds on, so its build stays");
         crate::ci::forget(&state, &crate::peers::address("rates", &name_of(&dir)));
@@ -1419,7 +1476,7 @@ mod tests {
                 let state = state_of(&dir);
                 let address = crate::peers::address("refunds", &name_of(&dir));
                 followed(&state, &address);
-                let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false }, "the user", &state, ci).unwrap();
+                let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false, to: None }, "the user", &state, ci).unwrap();
                 assert!(!said.contains("removed target/") && slot.path.join("target/debug/app").exists(), "with {by} to follow, the build stays until the close releases the worktree: {said}");
                 crate::ci::forget(&state, &address);
                 crate::verify_after::forget(&state, &address);
@@ -1439,7 +1496,7 @@ mod tests {
         messages::log_report(&at("copy"), &blocked, "waiting for billing's push").unwrap();
         let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
         let unwatched = |_: &Path, _: &Path, _: &str, _: &str, _: bool, _: crate::ci::Pushed| crate::ci::Begin::Off;
-        deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head.clone(), rebased: false }, "the user", &state, &unwatched).unwrap();
+        deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head.clone(), rebased: false, to: None }, "the user", &state, &unwatched).unwrap();
         let told: Vec<String> = messages::load().into_iter().filter(|message| message.to == at("copy")).map(|message| message.text).collect();
         assert!(told.len() == 1 && told[0].starts_with(&format!("{} landed on", at("billing"))) && told[0].contains(&head[..7]) && told[0].contains("watches no CI"), "{told:?}");
         cleanup(dir, origin, &slot);
@@ -1453,7 +1510,7 @@ mod tests {
         std::fs::write(dirty.join("draft"), "draft").unwrap();
         let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
         let unwatched = |_: &Path, _: &Path, _: &str, _: &str, _: bool, _: crate::ci::Pushed| crate::ci::Begin::Off;
-        let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head, rebased: false }, "the user", &state, &unwatched).unwrap();
+        let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head, rebased: false, to: None }, "the user", &state, &unwatched).unwrap();
         assert!(said.contains("but the task did not close"), "closing needs herdr, which tests have not: {said}");
         assert_eq!(said.matches("agent-dirty").count(), 1, "{said}");
         cleanup(dir, origin, &slot);
@@ -1466,7 +1523,7 @@ mod tests {
         let address = crate::peers::address("billing", &name_of(&dir));
         crate::report::save_check(&state, &address, "the old key gets 401").unwrap();
         let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
-        let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head, rebased: false }, "the user", &state, &watching).unwrap();
+        let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head, rebased: false, to: None }, "the user", &state, &watching).unwrap();
         assert!(said.contains("once it is green the task checks the old key gets 401"), "{said}");
         assert_eq!(crate::ci::load(&state, &address).and_then(|watch| watch.pushed.check), Some(crate::ci::Check::new("the old key gets 401")), "asked only once CI is green");
         cleanup(dir, origin, &slot);
@@ -1476,7 +1533,7 @@ mod tests {
         crate::report::save_check(&state, &address, "the rates page shows 2027").unwrap();
         let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
         let unwatched = |_: &Path, _: &Path, _: &str, _: &str, _: bool, _: crate::ci::Pushed| crate::ci::Begin::Off;
-        let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head.clone(), rebased: false }, "the user", &state, &unwatched).unwrap();
+        let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head.clone(), rebased: false, to: None }, "the user", &state, &unwatched).unwrap();
         assert!(said.contains("The task checks the rates page shows 2027 now"), "{said}");
         assert!(find_task(&dir, Some("rates"), &dir).is_ok(), "with no CI to wait for, the check runs at once and the task stays open for it");
         let watch = crate::ci::load(&state, &address).unwrap();
@@ -1496,7 +1553,7 @@ mod tests {
         crate::verify_after::name(&state, &address, "the refunds page loads").unwrap();
         let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
         let unwatched = |_: &Path, _: &Path, _: &str, _: &str, _: bool, _: crate::ci::Pushed| crate::ci::Begin::Off;
-        let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head, rebased: false }, "the user", &state, &unwatched).unwrap();
+        let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head, rebased: false, to: None }, "the user", &state, &unwatched).unwrap();
         assert!(said.contains("waits on your verification"), "{said}");
         assert!(find_task(&dir, Some("billing"), &dir).is_ok(), "with no CI, the push asks the user and the task stays open");
         assert_eq!(solved(&state, &address), 1);
@@ -1507,7 +1564,7 @@ mod tests {
         let state = state_of(&dir);
         let address = crate::peers::address("rates", &name_of(&dir));
         crate::verify_after::name(&state, &address, "the rates page shows 2027").unwrap();
-        deliver(&dir, &slot, &upstream, Through::First { count: 2, of: 2 }, &Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false }, "the user", &state, &unwatched).unwrap();
+        deliver(&dir, &slot, &upstream, Through::First { count: 2, of: 2 }, &Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false, to: None }, "the user", &state, &unwatched).unwrap();
         assert_eq!(solved(&state, &address), 1, "kept open with everything on main and no CI, kebbie asks the user's check");
         assert!(crate::kebbie_questions::load(&state).iter().all(|asked| asked.address != address || asked.kind != crate::kebbie_questions::Kind::Close), "and not whether to close it");
         cleanup(dir, origin, &slot);
@@ -1517,7 +1574,7 @@ mod tests {
         let address = crate::peers::address("refunds", &name_of(&dir));
         crate::verify_after::name(&state, &address, "the refunds page loads").unwrap();
         crate::report::save_check(&state, &address, "the old key gets 401").unwrap();
-        let said = deliver(&dir, &slot, &upstream, Through::First { count: 2, of: 2 }, &Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false }, "the user", &state, &watching).unwrap();
+        let said = deliver(&dir, &slot, &upstream, Through::First { count: 2, of: 2 }, &Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false, to: None }, "the user", &state, &watching).unwrap();
         assert!(!said.contains("asks you whether to close it"), "{said}");
         assert_eq!(solved(&state, &address), 0, "with CI to watch, nothing is asked before it is green");
         let watch = crate::ci::load(&state, &address).unwrap();
@@ -1535,7 +1592,7 @@ mod tests {
         fake.answer("task-claim", r#"{"path":"Projects/api-billing.md","claimed":true}"#);
         std::fs::create_dir_all(state.join("started")).unwrap();
         std::fs::write(state.join("started").join(&address), "Projects/api-billing.md").unwrap();
-        let went = went_out(&dir, &slot, &upstream, Through::All, &Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false }).unwrap();
+        let went = went_out(&dir, &slot, &upstream, Through::All, &Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false, to: None }).unwrap();
         let claiming = fake.claiming();
         let (vault, log) = after_push(&state, &dir, &slot, &address, "billing", &went, &|| Some(claiming.clone()));
         assert!(vault.is_some() && log.is_some(), "the vault that answered is the one the report and the close use");
@@ -1556,14 +1613,14 @@ mod tests {
         let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
         crate::phase::record(&state, &address, "report", &Event::Reported { state: "ready", head: Some(&head), committed: true, pushing: false });
         git(&dir, &["remote", "set-url", "origin", &dir.with_extension("nowhere").to_string_lossy()]).unwrap();
-        assert!(deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head.clone(), rebased: false }, "the user", &state, &watching).unwrap_err().contains("git refused the push"));
+        assert!(deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head.clone(), rebased: false, to: None }, "the user", &state, &watching).unwrap_err().contains("git refused the push"));
         assert!(crate::ci::load(&state, &address).is_none(), "a refused push leaves no watch");
         assert_eq!(phase(&state), Some(Phase::Ready { head: Some(head.clone()) }), "and leaves the phase where it was");
         git(&dir, &["remote", "set-url", "origin", &origin.to_string_lossy()]).unwrap();
         let seen = dir.with_extension("seen");
         let _ = std::fs::remove_dir_all(&seen);
         crate::executable::write(dir.join(".git/hooks/pre-push"), format!("#!/bin/sh\ncp -R '{}' '{}'\n", state.display(), seen.display())).unwrap();
-        deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head.clone(), rebased: false }, "the user", &state, &watching).unwrap();
+        deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head.clone(), rebased: false, to: None }, "the user", &state, &watching).unwrap();
         assert_eq!(crate::ci::load(&seen, &address).map(|watch| watch.sha), Some(head.clone()), "between the push and the watch a task is neither pushable nor CI running");
         assert_eq!(phase(&seen), Some(Phase::CiRunning { sha: head.clone() }), "CI running is written before the push, so the push never shows anywhere else");
         assert_eq!(git(&origin, &["rev-parse", upstream.trim_start_matches("origin/")]).unwrap(), head, "pushed");
@@ -1683,9 +1740,9 @@ mod tests {
         std::fs::write(slot.path.join("d"), "uncommitted").unwrap();
         let through = chosen(&slot, &upstream, Some(&fourth), true).unwrap();
         let (_, hand) = handed();
-        assert_eq!(prepare(&pushing.state, &Caller::User, &dir, &slot, through, None, &hand).unwrap(), Prepared::Push("the user".to_string(), Out { sha: fourth.clone(), rebased: false }));
+        assert_eq!(prepare(&pushing.state, &Caller::User, &dir, &slot, through, None, &hand).unwrap(), Prepared::Push("the user".to_string(), Out { sha: fourth.clone(), rebased: false, to: None }));
         let state = state_of(&dir);
-        let said = deliver(&dir, &slot, &upstream, through, &Out { sha: fourth.clone(), rebased: false }, "the user", &state, &crate::ci::begin).unwrap();
+        let said = deliver(&dir, &slot, &upstream, through, &Out { sha: fourth.clone(), rebased: false, to: None }, "the user", &state, &crate::ci::begin).unwrap();
         assert!(said.contains("It stays open with 1 commit on top"), "{said}");
         assert_eq!(crate::assessment::pushed_in(&state, &crate::peers::address("billing", &name_of(&dir))), std::slice::from_ref(&fourth), "the pushed step stays in the task's review");
         assert_eq!(git(&origin, &["rev-parse", upstream.trim_start_matches("origin/")]).unwrap(), fourth);
@@ -2088,7 +2145,7 @@ mod tests {
         let (texts, hand) = handed();
         let prepared = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap();
         assert_eq!(ahead_behind(&slot.path, &upstream).unwrap(), (1, 0), "rebased, ready for the push");
-        assert_eq!(prepared, Prepared::Push("the user".to_string(), Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false }), "it goes at once, with no test run on the rebased code");
+        assert_eq!(prepared, Prepared::Push("the user".to_string(), Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false, to: None }), "it goes at once, with no test run on the rebased code");
         assert!(texts.borrow().is_empty());
         std::fs::write(slot.path.join("d"), "half done").unwrap();
         let dirty = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap_err();
@@ -2149,7 +2206,7 @@ mod tests {
         record_approval(&pushing.state, &pushing.address, &fingerprint(&slot.path, &upstream).unwrap(), crate::tasks::ApprovedBy::Reviewer).unwrap();
         let (texts, hand) = handed();
         let prepared = prepare(&pushing.state, &Caller::Lead, &dir, &slot, Through::All, Some(7), &hand).unwrap();
-        assert_eq!(prepared, Prepared::Push("the lead".to_string(), Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false }), "main changed m too, and the clean rebase goes out at once");
+        assert_eq!(prepared, Prepared::Push("the lead".to_string(), Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false, to: None }), "main changed m too, and the clean rebase goes out at once");
         assert!(texts.borrow().is_empty() && intent::load(&pushing.state, &pushing.address).is_none(), "nothing went to its Claude: {:?}", texts.borrow());
         assert!(approved(&slot.path, &upstream, &pushing.address), "the clean rebase kept the approval");
         cleanup(dir, origin, &slot);
@@ -2323,7 +2380,7 @@ mod tests {
         commit(&slot.path, "e", "fifth");
         let state = state_of(&dir);
         let address = crate::peers::address("billing", &name_of(&dir));
-        deliver(&dir, &slot, &upstream, Through::First { count: 1, of: 2 }, &Out { sha: git(&slot.path, &["rev-parse", "HEAD~1"]).unwrap(), rebased: false }, "the user", &state, &crate::ci::begin).unwrap();
+        deliver(&dir, &slot, &upstream, Through::First { count: 1, of: 2 }, &Out { sha: git(&slot.path, &["rev-parse", "HEAD~1"]).unwrap(), rebased: false, to: None }, "the user", &state, &crate::ci::begin).unwrap();
         let fifth = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
         git(&dir, &["merge", "--quiet", "--ff-only", &upstream]).unwrap();
         pick(&dir, &fifth);
@@ -2352,7 +2409,7 @@ mod tests {
         done_at(&state, &slot.path, &upstream, &address).unwrap();
         commit(&slot.path, "e", "fifth");
         assert!(listed_at(&state, &slot.path, &upstream, &address).pushed.is_empty());
-        deliver(&dir, &slot, &upstream, Through::First { count: 1, of: 2 }, &Out { sha: git(&slot.path, &["rev-parse", "HEAD~1"]).unwrap(), rebased: false }, "the user", &state, &crate::ci::begin).unwrap();
+        deliver(&dir, &slot, &upstream, Through::First { count: 1, of: 2 }, &Out { sha: git(&slot.path, &["rev-parse", "HEAD~1"]).unwrap(), rebased: false, to: None }, "the user", &state, &crate::ci::begin).unwrap();
         let shown = listed_at(&state, &slot.path, &upstream, &address);
         assert_eq!((shown.pushed.len(), shown.items[0].id.as_str(), shown.items[0].title.as_str()), (1, "command", "Command"), "one commit went out: the model");
         assert_eq!(shown.items[0].commits.iter().map(|commit| commit.subject.as_str()).collect::<Vec<_>>(), ["fifth"]);
@@ -2369,7 +2426,7 @@ mod tests {
         commit(&slot.path, "e", "fifth");
         let state = state_of(&dir);
         let address = crate::peers::address("billing", &name_of(&dir));
-        let said = deliver(&dir, &slot, &upstream, Through::First { count: 2, of: 2 }, &Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false }, "the user", &state, &crate::ci::begin).unwrap();
+        let said = deliver(&dir, &slot, &upstream, Through::First { count: 2, of: 2 }, &Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false, to: None }, "the user", &state, &crate::ci::begin).unwrap();
         assert!(said.contains("It stays open, as you chose, with everything on main"), "{said}");
         assert!(branch_exists(&dir, "billing"));
         assert_eq!(ahead_behind(&slot.path, &upstream).unwrap().0, 0, "everything is on main");
@@ -2396,10 +2453,10 @@ mod tests {
         crate::phase::record(&state, &address, "report", &Event::Reported { state: "ready", head: Some(&head), committed: true, pushing: false });
         let watching: Watch = &|_, _, _, _, _, _| crate::ci::Begin::Watching;
         git(&dir, &["remote", "set-url", "origin", &dir.with_extension("nowhere").to_string_lossy()]).unwrap();
-        assert!(deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head.clone(), rebased: false }, "the user", &state, watching).unwrap_err().contains("git refused the push"));
+        assert!(deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head.clone(), rebased: false, to: None }, "the user", &state, watching).unwrap_err().contains("git refused the push"));
         assert_eq!(phase(), Some(Phase::Ready { head: Some(head.clone()) }), "refused, it is where it was");
         git(&dir, &["remote", "set-url", "origin", &origin.to_string_lossy()]).unwrap();
-        deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head.clone(), rebased: false }, "the user", &state, watching).unwrap();
+        deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head.clone(), rebased: false, to: None }, "the user", &state, watching).unwrap();
         assert_eq!(phase(), Some(Phase::CiRunning { sha: head.clone() }));
         assert_eq!(git(&origin, &["rev-parse", upstream.trim_start_matches("origin/")]).unwrap(), head, "pushed");
         cleanup(dir, origin, &slot);
@@ -2498,8 +2555,9 @@ mod tests {
         tested(&pushing, &slot);
         let (texts, hand) = handed();
         let unwatched = |_: &Path, _: &Path, _: &str, _: &str, _: bool, _: crate::ci::Pushed| crate::ci::Begin::Off;
-        assert_eq!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap(), Prepared::Push("the user".to_string(), Out { sha: first.clone(), rebased: false }), "main moved, yet nothing is rebased");
-        let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: first.clone(), rebased: false }, "the user", &pushing.state, &unwatched).unwrap();
+        let own = |exists: bool| Some(crate::push_target::Target { branch: "feature/billing".to_string(), version: None, exists, per_task: true });
+        assert_eq!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap(), Prepared::Push("the user".to_string(), Out { sha: first.clone(), rebased: false, to: own(false) }), "main moved, yet nothing is rebased");
+        let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: first.clone(), rebased: false, to: own(false) }, "the user", &pushing.state, &unwatched).unwrap();
         assert!(said.contains("to feature/billing") && said.contains("On branch, waiting for"), "{said}");
         assert_eq!(git(&origin, &["rev-parse", "feature/billing"]).unwrap(), first, "the task's commits are on its branch");
         assert_eq!(git(&origin, &["rev-parse", &main]).unwrap(), main_before, "main is untouched");
@@ -2510,8 +2568,8 @@ mod tests {
         assert!(again.contains("Nothing new to push: feature/billing on origin already holds it"), "{again}");
         let second = commit(&slot.path, "e", "more work");
         tested(&pushing, &slot);
-        assert_eq!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap(), Prepared::Push("the user".to_string(), Out { sha: second.clone(), rebased: false }));
-        let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: second.clone(), rebased: false }, "the user", &pushing.state, &unwatched).unwrap();
+        assert_eq!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap(), Prepared::Push("the user".to_string(), Out { sha: second.clone(), rebased: false, to: own(true) }));
+        let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: second.clone(), rebased: false, to: own(true) }, "the user", &pushing.state, &unwatched).unwrap();
         assert!(said.starts_with("Pushed 1 commit to feature/billing") || said.contains("Pushed 1 commit to feature/billing"), "only the new commit goes: {said}");
         assert_eq!(git(&origin, &["rev-parse", "feature/billing"]).unwrap(), second, "a fast-forward of the branch");
         git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend", "-m", "more work, reworded"]).unwrap();
@@ -2520,6 +2578,85 @@ mod tests {
         assert!(rewritten.contains("feature/billing on origin has commits this task's branch does not hold"), "never a force push: {rewritten}");
         assert_eq!(git(&origin, &["rev-parse", "feature/billing"]).unwrap(), second);
         crate::phase::forget(&pushing.state, &pushing.address);
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_tasks_next_push_to_a_shared_branch_adds_only_its_new_commits() {
+        use crate::permit::Caller;
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let main = upstream.trim_start_matches("origin/").to_string();
+        require_accept(&dir, "[push]\nbranch = \"release/{next}\"\n[push.version]\ncommand = \"echo 3.5\"\n");
+        let unwatched = |_: &Path, _: &Path, _: &str, _: &str, _: bool, _: crate::ci::Pushed| crate::ci::Begin::Off;
+        let (_, hand) = handed();
+        git(&dir, &["push", "--quiet", "origin", "HEAD:refs/heads/release/3.5"]).unwrap();
+        let pushing = Pushing::new(&dir);
+        commit(&slot.path, "d", "d, again");
+        tested(&pushing, &slot);
+        let Prepared::Push(pusher, out) = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap() else { panic!("pushed") };
+        deliver(&dir, &slot, &upstream, Through::All, &out, &pusher, &pushing.state, &unwatched).unwrap();
+        let again = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap_err();
+        assert!(again.contains("Nothing new to push: release/3.5 on origin already holds it"), "two commits on one file, both out: {again}");
+        commit(&slot.path, "d", "d, a third time");
+        tested(&pushing, &slot);
+        let Prepared::Push(pusher, out) = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap() else { panic!("pushed") };
+        let said = deliver(&dir, &slot, &upstream, Through::All, &out, &pusher, &pushing.state, &unwatched).unwrap();
+        assert!(said.contains("Pushed 1 commit to release/3.5"), "only the new commit goes: {said}");
+        let log: Vec<String> = git(&origin, &["log", "--reverse", "--format=%s", &format!("{main}..release/3.5")]).unwrap().lines().map(str::to_string).collect();
+        assert_eq!(log, ["fourth", "d, again", "d, a third time"]);
+        assert_eq!(git(&origin, &["show", "release/3.5:d"]).unwrap(), "d, a third time");
+        crate::phase::forget(&pushing.state, &pushing.address);
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn tasks_sharing_a_release_branch_go_out_rebased_onto_it_in_line_order_and_leave_main_and_their_own_branches_alone() {
+        use crate::permit::Caller;
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let main = upstream.trim_start_matches("origin/").to_string();
+        require_accept(&dir, "[push]\nbranch = \"release/{next}\"\n");
+        git(&dir, &["push", "--quiet", "origin", "HEAD:refs/heads/release/3.4"]).unwrap();
+        let unwatched = |_: &Path, _: &Path, _: &str, _: &str, _: bool, _: crate::ci::Pushed| crate::ci::Begin::Off;
+        let (texts, hand) = handed();
+        let pushing = Pushing::new(&dir);
+        tested(&pushing, &slot);
+        let merged = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap_err();
+        assert!(merged.contains("release/3.5 is not on origin yet"), "release/3.4 is on main, so next counts up: {merged}");
+        commit(&dir, "version", "3.5");
+        git(&dir, &["push", "--quiet", "origin", "HEAD:refs/heads/release/3.5"]).unwrap();
+        git(&dir, &["reset", "--quiet", "--hard", "HEAD~1"]).unwrap();
+        let main_before = git(&origin, &["rev-parse", &main]).unwrap();
+        let own = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        let Prepared::Push(pusher, out) = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap() else { panic!("pushed") };
+        assert_eq!((out.rebased, out.to.as_ref().map(|to| (to.branch.as_str(), to.exists, to.per_task))), (true, Some(("release/3.5", true, false))), "the open release branch is next");
+        let said = deliver(&dir, &slot, &upstream, Through::All, &out, &pusher, &pushing.state, &unwatched).unwrap();
+        assert!(said.contains("Pushed 1 commit to release/3.5"), "{said}");
+        assert_eq!(git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), own, "the task's own branch is as it was");
+        assert_eq!(crate::phase::load(&pushing.state, &pushing.address).map(|record| record.phase), Some(crate::phase::Phase::OnBranch { sha: own.clone(), branch: "release/3.5".to_string() }));
+        crate::phase::forget(&pushing.state, &pushing.address);
+        drop(pushing);
+        let other = another_task(&dir, "invoices", "e");
+        let address = crate::peers::address("invoices", &name_of(&dir));
+        let state = crate::lead::state_dir().unwrap();
+        let head = git(&other.path, &["rev-parse", "HEAD"]).unwrap();
+        crate::evidence::save(&state, &address, &crate::evidence::Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result: crate::evidence::Outcome::Passed, sha: head.clone(), code: head.clone(), ..Default::default() }).unwrap();
+        let Prepared::Push(pusher, out) = prepare(&state, &Caller::User, &dir, &other, Through::All, None, &hand).unwrap() else { panic!("pushed") };
+        deliver(&dir, &other, &upstream, Through::All, &out, &pusher, &state, &unwatched).unwrap();
+        let log: Vec<String> = git(&origin, &["log", "--reverse", "--format=%s", &format!("{main}..release/3.5")]).unwrap().lines().map(str::to_string).collect();
+        assert_eq!(log, ["3.5", "fourth", "invoices"], "the branch's own commit first, then each task in the order it went out");
+        assert_eq!(git(&origin, &["rev-parse", &main]).unwrap(), main_before, "main is untouched");
+        assert_eq!(git(&other.path, &["rev-parse", "HEAD"]).unwrap(), head);
+        assert!(texts.borrow().is_empty(), "nothing was handed to a Claude");
+        let again = prepare(&state, &Caller::User, &dir, &other, Through::All, None, &hand).unwrap_err();
+        assert!(again.contains("Nothing new to push: release/3.5 on origin already holds it"), "{again}");
+        assert!(!crate::tasks::landed::landed(&slot.path, &upstream).unwrap());
+        git(&dir, &["push", "--quiet", "origin", &format!("refs/remotes/origin/release/3.5:refs/heads/{main}")]).unwrap();
+        git(&dir, &["fetch", "--quiet", "origin"]).unwrap();
+        assert!(crate::tasks::landed::landed(&slot.path, &upstream).unwrap() && crate::tasks::landed::landed(&other.path, &upstream).unwrap(), "once the release branch reaches main, both tasks have landed though their own shas never went out");
+        crate::phase::forget(&state, &address);
+        intent::forget(&state, &address);
+        let _ = std::fs::remove_file(crate::evidence::file(&state, &address));
+        git(&dir, &["worktree", "remove", "--force", &other.path.to_string_lossy()]).unwrap();
         cleanup(dir, origin, &slot);
     }
 
@@ -2578,7 +2715,7 @@ mod tests {
         let state = state_of(&dir);
         let address = crate::peers::address("billing", &name_of(&dir));
         let phase = || crate::phase::load(&state, &address).map(|record| record.phase);
-        let first = |slot: &Slot| Out { sha: git(&slot.path, &["rev-parse", "HEAD~1"]).unwrap(), rebased: false };
+        let first = |slot: &Slot| Out { sha: git(&slot.path, &["rev-parse", "HEAD~1"]).unwrap(), rebased: false, to: None };
         crate::phase::record(&state, &address, "report", &Event::Reported { state: "working", head: None, committed: true, pushing: false });
         crate::phase::record(&state, &address, "user", &Event::PushQueued { ahead: 1 });
         crate::phase::record(&state, &address, "push", &Event::PushQueued { ahead: 0 });
@@ -2600,7 +2737,7 @@ mod tests {
         let state = state_of(&dir);
         let address = crate::peers::address("billing", &name_of(&dir));
         let phase = || crate::phase::load(&state, &address).map(|record| record.phase);
-        let all = |slot: &Slot| Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false };
+        let all = |slot: &Slot| Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false, to: None };
         crate::tasks::plan::list_at(&state, &slot.path, &upstream, &address, &["Model", "Command"]).unwrap();
         crate::phase::record(&state, &address, "report", &Event::Reported { state: "working", head: None, committed: true, pushing: false });
         crate::phase::record(&state, &address, "user", &Event::PushQueued { ahead: 0 });

@@ -520,7 +520,8 @@ pub fn push_block(repo: &Path) -> Check {
 pub fn push_target(branch: Option<&str>, upstream: &str) -> Check {
     let main = upstream.trim_start_matches("origin/");
     match branch {
-        Some(template) => ok("push target", format!("each task pushes to its own branch, push.branch = {template:?}, unrebased; kebbie closes it once its commits reach {main}")).brief(format!("pushes to {template}")),
+        Some(template) if template.contains(crate::config::TASK_PLACE) => ok("push target", format!("each task pushes to its own branch, push.branch = {template:?}, unrebased; kebbie closes it once its commits reach {main}")).brief(format!("pushes to {template}")),
+        Some(template) => ok("push target", format!("tasks share the branch push.branch = {template:?}: each push rebases onto it and fast-forwards it; kebbie closes a task once its commits reach {main}")).brief(format!("pushes to {template}")),
         None => ok("push target", format!("tasks rebase onto {main} and push to it")).brief(format!("pushes to {main}")),
     }
 }

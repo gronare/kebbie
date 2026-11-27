@@ -136,7 +136,7 @@ fn a_repo_names_a_branch_of_its_own_per_task_and_config_toml_cannot() {
     let set = settings(&repo("[push]\nbranch = \"feature/{task}\"\n"), &Machine::default());
     assert_eq!(set.push_branch, Setting { value: Some("feature/{task}".to_string()), layer: Layer::Repo });
     assert_eq!(fill("feature/{task}", "login-sheet", None), "feature/login-sheet");
-    assert!(parse_repo("[push]\nbranch = \"release\"\n", "app.toml").unwrap_err().contains("push.branch: \"release\" must name {task}"), "one branch shared by every task is refused");
+    assert_eq!(settings(&repo("[push]\nbranch = \"release/{next}\"\n"), &Machine::default()).push_branch.value.as_deref(), Some("release/{next}"), "a branch the tasks share");
     assert!(parse_repo("[push]\nbranch = \"feature/{task}..x\"\n", "app.toml").unwrap_err().contains("is no branch name git takes"));
     assert!(parse_machine("[push]\nbranch = \"feature/{task}\"\n", "config.toml").unwrap_err().contains("push.branch: each repo opts in on its own"));
     assert!(unknown_repo("[push]\nto = \"x\"\n").contains("push.to: unknown key; known keys here: branch, choices, prepare, version"));
@@ -150,7 +150,7 @@ fn a_repo_names_a_branch_of_its_own_per_task_and_config_toml_cannot() {
         ("[push]\nbranch = \"f/{task}\"\n[push.version]\nfile = \"a\"\ncommand = \"b\"\n", "set file or command, not both"),
         ("[push]\nbranch = \"f/{task}\"\n[push.version]\nkey = \"V\"\n", "needs the file"),
         ("[push]\nbranch = \"f/{task}\"\n[push.version]\nbump = \"tiny\"\n", "push.version.bump: \"tiny\" must be one of \"major\", \"minor\", \"patch\""),
-        ("[push]\nbranch = \"f/{task}\"\nchoices = [\"main\"]\n", "push.choices: \"main\" must name {task}"),
+        ("[push]\nbranch = \"f/{task}\"\nchoices = [\"r/{nxt}\"]\n", "push.choices: \"r/{nxt}\" names {nxt}"),
     ] {
         assert!(parse_repo(text, "app.toml").unwrap_err().contains(error), "{text}");
     }

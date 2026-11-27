@@ -246,11 +246,8 @@ pub const TASK_PLACE: &str = "{task}";
 pub const NEXT_PLACE: &str = "{next}";
 pub const CURRENT_PLACE: &str = "{current}";
 
-// Each task gets a branch of its own, so a template without {task} would send every task to one shared branch.
+// With {task} each task gets a branch of its own; without it the tasks share one, such as release/{next}.
 fn branch_template(template: &str) -> Result<()> {
-    if !template.contains(TASK_PLACE) {
-        return Err(format!("\"{template}\" must name {TASK_PLACE}, such as \"feature/{TASK_PLACE}\", so each task pushes to a branch of its own"));
-    }
     let mut rest = template.replace(TASK_PLACE, "");
     let versions = [NEXT_PLACE, CURRENT_PLACE].iter().map(|place| rest.matches(place).count()).sum::<usize>();
     if versions > 1 {
