@@ -45,6 +45,14 @@ impl App {
         }
     }
 
+    pub(super) fn confirm_unreviewed(&mut self, item: crate::status::Item, path: PathBuf, key: KeyEvent, cancels: bool) {
+        match key.code {
+            KeyCode::Char('y') => self.open_push(&item, path),
+            _ if cancels => {}
+            _ => self.mode = Mode::ConfirmUnreviewed { item: Box::new(item), path, nudged: true },
+        }
+    }
+
     pub(super) fn confirm_queued(&mut self, name: String, about: String, now: bool, key: KeyEvent, cancels: bool) {
         match key.code {
             KeyCode::Char('y') if now => {
@@ -118,6 +126,11 @@ pub(super) fn draw_dismiss(frame: &mut Frame, name: &str, nudged: bool) {
     modal(frame, "dismiss its CI".to_string(), confirm_lines(name, Some("Its failed, cancelled or unread run is kept on record with the reason its Claude gave, the push waiting for a fix is dropped, and the task closes once its commits are on main."), "Dismiss its CI?", nudged), 72);
 }
 
+pub(super) fn draw_unreviewed(frame: &mut Frame, item: &crate::status::Item, nudged: bool) {
+    let why = item.next_for_you().unwrap_or_default();
+    modal(frame, "push without a pass".to_string(), confirm_lines(&item.name, Some(&format!("kebbie stopped sending its review back ({why}). The push window opens as for any push; its reviewer's last verdict stays on record.")), "Push without a reviewer's pass?", nudged), 72);
+}
+
 pub(super) fn draw_queued(frame: &mut Frame, name: &str, about: &str, now: bool, nudged: bool) {
     let (title, question) = if now { ("start now", "Start it now?") } else { ("drop the wait", "Drop the wait?") };
     modal(frame, title.to_string(), confirm_lines(name, Some(about), question, nudged), 72);
@@ -183,6 +196,27 @@ mod tests {
         assert!(rows.join("\n").contains("Dismiss its CI?"));
         press(&mut app, key(KeyCode::Esc));
         assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn p_on_a_review_kebbie_stopped_sending_back_asks_to_push_without_a_pass() {
+        let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 2);
+        item.path = Some(PathBuf::from("/nowhere/wt1.app"));
+        let line = "review stopped after 3 rounds: all 4 findings fixed, 37 lines changed since the last review".to_string();
+        item.verdict = Some(crate::review::Shown { looped: Some(crate::review::Looped { rounds: 3, line, ways: "p pushes without a reviewer's pass".to_string(), ..Default::default() }), ..crate::status::tests::in_review(false, 4, true, false) });
+        assert!(crate::board::options::task_choices(Some(&item), None, None).iter().any(|choice| choice.act == Some(crate::keys::Act::Push) && choice.label == "Push without a reviewer's pass"), "the menu offers the push too");
+        let mut app = test_app(vec![item.clone()]);
+        app.handle_normal(key(KeyCode::Char('p')));
+        assert!(matches!(app.mode, Mode::ConfirmUnreviewed { nudged: false, .. }), "p asks first instead of refusing");
+        let shown = render(&mut app, 120, 30).0.join("\n");
+        assert!(shown.contains("Push without a reviewer's pass?") && shown.contains("review stopped after 3 rounds"), "{shown}");
+        press(&mut app, key(KeyCode::Char('y')));
+        assert!(matches!(app.mode, Mode::PushOpening { .. }), "y opens the push window");
+        let mut held = item;
+        held.verdict = Some(crate::status::tests::in_review(false, 4, false, false));
+        let mut app = test_app(vec![held]);
+        app.handle_normal(key(KeyCode::Char('p')));
+        assert!(!matches!(app.mode, Mode::ConfirmUnreviewed { .. } | Mode::PushOpening { .. }), "a review still under way keeps refusing the push");
     }
 
     #[test]

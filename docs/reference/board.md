@@ -226,6 +226,7 @@ kebbie keeps one phase per task, and only what changes it writes it: its start, 
 - A queued task whose start failed, with why it did not start, as when its shell asked a question while it started.
 - A task whose commits are on the default branch that kebbie does not close by itself, marked `landed on main · d closes it` beside a question (kebbie asks you whether to close it), or `landed on main, but its worktree has uncommitted changes or a stash` (see [`kebbie done`](commands.md#kebbie-done-name)).
 - A task that reported needs-you, or ready with nothing committed.
+- A task whose review kebbie stopped sending back, marked `review stopped after 3 rounds: all 4 findings fixed, 37 lines changed since the last review · p pushes without a reviewer's pass, v then l sends it to a last review`, or after a last review that found its findings standing, `last review: 2 findings still open, first <the finding>`. `p` asks "Push without a reviewer's pass?" and opens the push window on `y`; see [The review gate](../explanation/review-gate.md).
 - A task whose held review ended without a verdict, marked `its review gave no verdict: send it again with v, or withdraw it to push without a pass`.
 - A task that reported ready with commits while tracked files are uncommitted, marked `2 uncommitted files hold it: a.md and b.md · p then p pushes the commits and keeps them`. The push window opens on its last commit, so `p` pushes every commit and keeps the task open with the files as they are; its approval is of the commits and stays.
 - With `task.require_accept` on, a ready task with a commit you have not accepted, marked `accept “<title>”`.
@@ -437,7 +438,7 @@ A question that asks first, as reset, drop and done do, takes `y` to go ahead an
 | `v` | The review menu: send it to review, or withdraw it while it is in review. See below. | It has commits and Claude is not mid-turn. |
 | `e` | Rebase onto the default branch now, in the background, without pushing. | It is behind the default branch, Claude is not mid-turn, and it is not pushed. |
 | `t` | Ask its Claude to tidy its commits by the rules skill. | Claude is not mid-turn, and it is not pushed. |
-| `p` | Push: open the push window. On a task already in the line, take it out again, unpushed. | Claude is not mid-turn, it is not waiting for the reviewer, and it is not pushed. |
+| `p` | Push: open the push window. On a task already in the line, take it out again, unpushed. On a review kebbie stopped sending back, it first asks "Push without a reviewer's pass?". | Claude is not mid-turn, it is not waiting for the reviewer, and it is not pushed. |
 | `M` | Put on local main to try it; on a staged task, take it off again. | See below. |
 | `C` | Dismiss the CI of a pushed task: a red one whose failure is not the code's, a cancelled one you leave cancelled, one gh could not read, or a red one it inherited and waits on another push's fix for. Asks first. Yours alone. | The task's CI failed, was cancelled, is unknown or inherited a red. |
 | `G` | Re-run CI: gh runs the pushed commit's failed and cancelled runs again, and kebbie watches them as after a push, closing the task once they are green. | Every commit is on the default branch and its CI failed or was cancelled. |

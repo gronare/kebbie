@@ -103,6 +103,13 @@ kebbie review --withdraw billing
 
 The reviewer stops, its verdict goes, a second opinion with it, and push is offered again. Only you can withdraw, and the assessor leaves a task you withdrew out until you send it again.
 
+## When kebbie stops sending it back
+
+After two rounds in a row with new findings, kebbie stops sending a review back by itself, and the task waits under Needs you with a row such as `review stopped after 3 rounds: all 4 findings fixed, 37 lines changed since the last review`. From there:
+
+- `p` asks "Push without a reviewer's pass?" and opens the push window on `y`.
+- `v` then `l`, Last review, or `kebbie review --last billing`, has the reviewer check only the findings of its last verdict. A pass lets the task through; findings that stand keep it under Needs you, marked `last review: 1 finding still open, first <the finding>`.
+
 ## Let kebbie start or require the review
 
 To have the reviewer start by itself on work the assessor says needs one, set in `~/.config/kebbie/config.toml` or a repo's own file:

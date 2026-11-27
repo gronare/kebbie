@@ -61,6 +61,8 @@ pub(super) fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_wo
         }
         if item.is_some_and(Item::in_push_line) {
             choices.push(choice(Act::Push, "Take out of the push line", "nothing of it is pushed; it waits under Ready to push until you push it again, at the end of the line"));
+        } else if item.is_some_and(Item::review_stopped) && !out {
+            choices.push(choice(Act::Push, "Push without a reviewer's pass", "kebbie stopped sending its review back: asks first, then opens the push window as for any push"));
         } else if !item.is_some_and(Item::awaiting_review) && !out {
             choices.push(choice(Act::Push, "Push", "its card and commits: push them all and close, or the first few and keep it open; it joins its repo's push line and is rebased when its turn comes"));
         }

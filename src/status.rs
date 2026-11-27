@@ -1654,9 +1654,9 @@ pub(crate) mod tests {
     #[test]
     fn a_review_kebbie_stopped_sending_back_waits_under_needs_you_with_one_line() {
         let mut item = task(Some("idle"), Some("ready"), 2);
-        let looped = crate::review::Looped { rounds: 3, line: "review stopped after 3 rounds".to_string(), ways: "v then l sends it to a last review".to_string(), ..Default::default() };
+        let looped = crate::review::Looped { rounds: 3, line: "review stopped after 3 rounds".to_string(), ways: "p pushes without a reviewer's pass".to_string(), ..Default::default() };
         item.verdict = Some(crate::review::Shown { looped: Some(looped.clone()), ..in_review(false, 3, true, false) });
-        assert_eq!((item.group(), item.wanted("enter").as_deref(), item.next_for_you()), (Group::NeedsYou, Some("review stopped after 3 rounds · v then l sends it to a last review"), Some("review stopped after 3 rounds")), "the board's row names its keys; the phone and kebbie status get the facts");
+        assert_eq!((item.group(), item.wanted("enter").as_deref(), item.next_for_you()), (Group::NeedsYou, Some("review stopped after 3 rounds · p pushes without a reviewer's pass"), Some("review stopped after 3 rounds")), "the board's row names its keys; the phone and kebbie status get the facts");
         item.verdict = Some(crate::review::Shown { looped: Some(looped), ..in_review(false, 3, false, true) });
         assert!(item.group() == Group::InReview, "a review the user sent again waits on the reviewer");
     }

@@ -129,6 +129,7 @@ enum Mode {
     ConfirmReset { path: PathBuf, name: String, nudged: bool },
     ConfirmDone { path: PathBuf, name: String, nudged: bool },
     ConfirmDismiss { path: PathBuf, name: String, nudged: bool },
+    ConfirmUnreviewed { item: Box<crate::status::Item>, path: PathBuf, nudged: bool },
     ConfirmQueued { name: String, about: String, now: bool, nudged: bool },
     ConfirmClaimed { entry: Entry, about: String, machine: String, nudged: bool },
     RestartLead(usize),
@@ -826,6 +827,7 @@ impl App {
             Mode::ConfirmReset { path, name, .. } => self.confirm_reset(path, name, key, cancels),
             Mode::ConfirmDone { path, name, .. } => self.confirm_done(path, name, key, cancels),
             Mode::ConfirmDismiss { path, name, .. } => self.confirm_dismiss(path, name, key, cancels),
+            Mode::ConfirmUnreviewed { item, path, .. } => self.confirm_unreviewed(*item, path, key, cancels),
             Mode::ConfirmQueued { name, about, now, .. } => self.confirm_queued(name, about, now, key, cancels),
             Mode::ConfirmClaimed { entry, about, machine, .. } => self.confirm_claimed(entry, about, machine, key, cancels),
             Mode::ConfirmDrop { path, name, force, .. } => self.confirm_drop(path, name, force, key, cancels),
@@ -1131,6 +1133,11 @@ impl App {
                         if let Some(path) = item.path.clone() {
                             self.about("push", &item.name);
                             self.task_in_background(&item.name, item.path.as_deref(), "leaving the push line", format!("Taking {} out of the push line", item.name), move || tasks::cancel_push(&path, None));
+                        }
+                    }
+                    Act::Push if item.review_stopped() => {
+                        if let Some(path) = item.path.clone() {
+                            self.mode = Mode::ConfirmUnreviewed { item: Box::new(item), path, nudged: false };
                         }
                     }
                     Act::Push if item.awaiting_review() => {

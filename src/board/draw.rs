@@ -216,6 +216,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Mode::ConfirmReset { name, nudged, .. } => draw_reset(frame, name, *nudged),
         Mode::ConfirmDone { name, nudged, .. } => draw_done(frame, name, *nudged),
         Mode::ConfirmDismiss { name, nudged, .. } => draw_dismiss(frame, name, *nudged),
+        Mode::ConfirmUnreviewed { item, nudged, .. } => super::confirm::draw_unreviewed(frame, item, *nudged),
         Mode::ConfirmQueued { name, about, now, nudged } => draw_queued(frame, name, about, *now, *nudged),
         Mode::ConfirmClaimed { entry, about, machine, nudged } => draw_claimed(frame, &entry.title, about, machine, *nudged),
         Mode::ConfirmDrop { name, force, nudged, .. } => draw_drop(frame, name, *force, *nudged),

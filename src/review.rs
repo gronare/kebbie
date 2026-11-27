@@ -332,12 +332,14 @@ const LAST: &str = "last";
 
 // A review kebbie stopped sending back: why it stopped and what is left, then the board's keys on from there, which only the board's row shows.
 pub fn stop_line(verdict: Option<&Verdict>, stale: bool, rounds: usize, changed: Option<usize>, last: bool) -> (String, String) {
-    let ways = format!("{} then l sends it to a last review", crate::keys::key(crate::keys::Act::SendReview));
+    let (push, review) = (crate::keys::key(crate::keys::Act::Push), crate::keys::key(crate::keys::Act::SendReview));
+    let pushes = format!("{push} pushes without a reviewer's pass");
+    let ways = format!("{pushes}, {review} then l sends it to a last review");
     let findings = |count: usize| if count == 1 { "1 finding".to_string() } else { format!("{count} findings") };
     let open = verdict.filter(|verdict| !verdict.ok && verdict.findings > 0);
     if last && !stale && let Some(verdict) = open {
         let first = verdict.first.as_deref().unwrap_or_default();
-        return (format!("last review: {} still open, first {first}", findings(verdict.findings)), String::new());
+        return (format!("last review: {} still open, first {first}", findings(verdict.findings)), pushes);
     }
     let stopped = format!("review stopped after {rounds} rounds");
     let line = match (open, stale) {
@@ -2399,7 +2401,7 @@ mod tests {
         assert!(looped_in(&state, address));
         fs::write(verdict_file(&state, address), "verdict: changes\nreviewed: abc\n\n- src/a.rs:1 — a bug.\n- src/b.rs:2 — another.\n").unwrap();
         let shown = shown_in(&state, address, |_| false).unwrap();
-        assert_eq!(shown.looped.as_ref().map(|looped| (looped.rounds, looped.line.as_str(), looped.ways.as_str())), Some((3, "review stopped after 3 rounds: all 2 findings fixed since the last review", "v then l sends it to a last review")), "the first review and the two kebbie sent back");
+        assert_eq!(shown.looped.as_ref().map(|looped| (looped.rounds, looped.line.as_str(), looped.ways.as_str())), Some((3, "review stopped after 3 rounds: all 2 findings fixed since the last review", "p pushes without a reviewer's pass, v then l sends it to a last review")), "the first review and the two kebbie sent back");
         let stopped = Shown { verdict: Some(Verdict { ok: false, sha: "abc".to_string(), findings: 3, ..Verdict::default() }), stale: true, running: false, held: true, file: PathBuf::new(), looped: Some(Looped::default()), at: 0 };
         assert_eq!(gate(Some(&stopped), |_| false), Ok(()), "the user may push what kebbie stopped re-reviewing");
         assert!(gate(Some(&Shown { running: true, ..stopped.clone() }), |_| false).is_err(), "a review the user sent again holds it while it runs");
@@ -2466,11 +2468,11 @@ mod tests {
     #[test]
     fn a_stopped_review_says_what_is_left_and_the_ways_on() {
         let verdict = |findings: usize| Verdict { ok: false, sha: "abc".to_string(), findings, first: Some("src/pay.rs:41 — books twice.".to_string()), ..Verdict::default() };
-        let ways = "v then l sends it to a last review".to_string();
+        let ways = "p pushes without a reviewer's pass, v then l sends it to a last review".to_string();
         assert_eq!(stop_line(Some(&verdict(4)), true, 3, Some(37), false), ("review stopped after 3 rounds: all 4 findings fixed, 37 lines changed since the last review".to_string(), ways.clone()));
         assert_eq!(stop_line(Some(&verdict(1)), true, 3, Some(1), false).0, "review stopped after 3 rounds: all 1 finding fixed, 1 line changed since the last review");
         assert_eq!(stop_line(Some(&verdict(2)), false, 5, None, false).0, "review stopped after 5 rounds: 2 findings still open on this code", "a verdict on this code is not fixed yet");
-        assert_eq!(stop_line(Some(&verdict(2)), false, 3, None, true), ("last review: 2 findings still open, first src/pay.rs:41 — books twice.".to_string(), String::new()), "a last review that found its findings standing says what is left, and offers no other review");
+        assert_eq!(stop_line(Some(&verdict(2)), false, 3, None, true), ("last review: 2 findings still open, first src/pay.rs:41 — books twice.".to_string(), "p pushes without a reviewer's pass".to_string()), "a last review that found its findings standing says what is left, and only the push is on");
         assert_eq!(stop_line(Some(&verdict(2)), true, 3, None, true), ("review stopped after 3 rounds: all 2 findings fixed since the last review".to_string(), ways), "fixed again after a last review, it offers another");
         assert_eq!(diff_lines(" 2 files changed, 30 insertions(+), 7 deletions(-)"), 37);
         assert_eq!(diff_lines(" 1 file changed, 1 deletion(-)"), 1);
