@@ -149,7 +149,7 @@ fn chats(state: &Path) -> Vec<Chat> {
 }
 
 pub fn tick(state: &Path) -> Vec<String> {
-    if !super::watch::on() {
+    if !crate::dev::on() {
         return Vec::new();
     }
     tick_in(state, &chats(state), crate::messages::now())
@@ -208,7 +208,7 @@ pub fn board_answer(task: &str, question: &str, label: Option<&str>, comment: &s
     if cfg!(test) {
         return heard(task, label, comment);
     }
-    if !super::watch::on() {
+    if !crate::dev::on() {
         return;
     }
     let Ok(state) = crate::lead::state_dir() else { return };

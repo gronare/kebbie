@@ -27,6 +27,7 @@ mod config;
 mod config_edit;
 mod decisions;
 mod deploy_window;
+mod dev;
 mod doctor;
 mod doctor_view;
 mod docs;
@@ -694,6 +695,9 @@ fn run(arguments: &Arguments) -> Result<String> {
     if arguments.flag("-h") || arguments.flag("--help") {
         return Ok(USAGE.to_string());
     }
+    if let Some(command) = arguments.positional(0).filter(|command| dev::hidden(command)) {
+        return Err(format!("Unknown command \"{command}\"\n\n{USAGE}"));
+    }
     let name = arguments.positional(1);
     match arguments.positional(0) {
         None if arguments.flag("--version") => Ok(shown_kebbie()),
@@ -947,14 +951,13 @@ fn run(arguments: &Arguments) -> Result<String> {
             None => config::show(&cwd, arguments.value("--repo")),
         },
         Some("issues") => Ok(issues::list_in(&issues::dir(&lead::state_dir()?), arguments.flag("--all"), arguments.flag("--json"))),
-        Some(command) if faults::COMMANDS.contains(&command) && !faults::watch::on() => Err(format!("Unknown command \"{command}\"\n\n{USAGE}")),
         Some("fault") => {
             let words: Vec<String> = std::env::args().skip_while(|argument| argument != "fault").skip(1).collect();
             faults::report(&messages::tell_text(&words, &mut std::io::stdin())?)
         }
         Some("faults") if arguments.flag("--watch") => faults::watch::run(),
         Some("faults") if name == Some("show") => faults::show_in(&lead::state_dir()?, arguments.positional(2).ok_or("kebbie faults show needs the issue's id; kebbie faults lists them")?),
-        Some("faults") => Ok(faults::list_in(&lead::state_dir()?, arguments.flag("--json"), faults::watch::on())),
+        Some("faults") => Ok(faults::list_in(&lead::state_dir()?, arguments.flag("--json"), dev::on())),
         Some("issue") => issue(arguments, name),
         Some("setup") if matches!(name, Some("mindin" | "vault")) => setup::vault(),
         Some("setup") if name == Some("codex") => setup::codex(arguments.flag("--uninstall"), arguments.flag("--yes")),

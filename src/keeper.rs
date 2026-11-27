@@ -48,10 +48,10 @@ impl Routine {
 }
 
 pub fn routines() -> Vec<Routine> {
-    routines_for(crate::faults::watch::on())
+    routines_for(crate::dev::on())
 }
 
-// A routine of kebbie's own development is registered only where [kebbie_dev] turns it on, so nowhere else lists it.
+// A routine of kebbie's own development is registered only where crate::dev turns it on, so nowhere else lists it.
 pub fn routines_for(dev: bool) -> Vec<Routine> {
     every_routine().into_iter().filter(|routine| dev || !routine.dev).collect()
 }

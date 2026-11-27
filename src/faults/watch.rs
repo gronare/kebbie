@@ -17,10 +17,6 @@ const TRIES: u32 = 2;
 const ARGS: [&str; 2] = ["faults", "--watch"];
 pub const BARRIERS: [&str; 3] = ["code", "role", "skill"];
 
-pub fn on() -> bool {
-    crate::config::fault_watcher_enabled().unwrap_or(false)
-}
-
 fn file(state: &Path, kind: &str) -> PathBuf {
     super::dir(state).join(format!("watch.{kind}"))
 }
@@ -60,7 +56,7 @@ pub fn due(cases: &[Case], last: u64, now: u64) -> Vec<String> {
 }
 
 pub fn tick(state: &Path) -> Vec<String> {
-    if !on() {
+    if !crate::dev::on() {
         return Vec::new();
     }
     let mut notes = Vec::new();

@@ -328,7 +328,7 @@ fn a_fix_task_reset_before_it_landed_lets_go_of_its_issue() {
 
 #[test]
 fn the_fault_watcher_is_off_without_its_key_and_kebbie_faults_says_so() {
-    assert!(!watch::on(), "a machine whose config sets no kebbie_dev.fault_watcher runs no watcher");
+    assert!(!crate::dev::on(), "a machine whose config sets no kebbie_dev.fault_watcher runs no watcher");
     let state = state("off");
     assert!(capture::tick(&state).is_empty() && watch::tick(&state).is_empty() && pending(&state).is_empty());
     assert!(!dir(&state).join("read.json").exists(), "the watcher reads no chat while off");
@@ -468,20 +468,6 @@ fn a_watcher_that_cannot_start_counts_a_try_and_a_pointed_case_reaches_the_lead_
     assert_eq!(watch::start_due(&state, &pending(&state), 100, |payload: &str| { assert_eq!(payload, started); Ok(()) }).as_deref(), Some("faults: the fault watcher weighs 1 case"));
     assert_eq!(pending(&state)[0].tries, 0, "a start that worked leaves the try to the run");
     fs::remove_dir_all(state).unwrap();
-}
-
-#[test]
-fn nothing_of_the_fault_watcher_shows_or_runs_where_it_is_off() {
-    let names = |watcher| crate::keeper::routines_for(watcher).iter().map(|routine| routine.name).collect::<Vec<_>>();
-    let watcher: Vec<&str> = crate::keeper::routines_for(true).iter().filter(|routine| routine.dev).map(|routine| routine.name).collect();
-    assert_eq!(watcher, ["faults", "watch"], "the fault watcher's routines are built with Routine::dev");
-    assert!(watcher.iter().all(|routine| !names(false).contains(routine)), "kebbie keeper --status lists no fault watcher routine: {:?}", names(false));
-    assert_eq!(names(true).len(), names(false).len() + watcher.len(), "only the watcher's routines differ");
-    assert!(crate::keeper::routines().iter().all(|routine| !routine.dev), "a machine without the key, as the tests run, registers neither");
-    let (off, on) = (crate::lead::settings_for("/opt/kebbie/kebbie", false), crate::lead::settings_for("/opt/kebbie/kebbie", true));
-    assert!(!off.contains("kebbie fault") && on.contains("Bash(/opt/kebbie/kebbie fault:*)") && on.contains("Bash(/opt/kebbie/kebbie faults:*)"), "{off}");
-    let role = crate::lead::role_text_with(include_str!("../../roles/lead.md"), "/opt/kebbie/kebbie", &[], false, crate::lead::FaultRoles { propose: true, ..Default::default() }, "English");
-    assert!(!role.contains("kebbie fault") && !role.contains("fault watcher"), "the lead's role names no fault watcher where it is off");
 }
 
 #[test]

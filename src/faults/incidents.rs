@@ -136,7 +136,7 @@ impl Incident {
 
     // A call site's test hands its code a state dir of its own, which this never sees, so its incidents would land in another test's.
     pub fn note(&self) {
-        if cfg!(test) || !super::watch::on() {
+        if cfg!(test) || !crate::dev::on() {
             return;
         }
         let Ok(state) = crate::lead::state_dir() else { return };

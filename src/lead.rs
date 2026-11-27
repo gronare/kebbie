@@ -159,11 +159,11 @@ fn go() -> Result<String> {
 
 // Each of the user's prompts carries what sessions told each other since the lead last looked; the lead pushes only through kebbie push, which checks the user's permission; a compaction would drop the lead's rules, so it never compacts on its own.
 fn settings(kebbie: &str) -> String {
-    settings_for(kebbie, crate::faults::watch::on())
+    settings_for(kebbie, crate::dev::on())
 }
 
-pub(crate) fn settings_for(kebbie: &str, watcher: bool) -> String {
-    let allow: Vec<String> = ["peers", "tell", "release", "answered", "messages", "status", "next", "areas", "approve", "review", "land", "push", "try", "stage", "unstage", "decide", "defer", "notify", "issues", "issue", "fault", "faults", "handover", "promise", "promises"].into_iter().filter(|command| watcher || !crate::faults::COMMANDS.contains(command)).map(|command| format!("Bash({kebbie} {command}:*)")).collect();
+pub(crate) fn settings_for(kebbie: &str, dev: bool) -> String {
+    let allow: Vec<String> = ["peers", "tell", "release", "answered", "messages", "status", "next", "areas", "approve", "review", "land", "push", "try", "stage", "unstage", "decide", "defer", "notify", "issues", "issue", "fault", "faults", "handover", "promise", "promises"].into_iter().filter(|command| crate::dev::shows_command(command, dev)).map(|command| format!("Bash({kebbie} {command}:*)")).collect();
     let settings = json!({
         "hooks": {
             "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": format!("{} messages --unread", crate::sh::quote(kebbie)) }] }],
@@ -303,7 +303,7 @@ fn sending_role(maintainers: bool) -> &'static str {
 // roles/lead.md filled in for the configured backlog sources, written to the state dir for --append-system-prompt-file; returns the file and its text.
 pub fn role_file() -> Result<(PathBuf, String)> {
     let template = fs::read_to_string(install_root()?.join("roles/lead.md")).map_err(|error| format!("roles/lead.md: {error}"))?;
-    let role = role_text_with(&template, &peers::kebbie_command()?, &config::sources()?, crate::vault_cli::detect().is_some(), FaultRoles { propose: config::propose_issues_enabled()?, watcher: crate::faults::watch::on(), maintainers: config::maintainers_machine() }, &crate::item_template::content_language());
+    let role = role_text_with(&template, &peers::kebbie_command()?, &config::sources()?, crate::vault_cli::detect().is_some(), FaultRoles { propose: config::propose_issues_enabled()?, watcher: crate::dev::on(), maintainers: config::maintainers_machine() }, &crate::item_template::content_language());
     let file = roles_dir()?.join("lead.md");
     crate::state::write(&file, &role)?;
     Ok((file, role))

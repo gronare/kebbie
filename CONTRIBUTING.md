@@ -15,6 +15,8 @@ When the user tells the lead something in kebbie is wrong, the lead hands their 
 
 Its code is in `src/faults`, its role in `roles/fault-watch.md`, and `kebbie faults` lists the faults it follows.
 
+Without `[kebbie_dev]` nothing of it shows: `kebbie fault` and `kebbie faults` answer "Unknown command", the keeper registers neither of its routines and the lead is given neither command. Every developer-only feature asks the one gate in `src/dev.rs`: a command goes in `dev::COMMANDS`, a keeper routine is built with `Routine::dev`, and a module of kebbie's own development goes in `MODULES` in `src/dev/tests.rs`, whose tests fail when a command or routine runs such a module without the gate, or when anything else reads the flag.
+
 ## Sign off your commits
 
 Contributions are made under the project's [MIT licence](LICENSE). Each commit in a pull request certifies the [Developer Certificate of Origin](https://developercertificate.org) with a `Signed-off-by:` line matching the commit's author:
