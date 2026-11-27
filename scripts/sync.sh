@@ -1,5 +1,5 @@
 #!/bin/sh
-# Run by a herdr tab_bar_right command entry every few seconds; prints nothing.
+# Run by the keeper every three seconds, and by a herdr tab_bar_right command entry; prints nothing.
 
 herdr="${HERDR_BIN_PATH:-$(command -v herdr)}"
 [ -n "$herdr" ] || exit 0

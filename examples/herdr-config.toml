@@ -16,7 +16,7 @@ agent_panel_sort = "priority"           # agents waiting on you float to the top
 window_title = "{workspace} · {tab}"    # the hostname rarely helps; drop it
 tab_bar_right = [
   { type = "zoom" },
-  { type = "command", command = "~/.local/share/kebbie/current/scripts/sync.sh", interval_seconds = 3, timeout_seconds = 3 }, # kebbie's sidebar sync; prints nothing
+  { type = "command", command = "~/.local/share/kebbie/current/scripts/sync.sh", interval_seconds = 3, timeout_seconds = 3 }, # kebbie's sidebar sync, which the keeper also runs; prints nothing
   { type = "datetime", format = "%H:%M" },
 ]
 

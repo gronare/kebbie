@@ -66,6 +66,7 @@ Some of kebbie's work runs on a clock rather than on a command. The keeper runs 
 | --- | --- |
 | 3 seconds | Delivers held messages once their receiver is free, and a new task's prompt that waited for your answer to Claude's trust prompt. |
 | 3 seconds | Checks prompts kebbie typed for delivery, and tells the board when one was not taken. |
+| 3 seconds | Runs the sidebar sync, so the board sees a running dev server or worker even when herdr is attached from another machine, whose tab bar never runs it here. See [Show task state in herdr's sidebar](../how-to/show-task-state-in-the-sidebar.md). |
 | 5 seconds | Sends the lead a prompt a task's Claude waits on in its own pane. See [Claude's own prompts in a task](lead-and-away-mode.md#claudes-own-prompts-in-a-task). |
 | 5 seconds | Gives a ready task's rules check its read-only reviewer. See [The review gate](review-gate.md). |
 

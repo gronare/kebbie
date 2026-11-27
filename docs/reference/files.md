@@ -319,7 +319,7 @@ What happened: …
 | --- | --- |
 | `examples/herdr-config.toml` | A complete herdr config with kebbie's keys, the sidebar sync and a sidebar layout. |
 | `examples/profiles/` | Two [profiles](configuration.md#profiles) to copy into `~/.config/kebbie/profiles/`: `designer` for UI work and `careful` for risky changes, each with its role file. |
-| `scripts/sync.sh` | The sidebar sync, run from herdr's tab bar. |
+| `scripts/sync.sh` | The sidebar sync, run by the keeper every three seconds and from herdr's tab bar. |
 | `scripts/build.sh` | herdr's build step for the plugin: puts the binary at `target/release/kebbie`, the release's prebuilt one on a release tag, else `cargo build --release`. |
 | `scripts/herdr-startup.sh` | herdr's startup step: links `~/.local/share/kebbie/current` to the install and brings the board back in the lead Space. |
 | `scripts/review.sh` | Opens the review split next to Claude; the view itself is `kebbie review --view`. |

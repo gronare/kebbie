@@ -34,6 +34,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task reports ready with its lint red when the error came from main and main has fixed it since.
 
 ### Fixed
+- The board shows a task's dev server and worker as running while they run when herdr is attached from another machine: the keeper runs the sidebar sync itself.
 - A link in a task's question, such as a mock, stays among its links after you answer.
 - A plan question whose plan cannot be read yet still shows its brief and its links.
 - A ready task given a new subtask moves to Working at once.

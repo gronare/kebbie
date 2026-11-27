@@ -17,6 +17,8 @@ pub const STATUS: &str = "keeper.json";
 pub const LOG: &str = "keeper.log";
 const LOG_BYTES: u64 = 256 * 1024;
 const MAX_BACKOFF: u64 = 15 * 60;
+const SYNC_TIMEOUT: Duration = Duration::from_secs(10);
+const SYNC_EVERY: u64 = 3;
 const SLICE: Duration = Duration::from_millis(500);
 pub const OFF: &str = "keeper: off ([keeper] enabled = false); an open board runs the routines";
 
@@ -89,6 +91,47 @@ fn restart(ctx: &mut Ctx) -> Result<()> {
     ctx.stale_at = began;
     ctx.notes.extend(crate::known::announce()?.into_iter().map(|said| format!("update: {said}")));
     Ok(())
+}
+
+// herdr runs scripts/sync.sh only from an attached client's tab bar, which a client on another machine never does; its own thread, as a long routine round would outlast the tokens' 15 s ttl.
+fn spawn_sync(dir: &Path) {
+    let kept = dir.to_path_buf();
+    let started = std::thread::Builder::new().name("sync".to_string()).spawn(move || {
+        let round = || unpanicked(|| {
+            let script = crate::lead::install_root()?.join("scripts/sync.sh");
+            run_sync(sync_command(&script, Path::new(&crate::peers::installed_command()?)), SYNC_TIMEOUT)
+        });
+        sync_loop(round, stopping, pause, |line| log_line(&kept, line));
+    });
+    if let Err(error) = started {
+        log_line(dir, &format!("sync did not start: {error}"));
+    }
+}
+
+pub fn sync_loop(mut round: impl FnMut() -> Result<()>, stop: impl Fn() -> bool, mut wait: impl FnMut(u64), mut log: impl FnMut(&str)) {
+    let mut last: Option<String> = None;
+    while !stop() {
+        let error = round().err();
+        if error != last {
+            log(&error.as_deref().map_or("sync: ok again".to_string(), |error| format!("sync: {error}")));
+            last = error;
+        }
+        wait(SYNC_EVERY);
+    }
+}
+
+pub fn sync_command(script: &Path, kebbie: &Path) -> Command {
+    let mut command = Command::new("sh");
+    command.arg(script).env("KEBBIE_BIN", kebbie);
+    command
+}
+
+pub fn run_sync(command: Command, timeout: Duration) -> Result<()> {
+    match crate::sh::output_with_timeout(command, timeout).map_err(|error| format!("sync.sh: {error}"))? {
+        None => Err(format!("sync.sh: still running after {} ms", timeout.as_millis())),
+        Some(done) if done.code == Some(0) => Ok(()),
+        Some(done) => Err(format!("sync.sh: exit {}: {}", done.code.map_or("by signal".to_string(), |code| code.to_string()), done.stderr.trim())),
+    }
 }
 
 fn updates(_: &mut Ctx) -> Result<()> {
@@ -518,6 +561,7 @@ pub fn run() -> Result<String> {
     log.line(&format!("started: pid {}, kebbie {}, {}", std::process::id(), env!("CARGO_PKG_VERSION"), exe.display()));
     crate::hub::commands::spawn(&dir);
     crate::vault_watch::spawn(&dir);
+    spawn_sync(&dir);
     if let Some(line) = crate::backlog_style::sync_here() {
         log.line(&line);
     }
@@ -592,6 +636,41 @@ mod tests {
         let commands = include_str!("hub/commands.rs");
         assert!(commands.contains("unpanicked(|| round(") && commands.contains("unpanicked(|| released("), "a panic while a phone command is applied would end hub-commands or hub-devices for good");
         assert!(include_str!("vault_watch.rs").contains("unpanicked(|| Ok(follow("), "a panic while a vault change is applied would end the vault watch for good");
+    }
+
+    #[test]
+    fn the_keeper_reports_a_running_dev_server_to_herdr_without_a_client_tab_bar() {
+        let run = include_str!("keeper.rs").split("pub fn run() -> Result<String> {").nth(1).unwrap().split("let routines = routines();").next().unwrap();
+        assert!(run.contains("spawn_sync(&dir);"), "with herdr attached from another machine no tab bar runs sync.sh on this one");
+        let dir = crate::sh::test_dir("keeper-sync");
+        let panes = r#"{"result":{"panes":[{"pane_id":"p_web","workspace_id":"w1","tab_id":"t1","agent":null}]}}"#;
+        let tabs = r#"{"result":{"tabs":[{"tab_id":"t1","label":"server"}]}}"#;
+        let info = r#"{"result":{"process_info":{"shell_pid":1,"foreground_processes":[{"pid":2,"name":"node","argv":["node","dev"]}]}}}"#;
+        let herdr = format!(concat!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{0}/herdr.log'\ncase \"$1 $2\" in\n",
+            "  'pane list') echo '{1}' ;;\n  'tab list') echo '{2}' ;;\n  'pane process-info') echo '{3}' ;;\nesac\n"), dir.display(), panes, tabs, info);
+        crate::executable::write(dir.join("herdr"), herdr).unwrap();
+        let mut command = sync_command(&Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/sync.sh"), Path::new("false"));
+        command.env("HOME", &dir).env("HERDR_BIN_PATH", dir.join("herdr")).env("XDG_STATE_HOME", dir.join("state"));
+        assert_eq!(run_sync(command, SYNC_TIMEOUT), Ok(()));
+        let calls = fs::read_to_string(dir.join("herdr.log")).unwrap();
+        assert!(calls.lines().any(|call| call.starts_with("workspace report-metadata w1 ") && call.contains("--token server=server")), "{calls}");
+    }
+
+    #[test]
+    fn a_sync_that_fails_or_hangs_is_an_error_logged_once_until_it_runs_again() {
+        let failing = sync_command(Path::new("/nonexistent/sync.sh"), Path::new("false"));
+        assert!(run_sync(failing, SYNC_TIMEOUT).is_err_and(|error| error.starts_with("sync.sh: exit ")));
+        let mut hanging = Command::new("sleep");
+        hanging.arg("5");
+        let started = Instant::now();
+        assert!(run_sync(hanging, Duration::from_millis(200)).is_err_and(|error| error.contains("still running")));
+        assert!(started.elapsed() < Duration::from_secs(3), "a hanging sync is stopped at its limit");
+        let outcomes = std::cell::RefCell::new(vec![Ok(()), Err("x".to_string()), Err("x".to_string()), Ok(())]);
+        let (rounds, mut logged, mut waits) = (std::cell::Cell::new(0), Vec::new(), Vec::new());
+        sync_loop(|| { rounds.set(rounds.get() + 1); outcomes.borrow_mut().remove(0) }, || rounds.get() == 4, |seconds| waits.push(seconds), |line| logged.push(line.to_string()));
+        assert_eq!(logged, ["sync: x", "sync: ok again"]);
+        assert_eq!(waits, [SYNC_EVERY; 4]);
     }
 
     #[test]
