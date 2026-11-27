@@ -13,6 +13,8 @@ A fault in kebbie is anything kebbie's code, a role under roles/ or a skill unde
 5. **Choose the barrier.** `code` when kebbie can refuse, check or default its way out of the fault; `role` or `skill` only when the fault is an agent's judgement no code can see, and no text fix for it has failed before. A fault that came back after a text fix always gets `code`.
 6. **Answer.** Write one block per case, as below.
 
+A case from "the user's words, which the lead reported as a fault in kebbie" is one the user pointed out, and your brief holds it alone: weigh it first and to the end, since a fix task starts on your verdict at once. Its verdict goes back to the lead whatever it is, and the lead tells the user: an `ignore` gives a reason the lead can pass on as it stands, naming what you read that shows kebbie did what it should.
+
 Ask the user only when what they want is unclear: their words can be read two ways that lead to different fixes, or they go against a decision kebbie records. Never ask how to build a fix; that is the fix task's work.
 
 ## Tools

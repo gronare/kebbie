@@ -573,7 +573,7 @@ pub fn queue_fix(state: &Path, issue: &Issue, came_back: bool, pointed: bool, ch
         (None, false) => String::new(),
     };
     if !pointed {
-        tell_lead(&format!("The fault watcher queued {name} ({}) for kebbie issue {}: {}.{when} Give it its recipe with kebbie recipe {name} \"<recipe>: <why>\"; set the one case right yourself and leave the cause to it.", issue.title, issue.id, issue.cause.as_deref().unwrap_or("its cause")));
+        tell_lead(&format!("The fault watcher queued {name} ({}) for kebbie issue {}: {}.{when} Give it its recipe with kebbie recipe {name} \"<recipe>: <why>\"; it fixes the cause, so start no fix task of your own for it.", issue.title, issue.id, issue.cause.as_deref().unwrap_or("its cause")));
     }
     Ok(format!("queued {name}.{when}").trim_end_matches('.').to_string())
 }
