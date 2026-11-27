@@ -33,6 +33,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task reports ready with its lint red when the error came from main and main has fixed it since.
 
 ### Fixed
+- The review assessor counts tests added inside a source file's test module.
 - A question a task puts to you reaches the board with answers to pick, never only its report.
 - A push line's head keeps its place while its tests still run in a build slot.
 - kebbie doctor and the lead suggest ci.deploy_window once a deploy is cancelled in a repo without it.

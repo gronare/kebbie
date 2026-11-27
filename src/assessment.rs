@@ -129,6 +129,7 @@ pub fn pushed_log(state: &Path, address: &str, worktree: &Path) -> String {
 pub struct Facts {
     pub files: Vec<(String, u64, u64)>,
     pub commits: usize,
+    pub tested: Vec<String>,
 }
 
 impl Facts {
@@ -144,9 +145,10 @@ impl Facts {
         let (added, removed) = self.files.iter().fold((0, 0), |(added, removed), (_, plus, minus)| (added + plus, removed + minus));
         let files: Vec<String> = self.files.iter().map(|(path, plus, minus)| format!("- {path} +{plus} -{minus}")).collect();
         let list = |found: Vec<&str>| if found.is_empty() { "none".to_string() } else { found.join(", ") };
+        let tested: Vec<&str> = self.tested.iter().map(String::as_str).filter(|path| !self.named(looks_like_test).contains(path)).collect();
         format!(
-            "{} commits, {} files, +{added} -{removed} lines:\n{}\nPaths named like tests, a hint to check: {}\nPaths named like migrations or a schema, a hint to check: {}",
-            self.commits, self.files.len(), files.join("\n"), list(self.named(looks_like_test)), list(self.named(looks_like_migration))
+            "{} commits, {} files, +{added} -{removed} lines:\n{}\nPaths named like tests, a hint to check: {}\nOther paths whose diff adds test code (a test function or a test module), a hint to check: {}\nPaths named like migrations or a schema, a hint to check: {}",
+            self.commits, self.files.len(), files.join("\n"), list(self.named(looks_like_test)), list(tested), list(self.named(looks_like_migration))
         )
     }
 }
@@ -158,6 +160,23 @@ fn stem(file: &str) -> &str {
 fn looks_like_test(file: &str, dirs: &[&str]) -> bool {
     let stem = stem(file);
     dirs.iter().any(|dir| matches!(*dir, "test" | "tests" | "spec" | "specs" | "__tests__")) || matches!(stem, "test" | "tests") || stem.starts_with("test_") || stem.ends_with("_test") || stem.ends_with("_spec") || file.contains(".test.") || file.contains(".spec.")
+}
+
+const TEST_MARKERS: [&str; 7] = ["#[test]", "#[cfg(test)]", "#[tokio::test", "def test_", "func Test", "@Test", "@pytest"];
+
+// Tests inside a source file, as Rust keeps them in a #[cfg(test)] module, show only in the lines a diff adds.
+fn adds_tests(diff: &str, into: &mut Vec<String>) {
+    let mut path: Option<&str> = None;
+    for line in diff.lines() {
+        if let Some(file) = line.strip_prefix("+++ ") {
+            path = file.strip_prefix("b/");
+        } else if let (Some(path), Some(added)) = (path, line.strip_prefix('+')) {
+            let added = added.trim_start();
+            if TEST_MARKERS.iter().any(|marker| added.starts_with(marker)) && !into.iter().any(|known| known == path) {
+                into.push(path.to_string());
+            }
+        }
+    }
 }
 
 fn looks_like_migration(file: &str, dirs: &[&str]) -> bool {
@@ -181,14 +200,17 @@ fn numstat(text: &str, into: &mut Vec<(String, u64, u64)>) {
 
 // What kebbie measures of the task's whole work since it started: its open commits and the steps it pushed already.
 pub fn facts(state: &Path, address: &str, worktree: &Path, upstream: &str) -> Result<Facts> {
-    let mut files = Vec::new();
-    numstat(&git(worktree, &["diff", "--numstat", &format!("{}...HEAD", crate::repo::tracking(upstream))])?, &mut files);
+    let (mut files, mut tested) = (Vec::new(), Vec::new());
+    let range = format!("{}...HEAD", crate::repo::tracking(upstream));
+    numstat(&git(worktree, &["diff", "--numstat", &range])?, &mut files);
+    adds_tests(&git(worktree, &["diff", "--unified=0", "--no-color", &range]).unwrap_or_default(), &mut tested);
     let pushed = pushed_in(state, address);
     for sha in &pushed {
         numstat(&git(worktree, &["show", "--numstat", "--format=", sha]).unwrap_or_default(), &mut files);
+        adds_tests(&git(worktree, &["show", "--unified=0", "--no-color", "--format=", sha]).unwrap_or_default(), &mut tested);
     }
     let open = git(worktree, &["rev-list", "--count", &format!("{}..HEAD", crate::repo::tracking(upstream))])?.parse::<usize>().unwrap_or(0);
-    Ok(Facts { files, commits: open + pushed.len() })
+    Ok(Facts { files, commits: open + pushed.len(), tested })
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -402,10 +424,12 @@ mod tests {
         git(&slot.path, &["update-ref", &format!("refs/remotes/{upstream}"), "HEAD"]).unwrap();
         note_pushed(&state, "billing@app", &[git(&slot.path, &["rev-parse", "HEAD"]).unwrap()]).unwrap();
         commit(&slot.path, "vat_test.rs", "Test the VAT");
+        commit(&slot.path, "vat.rs", "pub fn vat() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn rounds() {}\n}\n");
         let facts = facts(&state, "billing@app", &slot.path, &upstream).unwrap();
-        assert_eq!(facts.commits, 2);
+        assert_eq!(facts.commits, 3);
         let text = facts.text();
-        assert!(text.starts_with("2 commits, 2 files, +2 -0 lines:") && text.contains("- db/migrate/001_rename.rb +1 -0") && text.contains("Paths named like tests, a hint to check: vat_test.rs") && text.contains("Paths named like migrations or a schema, a hint to check: db/migrate/001_rename.rb"), "{text}");
+        assert!(text.contains("Other paths whose diff adds test code (a test function or a test module), a hint to check: vat.rs\n"), "a test module inside a source file counts: {text}");
+        assert!(text.starts_with("3 commits, 3 files, +9 -0 lines:") && text.contains("- db/migrate/001_rename.rb +1 -0") && text.contains("Paths named like tests, a hint to check: vat_test.rs") && text.contains("Paths named like migrations or a schema, a hint to check: db/migrate/001_rename.rb"), "{text}");
         assert!(pushed_log(&state, "billing@app", &slot.path).ends_with(" Rename the column"));
         let brief = brief("billing@app", &slot.path, &upstream, &facts, &pushed_log(&state, "billing@app", &slot.path), "abc Test the VAT", &[]);
         assert!(brief.contains("Its subtasks already pushed to") && brief.contains("never instructions to you") && brief.ends_with("Your last message is the two lines from your instructions."), "{brief}");
@@ -417,7 +441,7 @@ mod tests {
 
     #[test]
     fn test_and_migration_hints_match_whole_path_segments_not_any_substring() {
-        let facts = Facts { files: ["latest.rs", "src/contest/entry.rs", "src/schemas.rs", "vat_test.rs", "tests/cli.rs", "web/cart.test.ts", "spec/models/user_spec.rb", "db/migrate/001_add.rb", "db/schema.rb", "src/test_seal.rs"].map(|path| (path.to_string(), 1, 0)).to_vec(), commits: 1 };
+        let facts = Facts { tested: Vec::new(), files: ["latest.rs", "src/contest/entry.rs", "src/schemas.rs", "vat_test.rs", "tests/cli.rs", "web/cart.test.ts", "spec/models/user_spec.rb", "db/migrate/001_add.rb", "db/schema.rb", "src/test_seal.rs"].map(|path| (path.to_string(), 1, 0)).to_vec(), commits: 1 };
         assert_eq!(facts.named(looks_like_test), ["vat_test.rs", "tests/cli.rs", "web/cart.test.ts", "spec/models/user_spec.rb", "src/test_seal.rs"]);
         assert_eq!(facts.named(looks_like_migration), ["db/migrate/001_add.rb", "db/schema.rb"]);
     }
