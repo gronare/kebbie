@@ -118,7 +118,7 @@ again="kebbie restarted you for its release smoke test. Report ready again with 
 smoke() {
   label=$1 task=$2
   shift 2
-  if ! said=$("$kebbie" -C "$repo" start "$task" "$prompt" --no-focus --no-note "$@" 2>&1); then
+  if ! said=$("$kebbie" -C "$repo" start "$task" "$prompt" --no-focus --no-note --recipe "small-fix: kebbie's release smoke test" "$@" 2>&1); then
     said_in_full start
     record "$label" FAIL "start: $(printf '%s' "$said" | head -n 1)"
     return
