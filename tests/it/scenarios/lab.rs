@@ -10,8 +10,8 @@ pub const KEBBIE: &str = env!("CARGO_BIN_EXE_kebbie");
 // A herdr that keeps its Spaces and agents as files, starts an agent by marking its pane as running, and shows a pane's screen from screens/<pane>, or the agent's empty input box while it runs; a bracketed paste shows folded in that box until Enter takes it.
 const HERDR: &str = r#"#!/bin/sh
 d=$(dirname "$0")
-for a in "$@"; do printf '%s\037' "$a" >> "$d/herdr.log"; done
-printf '\036' >> "$d/herdr.log"
+us=$(printf '\037'); rec=; for a in "$@"; do rec="$rec$a$us"; done
+printf '%s\036' "$rec" >> "$d/herdr.log"
 [ "$1" = --version ] && { echo 'herdr 0.9.5'; exit 0; }
 flag() { want=$1; shift; while [ $# -gt 0 ]; do [ "$1" = "$want" ] && { printf '%s' "$2"; return; }; shift; done; }
 list() { printf '{"result":{"%s":[' "$1"; sep=; for f in "$d/$1"/*.json; do [ -f "$f" ] || continue; printf '%s' "$sep"; cat "$f"; sep=,; done; printf ']}}\n'; }
@@ -193,7 +193,8 @@ impl Lab {
     pub fn herdr_calls(&self) -> Vec<Vec<String>> {
         let log = fs::read_to_string(self.root.join("herdr.log")).unwrap_or_default();
         log.split('\u{1e}').filter(|record| !record.is_empty())
-            .map(|record| record.split('\u{1f}').filter(|field| !field.is_empty()).map(str::to_string).collect())
+            .map(|record| record.split('\u{1f}').filter(|field| !field.is_empty()).map(str::to_string).collect::<Vec<_>>())
+            .filter(|call| call.len() >= 2)
             .collect()
     }
 
@@ -323,4 +324,17 @@ pub fn eventually(limit: Duration, mut done: impl FnMut() -> bool) -> bool {
         std::thread::sleep(Duration::from_millis(100));
     }
     done()
+}
+
+#[test]
+fn concurrent_herdr_calls_log_whole_records() {
+    let lab = Lab::new("concurrent-herdr-log");
+    let text = "x".repeat(2000);
+    let calls: Vec<std::process::Child> = (0..32).map(|n| Command::new(lab.root.join("herdr")).args(["pane", "send-text", &format!("p_{n}"), &text]).stdout(Stdio::null()).spawn().unwrap()).collect();
+    for mut call in calls {
+        call.wait().unwrap();
+    }
+    let logged = lab.herdr_calls();
+    assert_eq!(logged.len(), 32, "one record per call");
+    assert!(logged.iter().all(|call| call.len() == 4 && call[..2] == ["pane", "send-text"] && call[3] == text), "each record holds its call whole: {logged:?}");
 }

@@ -66,7 +66,7 @@ impl Lab {
         fs::write(answers.join("workspace-get.json"), r#"{"result":{"workspace":{"tokens":{}}}}"#).unwrap();
         self.screen("❯ ");
         let script = format!(
-            "#!/bin/sh\nd='{}'\nfor a in \"$@\"; do printf '%s\\037' \"$a\" >> \"$d/herdr.log\"; done\nprintf '\\036' >> \"$d/herdr.log\"\nkey=\"$1-$2\"\n[ -f \"$d/live.sh\" ] && . \"$d/live.sh\"\nif [ -f \"$d/answers/$key.json\" ]; then cat \"$d/answers/$key.json\"; exit 0; fi\necho '{{\"error\":{{\"code\":\"not_faked\",\"message\":\"the fake herdr has no answer\"}}}}' >&2\nexit 1\n",
+            "#!/bin/sh\nd='{}'\nus=$(printf '\\037'); rec=; for a in \"$@\"; do rec=\"$rec$a$us\"; done\nprintf '%s\\036' \"$rec\" >> \"$d/herdr.log\"\nkey=\"$1-$2\"\n[ -f \"$d/live.sh\" ] && . \"$d/live.sh\"\nif [ -f \"$d/answers/$key.json\" ]; then cat \"$d/answers/$key.json\"; exit 0; fi\necho '{{\"error\":{{\"code\":\"not_faked\",\"message\":\"the fake herdr has no answer\"}}}}' >&2\nexit 1\n",
             self.root.display()
         );
         crate::executable::write(&self.herdr, script).unwrap();
@@ -96,7 +96,8 @@ esac
     fn herdr_calls(&self) -> Vec<Vec<String>> {
         let log = fs::read_to_string(&self.herdr_log).unwrap_or_default();
         log.split('\u{1e}').filter(|record| !record.is_empty())
-            .map(|record| record.split('\u{1f}').filter(|field| !field.is_empty()).map(str::to_string).collect())
+            .map(|record| record.split('\u{1f}').filter(|field| !field.is_empty()).map(str::to_string).collect::<Vec<_>>())
+            .filter(|call| call.len() >= 2)
             .collect()
     }
 
@@ -1031,7 +1032,7 @@ fn sessions(lab: &Lab) -> Sessions {
     commit(&root, "a", "first");
     fs::write(answers.join("plugin-list.json"), format!(r#"{{"result":{{"plugins":[{{"plugin_id":"kebbie","plugin_root":"{}","source":{{"kind":"local"}}}}]}}}}"#, root.display())).unwrap();
     let script = format!(
-        "#!/bin/sh\nd='{}'\nfor a in \"$@\"; do printf '%s\\037' \"$a\" >> \"$d/herdr.log\"; done\nprintf '\\036' >> \"$d/herdr.log\"\n\
+        "#!/bin/sh\nd='{}'\nus=$(printf '\\037'); rec=; for a in \"$@\"; do rec=\"$rec$a$us\"; done\nprintf '%s\\036' \"$rec\" >> \"$d/herdr.log\"\n\
          case \"$1 $2\" in\n\
          'pane process-info') if [ -f \"$d/ended-$4\" ]; then cat \"$d/answers/shell.json\"; elif [ -f \"$d/answers/process-$4.json\" ]; then cat \"$d/answers/process-$4.json\"; else cat \"$d/answers/process.json\"; fi; exit 0;;\n\
          'pane send-keys') touch \"$d/ended-$3\"; echo '{{\"result\":{{}}}}'; exit 0;;\n\
@@ -1823,13 +1824,13 @@ fn a_start_in_a_free_worktree_waits_for_the_space_the_last_task_left_there_befor
     tab_named(&lab, "1");
     lab.live_claude();
     let mut live = fs::read_to_string(lab.root.join("live.sh")).unwrap();
-    live.push_str("if [ \"$key\" = workspace-list ] && grep -q w_old \"$d/answers/workspace-list.json\"; then\n  echo x >> \"$d/old-looks\"\n  if [ \"$(wc -l < \"$d/old-looks\")\" -gt 2 ]; then cp \"$d/list-after.json\" \"$d/answers/workspace-list.json\"; else printf 'w_old-listed\\036' >> \"$d/herdr.log\"; fi\nfi\n");
+    live.push_str("if [ \"$key\" = workspace-list ] && grep -q w_old \"$d/answers/workspace-list.json\"; then\n  echo x >> \"$d/old-looks\"\n  if [ \"$(wc -l < \"$d/old-looks\")\" -gt 2 ]; then cp \"$d/list-after.json\" \"$d/answers/workspace-list.json\"; else printf 'marker\\037w_old-listed\\036' >> \"$d/herdr.log\"; fi\nfi\n");
     fs::write(lab.root.join("live.sh"), live).unwrap();
 
     let started = lab.run(&["-C", app.to_str().unwrap(), "start", "search", "Add the search page"]);
     assert!(started.status.success(), "{}{}", stdout(&started), stderr(&started));
     let calls = lab.herdr_calls();
-    let last_seen = calls.iter().rposition(|call| call == &vec!["w_old-listed".to_string()]).expect("the start found the Space the last task left on its worktree");
+    let last_seen = calls.iter().rposition(|call| call[..] == ["marker", "w_old-listed"]).expect("the start found the Space the last task left on its worktree");
     let opened = calls.iter().position(|call| call.len() > 1 && call[..2] == ["worktree", "open"]).expect("the start opens its own Space");
     assert!(last_seen < opened, "it opens its Space only once the left one is gone: {calls:?}");
     assert!(!calls.iter().any(|call| call.contains(&"w_old".to_string())), "a Space that closes by itself is left to close: {calls:?}");
@@ -1935,7 +1936,7 @@ fn idle_lead(lab: &Lab) {
     fs::write(answers.join("process.json"), r#"{"result":{"process_info":{"shell_pid":1,"foreground_processes":[{"argv":["claude"],"pid":2}]}}}"#).unwrap();
     fs::write(answers.join("shell.json"), r#"{"result":{"process_info":{"shell_pid":1,"foreground_processes":[]}}}"#).unwrap();
     let script = format!(
-        "#!/bin/sh\nd='{}'\nfor a in \"$@\"; do printf '%s\\037' \"$a\" >> \"$d/herdr.log\"; done\nprintf '\\036' >> \"$d/herdr.log\"\n\
+        "#!/bin/sh\nd='{}'\nus=$(printf '\\037'); rec=; for a in \"$@\"; do rec=\"$rec$a$us\"; done\nprintf '%s\\036' \"$rec\" >> \"$d/herdr.log\"\n\
          case \"$1 $2\" in\n\
          'pane process-info') if [ -f \"$d/ended-$4\" ]; then cat \"$d/answers/shell.json\"; elif [ -f \"$d/answers/process-$4.json\" ]; then cat \"$d/answers/process-$4.json\"; else cat \"$d/answers/process.json\"; fi; exit 0;;\n\
          'pane send-keys') touch \"$d/ended-$3\"; echo '{{\"result\":{{}}}}'; exit 0;;\n\
