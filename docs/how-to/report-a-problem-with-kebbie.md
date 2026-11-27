@@ -65,7 +65,7 @@ kebbie issue show <id>
 
 You do nothing. After `kebbie update`, the keeper rechecks each open bug and wish that was filed on older code, one at a time in the background.
 
-Older code means a commit this install's history holds and the new build descends from. An issue filed on a build the history cannot place, such as one built outside git, is not rechecked, and you close it yourself.
+Older code means a commit the new build descends from. An install cloned with only its newest commit, as herdr installs kebbie, first fetches its history back to a month before the oldest open issue was filed, so each one can be placed. An issue filed on a build the history still cannot place, such as one built outside git, is not rechecked, and you close it yourself.
 
 A read-only Claude reads the issue, every commit since the build it was filed on with its full message, and kebbie's source as it is now. It answers fixed, not fixed or unclear, and answers fixed only when a commit plainly addresses the issue and the code shows it.
 
@@ -105,7 +105,7 @@ With `gh` installed and logged in, the update also finds the issues you sent on 
 
 When you or the lead saves a bug or a wish about kebbie, the board's header counts it, such as `! 2 bugs and 1 wish to send`, and the list waits under Work, below the tasks, folded into one row: `! 2 bugs and 1 wish to send · ⏎ shows them`. A wish goes the same way as a bug, marked as a wish.
 
-On the maintainers' own machine, the one with `report.inbox_token` set or kebbie's fault watcher on, kebbie's bugs are fixed where they are found: the board offers none to send, and `report.text = "always"` sends none. `kebbie issue report <id>` in your own terminal still sends one.
+On the maintainers' own machine, the one with `report.inbox_token` set or kebbie's fault watcher on, kebbie's bugs are fixed where they are found: the board offers none to send, and `report.text = "always"` sends none. There nothing is rechecked after an update: an issue closes as fixed once the task that fixes it lands with green CI, and it opens again when the fault comes back. `kebbie issue report <id>` in your own terminal still sends one.
 
 1. Select the row with `↓` from the last task, or a click, and press `⏎`. The list opens under **Send to kebbie's maintainers?**, with the first one selected.
 2. Pick one with `↑` `↓` or a click.

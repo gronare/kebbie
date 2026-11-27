@@ -210,14 +210,14 @@ fn a_board_answer_is_a_case_only_when_it_corrects() {
 fn a_fault_seen_again_gets_one_fix_task_and_a_closed_one_stays_the_users_call() {
     use watch::{Step, step};
     let issue = |status: &str, fix: Option<&str>| Issue { id: "3f9a2c".to_string(), status: status.to_string(), fix: fix.map(str::to_string), ..Issue::default() };
-    assert_eq!(step(&issue("open", None), None), Step::Queue { came_back: false });
-    assert_eq!(step(&issue("open", Some("start-queues-overlap")), Some("start-queues-overlap@kebbie".to_string())), Step::Tell("start-queues-overlap@kebbie".to_string()), "a task on it hears of it, and no second one starts");
-    assert_eq!(step(&issue("retry", Some("fault-3f9a2c")), None), Step::Wait("fault-3f9a2c".to_string()), "its fix ended but is not in use yet: no fault-3f9a2c-2");
+    assert_eq!(step(&issue("open", None), None, true), Step::Queue { came_back: false });
+    assert_eq!(step(&issue("open", Some("start-queues-overlap")), Some("start-queues-overlap@kebbie".to_string()), true), Step::Tell("start-queues-overlap@kebbie".to_string()), "a task on it hears of it, and no second one starts");
+    assert_eq!(step(&issue("retry", Some("fault-3f9a2c")), None, true), Step::Wait("fault-3f9a2c".to_string()), "its fix ended but is not in use yet: no fault-3f9a2c-2");
     let rechecked = Issue { history: vec!["fixed in 0.42.0 (abc1234), checked automatically".to_string()], ..issue("fixed", Some("fault-3f9a2c")) };
-    assert_eq!(step(&rechecked, None), Step::Queue { came_back: true }, "only the keeper's recheck puts a fix in use");
-    assert_eq!(step(&issue("fixed", Some("fault-3f9a2c")), None), Step::Keep, "an issue closed by hand stays closed");
-    assert_eq!(step(&issue("wontfix", None), None), Step::Keep);
-    assert_eq!(step(&issue("duplicate", Some("x")), None), Step::Keep);
+    assert_eq!(step(&rechecked, None, true), Step::Queue { came_back: true }, "only the keeper's recheck puts a fix in use");
+    assert_eq!(step(&issue("fixed", Some("fault-3f9a2c")), None, true), Step::Keep, "an issue closed by hand stays closed");
+    assert_eq!(step(&issue("wontfix", None), None, true), Step::Keep);
+    assert_eq!(step(&issue("duplicate", Some("x")), None, true), Step::Keep);
 }
 
 #[test]
@@ -308,21 +308,28 @@ fn the_running_mark_stays_until_every_verdict_is_carried_out() {
 }
 
 #[test]
-fn a_fix_task_reset_before_it_landed_lets_go_of_its_issue() {
+fn a_fix_task_that_lands_fixes_its_issue_and_one_reset_before_it_landed_lets_go() {
     let state = state("unlanded");
     let dir = issues::dir(&state);
     let filed = |id: &str, fix: &str| issues::save(&dir, &Issue { id: id.to_string(), title: id.to_string(), kind: "bug".to_string(), status: "open".to_string(), by: BY.to_string(), fix: Some(fix.to_string()), ..Issue::default() }).unwrap();
     filed("aa0001", "fault-aa0001");
     filed("aa0002", "fault-aa0002");
     filed("aa0003", "fault-aa0003");
-    let end = |task: &str, how: &str| crate::messages::fold(&serde_json::json!({ "id": format!("e-{task}"), "at": 5, "from": "kebbie", "to": format!("{task}@kebbie"), "text": format!("{task} ended ({how})"), "state": "ended" }).to_string());
-    let log: Vec<crate::messages::Message> = [end("fault-aa0001", "reset"), end("fault-aa0002", "done")].into_iter().flatten().collect();
-    let notes = watch::release_unlanded(&state, |task| (task != "fault-aa0003").then(|| watch::ended_how(&log, task)).flatten());
-    assert_eq!(watch::ended_how(&log, "fault-aa0003"), None);
-    assert_eq!(notes, ["faults: kebbie issue aa0001 waits for a fix again, as fault-aa0001 ended (reset)"]);
-    let fix = |id: &str| issues::find(&dir, id).unwrap().fix;
-    assert_eq!((fix("aa0001"), fix("aa0002").as_deref(), fix("aa0003").as_deref()), (None, Some("fault-aa0002"), Some("fault-aa0003")), "a landed fix waits for the recheck and a running one keeps its issue");
-    assert_eq!(watch::step(&issues::find(&dir, "aa0001").unwrap(), None), watch::Step::Queue { came_back: false }, "its next occurrence queues a new fix");
+    let end = |task: &str, how: &str, landed: Option<&str>| crate::messages::fold(&serde_json::json!({ "id": format!("e-{task}"), "at": 5, "from": "kebbie", "to": format!("{task}@kebbie"), "text": format!("{task} ended ({how})"), "state": "ended", "landed": landed }).to_string());
+    let log: Vec<crate::messages::Message> = [end("fault-aa0001", "reset", None), end("fault-aa0002", "done", Some("1111111 Refuse the chat question\n2222222 Test the refusal"))].into_iter().flatten().collect();
+    let notes = watch::settle_ended(&state, |task| (task != "fault-aa0003").then(|| watch::ended_how(&log, task)).flatten());
+    assert!(watch::ended_how(&log, "fault-aa0003").is_none());
+    assert_eq!(notes, ["faults: kebbie issue aa0001 waits for a fix again, as fault-aa0001 ended (reset)", "faults: kebbie issue aa0002 is fixed in 2222222, as fault-aa0002 landed"]);
+    let found = |id: &str| issues::find(&dir, id).unwrap();
+    assert_eq!((found("aa0001").fix, found("aa0003").fix.as_deref()), (None, Some("fault-aa0003")), "a running fix keeps its issue");
+    let fixed = found("aa0002");
+    assert_eq!((fixed.status.as_str(), fixed.history.last().map(String::as_str)), ("fixed", Some("fixed in 2222222 by fault-aa0002, landed with green CI")));
+    assert!(in_use(&fixed) && awaiting_confirm(&state) == ["aa0002"], "the lead is asked to confirm a landed fix");
+    assert_eq!(landed_in(&fixed), Some("2222222"));
+    assert_eq!(watch::step(&fixed, None, false), watch::Step::Keep, "met again before the installed kebbie holds the fix, it has not come back");
+    assert_eq!(watch::step(&fixed, None, true), watch::Step::Queue { came_back: true }, "a later occurrence opens it again for a code barrier");
+    assert_eq!(watch::step(&found("aa0001"), None, true), watch::Step::Queue { came_back: false }, "its next occurrence queues a new fix");
+    assert!(watch::settle_ended(&state, |task| watch::ended_how(&log, task)).is_empty(), "settled once");
     fs::remove_dir_all(state).unwrap();
 }
 
@@ -499,12 +506,13 @@ fn the_lead_hears_every_verdict_on_a_pointed_fault_as_a_message_and_confirms_onc
     record_occurrence(&state, "aa0009", &Occurrence { at: 11, case: filed.clone(), source: Source::Chat, from: "lead".to_string(), quote: "the lead asked me in the chat again".to_string(), came_back: false }).unwrap();
     let asked = std::cell::RefCell::new(Vec::new());
     let ask = |text: &str, asks: bool| asked.borrow_mut().push((text.to_string(), asks));
-    assert!(watch::ask_confirm(&state, ask).is_empty(), "the fix is not in use yet");
-    issues::save(&dir, &Issue { status: "fixed".to_string(), history: vec!["fixed: checked automatically".to_string()], ..issue }).unwrap();
-    assert_eq!(watch::ask_confirm(&state, ask).len(), 1);
-    assert!(watch::ask_confirm(&state, ask).is_empty(), "asked once");
+    assert!(watch::ask_confirm(&state, |_| true, ask).is_empty(), "the fix has not landed yet");
+    issues::save(&dir, &Issue { status: "fixed".to_string(), history: vec![format!("fixed in 2222222 by fault-aa0009, {LANDED}")], ..issue }).unwrap();
+    assert!(watch::ask_confirm(&state, |sha| sha != "2222222", ask).is_empty(), "the installed kebbie does not hold the fix yet");
+    assert_eq!(watch::ask_confirm(&state, |_| true, ask).len(), 1);
+    assert!(watch::ask_confirm(&state, |_| true, ask).is_empty(), "asked once");
     let asked = asked.into_inner();
-    assert!(asked.len() == 1 && asked[0].1 && asked[0].0.contains("is in use in the installed kebbie: reproduce the fault as the user met it (their words: \"the lead asked me in the chat again\")"), "{asked:?}");
+    assert!(asked.len() == 1 && asked[0].1 && asked[0].0.contains("has landed: reproduce the fault as it was met (their words: \"the lead asked me in the chat again\")"), "{asked:?}");
     assert!(awaiting_confirm(&state).is_empty());
     fs::remove_dir_all(state).unwrap();
 }
@@ -531,3 +539,19 @@ fn a_watcher_that_cannot_start_counts_a_try_and_a_pointed_case_reaches_the_lead_
     fs::remove_dir_all(state).unwrap();
 }
 
+#[test]
+fn an_issue_reopened_after_its_fix_landed_goes_back_to_the_watcher_and_stays_open() {
+    let state = state("reopen-landed");
+    let dir = issues::dir(&state);
+    issues::save(&dir, &Issue { id: "aa0007".to_string(), title: "The push line stalls".to_string(), kind: "bug".to_string(), status: "fixed".to_string(), by: "lead".to_string(), fix: Some("fault-aa0007".to_string()), history: vec![format!("fixed in 1234567 by fault-aa0007, {LANDED}")], ..Issue::default() }).unwrap();
+    let said = issues::reopen_watched(&state, &crate::permit::Caller::Lead, "aa0007", "3333333 2026-11-28", true).unwrap();
+    assert!(said.contains("The fault watcher weighs it now"), "{said}");
+    let reopened = issues::find(&dir, "aa0007").unwrap();
+    assert_eq!((reopened.status.as_str(), reopened.fix.as_deref()), ("open", None), "the old fix task no longer names it");
+    let end = crate::messages::fold(&serde_json::json!({ "id": "e", "at": 5, "from": "kebbie", "to": "fault-aa0007@kebbie", "text": "fault-aa0007 ended (done)", "state": "ended", "landed": "1234567 Fix the stall" }).to_string());
+    let log: Vec<crate::messages::Message> = end.into_iter().collect();
+    assert!(watch::settle_ended(&state, |task| watch::ended_how(&log, task)).is_empty(), "the old task's landing does not close it again");
+    assert_eq!(issues::find(&dir, "aa0007").unwrap().status, "open");
+    assert!(pending(&state).iter().any(|case| case.about.as_deref() == Some("aa0007") && case.urgent()), "the watcher weighs it at once");
+    fs::remove_dir_all(state).unwrap();
+}

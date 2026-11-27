@@ -13,5 +13,7 @@ pub fn shows_command(command: &str, dev: bool) -> bool {
     dev || !COMMANDS.contains(&command)
 }
 
+pub mod build;
+
 #[cfg(test)]
 mod tests;

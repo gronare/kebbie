@@ -310,9 +310,16 @@ pub fn occurrences_line(state: &Path, id: &str) -> Option<String> {
     Some(format!("seen {} {}{after} · kebbie faults show {id}", all.len(), if all.len() == 1 { "time" } else { "times" }))
 }
 
-// The keeper's recheck closes an issue only once the installed kebbie holds its fix, so a fixed one with that line is in use on this machine.
+pub const LANDED: &str = "landed with green CI";
+
+// Fixed and in use: closed by the keeper's recheck once the installed kebbie held the fix, or by its fix task landing; a later occurrence reopens it.
 pub fn in_use(issue: &Issue) -> bool {
-    issue.status == "fixed" && issue.history.last().is_some_and(|line| line.ends_with("checked automatically"))
+    issue.status == "fixed" && issue.history.last().is_some_and(|line| line.ends_with("checked automatically") || line.ends_with(LANDED))
+}
+
+// The commit a landed fix task closed its issue with.
+pub fn landed_in(issue: &Issue) -> Option<&str> {
+    issue.history.last().filter(|line| line.ends_with(LANDED))?.strip_prefix("fixed in ")?.split_whitespace().next()
 }
 
 pub fn tracked(state: &Path) -> Vec<Issue> {
