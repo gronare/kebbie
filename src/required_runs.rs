@@ -162,6 +162,21 @@ fn had_findings(state: &Path, address: &str) -> crate::sh::Result<bool> {
     Ok(!verdict.ok && !verdict.asks_only_confirmation())
 }
 
+// HEAD holds the code a run ran on, rebased onto the default branch without a change of its own, which counts only while no run of the same command ran on HEAD's own code: each of HEAD's commits changes the same lines as one the run held, and each the run held that HEAD lacks reached the default branch, as a push of the first commits leaves it.
+fn rebased_cleanly(worktree: &Path, upstream: &str, ran: &str, head: &str) -> bool {
+    let codes = |range: String| crate::tasks::commit_codes(worktree, &[&range]).map(|codes| codes.into_iter().map(|(_, code)| code).collect::<Vec<_>>());
+    let Ok(ran_base) = git(worktree, &["merge-base", ran, upstream]) else { return false };
+    let (Ok(mut tested), Ok(now), Ok(landed)) = (codes(format!("{ran_base}..{ran}")), codes(format!("{upstream}..{head}")), codes(format!("{ran_base}..{upstream}"))) else { return false };
+    if now.is_empty() {
+        return false;
+    }
+    for code in &now {
+        let Some(at) = tested.iter().position(|held| held == code) else { return false };
+        tested.remove(at);
+    }
+    tested.iter().all(|left| landed.contains(left))
+}
+
 // The test command a task is pointed to when any green test run will do: the one it ran last, else the repo's first named one.
 fn suggested(settings: &Settings, tests: &[Run]) -> String {
     tests.last().map(|run| run.runner.clone()).or_else(|| settings.test_commands.value.first().cloned()).unwrap_or_default()
@@ -172,7 +187,17 @@ fn owed_in(state: &Path, worktree: &Path, address: &str, findings: bool, excused
     crate::evidence::settle(state, address, &crate::evidence::listed_for(&settings), crate::messages::now());
     let head = git(worktree, &["rev-parse", "HEAD"]).map_err(unreadable("the commit the runs must hold"))?;
     let head_tree = crate::evidence::tree_of(worktree, &head);
+    let upstream = crate::repo::main_checkout(worktree).and_then(|repo| crate::repo::default_branch(&repo)).map(|upstream| crate::repo::tracking(&upstream)).ok();
     let on_head = |run: &Run| run.code == head || (head_tree.is_some() && crate::evidence::tree_of(worktree, &run.code) == head_tree);
+    let judged = std::cell::RefCell::new(std::collections::HashMap::<String, bool>::new());
+    let carried = |run: &Run| {
+        if let Some(known) = judged.borrow().get(&run.code) {
+            return *known;
+        }
+        let holds = upstream.as_deref().is_some_and(|upstream| rebased_cleanly(worktree, upstream, &run.code, &head));
+        judged.borrow_mut().insert(run.code.clone(), holds);
+        holds
+    };
     let (tests, lints) = (crate::evidence::runs_in(state, address), crate::evidence::lint_runs_in(state, address));
     let mut required = required(&settings);
     if findings && !required.iter().any(|required| required.kind == Kind::Full) {
@@ -185,7 +210,8 @@ fn owed_in(state: &Path, worktree: &Path, address: &str, findings: bool, excused
     let excused_on_head = excused.is_some_and(|code| crate::evidence::latest(&tests).is_some_and(|run| run.result == Outcome::Failed && run.code == code && on_head(run)));
     let mut owed: Vec<Owed> = required.into_iter().filter(|required| !(excused_on_head && matches!(required.kind, Kind::Tests(_)))).filter_map(|required| {
         let runs = match required.kind { Kind::Full | Kind::Tests(_) => &tests, Kind::Lint => &lints };
-        missing(runs, &required, on_head).map(|why| Owed { required, why })
+        let ran_on_head = runs.iter().any(|run| counts(run, &required) && on_head(run));
+        missing(runs, &required, |run| on_head(run) || (!ran_on_head && carried(run))).map(|why| Owed { required, why })
     }).collect();
     let from_main = owed.iter().find(|owed| owed.required.kind == Kind::Lint).and_then(|owed| from_main(worktree, &head, &lints, &owed.required));
     let shown = from_main.clone().filter(|from_main| from_main.shown);
@@ -451,5 +477,41 @@ mod tests {
         let both = Gap { owed: vec![no_run(full("uv run pytest -q")), no_run(lint("ruff check"))], from_main: None };
         let report = report_refusal(&both);
         assert!(report.contains("green run of its full suite and its lint on HEAD (tests.before_push = \"full\", tests.lint_command)") && report.contains("Run `uv run pytest -q` and `ruff check` in your worktree") && report.contains("for `ruff check`, kebbie recorded no run"), "{report}");
+    }
+
+    #[test]
+    fn a_clean_rebase_keeps_the_runs_a_ready_report_needs_and_a_change_of_code_does_not() {
+        use crate::tasks::test_support::{cleanup, commit, task_with_a_commit, upstream_commit};
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = crate::lead::state_dir().unwrap();
+        let address = crate::peers::address("billing", &crate::repo::name_of(&dir));
+        let cmd = "cargo clippy --locked --all-targets -- -D warnings";
+        let file = crate::config::repo_file(&dir);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, format!("[tests]\nlint_command = \"{cmd}\"\n")).unwrap();
+        commit(&slot.path, "e", "fifth");
+        let head = commit(&slot.path, "f", "sixth");
+        crate::evidence::save(&state, &address, &Run { command: cmd.to_string(), runner: cmd.to_string(), result: Outcome::Passed, sha: head.clone(), code: head, lint: true, ..Run::default() }).unwrap();
+        let owes = || owed(&slot.path, &address, None).unwrap().gap.is_some();
+        assert!(!owes(), "green on HEAD");
+        upstream_commit(&dir, "elsewhere", "x", "someone else's work");
+        git(&slot.path, &["rebase", "--quiet", &upstream]).unwrap();
+        assert!(!owes(), "a clean rebase over other work keeps the green lint, as it keeps the review's approval");
+        let rebased = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        crate::evidence::save(&state, &address, &Run { command: cmd.to_string(), runner: cmd.to_string(), result: Outcome::Failed, sha: rebased.clone(), code: rebased.clone(), lint: true, ..Run::default() }).unwrap();
+        assert!(owes(), "a lint red on the rebased code itself outweighs the green run from before the rebase");
+        crate::evidence::save(&state, &address, &Run { command: cmd.to_string(), runner: cmd.to_string(), result: Outcome::Passed, sha: rebased.clone(), code: rebased, lint: true, ..Run::default() }).unwrap();
+        let rebased_first = git(&slot.path, &["rev-parse", "HEAD~1"]).unwrap();
+        git(&dir, &["merge", "--quiet", "--ff-only", &rebased_first]).unwrap();
+        upstream_commit(&dir, "later", "y", "another task's push");
+        git(&slot.path, &["rebase", "--quiet", &upstream]).unwrap();
+        assert_eq!(git(&slot.path, &["log", "--format=%s", &format!("{upstream}..HEAD")]).unwrap(), "sixth", "the first commits went out");
+        assert!(!owes(), "the rest, rebased after its first commits were pushed, keeps the run too");
+        std::fs::write(slot.path.join("f"), "changed").unwrap();
+        git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend", "-am", "sixth, changed"]).unwrap();
+        assert!(owes(), "code changed after the run is untested");
+        let _ = std::fs::remove_file(file);
+        let _ = std::fs::remove_file(crate::evidence::file(&state, &address));
+        cleanup(dir, origin, &slot);
     }
 }

@@ -12,7 +12,7 @@ So kebbie keeps branches short. A task is meant to finish, land and free its wor
 
 `kebbie push` rebases the task onto the remote's default branch first, so what you push is exactly what you read, on top of what everyone else has pushed. However far behind the task is, that rebase is part of the push.
 
-- A push runs no test and checks no test run: the task's tests and lint ran before its ready report, and CI tests what lands. A clean rebase goes out at once, also when the commits it goes over changed files the task changes too.
+- A push runs no test and checks no test run: the task's tests and lint ran before its ready report, and CI tests what lands. A clean rebase goes out at once, also when the commits it goes over changed files the task changes too. A run before a clean rebase still counts for the next ready report, as a review's approval does.
 - That is also why a lint red on code the task only brought from an older main, which main has fixed since, does not hold its ready report: CI lints the code that lands.
 - When the rebase conflicts, kebbie aborts it, leaves the worktree as it was, and hands the conflict to the task's Claude, which knows the change best. Once it resolves the conflict and reports ready, the resolved commits go out after their rules check, with no test run first.
 - When the rebase stops only on `CHANGES.md`, where every task adds its line at the top of the same list, kebbie keeps both sides' lines and goes on. It stays a conflict when a side changed or removed a line already there, when the merge would repeat a heading, or when another file conflicts too.

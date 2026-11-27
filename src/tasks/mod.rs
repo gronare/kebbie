@@ -33,6 +33,7 @@ pub(crate) use after::{EVERY as AFTER_EVERY, Asked as QueueAsked, and_list, afte
 #[cfg(test)]
 pub(crate) use approval::{approval_by, approval_holds};
 pub(crate) use launch::{task_tmp, task_tmp_root};
+pub(crate) use accept::commit_codes;
 #[cfg(test)]
 pub(crate) use accept::open_commits;
 pub(crate) use approval::{ApprovedBy, approve, approved, approved_at, awaits_check, fingerprint_at, record_approval, rules_check, rules_check_subject, rules_check_task, same_code, same_commits};
