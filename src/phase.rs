@@ -155,6 +155,7 @@ pub enum Event<'a> {
     CiUnseen,
     CiCancelled,
     VerifyAsked,
+    SubtaskAdded,
     Stopped,
     Dismissed { kept_open: bool },
 }
@@ -258,6 +259,10 @@ pub fn next(current: Option<&Phase>, event: &Event) -> Option<Phase> {
             _ => return None,
         },
         Event::VerifyAsked => Phase::NeedsYou(Why::Verify),
+        Event::SubtaskAdded => match current {
+            Some(Phase::Ready { .. }) => Phase::Working,
+            _ => return None,
+        },
         Event::Stopped => Phase::NeedsYou(Why::Stopped),
         Event::Dismissed { kept_open: true } => Phase::Idle,
         Event::Dismissed { kept_open: false } => Phase::Closing,
@@ -459,6 +464,10 @@ mod tests {
         assert_eq!(next(Some(&Phase::Working), &Event::TurnEndedUnreported), Some(Phase::NeedsYou(Why::Unreported)));
         assert_eq!(next(Some(&Phase::NeedsYou(Why::Question)), &Event::Answered), Some(Phase::Working));
         assert_eq!(next(Some(&Phase::Ready { head: None }), &Event::Answered), None);
+        assert_eq!(next(Some(&Phase::Ready { head: None }), &Event::SubtaskAdded), Some(Phase::Working), "new work takes a ready task out of Ready to push");
+        for phase in [Phase::Working, Phase::Staged { head: None }, Phase::Pushing { ahead: 1 }, Phase::CiRunning { sha: "abc".to_string() }, Phase::NeedsYou(Why::Question)] {
+            assert_eq!(next(Some(&phase), &Event::SubtaskAdded), None, "{phase:?}");
+        }
         assert_eq!(next(Some(&Phase::Idle), &Event::Resumed), Some(Phase::Working), "an obstacle's decision or the lead's word hands a waiting task its work");
         for current in [Phase::Ready { head: None }, Phase::NeedsYou(Why::Stopped), Phase::CiRunning { sha: "abc".to_string() }] {
             assert_eq!(next(Some(&current), &Event::Resumed), None, "{current:?}");
@@ -481,7 +490,7 @@ mod tests {
         };
         for (file, name, event) in [
             ("questions.rs", "answer_heard", "Event::Answered"), ("tasks/push.rs", "prepare", "Event::PushHanded"), ("tasks/launch.rs", "restart", "Event::Started"),
-            ("tasks/line.rs", "turn", "Event::PushFailed"), ("tasks/push.rs", "join_on", "Event::PushQueued"), ("tasks/line.rs", "leave", "Why::LeftLine"), ("recover.rs", "apply", "Event::Stopped"), ("tasks/red_ci.rs", "dismiss_as", "Event::Dismissed"), ("tasks/finish.rs", "forget_address", "phase::forget("), ("tasks/stage.rs", "stage_in", "Event::Staged"), ("tasks/stage.rs", "unstage_in", "Event::Unstaged"), ("questions.rs", "decide", "Event::Answered"), ("obstacle.rs", "record_and_tell", "Event::Resumed"), ("report.rs", "record_turn", "Event::Resumed"),
+            ("tasks/line.rs", "turn", "Event::PushFailed"), ("tasks/push.rs", "join_on", "Event::PushQueued"), ("tasks/line.rs", "leave", "Why::LeftLine"), ("recover.rs", "apply", "Event::Stopped"), ("tasks/red_ci.rs", "dismiss_as", "Event::Dismissed"), ("tasks/finish.rs", "forget_address", "phase::forget("), ("tasks/stage.rs", "stage_in", "Event::Staged"), ("tasks/stage.rs", "unstage_in", "Event::Unstaged"), ("questions.rs", "decide", "Event::Answered"), ("obstacle.rs", "record_and_tell", "Event::Resumed"), ("report.rs", "record_turn", "Event::Resumed"), ("tasks/plan.rs", "add_as", "Event::SubtaskAdded"),
         ] {
             assert!(body(file, name).contains(event), "{file} {name} writes {event}");
         }

@@ -257,6 +257,8 @@ Two lines about the machine itself close the group, after these backlog rows, ea
 
 Only tasks you push stand here. The row counts uncommitted files when you edited after the report. Its rules check is the lead's: the task's panel names a check under way or a push past it, and breaks the check finds go to the lead and the task as messages.
 
+A subtask added to a ready task, by the lead, you or the task, moves it to Working at once; it comes back here on its next ready report.
+
 How far it is behind the default branch does not matter. A task on local main stays here, marked `on local main · waiting for your push`, until main is pushed and it closes as landed.
 
 ### Going out

@@ -344,7 +344,9 @@ fn add_needs_a_reason_and_goes_before_the_subtask_it_prepares_and_on_sends_the_n
     list_at(&state, &slot.path, &upstream, "billing@app", &["Model", "Command"]).unwrap();
     assert!(add_as(&Caller::User, &state, &task, "Store frontmatter", "  ", None, None, 5).unwrap_err().contains("--because"));
     assert!(add_as(&Caller::User, &state, &task, "Store frontmatter", "the lint reads it", Some("nope"), None, 5).unwrap_err().contains("no subtask nope to prepare"));
+    crate::phase::update(&state, "billing@app", "report", |_| Some(crate::phase::Phase::Ready { head: None }));
     assert_eq!(add_as(&Caller::Task("billing@app".to_string()), &state, &task, "Store frontmatter", "the lint\nreads it", Some("command"), None, 5).unwrap(), "Added Store frontmatter [store-frontmatter].");
+    assert_eq!(crate::phase::load(&state, "billing@app").map(|record| record.phase), Some(crate::phase::Phase::Working), "a ready task given new work leaves Ready to push");
     let plan = load(&state, "billing@app").unwrap();
     assert_eq!((ids_of(&plan), plan.parts[1].added.clone()), (vec!["model", "store-frontmatter", "command"], Some(Added { at: 5, reason: "the lint reads it".to_string(), by: "task".to_string() })));
     on_as(&Caller::Task("billing@app".to_string()), &state, &task, "command").unwrap();

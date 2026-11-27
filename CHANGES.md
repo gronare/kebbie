@@ -33,6 +33,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task reports ready with its lint red when the error came from main and main has fixed it since.
 
 ### Fixed
+- A ready task given a new subtask moves to Working at once.
 - A task's note gets each decision line once, also when it reports ready again on the same commit.
 - The review assessor counts tests added inside a source file's test module.
 - A question a task puts to you reaches the board with answers to pick, never only its report.

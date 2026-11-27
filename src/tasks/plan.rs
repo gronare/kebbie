@@ -806,6 +806,8 @@ pub(super) fn add_as(caller: &Caller, state: &Path, task: &Task, title: &str, be
             rollout::put_in(&mut plan, &id, stage)?;
         }
         Ok((Some(plan), format!("Added {} [{id}].", one_line(title))))
+    }).inspect(|_| {
+        crate::phase::record(state, task.address, "subtasks", &crate::phase::Event::SubtaskAdded);
     })
 }
 
