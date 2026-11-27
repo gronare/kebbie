@@ -370,6 +370,9 @@ pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     if worktree.stage_on_main.is_some() {
         return Err(fail(per_repo("worktree.stage_on_main")));
     }
+    if worktree.push_branch.is_some() {
+        return Err(fail(per_repo("push.branch")));
+    }
     if worktree.ci_deploy_window.is_some() {
         return Err(fail(per_repo("ci.deploy_window")));
     }

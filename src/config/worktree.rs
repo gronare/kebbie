@@ -43,6 +43,7 @@ pub struct Worktree {
     pub clean_on_release: Option<Vec<String>>,
     pub release_command: Option<String>,
     pub docs_required: Option<bool>,
+    pub push_branch: Option<String>,
 }
 
 fn worktree(table: &Table) -> Result<Worktree> {
@@ -84,6 +85,7 @@ fn worktree(table: &Table) -> Result<Worktree> {
         clean_on_release: worktree.get("clean_on_release").map(clean_on_release).transpose()?,
         release_command: unsettable(worktree, "release_command", "worktree.release_command")?,
         docs_required: None,
+        push_branch: None,
     })
 }
 
@@ -201,6 +203,38 @@ fn with_comments(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     Ok(worktree)
 }
 
+fn with_push(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
+    if let Some(push) = subtable(table, "push", "push")? {
+        worktree.push_branch = text(push, "branch", "push.branch")?.map(|template| branch_template(&template).map(|_| template)).transpose().map_err(|error| format!("push.branch: {error}"))?;
+    }
+    Ok(worktree)
+}
+
+pub const TASK_PLACE: &str = "{task}";
+
+// Each task gets a branch of its own, so a template without {task} would send every task to one shared branch.
+fn branch_template(template: &str) -> Result<()> {
+    if !template.contains(TASK_PLACE) {
+        return Err(format!("\"{template}\" must name {TASK_PLACE}, such as \"feature/{TASK_PLACE}\", so each task pushes to a branch of its own"));
+    }
+    let sample = branch_for(template, "task");
+    if !valid_branch(&sample) {
+        return Err(format!("\"{template}\" is no branch name git takes"));
+    }
+    Ok(())
+}
+
+pub fn branch_for(template: &str, task: &str) -> String {
+    template.replace(TASK_PLACE, task)
+}
+
+// git check-ref-format's rules for a branch name.
+pub fn valid_branch(name: &str) -> bool {
+    let bad_char = |character: char| character.is_ascii_control() || " ~^:?*[\\".contains(character);
+    !name.is_empty() && !name.starts_with(['/', '-']) && !name.ends_with(['/', '.']) && !name.ends_with(".lock") && !name.contains("..") && !name.contains("//") && !name.contains("@{") && name != "@"
+        && !name.chars().any(bad_char) && name.split('/').all(|part| !part.starts_with('.') && !part.ends_with(".lock"))
+}
+
 fn with_docs(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     if let Some(docs) = subtable(table, "docs", "docs")? {
         worktree.docs_required = flag(docs, "required", "docs.required")?;
@@ -217,7 +251,7 @@ pub(super) fn unset_keys(worktree: &Worktree) -> Vec<&'static str> {
 }
 
 pub(super) fn layers(table: &Table) -> Result<Worktree> {
-    worktree(table).and_then(|worktree| with_task(table, worktree)).and_then(|worktree| with_review(table, worktree)).and_then(|worktree| with_notify(table, worktree)).and_then(|worktree| with_vault(table, worktree)).and_then(|worktree| with_ci(table, worktree)).and_then(|worktree| with_comments(table, worktree)).and_then(|worktree| with_docs(table, worktree))
+    worktree(table).and_then(|worktree| with_task(table, worktree)).and_then(|worktree| with_review(table, worktree)).and_then(|worktree| with_notify(table, worktree)).and_then(|worktree| with_vault(table, worktree)).and_then(|worktree| with_ci(table, worktree)).and_then(|worktree| with_comments(table, worktree)).and_then(|worktree| with_docs(table, worktree)).and_then(|worktree| with_push(table, worktree))
 }
 
 const MACHINE_WIDE: &str = "applies to every repo, so it lives in config.toml";

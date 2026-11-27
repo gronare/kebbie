@@ -131,6 +131,21 @@ fn a_repo_names_its_deploy_window_and_config_toml_cannot() {
 }
 
 #[test]
+fn a_repo_names_a_branch_of_its_own_per_task_and_config_toml_cannot() {
+    assert_eq!(settings(&Worktree::default(), &Machine::default()).push_branch, Setting { value: None, layer: Layer::Default });
+    let set = settings(&repo("[push]\nbranch = \"feature/{task}\"\n"), &Machine::default());
+    assert_eq!(set.push_branch, Setting { value: Some("feature/{task}".to_string()), layer: Layer::Repo });
+    assert_eq!(branch_for("feature/{task}", "login-sheet"), "feature/login-sheet");
+    assert!(parse_repo("[push]\nbranch = \"release\"\n", "app.toml").unwrap_err().contains("push.branch: \"release\" must name {task}"), "one branch shared by every task is refused");
+    assert!(parse_repo("[push]\nbranch = \"feature/{task}..x\"\n", "app.toml").unwrap_err().contains("is no branch name git takes"));
+    assert!(parse_machine("[push]\nbranch = \"feature/{task}\"\n", "config.toml").unwrap_err().contains("push.branch: each repo opts in on its own"));
+    assert!(unknown_repo("[push]\nto = \"x\"\n").contains("push.to: unknown key; known keys here: branch"));
+    for (name, valid) in [("feature/a", true), ("a b", false), ("/a", false), ("a/", false), ("a.lock", false), ("a//b", false), ("a/.b", false), ("a@{b", false), ("a~b", false)] {
+        assert_eq!(valid_branch(name), valid, "{name}");
+    }
+}
+
+#[test]
 fn comments_are_watched_for_a_week_by_default_and_a_repo_can_change_either() {
     let default = settings(&Worktree::default(), &Machine::default());
     assert_eq!((default.comments_watch.value, default.comments_days.value), (true, 7));
@@ -325,7 +340,7 @@ fn unknown_keys_are_named_with_the_file_and_ignored_while_bad_values_still_fail(
     assert!(repo_error("[board.backlog]\nsources = []\n").starts_with("/home/u/.config/kebbie/repos/app.toml: board: applies to every repo, so it lives in config.toml; set [board] groups and [board.backlog] sources and ongoing in "));
     assert!(repo_error("colour = 1\n[ci]\nwatch = \"yes\"\n").contains("ci.watch: must be true or false"), "a known key with the wrong type still fails in a repo config");
     let repo_warned = |text: &str| unknown_in_file(text, "/home/u/.config/kebbie/repos/app.toml", &REPO_KEYS);
-    assert_eq!(repo_warned("colour = 1\n"), ["/home/u/.config/kebbie/repos/app.toml: colour: unknown key; known keys here: actions, worktree, task, review, investigate, ci, tests, comments, docs, routines, jobs"]);
+    assert_eq!(repo_warned("colour = 1\n"), ["/home/u/.config/kebbie/repos/app.toml: colour: unknown key; known keys here: actions, worktree, task, review, investigate, ci, tests, comments, docs, routines, jobs, push"]);
     assert_eq!(repo_warned("[worktree]\nport = 3000\n"), ["/home/u/.config/kebbie/repos/app.toml: worktree.port: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, server_name, worker_name, clean_on_release, release_command"]);
     assert_eq!(repo("colour = 1\n[lint]\nstrict = true\n[worktree]\nport = 3000\ndev_server = \"bin/dev\"\n").dev_server, Some("bin/dev".to_string()), "a repo config reads its known keys past unknown ones");
 }
