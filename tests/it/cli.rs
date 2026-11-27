@@ -192,6 +192,17 @@ fn kebbie_fault_is_unknown_and_unlisted_where_the_fault_watcher_is_off() {
 }
 
 #[test]
+fn the_fault_watchers_commands_are_unknown_and_unlisted_where_it_is_off() {
+    let lab = Lab::new("faults-off");
+    let help = stdout(&lab.run(&["--help"]));
+    assert!(!help.contains("kebbie fault") && !help.contains("fault watcher"), "{help}");
+    for command in [vec!["faults"], vec!["faults", "show", "aa0001"], vec!["faults", "--watch"]] {
+        let refused = lab.run(&command);
+        assert!(!refused.status.success() && stderr(&refused).starts_with(&format!("Unknown command \"{}\"", command[0])), "{command:?}: {}", stderr(&refused));
+    }
+}
+
+#[test]
 fn help_lists_every_command_and_an_unknown_command_fails_with_the_usage() {
     let lab = Lab::new("help");
     let help = lab.run(&["--help"]);

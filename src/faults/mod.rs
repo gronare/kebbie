@@ -12,6 +12,8 @@ pub mod incidents;
 pub mod watch;
 
 pub const BY: &str = "fault watcher";
+pub const COMMANDS: [&str; 2] = ["fault", "faults"];
+pub const ROUTINES: [&str; 2] = ["faults", "watch"];
 pub const DAILY_FIXES: usize = 3;
 pub const DAY: u64 = 86_400;
 const KEPT_CASES: usize = 400;

@@ -36,8 +36,17 @@ pub struct Routine {
     pub run: fn(&mut Ctx) -> Result<()>,
 }
 
-// Every routine the keeper runs, each with its interval in seconds; a new routine is one more entry here.
 pub fn routines() -> Vec<Routine> {
+    routines_for(crate::faults::watch::on())
+}
+
+// The fault watcher's routines are kebbie's own development: registered only where [kebbie_dev] turns it on, so nowhere else lists them.
+pub fn routines_for(watcher: bool) -> Vec<Routine> {
+    every_routine().into_iter().filter(|routine| watcher || !crate::faults::ROUTINES.contains(&routine.name)).collect()
+}
+
+// Every routine the keeper runs, each with its interval in seconds; a new routine is one more entry here.
+fn every_routine() -> Vec<Routine> {
     vec![
         Routine { name: "messages", every: 3, run: |_| crate::messages::flush().map(|_| ()) },
         Routine { name: "builds", every: crate::builds::EVERY, run: |ctx| { ctx.notes.extend(crate::builds::tick_now()?); Ok(()) } },

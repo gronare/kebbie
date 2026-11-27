@@ -947,7 +947,7 @@ fn run(arguments: &Arguments) -> Result<String> {
             None => config::show(&cwd, arguments.value("--repo")),
         },
         Some("issues") => Ok(issues::list_in(&issues::dir(&lead::state_dir()?), arguments.flag("--all"), arguments.flag("--json"))),
-        Some("fault") if !faults::watch::on() => Err(format!("Unknown command \"fault\"\n\n{USAGE}")),
+        Some(command) if faults::COMMANDS.contains(&command) && !faults::watch::on() => Err(format!("Unknown command \"{command}\"\n\n{USAGE}")),
         Some("fault") => {
             let words: Vec<String> = std::env::args().skip_while(|argument| argument != "fault").skip(1).collect();
             faults::report(&messages::tell_text(&words, &mut std::io::stdin())?)

@@ -163,7 +163,7 @@ fn settings(kebbie: &str) -> String {
 }
 
 pub(crate) fn settings_for(kebbie: &str, watcher: bool) -> String {
-    let allow: Vec<String> = ["peers", "tell", "release", "answered", "messages", "status", "next", "areas", "approve", "review", "land", "push", "try", "stage", "unstage", "decide", "defer", "notify", "issues", "issue", "fault", "faults", "handover", "promise", "promises"].into_iter().filter(|command| watcher || *command != "fault").map(|command| format!("Bash({kebbie} {command}:*)")).collect();
+    let allow: Vec<String> = ["peers", "tell", "release", "answered", "messages", "status", "next", "areas", "approve", "review", "land", "push", "try", "stage", "unstage", "decide", "defer", "notify", "issues", "issue", "fault", "faults", "handover", "promise", "promises"].into_iter().filter(|command| watcher || !crate::faults::COMMANDS.contains(command)).map(|command| format!("Bash({kebbie} {command}:*)")).collect();
     let settings = json!({
         "hooks": {
             "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": format!("{} messages --unread", crate::sh::quote(kebbie)) }] }],
