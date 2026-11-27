@@ -7,6 +7,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### What's new
 
 ### Fixed
+- The lead takes a colleague's comment on a commit to you, with who wrote it and on which commit, and changes your rules, roles or CLAUDE.md only on your word.
 - A push kebbie handed back for tests goes out when its task reports ready within the same second.
 
 ## 0.42.0
