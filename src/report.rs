@@ -59,6 +59,11 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
         question_goes_through_ask(&report, || crate::questions::open_now(&messages::load()).iter().any(|question| question.from == me || crate::questions::kebbies_about(question, &me)))?;
     }
     card_goes_with(&report.state, card.is_some(), crate::routines::routine_of(&me).is_some())?;
+    let dropped = (report.state == "needs-you" && crate::routines::routine_of(&me).is_none()).then(|| {
+        let messages = messages::load();
+        let open = crate::questions::open_now(&messages);
+        crate::questions::dropped(&messages, &me, &open).map(crate::questions::dropped_said)
+    }).flatten().unwrap_or_default();
     if let Some(watch) = crate::ci::load(&state_dir()?, &me).filter(|watch| (watch.close || !watch.pushed.stages.is_empty()) && watch.checking().is_some()) {
         let ahead = ahead_of(cwd).map_err(|error| format!("kebbie cannot tell whether the check held, since git cannot count the commits left to push: {error}"))?;
         if let Some(said) = check_reported(&state_dir()?, &me, &watch, &report, &summary, ahead)? {
@@ -131,7 +136,7 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
     if report.state == "ready" && !crate::routines::found(&me, &summary) {
         notice_ready(cwd, &state, &me, &summary);
     }
-    Ok(format!("Reported to the lead and the board as {me}.{kept}{check}"))
+    Ok(format!("Reported to the lead and the board as {me}.{kept}{check}{dropped}"))
 }
 
 fn to_push(cwd: &Path) -> bool {

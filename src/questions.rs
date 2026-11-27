@@ -196,6 +196,18 @@ fn relay_open(messages: &[Message], question: &Message, relayed: u64, prompted: 
     first.state == "needs-you" && reports.all(|(_, report)| report.state == "needs-you") && prompted(&question.from).is_none_or(|at| at <= ended)
 }
 
+// The task's latest question, closed before the user answered while every report since kept it needs-you: that needs-you points the user at nothing to answer.
+pub fn dropped<'a>(messages: &'a [Message], me: &str, open: &[&Message]) -> Option<&'a Message> {
+    let last = messages.iter().rev().find(|message| message.from == me && message.question.is_some())?;
+    let unanswered = last.question.as_ref().is_some_and(|question| !question.answered);
+    (unanswered && !open.iter().any(|question| question.id == last.id) && still_asking(messages, last)).then_some(last)
+}
+
+pub fn dropped_said(question: &Message) -> String {
+    let plan = if question.question.as_ref().is_some_and(|asked| asked.plan.is_some()) { " --plan" } else { "" };
+    format!(" Your question \"{}\" no longer waits on the board: a turn that began in your pane closed it before the user answered, so this report leaves them nothing to answer. If it still waits on the user, ask it again with kebbie ask{plan}.", crate::plan_brief::title(&question.text))
+}
+
 // The open question that holds a task's messages; one the lead marked answered lets its relay through.
 pub fn holding<'a>(open: &[&'a Message], address: &str) -> Option<&'a str> {
     open.iter().find(|question| question.from == address).filter(|question| question.question.as_ref().is_none_or(|asked| asked.relayed.is_none())).map(|question| question.id.as_str())
@@ -854,6 +866,24 @@ mod tests {
         report::record_turn(&state, task, Some(&messages::delivered(USER_LABEL, "build it")), asked_at + 1900);
         assert!(open(&waiting, prompted).is_empty(), "the user's prompt closes it");
         std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_needs_you_report_on_a_question_a_turn_closed_unanswered_is_told_so() {
+        let task = "verify@kebbie";
+        let report = |id: &str, at: u64, said: &str| json!({ "id": id, "at": at, "from": task, "to": LEAD_LABEL, "text": "plan written", "state": "logged", "report": { "state": said, "next": "approve the plan" } });
+        let asked = parse(&[], None, true, "Approve the test plan.").unwrap();
+        let question = record("q1", 100, task, &asked, Some("vault:Projects/kebbie-verify.md"), None);
+        let waiting = log(&[report("r1", 100, "needs-you"), question.clone(), report("r2", 150, "needs-you")]);
+        let still = open(&waiting, |_| None);
+        assert_eq!(dropped(&waiting, task, &still), None, "an open question is no dropped one");
+        let closed = open(&waiting, |_| Some(200));
+        let gone = dropped(&waiting, task, &closed).expect("a prompt after it closed the question unanswered");
+        assert!(dropped_said(gone).contains("\"Approve the test plan.\" no longer waits on the board") && dropped_said(gone).contains("kebbie ask --plan"), "{}", dropped_said(gone));
+        let answered = log(&[report("r1", 100, "needs-you"), question.clone(), json!({ "id": "q1", "at": 120, "state": "answered" })]);
+        assert_eq!(dropped(&answered, task, &open(&answered, |_| Some(200))), None, "an answered question is settled");
+        let moved_on = log(&[report("r1", 100, "needs-you"), question, report("r2", 150, "working")]);
+        assert_eq!(dropped(&moved_on, task, &open(&moved_on, |_| None)), None, "a task that worked on since asked has moved past it");
     }
 
     fn relayed_mark_shown(message: &Message) -> bool {
