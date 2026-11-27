@@ -448,3 +448,33 @@ fn a_met_stage_with_commits_left_shows_open_and_its_rest_goes_out_before_the_nex
     let (done, _) = derive(Some(&listed), &["code of aaa".to_string(), "code of bbb".to_string()], &open[1..], false);
     assert_eq!(done.stages[0].state, StageState::Met, "a met stage with nothing left stays met");
 }
+
+#[test]
+fn a_commit_squashed_into_the_first_commit_of_a_done_subtask_leaves_every_commit_in_its_subtask() {
+    let (dir, origin, slot, upstream, state, address) = hooked_task();
+    let fourth = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+    done_at(&state, &slot.path, &upstream, &address).unwrap();
+    commit(&slot.path, "e", "fifth");
+    assert!(noted_after(&state, &address, &bash_in(&slot.path, "git commit -m fifth")));
+    std::fs::write(slot.path.join("d"), "d fixed").unwrap();
+    git(&slot.path, &["add", "d"]).unwrap();
+    git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "-c", "core.editor=true", "commit", "--quiet", &format!("--squash={fourth}")]).unwrap();
+    assert!(noted_after(&state, &address, &bash_in(&slot.path, "git commit --squash")));
+    git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "-c", "sequence.editor=true", "-c", "core.editor=true", "rebase", "--quiet", "-i", &["--auto", "squash"].concat(), &upstream]).unwrap();
+    assert!(noted_after(&state, &address, &bash_in(&slot.path, "GIT_SEQUENCE_EDITOR=true git rebase -i origin/main")));
+    let subtasks = read_now(&state, &slot.path, &upstream, &address);
+    let held: Vec<(&str, Vec<&str>)> = subtasks.items.iter().map(|item| (item.id.as_str(), item.commits.iter().map(|commit| commit.subject.as_str()).collect())).collect();
+    cleanup(dir, origin, &slot);
+    assert_eq!(held, [("model", vec!["fourth"]), ("command", vec!["fifth"])], "the squashed commit stays in the subtask it was in, not in the one the squash commit was made under");
+}
+
+#[test]
+fn a_rewritten_commit_is_known_by_its_subject_and_a_folded_commit_counts_as_lost_by_none() {
+    let mut listed = plan(vec![part("model", "Model", true), part("command", "Command", false)], [seen("model", &["a1"]), seen("command", &["b1", "fix"])].concat());
+    listed.commits[2].subject = "squash! subject of a1".to_string();
+    let squashed = [Unpushed { subject: "subject of a1".to_string(), ..rewritten_code("x1", "a1+fix") }, Unpushed { subject: "subject of b1".to_string(), ..rewritten_code("x2", "b1") }];
+    assert_eq!(shas(&derive(Some(&listed), &[], &squashed, false).0), [("model".to_string(), vec!["x1"]), ("command".to_string(), vec!["x2"])], "the commit the squash went into keeps its subtask");
+    let unlisted = plan(vec![part("model", "Model", true), part("command", "Command", false)], [seen("model", &["a1", "a2"]), seen("command", &["b1", "b2"])].concat());
+    let both_rewritten = [Unpushed { subject: "subject of a1".to_string(), ..rewritten_code("x1", "a1'") }, Unpushed { subject: "subject of b1".to_string(), ..rewritten_code("x2", "b1'") }, Unpushed { subject: "subject of a2".to_string(), ..rewritten_code("x3", "a2'") }, Unpushed { subject: "subject of b2".to_string(), ..rewritten_code("x4", "b2'") }];
+    assert_eq!(shas(&derive(Some(&unlisted), &[], &both_rewritten, false).0), [("model".to_string(), vec!["x1", "x3"]), ("command".to_string(), vec!["x2", "x4"])], "each rewritten commit finds its own subtask by its subject, wherever it now sits");
+}

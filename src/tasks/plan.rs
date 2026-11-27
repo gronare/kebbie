@@ -321,15 +321,27 @@ fn taken(codes: &mut Vec<&str>, code: &str) -> bool {
     codes.iter().position(|one| *one == code).map(|at| codes.remove(at)).is_some()
 }
 
-// Each open commit's subtask: the one that held its change; a change rewritten by an amend or a squash goes to the subtask beside it that lost one; any other to the subtask commits go to now, or to a new one titled by it once every subtask is done.
+// A commit titled "<word>! <subject of another noted commit>" is one git's rebase folds into that commit, so its subtask lost nothing.
+fn folded(subject: &str, subjects: &[&str]) -> bool {
+    subject.split_once("! ").is_some_and(|(word, into)| !word.contains(' ') && subjects.contains(&into))
+}
+
+// Each open commit's subtask: the one that held its change, else the one that held a commit of its subject, as an amend or a fold leaves it; another rewritten change goes to the subtask beside it that lost one; any other to the subtask commits go to now, or to a new one titled by it once every subtask is done.
 fn placed(plan: &mut Plan, kept: &[bool], open: &[&Unpushed]) -> Vec<String> {
-    let mut wanted: Vec<Option<(String, String)>> = plan.commits.iter().zip(kept).map(|(seen, pushed)| (!pushed).then(|| (seen.code.clone(), seen.subtask.clone()))).collect();
-    let matched: Vec<Option<String>> = open.iter().map(|commit| {
-        let at = wanted.iter().position(|want| want.as_ref().is_some_and(|(code, _)| *code == commit.code))?;
-        wanted[at].take().map(|(_, subtask)| subtask)
+    let subjects: Vec<String> = plan.commits.iter().map(|seen| seen.subject.clone()).collect();
+    let subjects: Vec<&str> = subjects.iter().map(String::as_str).collect();
+    let mut wanted: Vec<Option<(String, String, String)>> = plan.commits.iter().zip(kept).map(|(seen, pushed)| (!pushed).then(|| (seen.code.clone(), seen.subject.clone(), seen.subtask.clone()))).collect();
+    let mut matched: Vec<Option<String>> = open.iter().map(|commit| {
+        let at = wanted.iter().position(|want| want.as_ref().is_some_and(|(code, _, _)| *code == commit.code))?;
+        wanted[at].take().map(|(_, _, subtask)| subtask)
     }).collect();
+    for (commit, found) in open.iter().zip(matched.iter_mut()).filter(|(commit, found)| found.is_none() && !commit.subject.is_empty()) {
+        if let Some(at) = wanted.iter().position(|want| want.as_ref().is_some_and(|(_, subject, _)| *subject == commit.subject)) {
+            *found = wanted[at].take().map(|(_, _, subtask)| subtask);
+        }
+    }
     let mut lost: Vec<(String, usize)> = Vec::new();
-    for (_, subtask) in wanted.into_iter().flatten() {
+    for (_, _, subtask) in wanted.into_iter().flatten().filter(|(_, subject, _)| !folded(subject, &subjects)) {
         match lost.iter_mut().find(|(id, _)| *id == subtask) {
             Some((_, count)) => *count += 1,
             None => lost.push((subtask, 1)),
