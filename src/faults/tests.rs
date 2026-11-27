@@ -88,7 +88,7 @@ fn the_watchers_answer_reads_one_block_per_case() {
 
 #[test]
 fn a_case_waits_for_the_agents_turn_and_runs_come_apart() {
-    let waiting = |at| Case { id: format!("c{at}"), at, source: Source::Chat, from: "lead".to_string(), words: "w".to_string(), context: String::new(), fingerprint: None, settled: None, issue: None, tries: 0 };
+    let waiting = |at| Case { id: format!("c{at}"), at, source: Source::Chat, from: "lead".to_string(), words: "w".to_string(), context: String::new(), fingerprint: None, settled: None, issue: None, tries: 0, pointed: false };
     let cases = vec![waiting(1_000), waiting(1_100)];
     assert_eq!(watch::due(&cases, 0, 1_110), Vec::<String>::new(), "neither has waited two minutes");
     assert_eq!(watch::due(&cases, 0, 1_150), ["c1000"]);
@@ -334,4 +334,56 @@ fn the_fault_watcher_is_off_without_its_key_and_kebbie_faults_says_so() {
     assert_eq!(list_in(&state, false, false), OFF);
     assert_eq!(serde_json::from_str::<serde_json::Value>(&list_in(&state, true, false)).unwrap()["on"], false);
     let _ = fs::remove_dir_all(state);
+}
+
+#[test]
+fn a_fault_the_lead_reports_is_weighed_at_once_and_alone() {
+    let state = state("pointed");
+    let waiting = case(&state, Source::Chat, "lead", "the board lost my answer again", 1_000);
+    let id = add_pointed(&state, "kebbie forgot my plan again, fix it", 1_010).unwrap();
+    let cases = pending(&state);
+    let pointed = cases.iter().find(|case| case.id == id).unwrap();
+    assert!(pointed.pointed && pointed.from == "lead" && pointed.context == POINTED_CONTEXT);
+    assert_eq!(watch::due(&cases, 1_000, 1_011), [id.as_str()], "neither the two minutes nor the gap since the last run hold it, and the other case waits");
+    assert!(watch::brief(&state, std::slice::from_ref(pointed), Path::new("/k"), "English").contains("(the user's words, which the lead reported as a fault in kebbie)"));
+    settle(&state, &id, "no fault in kebbie: r", None).unwrap();
+    assert_eq!(watch::due(&pending(&state), 0, 1_200), [waiting.id], "the rest are weighed as before once it is settled");
+    fs::remove_dir_all(state).unwrap();
+}
+
+#[test]
+fn the_users_words_the_lead_reports_are_weighed_once() {
+    let state = state("pointed-once");
+    let held = case(&state, Source::Chat, "lead", "Look, the push line is stuck again.  Fix it now", 1_000);
+    assert_eq!(add_pointed(&state, "the push line is stuck again. fix it now", 1_020).unwrap(), held.id, "the case the capture holds becomes the lead's");
+    assert!(pending(&state).iter().all(|case| case.pointed) && pending(&state).len() == 1);
+    assert!(add_pointed(&state, "  ", 1_030).is_err());
+    let state2 = crate::sh::test_dir("faults-pointed-capture");
+    let transcript = state2.join("lead.jsonl");
+    let user = |text: &str| serde_json::json!({ "type": "user", "uuid": "u", "timestamp": "2026-11-26T08:00:00.000Z", "message": { "role": "user", "content": text } }).to_string();
+    let end = serde_json::json!({ "type": "system", "subtype": "turn_duration", "timestamp": "2026-11-26T08:00:06.000Z" }).to_string();
+    fs::write(&transcript, "").unwrap();
+    let chats = vec![capture::Chat { from: "lead".to_string(), path: transcript.clone(), kebbie_typed: Vec::new() }];
+    let typed = 1_795_680_000;
+    assert!(capture::tick_in(&state2, &chats, typed - 60).is_empty());
+    let id = add_pointed(&state2, "the board shows the wrong task again", typed + 40).unwrap();
+    fs::write(&transcript, format!("{}\n{end}\n{}\n{end}\n", user("The board shows the wrong task again!"), user("and now the push line hangs too"))).unwrap();
+    assert_eq!(capture::tick_in(&state2, &chats, typed + 600), ["faults: 1 of the user's words to weigh"], "the words the lead reported after they were typed are not weighed a second time");
+    assert!(pending(&state2).iter().any(|case| case.id == id) && pending(&state2).iter().any(|case| case.words == "and now the push line hangs too"));
+    assert!(!pointed_after(&state2, "lead", "the board shows the wrong task again", typed + 60), "words typed after the report are the user's anew");
+    fs::remove_dir_all(state).unwrap();
+    fs::remove_dir_all(state2).unwrap();
+}
+
+#[test]
+fn only_the_lead_or_the_user_reports_a_fault_and_the_lead_may_only_where_the_watcher_is_on() {
+    let state = state("report");
+    let task = crate::permit::Caller::Task("billing@app".to_string());
+    assert!(report_as(&state, &task, "the board is wrong", 10).unwrap_err().contains("kebbie fault is the lead's"));
+    assert!(pending(&state).is_empty());
+    let (off, on) = (crate::lead::settings_for("/opt/kebbie/kebbie", false), crate::lead::settings_for("/opt/kebbie/kebbie", true));
+    assert!(!off.contains("kebbie fault:") && on.contains("Bash(/opt/kebbie/kebbie fault:*)"), "{off}");
+    let said = report_as(&state, &crate::permit::Caller::Lead, "the board is wrong", 10).unwrap();
+    assert!(said.starts_with("Case c1 goes to the fault watcher now") && said.contains("Its verdict comes to you as a message"), "{said}");
+    fs::remove_dir_all(state).unwrap();
 }

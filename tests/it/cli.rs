@@ -184,6 +184,14 @@ fn stderr(output: &Output) -> String {
 }
 
 #[test]
+fn kebbie_fault_is_unknown_and_unlisted_where_the_fault_watcher_is_off() {
+    let lab = Lab::new("fault-off");
+    assert!(!stdout(&lab.run(&["--help"])).contains("kebbie fault"));
+    let refused = lab.run(&["fault", "the board is wrong"]);
+    assert!(!refused.status.success() && stderr(&refused).starts_with("Unknown command \"fault\""), "{}", stderr(&refused));
+}
+
+#[test]
 fn help_lists_every_command_and_an_unknown_command_fails_with_the_usage() {
     let lab = Lab::new("help");
     let help = lab.run(&["--help"]);

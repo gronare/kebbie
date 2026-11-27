@@ -11,6 +11,8 @@ On the machine you develop kebbie on, the fault watcher turns the user's correct
 fault_watcher = true
 ```
 
+When the user tells the lead something in kebbie is wrong, the lead hands their words to the watcher with `kebbie fault "<their words>"`: that case is weighed at once and alone.
+
 Its code is in `src/faults`, its role in `roles/fault-watch.md`, and `kebbie faults` lists the faults it follows.
 
 ## Sign off your commits

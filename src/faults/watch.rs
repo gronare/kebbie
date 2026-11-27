@@ -46,11 +46,17 @@ fn last_run(state: &Path) -> u64 {
     fs::read_to_string(file(state, "last")).ok().and_then(|text| text.trim().parse().ok()).unwrap_or(0)
 }
 
+// A case the user pointed out through the lead is weighed alone and at once.
 pub fn due(cases: &[Case], last: u64, now: u64) -> Vec<String> {
+    let open = |case: &&Case| case.settled.is_none() && case.tries < TRIES;
+    let pointed: Vec<String> = cases.iter().filter(open).filter(|case| case.pointed).take(BATCH).map(|case| case.id.clone()).collect();
+    if !pointed.is_empty() {
+        return pointed;
+    }
     if now.saturating_sub(last) < GAP {
         return Vec::new();
     }
-    cases.iter().filter(|case| case.settled.is_none() && case.tries < TRIES && now.saturating_sub(case.at) >= SETTLE).take(BATCH).map(|case| case.id.clone()).collect()
+    cases.iter().filter(open).filter(|case| now.saturating_sub(case.at) >= SETTLE).take(BATCH).map(|case| case.id.clone()).collect()
 }
 
 pub fn tick(state: &Path) -> Vec<String> {
@@ -208,7 +214,7 @@ pub fn task_name(named: &str) -> String {
 }
 
 pub fn brief(state: &Path, cases: &[Case], root: &Path, language: &str) -> String {
-    let cases: Vec<String> = cases.iter().map(|case| format!("<case id=\"{}\">\nfrom: {} ({})\nat: {}\nwords: {}\n{}\n{}</case>", case.id, case.from, case.source.word(), crate::keeper::stamp(case.at), case.words, case.context, case.fingerprint.as_ref().map(|print| format!("fingerprint: {print}\n")).unwrap_or_default())).collect();
+    let cases: Vec<String> = cases.iter().map(|case| format!("<case id=\"{}\">\nfrom: {} ({})\nat: {}\nwords: {}\n{}\n{}</case>", case.id, case.from, case.said(), crate::keeper::stamp(case.at), case.words, case.context, case.fingerprint.as_ref().map(|print| format!("fingerprint: {print}\n")).unwrap_or_default())).collect();
     let mut issues: Vec<Issue> = issues::load(&issues::dir(state)).into_iter().filter(|issue| issue.source.is_none()).collect();
     issues.reverse();
     let issues: Vec<String> = issues.iter().take(120).map(|issue| format!("- {} [{}{}] {}{}", issue.id, issue.status, if super::in_use(issue) { ", in use" } else { "" }, issue.title, issue.cause.as_ref().map(|cause| format!(" · cause: {cause}")).unwrap_or_default())).collect();
@@ -456,7 +462,7 @@ pub fn fix_prompt(issue: &Issue, came_back: bool, quotes: &[String]) -> String {
 }
 
 pub fn unweighed(case: &Case, why: &str) -> String {
-    format!("The fault watcher could not weigh case {} ({}, from {}): {why}. Their words: \"{}\". Weigh them yourself: when they point at a fault in kebbie, save it as a kebbie issue by the skill kebbie:propose-change.", case.id, case.source.word(), case.from, super::clipped(&case.words, 300))
+    format!("The fault watcher could not weigh case {} ({}, from {}): {why}. Their words: \"{}\". Weigh them yourself: when they point at a fault in kebbie, save it as a kebbie issue by the skill kebbie:propose-change.", case.id, case.said(), case.from, super::clipped(&case.words, 300))
 }
 
 fn tell_lead(text: &str) {

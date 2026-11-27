@@ -19,6 +19,8 @@ pub const CORRECTING: [&str; 4] = ["Ask for changes", "Reject with a comment", "
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 struct Held {
+    #[serde(default)]
+    at: u64,
     words: String,
     before: String,
     after: String,
@@ -101,9 +103,9 @@ fn read_on(mark: Option<Mark>, path: &Path, started: u64) -> std::io::Result<(Ma
 
 fn step(mark: &mut Mark, event: Event, found: &mut Vec<Held>) {
     match event {
-        Event::Input { input: Input::You, text, .. } => {
+        Event::Input { input: Input::You, text, at, .. } => {
             found.extend(mark.held.take());
-            mark.held = Some(Held { words: text, before: mark.last_reply.clone(), after: String::new() });
+            mark.held = Some(Held { at, words: text, before: mark.last_reply.clone(), after: String::new() });
         }
         Event::Reply { text, .. } => {
             match mark.held.as_mut() {
@@ -161,7 +163,7 @@ pub fn tick_in(state: &Path, chats: &[Chat], now: u64) -> Vec<String> {
     for chat in chats {
         let key = chat.path.display().to_string();
         let Ok((mark, found)) = read_on(kept.remove(&key), &chat.path, started) else { continue };
-        for held in found.into_iter().filter(|held| worth(&held.words) && !typed_by_kebbie(chat, &held.words)) {
+        for held in found.into_iter().filter(|held| worth(&held.words) && !typed_by_kebbie(chat, &held.words) && !super::pointed_after(state, &chat.from, &held.words, held.at)) {
             if let Ok(Some(_)) = super::add_case(state, &NewCase { source: Source::Chat, from: &chat.from, words: &held.words, context: &context(&held), fingerprint: None }, now) {
                 added += 1;
             }

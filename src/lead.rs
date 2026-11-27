@@ -159,7 +159,11 @@ fn go() -> Result<String> {
 
 // Each of the user's prompts carries what sessions told each other since the lead last looked; the lead pushes only through kebbie push, which checks the user's permission; a compaction would drop the lead's rules, so it never compacts on its own.
 fn settings(kebbie: &str) -> String {
-    let allow = ["peers", "tell", "release", "answered", "messages", "status", "next", "areas", "approve", "review", "land", "push", "try", "stage", "unstage", "decide", "defer", "notify", "issues", "issue", "faults", "handover", "promise", "promises"].map(|command| format!("Bash({kebbie} {command}:*)"));
+    settings_for(kebbie, crate::faults::watch::on())
+}
+
+pub(crate) fn settings_for(kebbie: &str, watcher: bool) -> String {
+    let allow: Vec<String> = ["peers", "tell", "release", "answered", "messages", "status", "next", "areas", "approve", "review", "land", "push", "try", "stage", "unstage", "decide", "defer", "notify", "issues", "issue", "fault", "faults", "handover", "promise", "promises"].into_iter().filter(|command| watcher || *command != "fault").map(|command| format!("Bash({kebbie} {command}:*)")).collect();
     let settings = json!({
         "hooks": {
             "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": format!("{} messages --unread", crate::sh::quote(kebbie)) }] }],

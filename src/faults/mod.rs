@@ -62,6 +62,18 @@ pub struct Case {
     pub issue: Option<String>,
     #[serde(default)]
     pub tries: u32,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pointed: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
+impl Case {
+    pub fn said(&self) -> &'static str {
+        if self.pointed { "the user's words, which the lead reported as a fault in kebbie" } else { self.source.word() }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -119,16 +131,68 @@ pub fn add_case(state: &Path, new: &NewCase, now: u64) -> Result<Option<String>>
         if store.cases.iter().any(|case| case.settled.is_none() && case.from == new.from && case.words == words) {
             return None;
         }
-        store.next += 1;
-        let id = format!("c{}", store.next);
-        store.cases.push(Case { id: id.clone(), at: now, source: new.source, from: new.from.to_string(), words, context: clipped(new.context, CONTEXT_CHARS), fingerprint: new.fingerprint.map(str::to_string), settled: None, issue: None, tries: 0 });
-        let settled = store.cases.iter().filter(|case| case.settled.is_some()).count();
-        if settled > KEPT_CASES {
-            let mut drop = settled - KEPT_CASES;
-            store.cases.retain(|case| case.settled.is_none() || if drop > 0 { drop -= 1; false } else { true });
-        }
-        Some(id)
+        Some(push(store, Case { id: String::new(), at: now, source: new.source, from: new.from.to_string(), words, context: clipped(new.context, CONTEXT_CHARS), fingerprint: new.fingerprint.map(str::to_string), settled: None, issue: None, tries: 0, pointed: false }))
     })
+}
+
+fn push(store: &mut Store, mut case: Case) -> String {
+    store.next += 1;
+    case.id = format!("c{}", store.next);
+    let id = case.id.clone();
+    store.cases.push(case);
+    let settled = store.cases.iter().filter(|case| case.settled.is_some()).count();
+    if settled > KEPT_CASES {
+        let mut drop = settled - KEPT_CASES;
+        store.cases.retain(|case| case.settled.is_none() || if drop > 0 { drop -= 1; false } else { true });
+    }
+    id
+}
+
+fn flat(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+// The lead quotes the user's words, which may be part of a longer turn the chat capture keeps whole.
+fn same_words(one: &str, other: &str) -> bool {
+    let (one, other) = (flat(one), flat(other));
+    !one.is_empty() && !other.is_empty() && (one.contains(&other) || other.contains(&one))
+}
+
+pub const POINTED_CONTEXT: &str = "The lead reported these words of the user's with kebbie fault, as a fault in kebbie the user pointed out.";
+
+// A case the chat capture already holds for the same words becomes the lead's, so the report is weighed first and once.
+pub fn add_pointed(state: &Path, words: &str, now: u64) -> Result<String> {
+    let words = clipped(words, QUOTE_CHARS);
+    if words.is_empty() {
+        return Err("kebbie fault needs the user's words, verbatim: kebbie fault \"<their words>\", or - to read them from stdin".to_string());
+    }
+    let lead = crate::status::LEAD_LABEL;
+    change(state, |store| {
+        if let Some(case) = store.cases.iter_mut().find(|case| case.settled.is_none() && case.from == lead && same_words(&case.words, &words)) {
+            case.pointed = true;
+            case.tries = 0;
+            return case.id.clone();
+        }
+        push(store, Case { id: String::new(), at: now, source: Source::Chat, from: lead.to_string(), words, context: POINTED_CONTEXT.to_string(), fingerprint: None, settled: None, issue: None, tries: 0, pointed: true })
+    })
+}
+
+pub fn report(words: &str) -> Result<String> {
+    report_as(&crate::lead::state_dir()?, &crate::permit::caller(), words, crate::messages::now())
+}
+
+pub fn report_as(state: &Path, caller: &crate::permit::Caller, words: &str, now: u64) -> Result<String> {
+    use crate::permit::Caller;
+    if !matches!(caller, Caller::User | Caller::Lead) {
+        return Err(format!("kebbie fault is the lead's: it reports a fault the user pointed out; {} cannot. Tell the lead what kebbie did, with kebbie tell lead \"<text>\"", crate::permit::describe(caller)));
+    }
+    let id = add_pointed(state, words, now)?;
+    Ok(format!("Case {id} goes to the fault watcher now, ahead of every other case. Its verdict comes to you as a message: tell the user what it found and which task fixes it."))
+}
+
+// The chat capture skips the user's words once the lead reported them after they were typed.
+pub fn pointed_after(state: &Path, from: &str, words: &str, typed: u64) -> bool {
+    load(state).cases.iter().any(|case| case.pointed && case.from == from && case.at >= typed && case.at - typed < DAY && same_words(&case.words, words))
 }
 
 pub fn pending(state: &Path) -> Vec<Case> {
