@@ -32,6 +32,18 @@ pub fn parse(state: Option<&str>, next: Option<&str>, card: bool, summary: &str)
     Ok((Report { state: state.to_string(), next: next.split_whitespace().collect::<Vec<_>>().join(" "), head: None, after: Vec::new() }, summary))
 }
 
+const ASKING: [&str; 8] = ["answer:", "say whether", "say which", "tell me", "let me know", "decide", "choose", "confirm whether"];
+
+// A question in a needs-you report's next leaves the user no card to answer on, so it goes through kebbie ask; the ask's own needs-you report is let through.
+fn question_goes_through_ask(report: &Report, asked: impl FnOnce() -> bool) -> Result<()> {
+    let next = report.next.trim().to_lowercase();
+    let asks = next.ends_with('?') || ASKING.iter().any(|start| next.strip_prefix(start).is_some_and(|rest| rest.chars().next().is_none_or(|after| !after.is_alphanumeric())));
+    if report.state != "needs-you" || !asks || asked() {
+        return Ok(());
+    }
+    Err(format!("Not reported: \"{}\" asks the user something, and a needs-you report gives them nowhere to answer. Ask it with kebbie ask, which puts it on the board with the answers to pick: kebbie ask --option \"<label>: <what the user gets>\" --option \"<label>: <what the user gets>\" --recommend <n> \"<context> <question>?\". Keep needs-you for an act only the user can take, such as \"review the split, then push\".", report.next))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<&str>, after: &[&str], after_push: Option<&str>, verify_after_push: Option<&str>, red_cause: Option<&str>, summary: &str) -> Result<String> {
     let (mut report, summary) = parse(state, next, card.is_some(), summary)?;
@@ -43,6 +55,9 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
     report.head = crate::repo::git(cwd, &["rev-parse", "HEAD"]).ok();
     let me = peers::me(cwd).filter(|me| me != LEAD_LABEL).ok_or("kebbie report runs in a task's worktree")?;
     report.after = push_after(&report.state, &me, after)?;
+    if crate::routines::routine_of(&me).is_none() {
+        question_goes_through_ask(&report, || crate::questions::open_now(&messages::load()).iter().any(|question| question.from == me || crate::questions::kebbies_about(question, &me)))?;
+    }
     card_goes_with(&report.state, card.is_some(), crate::routines::routine_of(&me).is_some())?;
     if let Some(watch) = crate::ci::load(&state_dir()?, &me).filter(|watch| (watch.close || !watch.pushed.stages.is_empty()) && watch.checking().is_some()) {
         let ahead = ahead_of(cwd).map_err(|error| format!("kebbie cannot tell whether the check held, since git cannot count the commits left to push: {error}"))?;
@@ -612,6 +627,24 @@ mod tests {
         assert!(parse(Some("ready"), None, false, "x").is_err());
         assert!(parse(Some("ready"), Some("  "), false, "x").is_err());
         assert!(parse(Some("ready"), Some("push and close"), false, " ").is_err());
+    }
+
+    #[test]
+    fn a_question_in_a_needs_you_report_is_refused_unless_kebbie_ask_put_it_on_the_board() {
+        let report = |state: &str, next: &str| Report { state: state.to_string(), next: next.to_string(), head: None, after: Vec::new() };
+        for next in ["say whether to continue on the old API-based screens or leave this worktree as it is", "Which queue should refunds use?", "answer: which queue?", "decide between the two layouts"] {
+            let error = question_goes_through_ask(&report("needs-you", next), || false).unwrap_err();
+            assert!(error.contains("kebbie ask --option"), "{next}: {error}");
+        }
+        assert_eq!(question_goes_through_ask(&report("needs-you", "answer: which queue?"), || true), Ok(()), "the ask's own question is open on the board");
+        for act in ["review the split, then push and close", "answer Claude's prompt in its Space", "pick up the phone and approve the login", "decided: nothing left, close it", "chooser"] {
+            assert_eq!(question_goes_through_ask(&report("needs-you", act), || false), Ok(()), "an act of the user's is what needs-you is for: {act}");
+        }
+        let source = include_str!("report.rs");
+        assert!(source.contains(concat!("question_goes_through_ask(&report, || crate::questions::open_now(&messages::load()).iter().any(|question| question.from == me || crate::questions::kebbies_about(question, &me)))", "?;")), "kebbie report refuses through it, and a question kebbie asked about the task counts as open");
+        assert!(source.contains(concat!("if crate::routines::routine_of(&me).is_none() {\n", "        question_goes_through_ask(")), "a routine's findings wait on the user with their card");
+        assert_eq!(question_goes_through_ask(&report("ready", "push and close"), || false), Ok(()));
+        assert_eq!(question_goes_through_ask(&report("blocked", "nothing"), || panic!("only a question looks for an ask")), Ok(()));
     }
 
     #[test]
