@@ -1083,6 +1083,20 @@ fn ideas_machine_names_a_machine_and_writer_profile_a_profile_or_none() {
 }
 
 #[test]
+fn the_maintainers_machine_is_the_one_with_the_inbox_token_or_the_fault_watcher() {
+    let dir = crate::sh::test_dir("maintainers-machine");
+    let file = dir.join("config.toml");
+    assert!(!maintainers_machine_in(&file).unwrap(), "no config file, an ordinary install");
+    std::fs::write(&file, "[report]\ntext = \"always\"\n[issues]\npropose = true\n").unwrap();
+    assert!(!maintainers_machine_in(&file).unwrap(), "reporting and proposing make no maintainer");
+    std::fs::write(&file, "[report]\ninbox_token = \"kha_secret-token-1234\"\n").unwrap();
+    assert!(maintainers_machine_in(&file).unwrap(), "the machine that fetches the reports");
+    std::fs::write(&file, "[kebbie_dev]\nfault_watcher = true\n").unwrap();
+    assert!(maintainers_machine_in(&file).unwrap(), "the machine kebbie's faults are fixed on");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn the_fault_watcher_is_on_only_where_kebbie_dev_turns_it_on() {
     let dir = crate::sh::test_dir("fault-watcher-key");
     let file = dir.join("config.toml");

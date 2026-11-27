@@ -39,6 +39,16 @@ pub fn fault_watcher_in(file: &Path) -> Result<bool> {
     Ok(load_machine(file)?.fault_watcher.unwrap_or(false))
 }
 
+// The machine kebbie is developed on: it fetches the reports itself or runs the fault watcher, so its own bugs are fixed here and never sent to kebbie's maintainers.
+pub fn maintainers_machine() -> bool {
+    maintainers_machine_in(&path()).unwrap_or(false)
+}
+
+pub fn maintainers_machine_in(file: &Path) -> Result<bool> {
+    let machine = load_machine(file)?;
+    Ok(machine.report.inbox_token.is_some() || machine.fault_watcher.unwrap_or(false))
+}
+
 pub fn lead_profile() -> Result<Option<String>> {
     Ok(load_machine(&path())?.lead_profile.filter(|name| name != super::NONE))
 }

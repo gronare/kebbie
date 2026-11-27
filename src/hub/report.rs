@@ -686,7 +686,10 @@ pub fn armed(state: &Path) -> bool {
     dir(state).join(ARMED).exists()
 }
 
-pub fn board_offers(settings: &crate::config::Report, state: &Path) -> bool {
+pub fn board_offers(settings: &crate::config::Report, state: &Path, maintainers: bool) -> bool {
+    if maintainers {
+        return false;
+    }
     match settings.text() {
         crate::config::ReportText::Ask => true,
         crate::config::ReportText::Always => !armed(state),
@@ -738,9 +741,13 @@ pub fn send_unasked_in(state: &Path, text: crate::config::ReportText, url: &str,
     Ok(notes)
 }
 
+pub fn sends_unasked(settings: &crate::config::Report, maintainers: bool) -> bool {
+    !maintainers && settings.text() == crate::config::ReportText::Always
+}
+
 pub fn send_unasked_tick(state: &Path) -> Result<Vec<String>> {
     let settings = crate::config::report_settings()?;
-    if settings.text() != crate::config::ReportText::Always {
+    if !sends_unasked(&settings, crate::config::maintainers_machine()) {
         return Ok(Vec::new());
     }
     crate::signals::one_sender(state, || send_unasked_in(state, settings.text(), settings.url(), &Scrub::current, crate::messages::now()))

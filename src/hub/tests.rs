@@ -815,11 +815,24 @@ fn the_board_offers_a_bug_with_text_ask_and_with_always_until_it_is_armed() {
     use crate::config::{Report, ReportText};
     let state = crate::sh::test_dir("report-board-offers");
     for (text, offers) in [(None, true), (Some(ReportText::Ask), true), (Some(ReportText::Always), true), (Some(ReportText::Never), false)] {
-        assert_eq!(crate::hub::report::board_offers(&Report { text, ..Default::default() }, &state), offers, "{text:?} unarmed");
+        assert_eq!(crate::hub::report::board_offers(&Report { text, ..Default::default() }, &state, false), offers, "{text:?} unarmed");
     }
     crate::hub::report::arm_in(&state, &crate::permit::Caller::User, true, ReportText::Always, now()).unwrap();
-    assert!(!crate::hub::report::board_offers(&Report { text: Some(ReportText::Always), ..Default::default() }, &state), "armed, kebbie sends it without the offer");
-    assert!(crate::hub::report::board_offers(&Report { text: Some(ReportText::Ask), ..Default::default() }, &state), "an arming left behind changes nothing under ask");
+    assert!(!crate::hub::report::board_offers(&Report { text: Some(ReportText::Always), ..Default::default() }, &state, false), "armed, kebbie sends it without the offer");
+    assert!(crate::hub::report::board_offers(&Report { text: Some(ReportText::Ask), ..Default::default() }, &state, false), "an arming left behind changes nothing under ask");
+}
+
+#[test]
+fn the_maintainers_machine_offers_nothing_to_send_and_sends_nothing_unasked() {
+    use crate::config::{Report, ReportText};
+    let state = crate::sh::test_dir("report-maintainers-machine");
+    crate::hub::report::arm_in(&state, &crate::permit::Caller::User, true, ReportText::Always, now()).unwrap();
+    for text in [None, Some(ReportText::Ask), Some(ReportText::Always), Some(ReportText::Never)] {
+        let settings = Report { text, ..Default::default() };
+        assert!(!crate::hub::report::board_offers(&settings, &state, true), "{text:?}: the maintainers' own bugs are fixed there");
+        assert!(!crate::hub::report::sends_unasked(&settings, true), "{text:?}: nothing goes out unasked from the maintainers' machine");
+    }
+    assert!(crate::hub::report::sends_unasked(&Report { text: Some(ReportText::Always), ..Default::default() }, false), "another install still sends under always");
 }
 
 pub(crate) fn open_hub(configure: impl FnOnce(&mut Config)) -> TestHub {

@@ -451,7 +451,7 @@ builds_below = "10 GB"
 - `"always"`: once you arm it with `kebbie issue report --always` in your own terminal, kebbie sends it, redacted the same way, without asking, and says so under messages. Until then, or after `kebbie issue report --ask`, it asks as with `"ask"`.
 - `"never"`: it stays on this machine. `kebbie issue report <id>` still sends one when you ask.
 
-`report.inbox_token`: the keeper then files each report the endpoint lets through, and each error signal at least three installs reported on one day, as a kebbie issue every 10 minutes, each with a line under messages on the board, `New bug report: <title>` (`New wish report: <title>` for a wish), that is for you and not the lead, and `kebbie doctor` counts the reports in quarantine. `kebbie config` shows only whether it is set.
+`report.inbox_token`: the keeper then files each report the endpoint lets through, and each error signal at least three installs reported on one day, as a kebbie issue every 10 minutes, each with a line under messages on the board, `New bug report: <title>` (`New wish report: <title>` for a wish), that is for you and not the lead, and `kebbie doctor` counts the reports in quarantine. This is the maintainers' own machine, so the board offers no bug or wish to send and `report.text = "always"` sends none. `kebbie config` shows only whether it is set.
 
 `issues.propose`: the lead saves one by itself, with no question to you, and it waits in the board's bugs to send. `false` keeps the lead from filing them; it saves one only when you ask it to. It takes effect when the lead next restarts (`L` on the board).
 
