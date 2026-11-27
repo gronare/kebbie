@@ -58,6 +58,7 @@ pub enum Phase {
     Pushing { ahead: usize },
     CiRunning { sha: String },
     CiRed { sha: String },
+    OnBranch { sha: String, branch: String },
     Closing,
 }
 
@@ -73,6 +74,7 @@ impl Phase {
             Phase::Pushing { .. } => "pushing",
             Phase::CiRunning { .. } => "ci-running",
             Phase::CiRed { .. } => "ci-red",
+            Phase::OnBranch { .. } => "on-branch",
             Phase::Closing => "closing",
         }
     }
@@ -105,14 +107,18 @@ fn phase_json(phase: &Phase) -> Value {
     let (why, head, sha) = match phase {
         Phase::NeedsYou(why) => (Some(why.key()), None, None),
         Phase::Ready { head } | Phase::Staged { head } => (None, head.as_deref(), None),
-        Phase::CiRunning { sha } | Phase::CiRed { sha } => (None, None, Some(sha.as_str())),
+        Phase::CiRunning { sha } | Phase::CiRed { sha } | Phase::OnBranch { sha, .. } => (None, None, Some(sha.as_str())),
         _ => (None, None, None),
+    };
+    let branch = match phase {
+        Phase::OnBranch { branch, .. } => Some(branch.as_str()),
+        _ => None,
     };
     let ahead = match phase {
         Phase::Pushing { ahead } => Some(*ahead),
         _ => None,
     };
-    json!({ "name": phase.key(), "why": why, "head": head, "sha": sha, "ahead": ahead })
+    json!({ "name": phase.key(), "why": why, "head": head, "sha": sha, "ahead": ahead, "branch": branch })
 }
 
 fn phase_of(value: &Value) -> Option<Phase> {
@@ -127,6 +133,7 @@ fn phase_of(value: &Value) -> Option<Phase> {
         "pushing" => Phase::Pushing { ahead: value["ahead"].as_u64().and_then(|ahead| usize::try_from(ahead).ok()).unwrap_or(0) },
         "ci-running" => Phase::CiRunning { sha: text("sha")? },
         "ci-red" => Phase::CiRed { sha: text("sha")? },
+        "on-branch" => Phase::OnBranch { sha: text("sha")?, branch: text("branch")? },
         "closing" => Phase::Closing,
         _ => return None,
     })
@@ -201,7 +208,7 @@ pub fn next(current: Option<&Phase>, event: &Event) -> Option<Phase> {
         Event::Started { prompted: false } => Phase::Idle,
         Event::TurnBegan { by_user } => match current {
             Some(Phase::Starting) => Phase::Working,
-            Some(Phase::Idle | Phase::NeedsYou(_) | Phase::CiRed { .. }) if *by_user => Phase::Working,
+            Some(Phase::Idle | Phase::NeedsYou(_) | Phase::CiRed { .. } | Phase::OnBranch { .. }) if *by_user => Phase::Working,
             _ => return None,
         },
         Event::Resumed => match current {
@@ -219,6 +226,7 @@ pub fn next(current: Option<&Phase>, event: &Event) -> Option<Phase> {
             ("blocked", Some(Phase::NeedsYou(Why::Cancelled | Why::Unreadable | Why::Unseen))) => return None,
             ("blocked", _) => Phase::Idle,
             (_, Some(Phase::CiRunning { .. })) => return None,
+            (_, Some(Phase::OnBranch { sha, .. })) if head.is_some_and(|head| head == sha) => return None,
             ("working", _) => Phase::Working,
             ("ready", Some(Phase::Staged { .. })) => return None,
             ("ready", _) if *committed => Phase::Ready { head: head.map(str::to_string) },
@@ -380,7 +388,7 @@ mod tests {
     #[test]
     fn a_phase_reads_back_as_written_with_when_and_by_whom() {
         let state = crate::sh::test_dir("phase-file");
-        for phase in [Phase::Starting, Phase::Working, Phase::Idle, Phase::Ready { head: Some("abc".to_string()) }, Phase::Ready { head: None }, Phase::Staged { head: Some("abc".to_string()) }, Phase::Pushing { ahead: 0 }, Phase::Pushing { ahead: 2 }, Phase::CiRunning { sha: "abc".to_string() }, Phase::CiRed { sha: "def".to_string() }, Phase::Closing]
+        for phase in [Phase::Starting, Phase::Working, Phase::Idle, Phase::Ready { head: Some("abc".to_string()) }, Phase::Ready { head: None }, Phase::Staged { head: Some("abc".to_string()) }, Phase::Pushing { ahead: 0 }, Phase::Pushing { ahead: 2 }, Phase::CiRunning { sha: "abc".to_string() }, Phase::CiRed { sha: "def".to_string() }, Phase::OnBranch { sha: "abc".to_string(), branch: "feature/billing".to_string() }, Phase::Closing]
             .into_iter().chain(Why::ALL.map(Phase::NeedsYou)) {
             let record = Record { phase, since: 7, by: "report".to_string(), from: None };
             save(&state, "billing@app", &record);
@@ -543,5 +551,16 @@ mod tests {
         }
         assert_eq!(count(load(&state, "billing@app").as_ref().map(|record| &record.phase)), 8 * 40);
         std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_task_on_its_branch_waits_there_until_new_work_or_new_commits_move_it() {
+        let on = Phase::OnBranch { sha: "abc".to_string(), branch: "feature/billing".to_string() };
+        let reported = |state: &str, head: &str| next(Some(&on), &Event::Reported { state, head: Some(head), committed: true, pushing: false });
+        assert_eq!(reported("ready", "abc"), None, "the ready report about what it pushed keeps it on its branch");
+        assert_eq!(reported("ready", "def"), Some(Phase::Ready { head: Some("def".to_string()) }), "new commits are ready to push again");
+        assert_eq!(reported("needs-you", "abc"), Some(Phase::NeedsYou(Why::Report)));
+        assert_eq!(next(Some(&on), &Event::TurnBegan { by_user: true }), Some(Phase::Working), "the user's new work takes it off the branch group");
+        assert_eq!(next(Some(&on), &Event::TurnBegan { by_user: false }), None, "a notice it reads is no new work");
     }
 }

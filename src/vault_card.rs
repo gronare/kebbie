@@ -48,7 +48,7 @@ impl Push {
     pub fn of(group: Group) -> Push {
         match group {
             Group::ReadyToPush | Group::GoingOut => Push::Ready,
-            Group::CiRunning => Push::Pushed,
+            Group::CiRunning | Group::OnBranch => Push::Pushed,
             _ => Push::Waiting,
         }
     }

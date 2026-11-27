@@ -36,7 +36,7 @@ pub fn rank_of(phase: Option<&Phase>, agent: Option<&str>) -> Option<Rank> {
     match phase? {
         Phase::Starting | Phase::Working | Phase::Closing | Phase::Idle => None,
         Phase::Ready { .. } | Phase::Staged { .. } | Phase::Pushing { .. } | Phase::CiRunning { .. } => Some(Rank::WaitsForPush),
-        Phase::CiRed { .. } => Some(Rank::Finished),
+        Phase::CiRed { .. } | Phase::OnBranch { .. } => Some(Rank::Finished),
         Phase::NeedsYou(why) => match why {
             Why::Report | Why::Verify | Why::NothingToPush => Some(Rank::Finished),
             Why::Question | Why::Unreported | Why::Stopped | Why::Failed | Why::Unreadable | Why::LeftLine | Why::NotStaged | Why::Unseen | Why::Cancelled => None,

@@ -21,6 +21,7 @@ pub(super) fn group_color(group: Group) -> Color {
         Group::ReadyToPush => GREEN,
         Group::GoingOut => BLUE,
         Group::CiRunning => YELLOW,
+        Group::OnBranch => TEAL,
         Group::Idle => MUTED,
         Group::WaitingOn => MAUVE,
         Group::Queued => MAUVE,

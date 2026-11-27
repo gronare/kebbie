@@ -28,6 +28,7 @@ pub enum Group {
     ReadyToPush,
     GoingOut,
     CiRunning,
+    OnBranch,
     Idle,
     WaitingOn,
     Queued,
@@ -35,7 +36,7 @@ pub enum Group {
 }
 
 impl Group {
-    pub const ALL: [Group; 9] = [Group::NeedsYou, Group::Working, Group::InReview, Group::ReadyToPush, Group::GoingOut, Group::CiRunning, Group::Idle, Group::WaitingOn, Group::Queued];
+    pub const ALL: [Group; 10] = [Group::NeedsYou, Group::Working, Group::InReview, Group::ReadyToPush, Group::GoingOut, Group::CiRunning, Group::OnBranch, Group::Idle, Group::WaitingOn, Group::Queued];
 
     pub fn key(self) -> &'static str {
         match self {
@@ -45,6 +46,7 @@ impl Group {
             Group::ReadyToPush => "ready-to-push",
             Group::GoingOut => "going-out",
             Group::CiRunning => "ci-running",
+            Group::OnBranch => "on-branch",
             Group::Idle => "waiting-for-work",
             Group::WaitingOn => "waiting-on",
             Group::Queued => "queued",
@@ -60,6 +62,7 @@ impl Group {
             Group::ReadyToPush => "READY TO PUSH",
             Group::GoingOut => "GOING OUT",
             Group::CiRunning => "CI RUNNING",
+            Group::OnBranch => "ON BRANCH, WAITING FOR MAIN",
             Group::Idle => "WAITING FOR WORK",
             Group::WaitingOn => "WAITING ON",
             Group::Queued => "QUEUED",
@@ -384,7 +387,7 @@ impl Item {
 
     // Neutral words only: findings and a review that gave no verdict reach the lead as messages; a pushed task's review is of code already out, so CI running shows none.
     pub fn review_note(&self) -> Option<String> {
-        if matches!(self.phase(), Some(Phase::CiRunning { .. })) {
+        if matches!(self.phase(), Some(Phase::CiRunning { .. } | Phase::OnBranch { .. })) {
             return None;
         }
         let shown = self.verdict.as_ref()?;
@@ -400,7 +403,7 @@ impl Item {
 
     // The lead's summary also names the findings and a review that gave no verdict; the board's and the phone's rows never do.
     fn review_note_for_lead(&self) -> Option<String> {
-        if matches!(self.phase(), Some(Phase::CiRunning { .. })) {
+        if matches!(self.phase(), Some(Phase::CiRunning { .. } | Phase::OnBranch { .. })) {
             return None;
         }
         let shown = self.verdict.as_ref().filter(|shown| !shown.running && !shown.stale)?;
@@ -561,6 +564,7 @@ impl Item {
             Phase::Ready { .. } if self.lead_pushes() => Group::GoingOut,
             Phase::Ready { .. } | Phase::Staged { .. } => Group::ReadyToPush,
             Phase::CiRunning { .. } => Group::CiRunning,
+            Phase::OnBranch { .. } => Group::OnBranch,
         }
     }
 
@@ -627,7 +631,7 @@ impl Item {
         if self.unsent_start {
             return Some("send its start prompt: it is typed into its input box but not sent");
         }
-        if self.turn_under_way() || self.recovering().is_some() || matches!(self.phase(), Some(Phase::Pushing { .. } | Phase::CiRunning { .. } | Phase::CiRed { .. } | Phase::NeedsYou(Why::Cancelled | Why::Unreadable) | Phase::Closing)) {
+        if self.turn_under_way() || self.recovering().is_some() || matches!(self.phase(), Some(Phase::Pushing { .. } | Phase::CiRunning { .. } | Phase::CiRed { .. } | Phase::OnBranch { .. } | Phase::NeedsYou(Why::Cancelled | Why::Unreadable) | Phase::Closing)) {
             return None;
         }
         if let Some(held) = &self.held_by_draft {
@@ -794,6 +798,9 @@ impl Item {
         }
         if self.group() == Group::ReadyToPush && self.staged {
             return format!("{} · {STAGED}", plural(git.ahead, "commit"));
+        }
+        if let (Group::OnBranch, Some(Phase::OnBranch { branch, .. })) = (self.group(), self.phase()) {
+            return format!("{} on {branch} · kebbie closes it once they reach {}", plural(git.ahead, "commit"), git.upstream.trim_start_matches("origin/"));
         }
         if self.group() == Group::ReadyToPush {
             let review: String = self.rules_note().filter(|_| surface == Surface::Lead).into_iter().chain(self.review_note_on(surface)).chain(self.unrecorded.clone()).map(|note| format!(" · {note}")).collect();
@@ -2037,6 +2044,15 @@ pub(crate) mod tests {
         item.left_times = 0;
         assert_eq!(Group::GoingOut.title(), "GOING OUT");
         assert_eq!(Group::ALL.iter().position(|group| *group == Group::GoingOut), Group::ALL.iter().position(|group| *group == Group::ReadyToPush).map(|at| at + 1), "it follows Ready to push");
+    }
+
+    #[test]
+    fn a_task_on_its_own_branch_waits_under_its_group_with_where_its_commits_are() {
+        let mut item = task(Some("idle"), Some("ready"), 2);
+        in_phase(&mut item, Phase::OnBranch { sha: "abc".to_string(), branch: "feature/billing".to_string() });
+        assert_eq!((item.group(), item.summary(), item.next_for_you()), (Group::OnBranch, "2 commits on feature/billing · kebbie closes it once they reach main".to_string(), None));
+        assert_eq!(Group::OnBranch.title(), "ON BRANCH, WAITING FOR MAIN");
+        assert_eq!(Group::ALL.iter().position(|group| *group == Group::OnBranch), Group::ALL.iter().position(|group| *group == Group::CiRunning).map(|at| at + 1), "it follows CI running");
     }
 
     #[test]
