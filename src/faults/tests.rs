@@ -473,10 +473,11 @@ fn a_watcher_that_cannot_start_counts_a_try_and_a_pointed_case_reaches_the_lead_
 #[test]
 fn nothing_of_the_fault_watcher_shows_or_runs_where_it_is_off() {
     let names = |watcher| crate::keeper::routines_for(watcher).iter().map(|routine| routine.name).collect::<Vec<_>>();
-    assert!(ROUTINES.iter().all(|routine| !names(false).contains(routine)), "kebbie keeper --status lists no fault watcher routine: {:?}", names(false));
-    assert!(ROUTINES.iter().all(|routine| names(true).contains(routine)));
-    assert_eq!(names(true).len(), names(false).len() + ROUTINES.len(), "only the watcher's routines differ");
-    assert!(crate::keeper::routines().iter().all(|routine| !ROUTINES.contains(&routine.name)), "a machine without the key, as the tests run, registers neither");
+    let watcher: Vec<&str> = crate::keeper::routines_for(true).iter().filter(|routine| routine.dev).map(|routine| routine.name).collect();
+    assert_eq!(watcher, ["faults", "watch"], "the fault watcher's routines are built with Routine::dev");
+    assert!(watcher.iter().all(|routine| !names(false).contains(routine)), "kebbie keeper --status lists no fault watcher routine: {:?}", names(false));
+    assert_eq!(names(true).len(), names(false).len() + watcher.len(), "only the watcher's routines differ");
+    assert!(crate::keeper::routines().iter().all(|routine| !routine.dev), "a machine without the key, as the tests run, registers neither");
     let (off, on) = (crate::lead::settings_for("/opt/kebbie/kebbie", false), crate::lead::settings_for("/opt/kebbie/kebbie", true));
     assert!(!off.contains("kebbie fault") && on.contains("Bash(/opt/kebbie/kebbie fault:*)") && on.contains("Bash(/opt/kebbie/kebbie faults:*)"), "{off}");
     let role = crate::lead::role_text_with(include_str!("../../roles/lead.md"), "/opt/kebbie/kebbie", &[], false, crate::lead::FaultRoles { propose: true, ..Default::default() }, "English");

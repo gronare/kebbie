@@ -34,60 +34,71 @@ pub struct Routine {
     pub name: &'static str,
     pub every: u64,
     pub run: fn(&mut Ctx) -> Result<()>,
+    pub dev: bool,
+}
+
+impl Routine {
+    fn everyone(name: &'static str, every: u64, run: fn(&mut Ctx) -> Result<()>) -> Routine {
+        Routine { name, every, run, dev: false }
+    }
+
+    fn dev(name: &'static str, every: u64, run: fn(&mut Ctx) -> Result<()>) -> Routine {
+        Routine { name, every, run, dev: true }
+    }
 }
 
 pub fn routines() -> Vec<Routine> {
     routines_for(crate::faults::watch::on())
 }
 
-// The fault watcher's routines are kebbie's own development: registered only where [kebbie_dev] turns it on, so nowhere else lists them.
-pub fn routines_for(watcher: bool) -> Vec<Routine> {
-    every_routine().into_iter().filter(|routine| watcher || !crate::faults::ROUTINES.contains(&routine.name)).collect()
+// A routine of kebbie's own development is registered only where [kebbie_dev] turns it on, so nowhere else lists it.
+pub fn routines_for(dev: bool) -> Vec<Routine> {
+    every_routine().into_iter().filter(|routine| dev || !routine.dev).collect()
 }
 
 // Every routine the keeper runs, each with its interval in seconds; a new routine is one more entry here.
 fn every_routine() -> Vec<Routine> {
     vec![
-        Routine { name: "messages", every: 3, run: |_| crate::messages::flush().map(|_| ()) },
-        Routine { name: "builds", every: crate::builds::EVERY, run: |ctx| { ctx.notes.extend(crate::builds::tick_now()?); Ok(()) } },
-        Routine { name: "disk", every: crate::disk_trim::EVERY, run: |ctx| { ctx.notes.extend(crate::disk_trim::tick(&crate::lead::state_dir()?)); Ok(()) } },
-        Routine { name: "typed", every: 3, run: |_| { crate::typing::check(); Ok(()) } },
-        Routine { name: "restart", every: 60, run: restart },
-        Routine { name: "updates", every: 600, run: updates },
-        Routine { name: "agents", every: crate::agent_check::ROUTINE_EVERY, run: |ctx| { ctx.notes.extend(crate::agent_check::tick(&crate::lead::state_dir()?)); Ok(()) } },
-        Routine { name: "herdr", every: crate::herdr_link::EVERY, run: |ctx| { ctx.notes.extend(crate::herdr_link::heal()?); Ok(()) } },
-        Routine { name: "push", every: 15, run: |ctx| { let state = crate::lead::state_dir()?; ctx.notes.extend(crate::tasks::push_permitted(&state)); ctx.notes.extend(crate::tasks::complete_pushes(&state)); Ok(()) } },
-        Routine { name: "stage", every: 15, run: |ctx| { ctx.notes.extend(crate::tasks::stage_tick(&crate::lead::state_dir()?)); Ok(()) } },
-        Routine { name: "ci", every: 30, run: |_| { crate::ci::tick(&crate::lead::state_dir()?); Ok(()) } },
-        Routine { name: "after", every: crate::tasks::AFTER_EVERY, run: |ctx| { ctx.notes.extend(crate::tasks::after_tick(&crate::lead::state_dir()?)); Ok(()) } },
-        Routine { name: "promises", every: crate::tasks::PROMISES_EVERY, run: |ctx| { ctx.notes.extend(crate::tasks::promises_tick(&crate::lead::state_dir()?)); Ok(()) } },
-        Routine { name: "waiting", every: crate::tasks::AFTER_EVERY, run: |ctx| { ctx.notes.extend(crate::tasks::waiting_tick(&crate::lead::state_dir()?)); Ok(()) } },
-        Routine { name: "landed", every: crate::tasks::LANDED_EVERY, run: |ctx| { ctx.notes.extend(crate::tasks::landed_tick(&crate::lead::state_dir()?)); Ok(()) } },
-        Routine { name: "follow", every: 60, run: |ctx| { ctx.notes.extend(crate::tasks::follow_tick(&crate::lead::state_dir()?)); Ok(()) } },
-        Routine { name: "prompts", every: crate::menu::EVERY, run: |ctx| { ctx.notes.extend(crate::menu::tick(&crate::lead::state_dir()?)?); Ok(()) } },
-        Routine { name: "recover", every: 30, run: |_| { crate::recover::tick(&crate::lead::state_dir()?); Ok(()) } },
-        Routine { name: "comments", every: crate::comments::EVERY, run: |ctx| { ctx.notes.extend(crate::comments::tick(&crate::lead::state_dir()?)); Ok(()) } },
-        Routine { name: "faults", every: crate::faults::capture::EVERY, run: |ctx| { ctx.notes.extend(crate::faults::capture::tick(&crate::lead::state_dir()?)); Ok(()) } },
-        Routine { name: "watch", every: crate::faults::watch::EVERY, run: |ctx| { ctx.notes.extend(crate::faults::watch::tick(&crate::lead::state_dir()?)); Ok(()) } },
-        Routine { name: "issues", every: crate::issue_recheck::EVERY, run: |ctx| { ctx.notes.extend(crate::issue_recheck::tick(&crate::lead::state_dir()?)); Ok(()) } },
-        Routine { name: "rules", every: crate::rules_check::EVERY, run: |ctx| { ctx.notes.extend(crate::rules_check::tick(&crate::lead::state_dir()?)); Ok(()) } },
-        Routine { name: "review", every: crate::rules_check::EVERY, run: |ctx| { ctx.notes.extend(crate::review::tick(&crate::lead::state_dir()?)); Ok(()) } },
-        Routine { name: "writer", every: crate::backlog_writer::EVERY, run: |ctx| { ctx.notes.extend(crate::backlog_writer::tick(&crate::lead::state_dir()?)); Ok(()) } },
-        Routine { name: "start", every: crate::backlog_start::EVERY, run: |ctx| { ctx.notes.extend(crate::backlog_start::tick(&crate::lead::state_dir()?)); Ok(()) } },
-        Routine { name: "obstacle", every: crate::obstacle::EVERY, run: |ctx| { ctx.notes.extend(crate::obstacle::tick(&crate::lead::state_dir()?)); Ok(()) } },
-        Routine { name: "tests", every: crate::commit_tests::EVERY, run: |ctx| { ctx.notes.extend(crate::commit_tests::tick(&crate::lead::state_dir()?)); Ok(()) } },
-        Routine { name: "assess", every: crate::rules_check::EVERY, run: |ctx| { ctx.notes.extend(crate::assessment::tick(&crate::lead::state_dir()?)); Ok(()) } },
-        Routine { name: "routines", every: crate::routines::EVERY, run: |ctx| { ctx.notes.extend(crate::routines::tick(&crate::lead::state_dir()?)); Ok(()) } },
-        Routine { name: "clock", every: crate::clock::EVERY, run: |ctx| { ctx.notes.extend(crate::clock::tick(&crate::lead::state_dir()?)?); Ok(()) } },
-        Routine { name: "hub", every: crate::hub::EVERY, run: |_| crate::hub::tick() },
-        Routine { name: "reports", every: crate::hub::inbox::EVERY, run: |ctx| { ctx.notes.extend(crate::hub::inbox::tick(&crate::lead::state_dir()?)?); Ok(()) } },
-        Routine { name: "signals", every: crate::signals::EVERY, run: |ctx| { ctx.notes.extend(crate::signals::tick(&crate::lead::state_dir()?)?); Ok(()) } },
-        Routine { name: "install", every: crate::signals::EVERY, run: |_| { crate::install_signal::tick(&crate::lead::state_dir()?); Ok(()) } },
-        Routine { name: "machines", every: crate::vault_machines::EVERY, run: |ctx| { ctx.notes.extend(crate::vault_machines::tick(&crate::lead::state_dir()?)); Ok(()) } },
-        Routine { name: "inbox", every: crate::idea_mail::EVERY, run: |ctx| { ctx.notes.extend(crate::idea_mail::tick(&crate::lead::state_dir()?)); Ok(()) } },
-        Routine { name: "cards", every: crate::vault_card::EVERY, run: |ctx| { ctx.notes.extend(crate::vault_card::tick(&crate::lead::state_dir()?)); Ok(()) } },
-        Routine { name: "vault", every: crate::vault_snapshot::EVERY, run: |_| { crate::vault_snapshot::tick(&crate::lead::state_dir()?)?; crate::backlog::fetch_vault_bodies_if_listed(); Ok(()) } },
-        Routine { name: "outbox", every: crate::hub::report::UNASKED_EVERY, run: |ctx| { ctx.notes.extend(crate::hub::report::send_unasked_tick(&crate::lead::state_dir()?)?); Ok(()) } },
+        Routine::everyone("messages", 3, |_| crate::messages::flush().map(|_| ())),
+        Routine::everyone("builds", crate::builds::EVERY, |ctx| { ctx.notes.extend(crate::builds::tick_now()?); Ok(()) }),
+        Routine::everyone("disk", crate::disk_trim::EVERY, |ctx| { ctx.notes.extend(crate::disk_trim::tick(&crate::lead::state_dir()?)); Ok(()) }),
+        Routine::everyone("typed", 3, |_| { crate::typing::check(); Ok(()) }),
+        Routine::everyone("restart", 60, restart),
+        Routine::everyone("updates", 600, updates),
+        Routine::everyone("agents", crate::agent_check::ROUTINE_EVERY, |ctx| { ctx.notes.extend(crate::agent_check::tick(&crate::lead::state_dir()?)); Ok(()) }),
+        Routine::everyone("herdr", crate::herdr_link::EVERY, |ctx| { ctx.notes.extend(crate::herdr_link::heal()?); Ok(()) }),
+        Routine::everyone("push", 15, |ctx| { let state = crate::lead::state_dir()?; ctx.notes.extend(crate::tasks::push_permitted(&state)); ctx.notes.extend(crate::tasks::complete_pushes(&state)); Ok(()) }),
+        Routine::everyone("stage", 15, |ctx| { ctx.notes.extend(crate::tasks::stage_tick(&crate::lead::state_dir()?)); Ok(()) }),
+        Routine::everyone("ci", 30, |_| { crate::ci::tick(&crate::lead::state_dir()?); Ok(()) }),
+        Routine::everyone("after", crate::tasks::AFTER_EVERY, |ctx| { ctx.notes.extend(crate::tasks::after_tick(&crate::lead::state_dir()?)); Ok(()) }),
+        Routine::everyone("promises", crate::tasks::PROMISES_EVERY, |ctx| { ctx.notes.extend(crate::tasks::promises_tick(&crate::lead::state_dir()?)); Ok(()) }),
+        Routine::everyone("waiting", crate::tasks::AFTER_EVERY, |ctx| { ctx.notes.extend(crate::tasks::waiting_tick(&crate::lead::state_dir()?)); Ok(()) }),
+        Routine::everyone("landed", crate::tasks::LANDED_EVERY, |ctx| { ctx.notes.extend(crate::tasks::landed_tick(&crate::lead::state_dir()?)); Ok(()) }),
+        Routine::everyone("follow", 60, |ctx| { ctx.notes.extend(crate::tasks::follow_tick(&crate::lead::state_dir()?)); Ok(()) }),
+        Routine::everyone("prompts", crate::menu::EVERY, |ctx| { ctx.notes.extend(crate::menu::tick(&crate::lead::state_dir()?)?); Ok(()) }),
+        Routine::everyone("recover", 30, |_| { crate::recover::tick(&crate::lead::state_dir()?); Ok(()) }),
+        Routine::everyone("comments", crate::comments::EVERY, |ctx| { ctx.notes.extend(crate::comments::tick(&crate::lead::state_dir()?)); Ok(()) }),
+        Routine::dev("faults", crate::faults::capture::EVERY, |ctx| { ctx.notes.extend(crate::faults::capture::tick(&crate::lead::state_dir()?)); Ok(()) }),
+        Routine::dev("watch", crate::faults::watch::EVERY, |ctx| { ctx.notes.extend(crate::faults::watch::tick(&crate::lead::state_dir()?)); Ok(()) }),
+        Routine::everyone("issues", crate::issue_recheck::EVERY, |ctx| { ctx.notes.extend(crate::issue_recheck::tick(&crate::lead::state_dir()?)); Ok(()) }),
+        Routine::everyone("rules", crate::rules_check::EVERY, |ctx| { ctx.notes.extend(crate::rules_check::tick(&crate::lead::state_dir()?)); Ok(()) }),
+        Routine::everyone("review", crate::rules_check::EVERY, |ctx| { ctx.notes.extend(crate::review::tick(&crate::lead::state_dir()?)); Ok(()) }),
+        Routine::everyone("writer", crate::backlog_writer::EVERY, |ctx| { ctx.notes.extend(crate::backlog_writer::tick(&crate::lead::state_dir()?)); Ok(()) }),
+        Routine::everyone("start", crate::backlog_start::EVERY, |ctx| { ctx.notes.extend(crate::backlog_start::tick(&crate::lead::state_dir()?)); Ok(()) }),
+        Routine::everyone("obstacle", crate::obstacle::EVERY, |ctx| { ctx.notes.extend(crate::obstacle::tick(&crate::lead::state_dir()?)); Ok(()) }),
+        Routine::everyone("tests", crate::commit_tests::EVERY, |ctx| { ctx.notes.extend(crate::commit_tests::tick(&crate::lead::state_dir()?)); Ok(()) }),
+        Routine::everyone("assess", crate::rules_check::EVERY, |ctx| { ctx.notes.extend(crate::assessment::tick(&crate::lead::state_dir()?)); Ok(()) }),
+        Routine::everyone("routines", crate::routines::EVERY, |ctx| { ctx.notes.extend(crate::routines::tick(&crate::lead::state_dir()?)); Ok(()) }),
+        Routine::everyone("clock", crate::clock::EVERY, |ctx| { ctx.notes.extend(crate::clock::tick(&crate::lead::state_dir()?)?); Ok(()) }),
+        Routine::everyone("hub", crate::hub::EVERY, |_| crate::hub::tick()),
+        Routine::everyone("reports", crate::hub::inbox::EVERY, |ctx| { ctx.notes.extend(crate::hub::inbox::tick(&crate::lead::state_dir()?)?); Ok(()) }),
+        Routine::everyone("signals", crate::signals::EVERY, |ctx| { ctx.notes.extend(crate::signals::tick(&crate::lead::state_dir()?)?); Ok(()) }),
+        Routine::everyone("install", crate::signals::EVERY, |_| { crate::install_signal::tick(&crate::lead::state_dir()?); Ok(()) }),
+        Routine::everyone("machines", crate::vault_machines::EVERY, |ctx| { ctx.notes.extend(crate::vault_machines::tick(&crate::lead::state_dir()?)); Ok(()) }),
+        Routine::everyone("inbox", crate::idea_mail::EVERY, |ctx| { ctx.notes.extend(crate::idea_mail::tick(&crate::lead::state_dir()?)); Ok(()) }),
+        Routine::everyone("cards", crate::vault_card::EVERY, |ctx| { ctx.notes.extend(crate::vault_card::tick(&crate::lead::state_dir()?)); Ok(()) }),
+        Routine::everyone("vault", crate::vault_snapshot::EVERY, |_| { crate::vault_snapshot::tick(&crate::lead::state_dir()?)?; crate::backlog::fetch_vault_bodies_if_listed(); Ok(()) }),
+        Routine::everyone("outbox", crate::hub::report::UNASKED_EVERY, |ctx| { ctx.notes.extend(crate::hub::report::send_unasked_tick(&crate::lead::state_dir()?)?); Ok(()) }),
     ]
 }
 
@@ -635,7 +646,7 @@ mod tests {
     use super::*;
 
     fn routine(name: &'static str, every: u64) -> Routine {
-        Routine { name, every, run: |_| Ok(()) }
+        Routine::everyone(name, every, |_| Ok(()))
     }
 
     #[test]
