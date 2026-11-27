@@ -62,16 +62,16 @@ fn save(state: &Path, ledger: &Ledger) -> Result<()> {
     crate::state::write(&file(state), serde_json::to_string_pretty(ledger).map_err(|error| error.to_string())?)
 }
 
-pub fn pull(state: &Path, url: &str, token: &str, now: u64) -> Result<Vec<String>> {
+pub fn pull(state: &Path, url: &str, token: &str, watched: bool, now: u64) -> Result<Vec<String>> {
     let mut ledger = load(state);
-    let pulled = pull_into(state, &mut ledger, url, token, now);
+    let pulled = pull_into(state, &mut ledger, url, token, watched, now);
     ledger.checked_at = Some(now);
     ledger.error = pulled.as_ref().err().cloned();
     save(state, &ledger)?;
     pulled
 }
 
-fn pull_into(state: &Path, ledger: &mut Ledger, url: &str, token: &str, now: u64) -> Result<Vec<String>> {
+fn pull_into(state: &Path, ledger: &mut Ledger, url: &str, token: &str, watched: bool, now: u64) -> Result<Vec<String>> {
     let client = Client::new(&super::hub_url(url)?, Some(token), CALL);
     let dir = issues::dir(state);
     let mut notes = Vec::new();
@@ -83,7 +83,11 @@ fn pull_into(state: &Path, ledger: &mut Ledger, url: &str, token: &str, now: u64
             if let std::collections::btree_map::Entry::Vacant(slot) = ledger.filed.entry(received.id) {
                 let issue = issues::file_report_in(&dir, received.id, &received.report, now)?;
                 notes.push(format!("reports: filed kebbie issue {issue} from report {}", received.id));
-                announce(state, received.report.kind().key(), &issues::find(&dir, &issue).map(|filed| filed.title).unwrap_or_default());
+                let filed = issues::find(&dir, &issue)?;
+                announce(state, received.report.kind().key(), &filed.title);
+                if watched {
+                    crate::faults::add_about(state, &filed, crate::faults::Source::Report, now)?;
+                }
                 slot.insert(issue);
                 save(state, ledger)?;
             }
@@ -140,7 +144,7 @@ fn announce(state: &Path, kind: &str, title: &str) {
 pub fn tick(state: &Path) -> Result<Vec<String>> {
     let settings = crate::config::report_settings()?;
     match &settings.inbox_token {
-        Some(token) => pull(state, settings.url(), token, crate::messages::now()),
+        Some(token) => pull(state, settings.url(), token, crate::dev::on(), crate::messages::now()),
         None => Ok(Vec::new()),
     }
 }

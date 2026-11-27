@@ -203,10 +203,21 @@ pub struct Filing<'a> {
     pub body: &'a str,
 }
 
+#[cfg(test)]
 pub fn add_in(dir: &Path, caller: &Caller, filing: &Filing, built: &str, reports: crate::config::ReportText, now: u64) -> Result<String> {
+    add_watched(dir, caller, filing, built, reports, false, now)
+}
+
+// With the fault watcher on, the issue is its case at once: the watcher names its cause and queues its fix.
+pub fn add_watched(dir: &Path, caller: &Caller, filing: &Filing, built: &str, reports: crate::config::ReportText, watched: bool, now: u64) -> Result<String> {
     let by = may_write(caller, "Filing a kebbie issue")?;
     let issue = filed(dir, filing, &by, built, now)?;
     let _ = fs::remove_file(held_file(dir));
+    if watched {
+        let state = dir.parent().ok_or("the issues folder has no state folder")?;
+        crate::faults::add_about(state, &issue, crate::faults::Source::Issue, now)?;
+        return Ok(format!("Filed kebbie issue {} ({}): {} · the fault watcher weighs it now and queues its fix; its verdict comes to you as a message", issue.id, issue.kind, issue.title));
+    }
     let offered = match reports {
         crate::config::ReportText::Ask => " · it waits on the board for the user to send or keep",
         crate::config::ReportText::Always => " · it goes to kebbie's maintainers redacted once the user has armed [report] text = \"always\", and otherwise waits on the board for the user",
@@ -364,7 +375,7 @@ pub fn show_in(state: &Path, id: &str) -> Result<String> {
 }
 
 // The fence is longer than any run of backticks in the text, so the text cannot close it.
-fn fenced(text: &str) -> String {
+pub fn fenced(text: &str) -> String {
     let longest = text.split(|character| character != '`').map(str::len).max().unwrap_or(0);
     let fence = "`".repeat(longest.max(2) + 1);
     format!("{fence}text\n{}\n{fence}", text.trim_end())

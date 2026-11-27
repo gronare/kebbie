@@ -435,13 +435,13 @@ fn a_bug_the_user_sends_reaches_the_maintainers_kebbie_as_one_issue_once_its_key
     let maintainer = crate::sh::test_dir("report-maintainer");
     let token = crate::report_wire::fake::TOKEN.to_string();
     let settings = crate::config::Report { inbox_token: Some(token.clone()), ..Default::default() };
-    assert!(inbox::pull(&maintainer, &hub.url, &token, now()).unwrap().is_empty(), "an unknown install's report waits in quarantine");
+    assert!(inbox::pull(&maintainer, &hub.url, &token, false, now()).unwrap().is_empty(), "an unknown install's report waits in quarantine");
     let check = inbox::doctor(&maintainer, &settings, now()).unwrap();
     assert!(check.level == crate::doctor::Level::Warn && check.fact.contains("1 reports wait in quarantine"), "{}", check.fact);
 
     let key = report::install_key(&user).unwrap().public();
     hub.allow(&key);
-    let notes = inbox::pull(&maintainer, &hub.url, &token, now()).unwrap();
+    let notes = inbox::pull(&maintainer, &hub.url, &token, false, now()).unwrap();
     assert_eq!(notes.len(), 1, "{notes:?}");
     assert_eq!(crate::messages::load_in(&maintainer).iter().map(|line| (line.kind.as_deref(), line.text.as_str())).collect::<Vec<_>>(), [(Some(inbox::FILED_KIND), "New bug report: push in <repo> hid git's error")]);
     let arrived = crate::issues::load(&crate::issues::dir(&maintainer));
@@ -457,13 +457,13 @@ fn a_bug_the_user_sends_reaches_the_maintainers_kebbie_as_one_issue_once_its_key
     assert_eq!(inbox::doctor(&maintainer, &settings, now()).unwrap().level, crate::doctor::Level::Ok);
 
     hub.lose_acks();
-    assert!(inbox::pull(&maintainer, &hub.url, &token, now()).unwrap().is_empty(), "a report whose ack was lost is acked again, not filed again");
+    assert!(inbox::pull(&maintainer, &hub.url, &token, false, now()).unwrap().is_empty(), "a report whose ack was lost is acked again, not filed again");
     assert_eq!(crate::issues::load(&crate::issues::dir(&maintainer)).len(), 1);
     assert!(hub.unacked_allowed().is_empty());
 
     hub.lose_acks();
     std::fs::remove_file(maintainer.join("report/inbox.json")).unwrap();
-    inbox::pull(&maintainer, &hub.url, &token, now()).unwrap();
+    inbox::pull(&maintainer, &hub.url, &token, false, now()).unwrap();
     assert_eq!(crate::issues::load(&crate::issues::dir(&maintainer)).len(), 1, "a crash before the ledger was written files the report no second time");
 }
 
@@ -489,7 +489,7 @@ fn signals_three_installs_share_become_one_issue_that_later_days_update() {
     let maintainer = crate::sh::test_dir("signal-maintainer");
     *signals.lock().unwrap() = r#"{"signals":[{"id":7,"version":"0.28.0","component":"board.render","kind":"panic","day":"2026-10-27","installs":3,"days":[{"day":"2026-10-27","installs":3}]}]}"#.to_string();
 
-    let notes = inbox::pull(&maintainer, &url, "kha_token", now()).unwrap();
+    let notes = inbox::pull(&maintainer, &url, "kha_token", false, now()).unwrap();
     assert_eq!(notes.len(), 1, "{notes:?}");
     let filed = crate::issues::load(&crate::issues::dir(&maintainer));
     assert_eq!(filed.iter().map(|issue| (issue.title.as_str(), issue.kind.as_str(), issue.by.as_str())).collect::<Vec<_>>(), [("board.render: panic in 0.28.0 (3 installs on 2026-10-27)", "bug", "signals")]);
@@ -499,7 +499,7 @@ fn signals_three_installs_share_become_one_issue_that_later_days_update() {
         [(crate::messages::USER_LABEL, Some(inbox::FILED_KIND), "New bug report: board.render: panic in 0.28.0 (3 installs on 2026-10-27)")], "one line on the board, for the user and not the lead");
 
     *signals.lock().unwrap() = r#"{"signals":[{"id":8,"version":"0.28.0","component":"board.render","kind":"panic","day":"2026-10-28","installs":4,"days":[{"day":"2026-10-27","installs":3},{"day":"2026-10-28","installs":4}]}]}"#.to_string();
-    let notes = inbox::pull(&maintainer, &url, "kha_token", now()).unwrap();
+    let notes = inbox::pull(&maintainer, &url, "kha_token", false, now()).unwrap();
     assert!(notes.len() == 1 && notes[0].contains("updated"), "{notes:?}");
     let filed = crate::issues::load(&crate::issues::dir(&maintainer));
     assert_eq!(filed.len(), 1, "a later day adds to the issue its first day opened");
@@ -509,7 +509,7 @@ fn signals_three_installs_share_become_one_issue_that_later_days_update() {
     assert_eq!(acks.lock().unwrap().last().unwrap(), r#"/v1/admin/signals/8/ack {"installs":4}"#);
 
     std::fs::remove_file(maintainer.join("report/inbox.json")).unwrap();
-    assert!(inbox::pull(&maintainer, &url, "kha_token", now()).unwrap().is_empty(), "the same counts again, after a lost ledger, are acked and file nothing");
+    assert!(inbox::pull(&maintainer, &url, "kha_token", false, now()).unwrap().is_empty(), "the same counts again, after a lost ledger, are acked and file nothing");
     assert_eq!(acks.lock().unwrap().len(), 3);
 }
 
@@ -770,7 +770,7 @@ fn a_wish_goes_signed_and_redacted_as_a_wish_under_ask_always_and_never_and_file
     let maintainer = crate::sh::test_dir("report-wish-maintainer");
     let token = crate::report_wire::fake::TOKEN.to_string();
     hub.allow(&report::install_key(&asked).unwrap().public());
-    inbox::pull(&maintainer, &hub.url, &token, now()).unwrap();
+    inbox::pull(&maintainer, &hub.url, &token, false, now()).unwrap();
     let arrived = crate::issues::load(&crate::issues::dir(&maintainer));
     assert_eq!(arrived.iter().map(|issue| issue.kind.as_str()).collect::<Vec<_>>(), ["wish"]);
     assert_eq!(crate::messages::load_in(&maintainer).pop().unwrap().text, "New wish report: let <repo>'s board sort by repo");

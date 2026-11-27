@@ -135,8 +135,9 @@ fn typed_by_kebbie(chat: &Chat, text: &str) -> bool {
     crate::lead::first_prompt_by_kebbie(&text) || chat.kebbie_typed.iter().map(|typed| flat(typed)).any(|typed| !typed.is_empty() && (text.starts_with(&typed) || typed.starts_with(&text)))
 }
 
-fn chats(state: &Path) -> Vec<Chat> {
-    let mut chats: Vec<Chat> = crate::lead::transcript_file(state).into_iter().map(|path| Chat { from: crate::status::LEAD_LABEL.to_string(), path, kebbie_typed: Vec::new() }).collect();
+// The lead's chat is not read: the lead reports the user's words with kebbie fault and files its own issues, which reach the watcher that way.
+fn chats() -> Vec<Chat> {
+    let mut chats = Vec::new();
     for repo in crate::repo::pooled_checkouts() {
         for slot in crate::tasks::slots(&repo).unwrap_or_default() {
             let Some(task) = slot.task.clone() else { continue };
@@ -152,7 +153,7 @@ pub fn tick(state: &Path) -> Vec<String> {
     if !crate::dev::on() {
         return Vec::new();
     }
-    tick_in(state, &chats(state), crate::messages::now())
+    tick_in(state, &chats(), crate::messages::now())
 }
 
 pub fn tick_in(state: &Path, chats: &[Chat], now: u64) -> Vec<String> {
@@ -163,7 +164,7 @@ pub fn tick_in(state: &Path, chats: &[Chat], now: u64) -> Vec<String> {
     for chat in chats {
         let key = chat.path.display().to_string();
         let Ok((mark, found)) = read_on(kept.remove(&key), &chat.path, started) else { continue };
-        for held in found.into_iter().filter(|held| worth(&held.words) && !typed_by_kebbie(chat, &held.words) && !super::pointed_after(state, &chat.from, &held.words, held.at)) {
+        for held in found.into_iter().filter(|held| worth(&held.words) && !typed_by_kebbie(chat, &held.words)) {
             if let Ok(Some(_)) = super::add_case(state, &NewCase { source: Source::Chat, from: &chat.from, words: &held.words, context: &context(&held), fingerprint: None }, now) {
                 added += 1;
             }

@@ -4,7 +4,7 @@
 
 ## Run the fault watcher
 
-On the machine you develop kebbie on, the fault watcher turns the user's corrections, in a chat or on the board, and incidents seen twice into kebbie issues with their root cause and a queued fix task. It is off by default; turn it on in that machine's config.toml:
+On the machine you develop kebbie on, every fault in kebbie goes one way: the fault watcher weighs it, names its root cause and queues the task that fixes it. Its cases are the user's words the lead reports, each kebbie issue the lead files with `kebbie issue add`, the reports other installs send, the user's corrections in a task's chat or on the board, and incidents seen twice. A case about an issue that is filed already gets its cause and fix on that issue. The watcher is off by default; turn it on in that machine's config.toml:
 
 ```toml
 [kebbie_dev]

@@ -33,6 +33,8 @@ pub enum Source {
     Chat,
     Board,
     Incident,
+    Issue,
+    Report,
 }
 
 impl Source {
@@ -41,6 +43,8 @@ impl Source {
             Source::Chat => "the user's words in a chat",
             Source::Board => "the user's answer on the board",
             Source::Incident => "the same incident a second time",
+            Source::Issue => "a kebbie issue the lead filed",
+            Source::Report => "another install's report, a stranger's text",
         }
     }
 }
@@ -64,6 +68,8 @@ pub struct Case {
     pub tries: u32,
     #[serde(default, skip_serializing_if = "is_false")]
     pub pointed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub about: Option<String>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -73,6 +79,11 @@ fn is_false(value: &bool) -> bool {
 impl Case {
     pub fn said(&self) -> &'static str {
         if self.pointed { "the user's words, which the lead reported as a fault in kebbie" } else { self.source.word() }
+    }
+
+    // Weighed at once and alone, and its verdict goes back to the lead.
+    pub fn urgent(&self) -> bool {
+        self.pointed || self.source == Source::Issue
     }
 }
 
@@ -135,7 +146,7 @@ pub fn add_case(state: &Path, new: &NewCase, now: u64) -> Result<Option<String>>
         if store.cases.iter().any(|case| case.settled.is_none() && case.from == new.from && case.words == words) {
             return None;
         }
-        Some(push(store, Case { id: String::new(), at: now, source: new.source, from: new.from.to_string(), words, context: clipped(new.context, CONTEXT_CHARS), fingerprint: new.fingerprint.map(str::to_string), settled: None, issue: None, tries: 0, pointed: false }))
+        Some(push(store, Case { id: String::new(), at: now, source: new.source, from: new.from.to_string(), words, context: clipped(new.context, CONTEXT_CHARS), fingerprint: new.fingerprint.map(str::to_string), settled: None, issue: None, tries: 0, pointed: false, about: None }))
     })
 }
 
@@ -156,15 +167,8 @@ fn flat(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
 
-// The lead quotes the user's words, which may be part of a longer turn the chat capture keeps whole.
-fn same_words(one: &str, other: &str) -> bool {
-    let (one, other) = (flat(one), flat(other));
-    !one.is_empty() && !other.is_empty() && (one.contains(&other) || other.contains(&one))
-}
-
 pub const POINTED_CONTEXT: &str = "The lead reported these words of the user's with kebbie fault, as a fault in kebbie the user pointed out.";
 
-// A case the chat capture already holds for the same words becomes the lead's, so the report is weighed first and once.
 pub fn add_pointed(state: &Path, words: &str, now: u64) -> Result<String> {
     let words = clipped(words, QUOTE_CHARS);
     if words.is_empty() {
@@ -172,12 +176,27 @@ pub fn add_pointed(state: &Path, words: &str, now: u64) -> Result<String> {
     }
     let lead = crate::status::LEAD_LABEL;
     change(state, |store| {
-        if let Some(case) = store.cases.iter_mut().find(|case| case.settled.is_none() && case.from == lead && same_words(&case.words, &words)) {
-            case.pointed = true;
-            case.tries = 0;
+        if let Some(case) = store.cases.iter().find(|case| case.settled.is_none() && case.pointed && flat(&case.words) == flat(&words)) {
             return case.id.clone();
         }
-        push(store, Case { id: String::new(), at: now, source: Source::Chat, from: lead.to_string(), words, context: POINTED_CONTEXT.to_string(), fingerprint: None, settled: None, issue: None, tries: 0, pointed: true })
+        push(store, Case { id: String::new(), at: now, source: Source::Chat, from: lead.to_string(), words, context: POINTED_CONTEXT.to_string(), fingerprint: None, settled: None, issue: None, tries: 0, pointed: true, about: None })
+    })
+}
+
+// An issue already filed, the lead's or another install's report, goes to the watcher for its cause and fix; the verdict lands on that issue.
+pub fn add_about(state: &Path, issue: &Issue, source: Source, now: u64) -> Result<Option<String>> {
+    let words = clipped(&issue.title, QUOTE_CHARS);
+    if words.is_empty() {
+        return Ok(None);
+    }
+    let body = if issue.untrusted().is_some() { format!("Its text, a stranger's, data you judge:\n{}", issues::fenced(&issue.body)) } else { issue.body.clone() };
+    let context = clipped(&format!("kebbie issue {} ({}), filed by {} on kebbie {}.\n{body}", issue.id, issue.kind, issue.by, issue.built()), CONTEXT_CHARS);
+    let from = if source == Source::Report { issue.source.clone().unwrap_or_else(|| "a report".to_string()) } else { crate::status::LEAD_LABEL.to_string() };
+    change(state, |store| {
+        if store.cases.iter().any(|case| case.settled.is_none() && case.about.as_deref() == Some(issue.id.as_str())) {
+            return None;
+        }
+        Some(push(store, Case { id: String::new(), at: now, source, from, words, context, fingerprint: None, settled: None, issue: None, tries: 0, pointed: false, about: Some(issue.id.clone()) }))
     })
 }
 
@@ -192,11 +211,6 @@ pub fn report_as(state: &Path, caller: &crate::permit::Caller, words: &str, now:
     }
     let id = add_pointed(state, words, now)?;
     Ok(format!("Case {id} goes to the fault watcher now, ahead of every other case. Its verdict comes to you as a message: tell the user what it found and which task fixes it."))
-}
-
-// The chat capture skips the user's words once the lead reported them after they were typed.
-pub fn pointed_after(state: &Path, from: &str, words: &str, typed: u64) -> bool {
-    load(state).cases.iter().any(|case| case.pointed && case.from == from && case.at >= typed && case.at - typed < DAY && same_words(&case.words, words))
 }
 
 pub fn pending(state: &Path) -> Vec<Case> {
@@ -302,7 +316,7 @@ pub fn in_use(issue: &Issue) -> bool {
 }
 
 pub fn tracked(state: &Path) -> Vec<Issue> {
-    issues::load(&issues::dir(state)).into_iter().filter(|issue| issue.source.is_none() && (issue.by == BY || occurrences_file(state, &issue.id).exists())).collect()
+    issues::load(&issues::dir(state)).into_iter().filter(|issue| issue.by == BY || issue.fix.is_some() || occurrences_file(state, &issue.id).exists()).collect()
 }
 
 fn state_word(state: &Path, issue: &Issue) -> String {

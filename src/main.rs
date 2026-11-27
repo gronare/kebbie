@@ -1019,7 +1019,7 @@ fn issue(arguments: &Arguments, action: Option<&str>) -> Result<String> {
     match action {
         Some("add") => {
             let body = issues::read_body(arguments.rest(2), arguments.flag("-"));
-            issues::add_in(&dir, &caller(), &issues::Filing { kind: arguments.value("--kind"), title: arguments.value("--title"), body: &body }, env!("KEBBIE_BUILT_FROM"), config::report_settings().map_or(config::ReportText::Ask, |report| report.text()), messages::now())
+            issues::add_watched(&dir, &caller(), &issues::Filing { kind: arguments.value("--kind"), title: arguments.value("--title"), body: &body }, env!("KEBBIE_BUILT_FROM"), config::report_settings().map_or(config::ReportText::Ask, |report| report.text()), dev::on(), messages::now())
         }
         Some("hold") if arguments.flag("--take") => issues::take_held_in(&dir, &caller()),
         Some("hold") => issues::hold_in(&dir, &caller(), &arguments.rest(2).join(" "), config::propose_issues_enabled()?),
