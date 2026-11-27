@@ -240,3 +240,33 @@ fn the_lead_files_one_item_per_finding_and_asks_the_user_only_questions_of_inten
     says(&lead, &["files one item per problem", "only questions of intent", "settle a question of method yourself"], "taking in an idea put what the lead could not settle under Open questions");
     assert!(!lead.contains("what you could not settle under its Open questions"), "the intake still sends everything unsettled to the user");
 }
+
+#[test]
+fn a_task_answering_review_findings_writes_the_failing_test_and_runs_the_whole_suite_on_head() {
+    says(&task_role(), &["**Answering review findings.**", "write the test that fails on the finding before the fix", "The last step before ready after findings is the whole suite on HEAD"], "a task pasted the fix a finding proposed and reported ready on the related tests alone");
+}
+
+#[test]
+fn a_task_runs_a_test_command_with_no_pipe_after_it_and_echoes_its_exit() {
+    says(&task_role(), &["Run a test command without a pipe after it, so its own exit ends the line", "print the exit right after it"], "a task piped its test run into tail and kebbie read the pipe's exit as the run's");
+}
+
+#[test]
+fn a_task_names_its_check_after_the_push_and_the_users_with_its_ready_report() {
+    says(&task_role(), &["`--after-push \"<what you verify>\"`, with `ready`", "`--verify-after-push \"<what the user checks, and where>\"`, with `ready`", "so `--next` stays \"push\""], "a task folded its check after the push into --next and the push waited on it");
+}
+
+#[test]
+fn the_lead_registers_each_promise_it_makes_with_kebbie_promise() {
+    says(&lead_role(), &["**Your promises**", "register it in the same turn with `kebbie promise \"<what you will do>\"`", "Never keep it only in this chat or in a running vault note"], "the lead promised to set the lint command once a task landed and forgot it after a restart");
+}
+
+#[test]
+fn the_lead_queues_work_behind_another_task_with_start_after_and_a_reason() {
+    says(&lead_role(), &["**Work that must wait for another task**", "--after <task[@repo]> --why \"<what it builds on>\"", "never hold the order yourself"], "the lead held a start in its head until the task it built on landed");
+}
+
+#[test]
+fn the_lead_takes_a_red_ci_a_task_inherited_and_waits_out_as_a_notice() {
+    says(&lead_role(), &["a red CI a task inherited and waits out while the task that made it fixes it", "a red on main that no open task made"], "the lead was asked to act on every task that inherited red CI from the push that made it");
+}
