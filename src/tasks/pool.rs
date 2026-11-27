@@ -288,8 +288,28 @@ impl Drop for SlotLock {
 
 // A free slot, or a new one, with `onto` putting the task's branch on it before another start may look.
 pub(super) fn claim_slot(repo: &Path, upstream: &str, task: &str, onto: impl FnOnce(&Slot) -> Result<()>) -> Result<Slot> {
+    claim_slot_beside(repo, upstream, task, &agent_worktrees(), onto)
+}
+
+// The worktrees whose herdr Space runs an agent; a herdr that does not answer has no Space to reuse, so it names none.
+fn agent_worktrees() -> Vec<PathBuf> {
+    let (Ok(spaces), Ok(agents)) = (herdr::workspaces(), herdr::agents()) else { return Vec::new() };
+    worktrees_running_agents(&spaces, &agents)
+}
+
+fn worktrees_running_agents(spaces: &[Value], agents: &[Value]) -> Vec<PathBuf> {
+    spaces.iter().filter(|space| agents.iter().any(|agent| crate::agent::Agent::of(agent).is_some() && agent["workspace_id"] == space["workspace_id"]))
+        .filter_map(|space| space["worktree"]["checkout_path"].as_str().map(PathBuf::from)).collect()
+}
+
+fn same_path(one: &Path, other: &Path) -> bool {
+    one == other || one.canonicalize().is_ok_and(|one| other.canonicalize().is_ok_and(|other| one == other))
+}
+
+// A clean detached slot with an agent in its Space is a task kebbie has no record of, and herdr would hand the new task its busy pane.
+fn claim_slot_beside(repo: &Path, upstream: &str, task: &str, agents_in: &[PathBuf], onto: impl FnOnce(&Slot) -> Result<()>) -> Result<Slot> {
     let _alone = SlotLock::take(repo)?;
-    let slot = match slots(repo)?.into_iter().find(|slot| slot.free) {
+    let slot = match slots(repo)?.into_iter().find(|slot| slot.free && !agents_in.iter().any(|agent| same_path(agent, &slot.path))) {
         Some(slot) => slot,
         None => create_slot(repo, upstream)?,
     };
@@ -681,6 +701,42 @@ mod tests {
         git(&slot.path, &["switch", "--quiet", "billing"]).unwrap();
         git(&dir, &["branch", "-D", "wt1"]).unwrap();
         cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_worktree_runs_an_agent_when_a_claude_or_codex_sits_in_its_space_and_not_for_a_shell_or_another_space() {
+        let spaces = [
+            json!({ "workspace_id": "w1", "worktree": { "checkout_path": "/p/wt1.app" } }),
+            json!({ "workspace_id": "w2", "worktree": { "checkout_path": "/p/wt2.app" } }),
+            json!({ "workspace_id": "w3", "worktree": { "checkout_path": "/p/wt3.app" } }),
+            json!({ "workspace_id": "lead" }),
+        ];
+        let agents = [
+            json!({ "workspace_id": "w1", "agent": crate::agent::Agent::Claude.kind() }),
+            json!({ "workspace_id": "w3", "agent": crate::agent::Agent::Codex.kind() }),
+            json!({ "workspace_id": "w2", "agent": "bash" }),
+            json!({ "workspace_id": "lead", "agent": crate::agent::Agent::Claude.kind() }),
+        ];
+        assert_eq!(worktrees_running_agents(&spaces, &agents), [PathBuf::from("/p/wt1.app"), PathBuf::from("/p/wt3.app")]);
+        assert!(worktrees_running_agents(&spaces, &[]).is_empty(), "Spaces with no agent hold no worktree");
+    }
+
+    #[test]
+    fn a_start_never_takes_a_detached_slot_whose_space_runs_an_agent_though_no_record_names_its_task() {
+        let (dir, origin, busy, upstream) = task_with_a_commit("medicine");
+        std::fs::remove_file(task_record(&busy.path).unwrap()).unwrap();
+        git(&busy.path, &["switch", "--quiet", "--detach", "HEAD~1"]).unwrap();
+        assert!(slots(&dir).unwrap().iter().any(|slot| slot.path == busy.path && slot.free), "git alone reads the slot as free");
+        let free = create_slot(&dir, "HEAD").unwrap();
+        let mut touched = Vec::new();
+        let taken = claim_slot_beside(&dir, &upstream, "swedish", std::slice::from_ref(&busy.path), |slot| {
+            touched.push(slot.path.clone());
+            git(&slot.path, &["switch", "--quiet", "-c", "swedish"]).map(|_| ())
+        }).unwrap();
+        assert_eq!((taken.path.clone(), touched), (free.path.clone(), vec![free.path.clone()]), "the free slot is taken, and the busy one's Space and branch are never touched");
+        assert_eq!(git(&busy.path, &["branch", "--show-current"]).unwrap(), "", "the busy slot stays on the commit its task checked out");
+        git(&dir, &["worktree", "remove", "--force", &free.path.to_string_lossy()]).unwrap();
+        cleanup(dir, origin, &busy);
     }
 
     #[test]
