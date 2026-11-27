@@ -162,3 +162,24 @@ fn a_late_preparatory_commit_moves_up_holds_the_run_until_accepted_and_each_comm
     let old = lab.run_as_user(&["-C", lab.app(), "stage", "billing"]);
     assert!(stderr(&old).contains("kebbie stage is now kebbie try"), "{}", stderr(&old));
 }
+
+#[test]
+fn a_start_whose_prompt_names_a_file_a_running_task_changes_waits_behind_it_and_starts_once_it_is_pushed() {
+    let lab = Lab::new("same-files");
+    let billing = lab.start("billing", "Add refunds", &[]);
+    lab.work(&billing, "refunds.rb", "Add refunds");
+    let queued = lab.run_as("lead", &["-C", lab.app(), "start", "rounding", "Fix the rounding in refunds.rb", "--recipe", "small-fix: one function and its test"]);
+    assert!(queued.status.success() && stdout(&queued).contains("Queued behind billing@app: both change refunds.rb"), "{}\n{}", stdout(&queued), stderr(&queued));
+    let waiting = lab.item("rounding");
+    assert_eq!(waiting["group"], "QUEUED", "{waiting}");
+    lab.keeper_round();
+    assert!(lab.prompts_to("rounding").is_empty() && !lab.worktree(2).exists(), "it waits while billing changes the same file");
+    let elsewhere = lab.run_as("lead", &["-C", lab.app(), "start", "search", "Search the invoices in search.rb", "--recipe", "small-fix: one function and its test"]);
+    assert!(elsewhere.status.success() && lab.item("search")["group"] != "QUEUED", "a start on other files starts at once: {}", stdout(&elsewhere));
+
+    let pushed = lab.run_as_user(&["-C", lab.app(), "push", "billing"]);
+    assert!(pushed.status.success(), "{}\n{}", stdout(&pushed), stderr(&pushed));
+    lab.keeper_round();
+    assert!(eventually(std::time::Duration::from_secs(10), || lab.prompts_to("rounding").len() == 1), "{}", lab.keeper_log());
+    assert_eq!(lab.item("rounding")["group"], "WORKING");
+}
