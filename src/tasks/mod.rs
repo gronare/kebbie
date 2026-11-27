@@ -29,7 +29,7 @@ pub(crate) mod test_support;
 
 pub(crate) use accept::{Unaccepted, accept, accept_subtask_from_device, accept_required, accepted_in, unaccepted_at, last_accepted_through, listing_at as accepted_listing_at, open_commits_at, rest_base, shown as accepted_shown};
 pub(crate) use overlap::names_files as prompt_names_files;
-pub(crate) use after::{EVERY as AFTER_EVERY, Asked as QueueAsked, and_list, after as after_command, at as start_at, drop as drop_wait, now as start_now, queue, queue_as, queued_addresses, refuse_queued_name, Shown as WaitShown, shown as waits_shown, tick as after_tick};
+pub(crate) use after::{EVERY as AFTER_EVERY, Asked as QueueAsked, and_list, after as after_command, at as start_at, drop as drop_wait, now as start_now, queue, queue_as, queued_addresses, refuse_queued_name, notes_line as queued_notes_line, Shown as WaitShown, shown as waits_shown, tick as after_tick};
 #[cfg(test)]
 pub(crate) use approval::{approval_by, approval_holds};
 pub(crate) use launch::{task_tmp, task_tmp_root};

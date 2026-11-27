@@ -382,6 +382,9 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
         } else if let Some(waiting) = item.waiting() {
             lines.push(under_row(waiting, MUTED, selected && open && unfold, width));
         }
+        if let Some(notes) = item.queued_notes() {
+            lines.push(under_row(&notes, MUTED, selected && open && unfold, width));
+        }
         if selected && open && unfold {
             let detail = unfolded_lines(app, item, width.saturating_sub(4));
             lines.extend(detail.into_iter().map(|line| {

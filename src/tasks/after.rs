@@ -42,6 +42,7 @@ pub(crate) struct Wait {
     pub why: Option<String>,
     pub starts_at: Option<u64>,
     pub for_files: Vec<String>,
+    pub notes: Vec<String>,
 }
 
 impl Wait {
@@ -54,7 +55,7 @@ impl Wait {
             "task": self.task, "repo": self.repo,
             "after": self.after.iter().map(|dep| json!({ "address": dep.address, "repo": dep.repo })).collect::<Vec<_>>(),
             "prompt": self.prompt, "mode": self.mode, "profile": self.profile, "backlog": self.backlog, "by": self.by.key(), "at": self.at,
-            "blocked": self.blocked, "gone_since": self.gone_since, "why": self.why, "starts_at": self.starts_at, "for_files": self.for_files,
+            "blocked": self.blocked, "gone_since": self.gone_since, "why": self.why, "starts_at": self.starts_at, "for_files": self.for_files, "notes": self.notes,
         })
     }
 
@@ -74,6 +75,7 @@ impl Wait {
             prompt: text("prompt").filter(|prompt| !prompt.trim().is_empty())?,
             mode: text("mode"), profile: text("profile"), backlog: text("backlog"), by, at: value["at"].as_u64()?, blocked: text("blocked"), gone_since: value["gone_since"].as_u64(), why: text("why"), starts_at,
             for_files: value["for_files"].as_array().into_iter().flatten().filter_map(|address| address.as_str().map(str::to_string)).collect(),
+            notes: value["notes"].as_array().into_iter().flatten().filter_map(|note| note.as_str().map(str::to_string)).collect(),
         })
     }
 }
@@ -409,8 +411,17 @@ pub(crate) enum Told {
 
 pub(crate) type Begin<'a> = &'a mut dyn FnMut(&Path, &str, &Start) -> Result<Begun>;
 
+// The notes added while it was queued follow the prompt it was queued with, in the order they came.
+fn with_notes(prompt: &str, notes: &[String]) -> String {
+    if notes.is_empty() {
+        return prompt.to_string();
+    }
+    format!("{prompt}\n\nAdded while it was queued:\n{}", notes.iter().map(|note| format!("- {note}")).collect::<Vec<_>>().join("\n"))
+}
+
 fn launch(state: &Path, wait: &Wait, intro: &str, begin: Begin, tell: &mut dyn FnMut(Told)) -> Result<String> {
-    let prompt = if intro.is_empty() { wait.prompt.clone() } else { format!("{intro}\n\n{}", wait.prompt) };
+    let prompt = with_notes(&wait.prompt, &wait.notes);
+    let prompt = if intro.is_empty() { prompt } else { format!("{intro}\n\n{prompt}") };
     let options = Start { prompt: Some(&prompt), focus: false, from: None, mode: wait.mode.as_deref(), profile: wait.profile.as_deref(), backlog: wait.backlog.as_deref(), note: true, anyway: false };
     let first = begin(&wait.repo, &wait.task, &options);
     let (started, retried) = match first {
@@ -696,7 +707,7 @@ pub(crate) fn queue_in(state: &Path, caller: &Caller, repos: &[PathBuf], asked: 
             Plan::Now if asked.starts_at.is_some() => Vec::new(),
             Plan::Now => continue,
         };
-        let wait = Wait { task: task.clone(), repo: repo.clone(), after, prompt: asked.prompt.to_string(), mode: asked.mode.map(str::to_string), profile: asked.profile.map(str::to_string), backlog: asked.backlog.map(str::to_string), by: by.clone(), at: now, blocked: None, gone_since: None, why: why.clone(), starts_at: asked.starts_at, for_files };
+        let wait = Wait { task: task.clone(), repo: repo.clone(), after, prompt: asked.prompt.to_string(), mode: asked.mode.map(str::to_string), profile: asked.profile.map(str::to_string), backlog: asked.backlog.map(str::to_string), by: by.clone(), at: now, blocked: None, gone_since: None, why: why.clone(), starts_at: asked.starts_at, for_files, notes: Vec::new() };
         save(state, &wait)?;
         if let Some(title) = asked.title.map(str::to_string).or_else(|| prompt_title(asked.prompt)) {
             crate::status::keep_title(state, &wait.address(), &crate::title::readable(&title, &name_of(repo)));
@@ -889,6 +900,40 @@ pub(crate) fn waiting_line(deps: &[(String, String, DepState)], why: Option<&str
     }
 }
 
+const NOTE_SHOWN: usize = 80;
+
+// The Queued row says what was added for its start on a line of its own, each note cut to a glance.
+pub(crate) fn notes_line(notes: &[String]) -> Option<String> {
+    let shown: Vec<String> = notes.iter().map(|note| {
+        let note = note.split_whitespace().collect::<Vec<_>>().join(" ");
+        if note.chars().count() > NOTE_SHOWN { format!("{}…", note.chars().take(NOTE_SHOWN - 1).collect::<String>()) } else { note }
+    }).collect();
+    (!shown.is_empty()).then(|| format!("Noted for its start: {}", shown.join(" · ")))
+}
+
+pub(crate) fn note_in(state: &Path, caller: &Caller, name: &str, text: &str) -> Result<String> {
+    queuer(caller)?;
+    let note = text.trim();
+    if note.is_empty() {
+        return Err("kebbie after <task> --note \"<text>\" needs the text the task starts with".to_string());
+    }
+    let waits = halves(state, name)?;
+    let _lock = Lock::take(state, true);
+    for wait in &waits {
+        if starting(state, &wait.address()) {
+            return Notice::new(Tone::NotNow, "It is starting already, so the note would not reach its prompt").next(format!("Tell it instead: kebbie tell {} \"<text>\"", wait.task)).detail("task", wait.address()).err();
+        }
+    }
+    for wait in waits.iter().filter_map(|wait| load(state, &wait.address())) {
+        save(state, &Wait { notes: [wait.notes.clone(), vec![note.to_string()]].concat(), ..wait })?;
+    }
+    Notice::new(Tone::Done, "Noted; the task reads it after its prompt when it starts").detail("task", waits.iter().map(Wait::address).collect::<Vec<_>>().join(" and ")).ok()
+}
+
+pub fn note(name: &str, text: &str) -> Result<String> {
+    note_in(&crate::lead::state_dir()?, &crate::permit::caller(), name, text)
+}
+
 pub(crate) fn and_list(names: &[String]) -> String {
     match names.split_last() {
         Some((last, [])) => last.clone(),
@@ -965,7 +1010,14 @@ pub fn at(name: &str, text: &str) -> Result<String> {
     at_in(&crate::lead::state_dir()?, &crate::permit::caller(), name, crate::when::parse(text, now, &crate::recover::local_offset)?, now)
 }
 
-pub fn after(words: &[String], now_flag: bool, drop_flag: bool, at_flag: Option<&str>) -> Result<String> {
+pub fn after(words: &[String], now_flag: bool, drop_flag: bool, at_flag: Option<&str>, note_flag: Option<&str>) -> Result<String> {
+    if let Some(text) = note_flag {
+        return match (words.first(), now_flag || drop_flag || at_flag.is_some()) {
+            (_, true) => Err("kebbie after takes one of --now, --drop, --at and --note".to_string()),
+            (Some(name), false) => note(name, text),
+            (None, false) => Err("kebbie after --note needs the queued task's name".to_string()),
+        };
+    }
     if let Some(text) = at_flag {
         return match (words.first(), now_flag || drop_flag) {
             (_, true) => Err("kebbie after takes one of --now, --drop and --at".to_string()),
@@ -996,7 +1048,7 @@ mod tests {
     }
 
     fn wait_for(task: &str, repo: &str, after: &[&str]) -> Wait {
-        Wait { task: task.to_string(), repo: PathBuf::from(format!("/repos/{repo}")), after: after.iter().map(|address| dep(address)).collect(), prompt: "Use the rounding field".to_string(), mode: None, profile: None, backlog: None, by: By::Lead, at: 100, blocked: None, gone_since: None, why: None, starts_at: None, for_files: Vec::new() }
+        Wait { task: task.to_string(), repo: PathBuf::from(format!("/repos/{repo}")), after: after.iter().map(|address| dep(address)).collect(), prompt: "Use the rounding field".to_string(), mode: None, profile: None, backlog: None, by: By::Lead, at: 100, blocked: None, gone_since: None, why: None, starts_at: None, for_files: Vec::new(), notes: Vec::new() }
     }
 
     fn end(address: &str, at: u64, how: &str, landed: Option<&str>) -> Message {
@@ -1209,7 +1261,7 @@ mod tests {
         assert_ne!(git(&dir, &["rev-parse", &upstream]).unwrap(), landed, "the main checkout has not fetched what billing landed");
         let state = state_of(&dir);
         let address = peers::address("billing", &name_of(&dir));
-        let wait = Wait { task: "search".to_string(), repo: dir.clone(), after: vec![Dep { address: address.clone(), repo: dir.clone() }], prompt: "Search the invoices".to_string(), mode: None, profile: None, backlog: None, by: By::User, at: 100, blocked: None, gone_since: None, why: None, starts_at: None, for_files: Vec::new() };
+        let wait = Wait { task: "search".to_string(), repo: dir.clone(), after: vec![Dep { address: address.clone(), repo: dir.clone() }], prompt: "Search the invoices".to_string(), mode: None, profile: None, backlog: None, by: By::User, at: 100, blocked: None, gone_since: None, why: None, starts_at: None, for_files: Vec::new(), notes: Vec::new() };
         save(&state, &wait).unwrap();
         let mut told = Vec::new();
         tick_in(&state, &[end(&address, 200, "done", Some("abc fourth"))], 210, &mut super::super::launch::begin, &mut |said| told.push(said));
@@ -1388,7 +1440,7 @@ mod tests {
     fn waiting_on(dir: &Path, task: &str) -> (PathBuf, Wait) {
         let state = state_of(dir);
         let address = peers::address(task, &name_of(dir));
-        let wait = Wait { task: "search".to_string(), repo: dir.to_path_buf(), after: vec![Dep { address, repo: dir.to_path_buf() }], prompt: "Search".to_string(), mode: None, profile: None, backlog: None, by: By::User, at: 100, blocked: None, gone_since: None, why: None, starts_at: None, for_files: Vec::new() };
+        let wait = Wait { task: "search".to_string(), repo: dir.to_path_buf(), after: vec![Dep { address, repo: dir.to_path_buf() }], prompt: "Search".to_string(), mode: None, profile: None, backlog: None, by: By::User, at: 100, blocked: None, gone_since: None, why: None, starts_at: None, for_files: Vec::new(), notes: Vec::new() };
         save(&state, &wait).unwrap();
         (state, wait)
     }
@@ -1618,7 +1670,7 @@ mod tests {
         let (dir, origin, slot, _) = task_with_a_commit("billing");
         let state = state_of(&dir);
         let old = std::time::SystemTime::now() - std::time::Duration::from_secs(CLAIM_HOLDS + 5);
-        let lost = Wait { task: "search".to_string(), repo: dir.clone(), after: vec![Dep { address: "x@y".to_string(), repo: dir.clone() }], prompt: "Search".to_string(), mode: None, profile: None, backlog: None, by: By::User, at: 100, blocked: None, gone_since: None, why: None, starts_at: None, for_files: Vec::new() };
+        let lost = Wait { task: "search".to_string(), repo: dir.clone(), after: vec![Dep { address: "x@y".to_string(), repo: dir.clone() }], prompt: "Search".to_string(), mode: None, profile: None, backlog: None, by: By::User, at: 100, blocked: None, gone_since: None, why: None, starts_at: None, for_files: Vec::new(), notes: Vec::new() };
         let running = Wait { task: "billing".to_string(), ..lost.clone() };
         for wait in [&lost, &running] {
             crate::state::write(&claimed_file(&state, &wait.address()), wait.to_json().to_string()).unwrap();
@@ -1836,6 +1888,28 @@ mod tests {
         for prompt in ["", "   "] {
             assert!(plan("web-billing@web", prompt, &["billing"], &known).unwrap_err().contains("needs its prompt to wait"));
         }
+    }
+
+    #[test]
+    fn a_note_on_a_queued_task_follows_its_prompt_when_it_starts_and_shows_on_its_row() {
+        let state = crate::sh::test_dir("after-note");
+        save(&state, &wait_for("web-billing", "web", &["billing@api"])).unwrap();
+        assert!(note_in(&state, &Caller::User, "web-billing", "  ").unwrap_err().contains("needs the text"));
+        assert!(note_in(&state, &Caller::Task("billing@api".to_string()), "web-billing", "x").is_err(), "only the user or the lead queues and notes");
+        assert!(note_in(&state, &Caller::Lead, "search", "x").unwrap_err().contains("It is not queued"));
+        note_in(&state, &Caller::Lead, "web-billing", "The api now sends rounding as a string").unwrap();
+        note_in(&state, &Caller::User, "web-billing", "Keep the old field until v2").unwrap();
+        let wait = load(&state, "web-billing@web").unwrap();
+        assert_eq!(wait.notes, ["The api now sends rounding as a string", "Keep the old field until v2"]);
+        assert_eq!(notes_line(&wait.notes).unwrap(), "Noted for its start: The api now sends rounding as a string · Keep the old field until v2");
+        assert!(notes_line(&["word ".repeat(40)]).unwrap().ends_with("word…"), "a long note is cut on the row");
+        assert_eq!(notes_line(&[]), None);
+        let mut prompts = Vec::new();
+        now_in(&state, &Caller::User, "web-billing", &[end("billing@api", 200, "done", None)], &mut |_, _, options| { prompts.push(options.prompt.unwrap().to_string()); begun("Started web-billing.") }, &mut |_| {}).unwrap();
+        assert!(prompts[0].ends_with("\n\nUse the rounding field\n\nAdded while it was queued:\n- The api now sends rounding as a string\n- Keep the old field until v2"), "{}", prompts[0]);
+        assert!(include_str!("after.rs").contains(concat!("(Some(name), false) => note(name, text)", ",")) && include_str!("../main.rs").contains(concat!("arguments.value(\"--at\"), arguments.value(\"--note\")", ")")), "kebbie after --note reaches note_in");
+        assert!(include_str!("../status.rs").contains(concat!("notes: wait.notes", ".clone() }),")), "the Queued row gets the wait's notes");
+        fs::remove_dir_all(state).unwrap();
     }
 
     #[test]

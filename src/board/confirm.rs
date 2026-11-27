@@ -211,7 +211,7 @@ mod tests {
         let mut item = crate::status::tests::task(None, None, 0);
         (item.name, item.git, item.title) = ("web-billing".to_string(), None, Some("Bill in cents".to_string()));
         let waiting = "Waits for Billing totals (ready to push). Starts by itself once it is pushed and CI is green.";
-        item.queued = Some(crate::status::Queued { after: vec![("billing@api".to_string(), "ready to push".to_string())], blocked: None, waiting: waiting.to_string(), names: vec!["Billing totals".to_string()], base: "main".to_string(), at: None, backlog: true });
+        item.queued = Some(crate::status::Queued { after: vec![("billing@api".to_string(), "ready to push".to_string())], blocked: None, waiting: waiting.to_string(), names: vec!["Billing totals".to_string()], base: "main".to_string(), at: None, backlog: true, notes: Vec::new() });
         let mut app = test_app(vec![item]);
         let (rows, _) = render(&mut app, 200, 30);
         let screen = rows.join("\n");
@@ -219,6 +219,11 @@ mod tests {
         let (narrow, _) = render(&mut app, 80, 30);
         let at = narrow.iter().position(|row| untied(row).starts_with("Waits for Billing totals")).unwrap_or_else(|| panic!("{}", narrow.join("\n")));
         assert!(untied(&narrow[at]).trim_end().ends_with('…') && !narrow[at + 1].contains("CI is green"), "the wait under the row is one line, cut: {}", narrow.join("\n"));
+        app.tasks[0].queued.as_mut().unwrap().notes = vec!["The api sends rounding as a string".to_string()];
+        let (noted, _) = render(&mut app, 100, 30);
+        let at = noted.iter().position(|row| untied(row).starts_with("Waits for Billing totals")).unwrap_or_else(|| panic!("{}", noted.join("\n")));
+        assert!(untied(&noted[at + 1]).starts_with("Noted for its start: The api sends"), "a note has its own line under the wait: {}", noted.join("\n"));
+        app.tasks[0].queued.as_mut().unwrap().notes.clear();
         let menu: Vec<_> = crate::board::options::task_choices(app.selected_task().as_ref(), None, None).into_iter().map(|choice| (choice.act, choice.about)).collect();
         assert_eq!(menu, [
             (Some(crate::keys::Act::Go), "from main, without the changes from Billing totals; its Claude is told what is missing (asks first)".to_string()),
@@ -245,7 +250,7 @@ mod tests {
         use crate::board::input::{Purpose, START_AT_LABEL};
         let mut item = crate::status::tests::task(None, None, 0);
         (item.name, item.git) = ("nightly".to_string(), None);
-        item.queued = Some(crate::status::Queued { after: Vec::new(), blocked: None, waiting: "Starts 02:00 tomorrow.".to_string(), names: Vec::new(), base: "main".to_string(), at: Some("02:00 tomorrow".to_string()), backlog: false });
+        item.queued = Some(crate::status::Queued { after: Vec::new(), blocked: None, waiting: "Starts 02:00 tomorrow.".to_string(), names: Vec::new(), base: "main".to_string(), at: Some("02:00 tomorrow".to_string()), backlog: false, notes: Vec::new() });
         let mut app = test_app(vec![item]);
         let menu: Vec<_> = crate::board::options::task_choices(app.selected_task().as_ref(), None, None).into_iter().map(|choice| (choice.label, choice.about)).collect();
         assert_eq!(menu, [

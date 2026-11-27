@@ -118,6 +118,7 @@ The queued tasks, each with what it waits for and that task's state (`working`, 
 | `--now` | Start it now anyway, from the default branch; its prompt says which tasks it waited for were not done. |
 | `--drop` | Drop the wait. Nothing was started; the backlog item it was queued from shows on the Backlog page again. |
 | `--at <time>` | Set or move the time it starts at, in the words `kebbie start --at` takes. |
+| `--note "<text>"` | Add text to the prompt it starts with, after the prompt it was queued with; its Queued row shows each note. Repeat it to add more. The user and the lead add notes. |
 
 `kebbie start <name> "<prompt>" --after <task>` queues a task. It gets no worktree, Space or Claude while it waits, and shows under Queued on the board.
 

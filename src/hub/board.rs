@@ -886,7 +886,7 @@ pub(crate) mod tests {
         session.git = None;
         let mut queued = task(None, None, 0);
         queued.git = None;
-        queued.queued = Some(status::Queued { after: Vec::new(), blocked: None, waiting: "waits for 18:00".to_string(), names: Vec::new(), base: "main".to_string(), at: None, backlog: false });
+        queued.queued = Some(status::Queued { after: Vec::new(), blocked: None, waiting: "waits for 18:00".to_string(), names: Vec::new(), base: "main".to_string(), at: None, backlog: false, notes: Vec::new() });
         let mut blocked = queued.clone();
         blocked.name = "rounding".to_string();
         blocked.queued.as_mut().unwrap().blocked = Some("refunds was dropped".to_string());

@@ -494,7 +494,7 @@ pub(crate) mod tests {
         item.git = None;
         item.phase = None;
         item.agent = None;
-        item.queued = Some(Queued { after: after.iter().map(|address| (address.to_string(), "ready to push".to_string())).collect(), blocked: None, waiting: "Waits.".to_string(), names: Vec::new(), base: "main".to_string(), at: None, backlog: false });
+        item.queued = Some(Queued { after: after.iter().map(|address| (address.to_string(), "ready to push".to_string())).collect(), blocked: None, waiting: "Waits.".to_string(), names: Vec::new(), base: "main".to_string(), at: None, backlog: false, notes: Vec::new() });
         item
     }
 

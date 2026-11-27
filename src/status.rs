@@ -165,6 +165,7 @@ pub struct Queued {
     pub base: String,
     pub at: Option<String>,
     pub backlog: bool,
+    pub notes: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -258,7 +259,7 @@ impl Item {
             review: None, verdict: None, second: None, rules: None, permit: None, follows: false, bypass: false, profile: Some(crate::profiles::chosen(wait.profile.as_deref(), None, configured).to_string()), server: false, worker: false, url: None,
             name: wait.task.clone(), title, place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
             report: None, question: None, ci: None, recover: None, routine: None, push_waits: None,
-            queued: Some(Queued { after, blocked: wait.blocked.clone(), waiting, names, base, at, backlog: wait.backlog.is_some() }),
+            queued: Some(Queued { after, blocked: wait.blocked.clone(), waiting, names, base, at, backlog: wait.backlog.is_some(), notes: wait.notes.clone() }),
             held_by_draft: None, held_messages: 0, unsent_start: false, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), unrecorded: None, push_left: None, left_times: 0, staged: false, subtasks: tasks::Subtasks::default(), to_accept: None, parked: None, assessment: None, recipe: None, obstacle: None, built: Built::default(), build_wait: None, waits_on: None, blocks: Vec::new(),
         }
     }
@@ -734,6 +735,10 @@ impl Item {
     // What waits on a queued row's second line; a blocked one says it under Needs you.
     pub fn waiting(&self) -> Option<&str> {
         self.queued.as_ref().filter(|queued| queued.blocked.is_none()).map(|queued| queued.waiting.as_str())
+    }
+
+    pub fn queued_notes(&self) -> Option<String> {
+        crate::tasks::queued_notes_line(&self.queued.as_ref()?.notes)
     }
 
     pub fn start_now_means(&self) -> Option<String> {

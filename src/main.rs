@@ -147,7 +147,7 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
   kebbie after [name]             the queued tasks: what each waits for, with that task's state; one blocked because
                                   a task it waited for was dropped, reset or is gone waits for you (--now starts it
                                   anyway and tells its Claude what was not done, --drop drops the wait,
-                                  --at <time> sets when it starts)
+                                  --at <time> sets when it starts, --note \"<text>\" adds to the prompt it starts with)
   kebbie move <name> [file ...]   move work under way in the main checkout into a task: branch <name> if it
                                   exists, else the unpushed commits, plus the given uncommitted files
                                   (--pane <id> moves that herdr pane along, --no-focus stays put)
@@ -582,7 +582,7 @@ impl Arguments {
                 arguments.positionals.extend(input.by_ref());
                 break;
             }
-            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--after-push", "--verify-after-push", "--profile", "--why", "--name", "--until", "--recipe", "--step", "--on", "--id", "--subtask", "--because", "--prepares", "--before", "--verify", "--stage", "--red-cause", "--search", "--send", "--fetch", "--out", "--answered"].contains(&argument.as_str()) {
+            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--after-push", "--verify-after-push", "--profile", "--why", "--name", "--until", "--recipe", "--step", "--on", "--id", "--subtask", "--because", "--prepares", "--before", "--verify", "--stage", "--red-cause", "--search", "--send", "--fetch", "--out", "--answered", "--note"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
                 arguments.flags.push(argument);
@@ -744,7 +744,7 @@ fn run(arguments: &Arguments) -> Result<String> {
             let report = started.iter().map(|result| match result { Ok(text) | Err(text) => text.as_str() }).collect::<Vec<_>>().join("\n");
             if started.iter().any(Result::is_err) { Err(report) } else { Ok(report) }
         }
-        Some("after") => tasks::after_command(arguments.rest(1), arguments.flag("--now"), arguments.flag("--drop"), arguments.value("--at")),
+        Some("after") => tasks::after_command(arguments.rest(1), arguments.flag("--now"), arguments.flag("--drop"), arguments.value("--at"), arguments.value("--note")),
         Some("move") => {
             let name = name.ok_or("kebbie move needs a task name")?;
             tasks::move_work(&cwd, name, arguments.rest(2), arguments.value("--pane"), !arguments.flag("--no-focus"))
