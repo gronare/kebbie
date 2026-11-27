@@ -5,6 +5,12 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+
+### Fixed
+
+## 0.42.0
+
+### What's new
 - A repo whose push.branch names a branch per task, such as "feature/{task}", pushes each task there unrebased instead of to main; the task waits under On branch, waiting for main and closes once its commits reach main.
 - kebbie subtasks move <commit> <id> puts a commit that landed under the wrong subtask under the right one.
 - kebbie after <task> --note "<text>" adds to a queued task's prompt before it starts, and its Queued row shows the note.
