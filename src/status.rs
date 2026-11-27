@@ -475,7 +475,7 @@ impl Item {
             tasks::PushBy::Keeper => "under your permission",
         };
         if let Some(red) = pending.red.as_deref().filter(|_| pending.work == tasks::PushWork::Turn) {
-            return Some(format!("pushing for {who} · held while CI is red on main from {red}, until main is green again"));
+            return Some(format!("pushing {who} · held while CI is red on main from {red}, until main is green again"));
         }
         if pending.work == tasks::PushWork::Turn {
             let place = if pending.ahead == 0 { "kebbie pushes it now".to_string() } else { tasks::place_in_line(pending.ahead, pending.after.as_deref()) };
@@ -2298,6 +2298,16 @@ pub(crate) mod tests {
         item.phase.as_mut().unwrap().phase = Phase::NeedsYou(Why::LeftLine);
         assert_eq!(item.group(), Group::NeedsYou);
         assert_eq!(item.wanted("g").unwrap(), "out of the push line: its Claude did not report ready within 30 minutes, so the pushes behind it went on");
+    }
+
+    #[test]
+    fn a_push_held_while_ci_is_red_on_main_names_who_it_pushes_for_once() {
+        use tasks::{PendingPush, PushBy, PushWork};
+        let mut item = task(Some("working"), Some("ready"), 1);
+        for (by, who) in [(PushBy::User, "for you"), (PushBy::Lead, "for the lead"), (PushBy::Keeper, "under your permission")] {
+            item.push_waits = Some(PendingPush { by, work: PushWork::Turn, at: 10, ahead: 0, after: None, red: Some("billing".to_string()) });
+            assert_eq!(item.push_note().unwrap(), format!("pushing {who} · held while CI is red on main from billing, until main is green again"));
+        }
     }
 
     #[test]
