@@ -838,7 +838,7 @@ mod tests {
         let prompted = |address: &str| report::prompted_in(&state, address);
         std::fs::create_dir_all(state.join("turns")).unwrap();
         std::fs::write(state.join("turns").join(task), (asked_at + 60).to_string()).unwrap();
-        assert!(open(&waiting, prompted).is_empty(), "a task from before prompts were kept apart: its turn file stands for its last prompt");
+        assert_eq!(open(&waiting, prompted).len(), 1, "a turn file alone, which notices start too, closes nothing");
         report::record_turn(&state, task, Some("go on"), asked_at - 60);
         report::record_turn(&state, task, Some("<task-notification>\n<task-id>b3t20c2o0</task-id>\n<status>failed</status>\n<summary>Background command \"Fix the board\" failed with exit code 144</summary>\n</task-notification>"), asked_at + 1805);
         assert_eq!(std::fs::read_to_string(state.join("turns").join(task)).unwrap(), (asked_at + 1805).to_string(), "the stop hook still asks the notified turn for a report");
@@ -846,6 +846,8 @@ mod tests {
         assert!(open(&moved_on, prompted).is_empty(), "a report other than needs-you after the question closes it");
         report::record_turn(&state, task, Some(&messages::delivered("kebbie", "kebbie was updated\nrestart when you can")), asked_at + 1850);
         assert_eq!(open(&waiting, prompted).len(), 1, "kebbie's own notice answered nothing either");
+        crate::menu::pass(&state, &[], |_| Ok(String::new()), |_| Ok(()));
+        assert_eq!(open(&waiting, prompted).len(), 1, "the menu relay clearing its own told prompts leaves the task's last prompt where it was");
         report::record_turn(&state, task, Some(&messages::delivered(LEAD_LABEL, "the user approved it")), asked_at + 1860);
         assert!(open(&waiting, prompted).is_empty(), "the lead's prompt closes it");
         report::record_turn(&state, task, Some("go on"), asked_at - 60);

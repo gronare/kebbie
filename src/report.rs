@@ -521,17 +521,18 @@ pub fn prompted(me: &str) -> Option<u64> {
     prompted_in(&state_dir().ok()?, me)
 }
 
-// A task that began before kebbie kept prompts apart has only its turn file, which then stands for its last prompt.
+// prompts/ is the menu relay's, which clears every file of a task not blocked on its own prompt.
+const PROMPTED: &str = "prompted";
+
 pub fn prompted_in(state: &Path, me: &str) -> Option<u64> {
-    let read = |dir: &str| fs::read_to_string(state.join(dir).join(me)).ok();
-    read("prompts").or_else(|| read("turns"))?.trim().parse().ok()
+    fs::read_to_string(state.join(PROMPTED).join(me)).ok()?.trim().parse().ok()
 }
 
 // Every prompt starts a turn the stop hook asks a report of; one of only notices, a background command's end or kebbie's own, leaves the task's question open.
 pub fn record_turn(state: &Path, me: &str, prompt: Option<&str>, at: u64) {
     let _ = crate::state::write(&state.join("turns").join(me), at.to_string());
     if !prompt.is_some_and(crate::phase::notices_only) {
-        let _ = crate::state::write(&state.join("prompts").join(me), at.to_string());
+        let _ = crate::state::write(&state.join(PROMPTED).join(me), at.to_string());
     }
     let by_user = prompt.is_none_or(crate::phase::by_user);
     crate::phase::record(state, me, "turn", &crate::phase::Event::TurnBegan { by_user });

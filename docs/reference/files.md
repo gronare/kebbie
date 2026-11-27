@@ -37,6 +37,7 @@ The folder is `0700` and its files `0600`. Each file is replaced whole on write.
 | `cards/` | Sign-off cards. |
 | `plans/` | Plans put to you with `kebbie ask --plan <file>`. |
 | `prompts/` | Per task, the id of the prompt on its Claude's screen that the lead was last told about. |
+| `prompted/` | Per task, when its last prompt that was more than notices began, which closes a question it asked before. |
 | `evidence/<task>@<repo>.jsonl` | The task's last 20 recorded test runs and last 20 lint runs, one JSON object per line. See [`kebbie evidence`](commands.md#kebbie-evidence-name---json). |
 | `evidence/<task>@<repo>.hook.json` | When the hook that records test runs last ran in the task, and the last 3 commands that looked like test runs but are not in `task.test_commands`. |
 | `after/` | One file per queued task, `<task>@<repo>.json`. |
