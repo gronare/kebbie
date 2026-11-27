@@ -1111,3 +1111,19 @@ fn the_fault_watcher_is_on_only_where_kebbie_dev_turns_it_on() {
     assert!(!describe(&Loaded { machine: file, repo: None, settings: settings(&Worktree::default(), &Machine::default()) }).contains("kebbie_dev"), "kebbie config never shows it");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+fn about(key: &str) -> String {
+    entries(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) }).into_iter().find(|entry| entry.key == key).unwrap_or_else(|| panic!("kebbie config lists {key}")).about
+}
+
+#[test]
+fn review_auto_suggest_says_the_lead_hears_the_suggestion_and_sends_a_review_only_on_the_users_word() {
+    let about = about("review.auto");
+    assert!(about.contains("\"suggest\" tells the lead review suggested and its reason and shows it in the review menu") && about.contains("nothing starts until you send it, or the lead on your word"), "{about}");
+}
+
+#[test]
+fn hub_ideas_machine_says_it_writes_out_every_new_backlog_item_not_only_the_phones_ideas() {
+    let about = about("hub.ideas_machine");
+    assert!(about.starts_with("The machine.name of the machine that writes out new backlog items, from your phone and, when the backlog is the vault, from kebbie backlog add and n on your other machines") && about.contains("one it has not taken within 5 minutes is added where you added it"), "{about}");
+}
