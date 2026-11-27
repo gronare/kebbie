@@ -768,6 +768,8 @@ Folded, the bugs and wishes are one row under the tasks, `! 2 bugs to send · �
 | `a` | Show every one in the list as it would go out, and ask once whether to send them all. |
 | `esc`, `q` | Fold the list back into its row, with the selection on it; on the row, back to the tasks. |
 
+On the maintainers' own machine, with `report.inbox_token` set or kebbie's fault watcher on, nothing is offered to send. In its place, after the tasks and outside Needs you, **kebbie faults on this machine** lists the faults filed here, open ones first and then the ones whose fix is in use, each with its state: `fixing in <task>`, `open`, `, came back` once it happened again after its fix was in use, or `in use`. Six rows show, then `… and N more`. The list is for reading; the cursor does not step onto it.
+
 In the report window `↓` and `pgdn` scroll, `y` sends once you have read to the end, `n` keeps it on this machine only, and `esc` decides later.
 
 After `a`, `y` sends them all once you have read to the end, and `esc` decides later. They go in the background, paced to the endpoint's 5 per 5 minutes, each a line under messages; the board says which went and which failed when the last one has.

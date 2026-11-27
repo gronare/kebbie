@@ -482,3 +482,18 @@ fn nothing_of_the_fault_watcher_shows_or_runs_where_it_is_off() {
     let role = crate::lead::role_text_with(include_str!("../../roles/lead.md"), "/opt/kebbie/kebbie", &[], false, true, false, "English");
     assert!(!role.contains("kebbie fault") && !role.contains("fault watcher"), "the lead's role names no fault watcher where it is off");
 }
+
+#[test]
+fn the_board_lists_the_open_faults_first_then_the_fixes_in_use_and_leaves_the_rest_off() {
+    let state = state("board");
+    let dir = issues::dir(&state);
+    let fault = |id: &str, status: &str, fix: Option<&str>, history: &[&str]| Issue { id: id.to_string(), title: format!("fault {id}"), kind: "bug".to_string(), status: status.to_string(), by: BY.to_string(), fix: fix.map(str::to_string), history: history.iter().map(|line| line.to_string()).collect(), ..Issue::default() };
+    issues::save(&dir, &fault("aa0001", "fixed", Some("fault-aa0001"), &["fixed in 0.42.0 (abc1234), checked automatically"])).unwrap();
+    issues::save(&dir, &fault("aa0002", "open", Some("fault-aa0002"), &[])).unwrap();
+    issues::save(&dir, &fault("aa0003", "wontfix", None, &[])).unwrap();
+    issues::save(&dir, &fault("aa0004", "open", None, &[])).unwrap();
+    issues::save(&dir, &Issue { id: "bb0001".to_string(), title: "a wish the user saved".to_string(), kind: "wish".to_string(), status: "open".to_string(), ..Issue::default() }).unwrap();
+    let shown: Vec<(String, String)> = board(&state).into_iter().map(|fault| (fault.id, fault.word)).collect();
+    assert_eq!(shown, [("aa0002".to_string(), "fixing in fault-aa0002".to_string()), ("aa0004".to_string(), "open".to_string()), ("aa0001".to_string(), "in use".to_string())]);
+    fs::remove_dir_all(state).unwrap();
+}

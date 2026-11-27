@@ -429,6 +429,7 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool, height: usiz
     rows.extend(fixed_rows);
     selected_line = fixed_selected.unwrap_or(selected_line);
     lines.extend(fixed);
+    lines.extend(super::bug_report::fault_lines(&app.faults, width));
     let leftovers: Vec<String> = app.checkouts.iter().filter(|checkout| checkout.changed > 0)
         .map(|checkout| format!("{}: {} changed outside tasks", checkout.name, plural(checkout.changed, "file"))).collect();
     if !leftovers.is_empty() {
@@ -1105,6 +1106,24 @@ mod tests {
         assert_eq!(buffer[(20, last as u16)].bg, SURFACE, "the selection's background covers the block's last line");
         let (second, second_end) = ends[1];
         assert!((second..=second_end).all(|row| rows[row].chars().nth(2) == Some(' ')), "{screen}");
+    }
+
+    #[test]
+    fn the_maintainers_machine_lists_its_kebbie_faults_after_the_tasks_and_outside_needs_you() {
+        let mut app = test_app(four_tasks());
+        let fault = |id: &str, word: &str| crate::faults::Shown { id: id.to_string(), word: word.to_string(), title: format!("fault {id}") };
+        app.faults = (1..=8).map(|n| fault(&format!("aa000{n}"), if n == 1 { "fixing in fault-aa0001" } else { "open" })).collect();
+        let (rows, _) = render(&mut app, 120, 40);
+        let screen = rows.join("\n");
+        let heading = find(&rows, "kebbie faults on this machine  8")[0].1;
+        assert!(find(&rows, "◐ feed-hang")[0].1 < heading, "after the tasks: {screen}");
+        assert!(rows[heading + 1].contains("aa0001  fixing in fault-aa0001  fault aa0001"), "{screen}");
+        assert!(rows[heading + 7].contains("… and 2 more") && !screen.contains("aa0007"), "six rows, then a count: {screen}");
+        assert!(!screen.contains("to send"), "nothing offers to send them: {screen}");
+        press(&mut app, key(KeyCode::Down));
+        app.work_selected = 3;
+        press(&mut app, key(KeyCode::Down));
+        assert!(!app.offer_panel.focused, "the list is information, the cursor stays on the tasks");
     }
 
     #[test]

@@ -319,6 +319,19 @@ fn state_word(state: &Path, issue: &Issue) -> String {
     format!("{word}{}", if back { ", came back" } else { "" })
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct Shown {
+    pub id: String,
+    pub word: String,
+    pub title: String,
+}
+
+// The board's faults on the maintainers' machine: the open ones first, then the ones whose fix is in use; one closed some other way is left off.
+pub fn board(state: &Path) -> Vec<Shown> {
+    let (open, used): (Vec<Issue>, Vec<Issue>) = tracked(state).into_iter().filter(|issue| issue.is_open() || in_use(issue)).partition(Issue::is_open);
+    open.iter().chain(&used).map(|issue| Shown { id: issue.id.clone(), word: state_word(state, issue), title: issue.title.clone() }).collect()
+}
+
 pub const OFF: &str = "The fault watcher is off on this machine: it weighs nothing and files no faults.";
 
 pub fn list_in(state: &Path, as_json: bool, on: bool) -> String {
