@@ -62,6 +62,9 @@ pub(super) fn review_menu(item: &Item, default: &Named, second: Option<(&Named, 
     let mut choices = Vec::new();
     if item.awaiting_review() {
         choices.push(row('v', "Withdraw from review", "stop its reviewer and forget its verdict: push is offered again, and the lead is told".to_string()));
+        if item.review_stopped() {
+            choices.push(row('l', "Last review", format!("{} checks only the findings of its last verdict, with no new points: a pass lets it through, otherwise it waits with what is left", default.name)));
+        }
     } else {
         let then = second.filter(|(_, always)| *always).map_or_else(String::new, |(second, _)| format!(", then {} (review.second runs it every time)", second.name));
         choices.push(row('v', "Review", format!("{} · {}{then}", default.name, default.runs)));
@@ -155,6 +158,7 @@ impl App {
             ('v', _) => self.review_in_background(path, "sending it to review", move |path| review::request(path, None, Request::Review)),
             ('s', _) => self.review_in_background(path, "sending it to review", move |path| review::request(path, None, Request::WithSecond)),
             ('o', _) => self.review_in_background(path, "asking a second opinion", move |path| review::request(path, None, Request::SecondOnly)),
+            ('l', _) => self.review_in_background(path, "sending it to a last review", move |path| review::request(path, None, Request::Last)),
             ('i', _) => match (menu.second_file.clone(), terminal) {
                 (Some(file), Some(terminal)) => {
                     if let Err(error) = super::terminal::outside(terminal, || crate::settings_page::show_in_pager(&file)) {
@@ -234,6 +238,9 @@ mod tests {
         item.verdict = Some(crate::status::tests::in_review(false, 2, false, false));
         let menu = review_menu(&item, &reviewer(), Some((&codex_review(), false)));
         assert_eq!((keys(&menu), menu.choices[0].label.as_str()), ("vo".to_string(), "Withdraw from review"));
+        item.verdict = Some(crate::review::Shown { looped: Some(crate::review::Looped::default()), ..crate::status::tests::in_review(false, 2, true, false) });
+        let stopped = review_menu(&item, &reviewer(), Some((&codex_review(), false)));
+        assert_eq!((keys(&stopped), stopped.choices[1].label.as_str()), ("vlo".to_string(), "Last review"), "a review kebbie stopped sending back offers the last review after withdraw");
         let mut app = test_app(vec![billing()]);
         press(&mut app, KeyEvent::from(KeyCode::Char('v')));
         let Mode::ReviewMenu(opened) = &app.mode else { panic!("v opens the review menu") };

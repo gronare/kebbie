@@ -6,6 +6,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 
 ### What's new
 - A review kebbie stopped sending back says on its row how many rounds it took and what is left.
+- kebbie review --last, or v then l, checks only a stopped review's earlier findings, and a pass lets the task through.
 
 ### Fixed
 - The lead takes a colleague's comment on a commit to you, with who wrote it and on which commit, and changes your rules, roles or CLAUDE.md only on your word.

@@ -171,6 +171,8 @@ fn a_review_that_finds_a_new_point_each_round_goes_back_twice_by_itself_and_then
     lab.answer("review", &round(1));
     lab.ok(&["-C", lab.app(), "review", "billing"]);
     assert!(eventually(Duration::from_secs(120), || reviewed_at(&head)), "{}", lab.item("billing"));
+    let early = lab.run(&["-C", lab.app(), "review", "billing", "--last"]);
+    assert!(!early.status.success() && stderr(&early).contains("kebbie has not stopped sending its review back"), "a last review waits for kebbie to stop: {}", stderr(&early));
     for n in 2..=4 {
         head = lab.work(&worktree, &format!("case{n}.rb"), &format!("Round case {n} half up"));
         lab.answer("review", &round(n));
@@ -189,7 +191,21 @@ fn a_review_that_finds_a_new_point_each_round_goes_back_twice_by_itself_and_then
     lab.ok(&["-C", worktree.to_str().unwrap(), "report", "--state", "ready", "--next", "push", "still ready"]);
     lab.keeper_round();
     assert_eq!(lab.claude_roles().iter().filter(|role| *role == "review").count(), 3, "a stopped review stays stopped");
+    lab.answer("review", "verdict: changes\n\n- refunds.rb:3 — case 3 still rounds half down\n- refunds.rb:999 — a point no verdict named");
+    lab.ok(&["-C", lab.app(), "review", "billing", "--last"]);
+    assert!(eventually(Duration::from_secs(120), || reviewed_at(&head) && lab.item("billing")["verdict"]["running"] == false), "{}", lab.item("billing"));
+    let item = lab.item("billing");
+    assert_eq!((item["group"].as_str(), item["next_for_you"].as_str(), item["verdict"]["findings"].as_u64()), (Some("NEEDS YOU"), Some("last review: 1 finding still open, first refunds.rb:3 — case 3 still rounds half down"), Some(1)), "a last review keeps only the earlier finding that stands: {item}");
+    lab.ok(&["-C", worktree.to_str().unwrap(), "report", "--state", "ready", "--next", "push", "ready after the last review"]);
+    lab.keeper_round();
+    assert_eq!(lab.claude_roles().iter().filter(|role| *role == "review").count(), 4, "after a last review kebbie sends it back no more");
+    head = lab.work(&worktree, "case3.rb", "Round case 3 half up again");
+    lab.answer("review", "verdict: changes\n\n- refunds.rb:777 — only a point no verdict named");
+    lab.ok(&["-C", lab.app(), "review", "billing", "--last"]);
+    assert!(eventually(Duration::from_secs(120), || reviewed_at(&head) && lab.item("billing")["verdict"]["running"] == false), "{}", lab.item("billing"));
+    let item = lab.item("billing");
+    assert_eq!((item["verdict"]["verdict"].as_str(), item["verdict"]["stopped"].as_bool(), item["group"].as_str() != Some("NEEDS YOU")), (Some("ok"), Some(false), true), "with the earlier finding fixed and only a new point, the last review passes and lets it through: {item}");
     let push = pushed(&lab);
     assert!(push.status.success(), "{}\n{}", stdout(&push), stderr(&push));
-    assert_eq!(on_origin(&lab), "Round case 4 half up");
+    assert_eq!(on_origin(&lab), "Round case 3 half up again");
 }

@@ -467,6 +467,7 @@ A task counts as pushed once every commit is on the default branch and kebbie wa
 | --- | --- | --- |
 | `v` | Review: the reviewer [`review.profile`](configuration.md#review-and-docs) names reads its commits; the task waits under In review. With `review.second = "always …"` the second opinion runs beside it. | It is not in review. |
 | `v` | Withdraw from review: the reviewer stops, its verdict and any second opinion go, push is offered again. Yours alone. | It is in review. |
+| `l` | Last review: the reviewer checks only the findings of its last verdict, with no new points; a pass lets it through, otherwise it waits under Needs you with what is left. Yours alone. | kebbie stopped sending its review back. |
 | `s` | Review with a second opinion: the reviewer, and `review.second`'s profile beside it. | `review.second` names a profile, not `always`, and it is not in review. |
 | `o` | Second opinion only. The push still waits on the reviewer while the task is in review. | `review.second` names a profile. |
 | `i` | Read the second opinion's points in `$PAGER`. | A second opinion gave its points. |

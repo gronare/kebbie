@@ -690,8 +690,8 @@ impl Item {
             let asked = if question.plan.is_some() { "approve the plan".to_string() } else { format!("answer a question · {}", plural(question.options.len(), "option")) };
             return Some(if self.held_messages == 0 { asked } else { format!("{asked} · held: {}", plural(self.held_messages, "message")) });
         }
-        if let Some(line) = self.review_stop_line() {
-            return Some(line.to_string());
+        if let Some(looped) = self.verdict.as_ref().filter(|_| self.review_stopped()).and_then(|shown| shown.looped.as_ref()) {
+            return Some(if looped.ways.is_empty() { looped.line.clone() } else { format!("{} · {}", looped.line, looped.ways) });
         }
         if self.review_gave_none() {
             return Some(NO_VERDICT.to_string());
@@ -1654,9 +1654,9 @@ pub(crate) mod tests {
     #[test]
     fn a_review_kebbie_stopped_sending_back_waits_under_needs_you_with_one_line() {
         let mut item = task(Some("idle"), Some("ready"), 2);
-        let looped = crate::review::Looped { rounds: 3, line: "review stopped after 3 rounds".to_string(), ..Default::default() };
+        let looped = crate::review::Looped { rounds: 3, line: "review stopped after 3 rounds".to_string(), ways: "v then l sends it to a last review".to_string(), ..Default::default() };
         item.verdict = Some(crate::review::Shown { looped: Some(looped.clone()), ..in_review(false, 3, true, false) });
-        assert_eq!((item.group(), item.wanted("enter").as_deref(), item.next_for_you()), (Group::NeedsYou, Some("review stopped after 3 rounds"), Some("review stopped after 3 rounds")));
+        assert_eq!((item.group(), item.wanted("enter").as_deref(), item.next_for_you()), (Group::NeedsYou, Some("review stopped after 3 rounds · v then l sends it to a last review"), Some("review stopped after 3 rounds")), "the board's row names its keys; the phone and kebbie status get the facts");
         item.verdict = Some(crate::review::Shown { looped: Some(looped), ..in_review(false, 3, false, true) });
         assert!(item.group() == Group::InReview, "a review the user sent again waits on the reviewer");
     }

@@ -25,6 +25,8 @@ When your brief quotes your earlier verdict and the delta since its sha (a range
 
 0. **Earlier findings.** Open each earlier finding's `file:line` at the new sha. Still wrong: it is a finding again, written under its earlier `file:line` first, so kebbie knows it as the same finding, then where it now sits: `src/pay.rs:41 (now :44) — still books twice`. Fixed: it drops out. A fix is new code, so it is part of the delta. Done when every earlier finding is fixed or stands again.
 
+When your brief says it is a last review, run step 0 alone and stop there: the verdict is `ok` when every earlier finding is fixed, else `changes` listing only the earlier findings that stand.
+
 The delta is every commit the range-diff marks changed (`!`), added or dropped, and each function the code diff touches. Read those commits in full in step 2, follow every function the delta changes to its callers and read them in full in step 3, and check the changed commits against the rules in step 5. A commit marked `=` you read already: a finding there only when the delta reaches it.
 
 ## Tools

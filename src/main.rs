@@ -350,7 +350,9 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   findings only ask for your confirmation, as Confirm under Needs you does); the
                                   reviewer is the review profile review.profile names; --second
                                   adds review.second's profile as a second opinion and --second-only runs it alone,
-                                  which never holds the push: its points go to the lead
+                                  which never holds the push: its points go to the lead; --last, yours only, once
+                                  kebbie stopped sending it back, checks only the last verdict's findings and
+                                  gives no new ones: a pass lets it through, else it waits with what is left
   kebbie evidence [name] [--json] the test runs kebbie recorded for the task, newest first: the command, its result, the
                                   commit it ran on and whether the code changed since (task.test_commands adds commands)
   kebbie approve <name>           yours or the lead's word that a task's commits hold to the rules skill, an override of
@@ -898,6 +900,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("review") if arguments.flag("--withdraw") => review::withdraw(&cwd, name),
         Some("review") if arguments.flag("--confirm") => review::confirm(&cwd, name, &arguments.rest(2).join(" ")),
         Some("review") if arguments.flag("--view") => board::review::run(Path::new(name.ok_or("kebbie review --view needs the review's folder")?)),
+        Some("review") if arguments.flag("--last") => review::request(&cwd, name, review::Request::Last),
         Some("review") if arguments.flag("--second-only") => review::request(&cwd, name, review::Request::SecondOnly),
         Some("review") if arguments.flag("--second") => review::request(&cwd, name, review::Request::WithSecond),
         Some("review") => review::request(&cwd, name, review::Request::Review),

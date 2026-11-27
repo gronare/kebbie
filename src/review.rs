@@ -182,12 +182,14 @@ pub struct Shown {
     pub at: u64,
 }
 
-// kebbie stopped sending it back: how many reviews it took, the lines changed since the last one (None after a rebase), and the row's line.
+// kebbie stopped sending it back: how many reviews it took, the lines changed since the last one (None after a rebase), whether that one was the last review the user asked for, and the row's line.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Looped {
     pub rounds: usize,
     pub changed: Option<usize>,
+    pub last: bool,
     pub line: String,
+    pub ways: String,
 }
 
 impl Shown {
@@ -260,8 +262,8 @@ fn shown_by(state: &Path, address: &str, current: impl Fn(&Verdict) -> bool, cha
     let at = fs::metadata(&file).and_then(|meta| meta.modified()).ok().and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |at| at.as_secs());
     let looped = looped_of(state, address).map(|looped| {
         let changed = verdict.as_ref().filter(|_| stale).and_then(|verdict| changed(&verdict.sha));
-        let line = stop_line(verdict.as_ref(), stale, looped.rounds, changed);
-        Looped { changed, line, ..looped }
+        let (line, ways) = stop_line(verdict.as_ref(), stale, looped.rounds, changed, looped.last);
+        Looped { changed, line, ways, ..looped }
     });
     Some(Shown { verdict, stale, running, held: !marked(state, address, "advised").exists(), file, looped, at })
 }
@@ -326,19 +328,27 @@ pub const RERUNS: usize = 2;
 pub const RERUNS_AT_MOST: usize = 4;
 const CEILING: &str = "ceiling";
 const NEW_EACH_TIME: &str = "new";
+const LAST: &str = "last";
 
-// A review kebbie stopped sending back: why it stopped and what is left.
-pub fn stop_line(verdict: Option<&Verdict>, stale: bool, rounds: usize, changed: Option<usize>) -> String {
+// A review kebbie stopped sending back: why it stopped and what is left, then the board's keys on from there, which only the board's row shows.
+pub fn stop_line(verdict: Option<&Verdict>, stale: bool, rounds: usize, changed: Option<usize>, last: bool) -> (String, String) {
+    let ways = format!("{} then l sends it to a last review", crate::keys::key(crate::keys::Act::SendReview));
     let findings = |count: usize| if count == 1 { "1 finding".to_string() } else { format!("{count} findings") };
+    let open = verdict.filter(|verdict| !verdict.ok && verdict.findings > 0);
+    if last && !stale && let Some(verdict) = open {
+        let first = verdict.first.as_deref().unwrap_or_default();
+        return (format!("last review: {} still open, first {first}", findings(verdict.findings)), String::new());
+    }
     let stopped = format!("review stopped after {rounds} rounds");
-    match (verdict.filter(|verdict| !verdict.ok && verdict.findings > 0), stale) {
+    let line = match (open, stale) {
         (Some(verdict), true) => {
             let since = changed.map_or_else(String::new, |lines| format!(", {} changed", if lines == 1 { "1 line".to_string() } else { format!("{lines} lines") }));
             format!("{stopped}: all {} fixed{since} since the last review", findings(verdict.findings))
         }
         (Some(verdict), false) => format!("{stopped}: {} still open on this code", findings(verdict.findings)),
         (None, _) => stopped,
-    }
+    };
+    (line, ways)
 }
 
 // kebbie sends a review back by itself RERUNS times in a row when its verdict found something at a file:line no verdict since the count started named, and RERUNS_AT_MOST times in all; past either the task waits under Needs you instead, until you or the lead send it to review or it passes.
@@ -398,7 +408,8 @@ pub fn looped_in(state: &Path, address: &str) -> bool {
 }
 
 fn looped_of(state: &Path, address: &str) -> Option<Looped> {
-    looped_in(state, address).then(|| Looped { rounds: rounds_in(state, address) + 1, ..Looped::default() })
+    let limit = fs::read_to_string(marked(state, address, "looped")).ok()?;
+    Some(Looped { rounds: rounds_in(state, address) + 1, last: limit.trim() == LAST, ..Looped::default() })
 }
 
 fn forget_reruns(state: &Path, address: &str) {
@@ -411,7 +422,7 @@ fn stop_rerunning(state: &Path, address: &str, worktree: &Path) {
     if let Err(error) = messages::to_lead(messages::ToLead::Findings, &format!("{address}'s review {}, so kebbie stops sending it back: it waits under Needs you for the user to read it or push it. Send it to review again only on their word.", stopped_because(state, address))) {
         eprintln!("Could not tell the lead: {error}");
     }
-    crate::notify::send(worktree, &crate::notify::Notice::from(crate::notify::Event::NeedsYou, address, format!("{address}: its review stopped after {} rounds; read it yourself or push it", rounds_in(state, address) + 1)));
+    crate::notify::send(worktree, &crate::notify::Notice::from(crate::notify::Event::NeedsYou, address, format!("{address}: its review stopped after {} rounds; push it without a pass or send it to a last review", rounds_in(state, address) + 1)));
 }
 
 fn stopped_because(state: &Path, address: &str) -> String {
@@ -460,7 +471,7 @@ pub fn forget_in(state: &Path, address: &str) {
     for file in [second_file(state, address), second_log(state, address)] {
         let _ = fs::remove_file(file);
     }
-    for file in [verdict_file(state, address), log_file(state, address), marked(state, address, "withdrawn"), marked(state, address, "advised"), marked(state, address, "required")] {
+    for file in [verdict_file(state, address), log_file(state, address), marked(state, address, "withdrawn"), marked(state, address, "advised"), marked(state, address, "required"), marked(state, address, LAST)] {
         let _ = fs::remove_file(file);
     }
     forget_reruns(state, address);
@@ -506,6 +517,7 @@ pub enum Request {
     Review,
     WithSecond,
     SecondOnly,
+    Last,
 }
 
 // Starts the reviewer as a process of its own, so neither the board nor the caller waits for it.
@@ -536,7 +548,21 @@ fn request_as(state: &Path, caller: &crate::permit::Caller, cwd: &Path, name: Op
     let address = peers::address(task, &name_of(&repo));
     let sha = git(&slot.path, &["rev-parse", "--short", "HEAD"])?;
     let now = matches!(caller, crate::permit::Caller::User | crate::permit::Caller::Lead);
+    if send == Request::Last {
+        crate::permit::user_only_as(caller, "a last review, which reads only the earlier findings")?;
+        if !looped_in(state, &address) {
+            return crate::notice::Notice::new(crate::notice::Tone::NotNow, "kebbie has not stopped sending its review back").next("A last review is for a review kebbie stopped sending back; send it to a full review with v.").detail("task", &address).err();
+        }
+        if !fs::read_to_string(verdict_file(state, &address)).ok().as_deref().and_then(parse_verdict).is_some_and(|verdict| !verdict.ok) {
+            return crate::notice::Notice::new(crate::notice::Tone::NotNow, "No earlier findings to check").next("A last review reads only what the last verdict found; send it to a full review with v.").detail("task", &address).err();
+        }
+        if running_in(state, &address) {
+            return already_running(&address);
+        }
+        crate::state::write(&marked(state, &address, LAST), "")?;
+    }
     let opinion = match (send, second.profile()) {
+        (Request::Last, _) => None,
         (Request::Review, profile) => profile.filter(|_| second.always()),
         (_, Some(profile)) => Some(profile),
         (_, None) => return crate::notice::Notice::new(crate::notice::Tone::NotNow, "No second opinion is set").next("Pick a review profile for review.second on the Settings page (,).").detail("task", &address).err(),
@@ -546,7 +572,9 @@ fn request_as(state: &Path, caller: &crate::permit::Caller, cwd: &Path, name: Op
     }
     if send != Request::SecondOnly {
         if now {
-            start_reviewer(state, &address, kebbie, &slot.path, env, subtask.unwrap_or_default())?;
+            start_reviewer(state, &address, kebbie, &slot.path, env, subtask.unwrap_or_default()).inspect_err(|_| {
+                let _ = fs::remove_file(marked(state, &address, LAST));
+            })?;
         } else if running_in(state, &address) {
             return already_running(&address);
         } else {
@@ -555,6 +583,7 @@ fn request_as(state: &Path, caller: &crate::permit::Caller, cwd: &Path, name: Op
         let _ = fs::remove_file(marked(state, &address, "withdrawn"));
         let _ = fs::remove_file(marked(state, &address, "advised"));
         match caller {
+            _ if send == Request::Last => {}
             crate::permit::Caller::User | crate::permit::Caller::Hub { .. } | crate::permit::Caller::Lead => forget_reruns(state, &address),
             _ => {}
         }
@@ -567,6 +596,7 @@ fn request_as(state: &Path, caller: &crate::permit::Caller, cwd: &Path, name: Op
         }
     }
     let notice = match (send, now) {
+        (Request::Last, _) => crate::notice::Notice::new(crate::notice::Tone::Moving, "Last review started").next("The reviewer checks only the findings its last verdict named: a pass lets it through, otherwise it waits under Needs you with what is left."),
         (Request::SecondOnly, _) => crate::notice::Notice::new(crate::notice::Tone::Moving, "Second opinion started").next(format!("{} reads its commits in the background; the lead hears its points. It never holds the push.", opinion.unwrap_or_default())),
         (_, true) => crate::notice::Notice::new(crate::notice::Tone::Moving, "Review started").next("The reviewer reads its commits in the background; the lead hears its verdict."),
         (_, false) => crate::notice::Notice::new(crate::notice::Tone::Moving, "Review asked for").next("kebbie's keeper starts the reviewer within a minute; the lead hears its verdict."),
@@ -677,6 +707,9 @@ fn run_as(cwd: &Path, which: Which) -> Result<String> {
     let subtask = Some(payload.trim()).filter(|subtask| which == Which::Default && !subtask.is_empty());
     let result = review(&repo, &slot, &address, &state, which, subtask);
     queue.done(&state, &address);
+    if which == Which::Default {
+        let _ = fs::remove_file(marked(&state, &address, LAST));
+    }
     let (what, notice) = match &result {
         Ok((text, true)) => (messages::ToLead::ReviewPassed, text.clone()),
         Ok((text, false)) => (messages::ToLead::Findings, text.clone()),
@@ -718,7 +751,12 @@ fn review(repo: &Path, slot: &Slot, address: &str, state: &Path, which: Which, s
     let focus = subtask.and_then(|id| subtask_focus(&slot.path, id));
     let filed = crate::found::filed_by(state, address);
     let settled = settled_brief(&crate::obstacle::decided_points(state, address), &filed);
-    let previous = if which == Which::Default { previous_brief(&slot.path, &upstream, &sha, fs::read_to_string(&file).ok().as_deref()) } else { None };
+    let last = which == Which::Default && marked(state, address, LAST).exists();
+    let saved = fs::read_to_string(&file).ok();
+    let previous = if which == Which::Default { previous_brief(&slot.path, &upstream, &sha, saved.as_deref(), last) } else { None };
+    if last && previous.is_none() {
+        return Err("a last review needs the sha its last verdict read, which git no longer has; send it to a full review with v".to_string());
+    }
     let input = brief(&Brief { address, worktree: &slot.path, upstream: &upstream, sha: &sha, commits: &commits, rules, rules_file: rules_file.as_deref(), quoted: quoted.as_deref(), said: &said, tests: &tests, also_noticed: settings.also_noticed.value, docs: docs.as_deref(), card: card.as_deref(), focus: focus.as_deref(), settled: settled.as_deref(), previous: previous.as_deref() });
     let reviewer = match which { Which::Default => default_reviewer(&crate::profiles::dir(), &settings)?, Which::Second => second_reviewer(&crate::profiles::dir(), &settings)? };
     let role = match which { Which::Default => "review", Which::Second => "second" };
@@ -733,9 +771,12 @@ fn review(repo: &Path, slot: &Slot, address: &str, state: &Path, which: Which, s
     }
     let filed: Vec<String> = filed.into_iter().map(|item| item.id).collect();
     let (recorded, dropped) = drop_decided(&recorded, |finding| confirmation(finding).and_then(|_| crate::obstacle::decided_on(state, address, finding, &filed)));
-    let verdict = save(state, address, &recorded, rules_file.is_some(), || tasks::fingerprint_at(&slot.path, &upstream, &sha))?;
+    let (recorded, new) = if last { only_earlier(&recorded, saved.as_deref().unwrap_or_default()) } else { (recorded, Vec::new()) };
+    let verdict = save(state, address, &recorded, rules_file.is_some() && !last, || tasks::fingerprint_at(&slot.path, &upstream, &sha))?;
     if verdict.ok {
         forget_reruns(state, address);
+    } else if last {
+        crate::state::write(&marked(state, address, "looped"), LAST)?;
     }
     let unsettled: Vec<String> = findings_of(&recorded).iter().filter(|finding| confirmation(finding).is_some()).cloned().collect();
     let investigated = crate::obstacle::raise_from_review(state, address, &slot.path, &unsettled)?;
@@ -750,7 +791,12 @@ fn review(repo: &Path, slot: &Slot, address: &str, state: &Path, which: Which, s
     };
     let dropped = if dropped.is_empty() { String::new() } else { format!(" kebbie left out {} on points this task already decided ({}); those decisions stand.", if dropped.len() == 1 { "1 finding".to_string() } else { format!("{} findings", dropped.len()) }, dropped.join(", ")) };
     let waits = waits.to_string();
-    Ok((format!("{address} reviewed at {short}: {} — {}{waits}{dropped}", verdict.summary(), file.display()), verdict.ok))
+    let last = match (last, new.len()) {
+        (false, _) => String::new(),
+        (true, 0) => " It was the last review the user asked for, of the earlier findings only.".to_string(),
+        (true, count) => format!(" It was the last review the user asked for, of the earlier findings only, so kebbie left out {} at places no earlier finding named ({}).", if count == 1 { "1 new finding".to_string() } else { format!("{count} new findings") }, new.join(", ")),
+    };
+    Ok((format!("{address} reviewed at {short}: {} — {}{waits}{dropped}{last}", verdict.summary(), file.display()), verdict.ok))
 }
 
 pub const QUESTION_KIND: &str = "review";
@@ -1251,11 +1297,11 @@ fn brief(brief: &Brief) -> String {
 const RANGE_DIFF_BUDGET: usize = 20_000;
 
 // The verdict kebbie saved and the delta since its sha, so the reviewer checks its old findings and reads only what changed; on the same sha, read again for the tests it asked for, the delta is none; None for a first review or a sha git no longer has. The range-diff pairs even a commit amended past recognition at --creation-factor=100; the code diff is the delta only on an unchanged base, since after a rebase it would carry the default branch's commits.
-fn previous_brief(worktree: &Path, upstream: &str, sha: &str, saved: Option<&str>) -> Option<String> {
+fn previous_brief(worktree: &Path, upstream: &str, sha: &str, saved: Option<&str>, last: bool) -> Option<String> {
     let saved = saved?;
     let before = parse_verdict(saved)?.sha;
     if before == sha {
-        return Some(rereview_brief(saved, &before, sha, "none: no commit changed since, so what is new is the test runs in your brief."));
+        return Some(rereview_brief(saved, &before, sha, "none: no commit changed since, so what is new is the test runs in your brief.", last));
     }
     let base = crate::repo::tracking(upstream);
     let commits = git(worktree, &["range-diff", "--creation-factor=100", &base, &before, sha]).ok()?;
@@ -1265,17 +1311,22 @@ fn previous_brief(worktree: &Path, upstream: &str, sha: &str, saved: Option<&str
     } else {
         format!("The branch was rebased onto a newer {upstream} since, so there is no code diff here: a plain one would carry what landed on {upstream}; the range-diff above holds the task's own delta.")
     };
-    Some(rereview_brief(saved, &before, sha, &format!("{commits}\n\n{code}")))
+    Some(rereview_brief(saved, &before, sha, &format!("{commits}\n\n{code}"), last))
 }
 
-fn rereview_brief(saved: &str, before: &str, sha: &str, delta: &str) -> String {
+fn rereview_brief(saved: &str, before: &str, sha: &str, delta: &str, last: bool) -> String {
     let short = |sha: &str| sha.chars().take(7).collect::<String>();
     let clipped = if delta.chars().count() > RANGE_DIFF_BUDGET { "\nThe delta is clipped here: read the rest with git show on the commits the range-diff names." } else { "" };
+    let run = if last {
+        format!("This is a last review, which the user asked for after kebbie stopped sending this branch back: you reviewed it at {} before, and the verdict you gave then is quoted below. Run only step 0 of the kebbie:review instructions' Re-review, checking each earlier finding at {}, and skip every other step of your brief: give no new findings, since kebbie leaves out any finding at a place your earlier verdict did not name. `verdict: ok` when every earlier finding is fixed; `verdict: changes` with each one that still stands.", short(before), short(sha))
+    } else {
+        format!("This is a re-review: you reviewed this branch at {} before, and the verdict you gave then is quoted below. Run it as the kebbie:review instructions' Re-review says: step 0 checks each earlier finding at {}, then you review the delta and the callers of every function it changes in full.", short(before), short(sha))
+    };
     format!(
-        "This is a re-review: you reviewed this branch at {} before, and the verdict you gave then is quoted below. Run it as the kebbie:review instructions' Re-review says: step 0 checks each earlier finding at {}, then you review the delta and the callers of every function it changes in full.\n\
+        "{run}\n\
          Your earlier verdict:\n---\n{}\n---\n\
          The delta: the git range-diff from the commits you reviewed at {} to the commits at {} (`-` is what you read, `+` what replaced it, `=` a commit unchanged, `!` a commit changed), then the code diff between the two when the branch was not rebased:\n---\n{}{clipped}\n---",
-        short(before), short(sha), saved.trim(), short(before), short(sha), clip(delta.trim(), RANGE_DIFF_BUDGET)
+        saved.trim(), short(before), short(sha), clip(delta.trim(), RANGE_DIFF_BUDGET)
     )
 }
 
@@ -1353,6 +1404,16 @@ fn settled_brief(decided: &[String], filed: &[crate::found::Item]) -> Option<Str
         parts.push(format!("Items the task filed in the backlog from its Also noticed lines, by found id:\n{}", items.join("\n")));
     }
     (!parts.is_empty()).then(|| parts.join("\n\n"))
+}
+
+// A last review reports only on earlier findings: one at a place the earlier verdict did not name, or with no place, is left out, and a verdict left with none passes.
+fn only_earlier(recorded: &str, earlier: &str) -> (String, Vec<String>) {
+    let places: Vec<String> = findings_of(earlier).iter().filter_map(|finding| location(finding)).collect();
+    drop_decided(recorded, |finding| match location(finding) {
+        Some(place) if places.contains(&place) => None,
+        Some(place) => Some(place),
+        None => Some("a finding with no place".to_string()),
+    })
 }
 
 // The verdict without its findings on decided points, with the ids of the points they named; a verdict left with no finding passes.
@@ -2338,13 +2399,25 @@ mod tests {
         assert!(looped_in(&state, address));
         fs::write(verdict_file(&state, address), "verdict: changes\nreviewed: abc\n\n- src/a.rs:1 — a bug.\n- src/b.rs:2 — another.\n").unwrap();
         let shown = shown_in(&state, address, |_| false).unwrap();
-        assert_eq!(shown.looped.as_ref().map(|looped| (looped.rounds, looped.line.as_str())), Some((3, "review stopped after 3 rounds: all 2 findings fixed since the last review")), "the first review and the two kebbie sent back");
+        assert_eq!(shown.looped.as_ref().map(|looped| (looped.rounds, looped.line.as_str(), looped.ways.as_str())), Some((3, "review stopped after 3 rounds: all 2 findings fixed since the last review", "v then l sends it to a last review")), "the first review and the two kebbie sent back");
         let stopped = Shown { verdict: Some(Verdict { ok: false, sha: "abc".to_string(), findings: 3, ..Verdict::default() }), stale: true, running: false, held: true, file: PathBuf::new(), looped: Some(Looped::default()), at: 0 };
         assert_eq!(gate(Some(&stopped), |_| false), Ok(()), "the user may push what kebbie stopped re-reviewing");
         assert!(gate(Some(&Shown { running: true, ..stopped.clone() }), |_| false).is_err(), "a review the user sent again holds it while it runs");
         forget_reruns(&state, address);
         assert!(!looped_in(&state, address) && rerun_allowed(&state, address).unwrap(), "sent again, it counts from nothing");
         let _ = fs::remove_dir_all(state);
+    }
+
+    #[test]
+    fn a_last_review_keeps_only_findings_at_earlier_places_and_passes_when_none_stand() {
+        let earlier = "verdict: changes\nreviewed: abc\n\n- src/pay.rs:41 — books twice.\n- src/view.rs:88 — renames the export.\n";
+        let stands = "verdict: changes\nreviewed: def\n\n- src/pay.rs:41 (now :44) — still books twice.\n  the retry path.\n- src/pay.rs:60 — a new point.\n  more of it.\n- the commit message says nothing.\n";
+        let (kept, new) = only_earlier(stands, earlier);
+        assert_eq!(findings_of(&kept), vec!["src/pay.rs:41 (now :44) — still books twice.".to_string()], "{kept}");
+        assert!(kept.contains("  the retry path.") && !kept.contains("more of it."), "a finding's continuation goes with it: {kept}");
+        assert_eq!(new, vec!["src/pay.rs:60".to_string(), "a finding with no place".to_string()]);
+        let (passed, new) = only_earlier("verdict: changes\nreviewed: def\n\n- src/other.rs:3 — something new.\n", earlier);
+        assert_eq!((parse_verdict(&passed).map(|verdict| (verdict.ok, verdict.findings)), new.len()), (Some((true, 0)), 1), "every earlier finding fixed and only new points: it passes: {passed}");
     }
 
     #[test]
@@ -2391,12 +2464,14 @@ mod tests {
     }
 
     #[test]
-    fn a_stopped_review_says_why_it_stopped_and_what_is_left() {
-        let verdict = |findings: usize| Verdict { ok: false, sha: "abc".to_string(), findings, ..Verdict::default() };
-        assert_eq!(stop_line(Some(&verdict(4)), true, 3, Some(37)), "review stopped after 3 rounds: all 4 findings fixed, 37 lines changed since the last review");
-        assert_eq!(stop_line(Some(&verdict(1)), true, 3, Some(1)), "review stopped after 3 rounds: all 1 finding fixed, 1 line changed since the last review");
-        assert_eq!(stop_line(Some(&verdict(2)), true, 3, None), "review stopped after 3 rounds: all 2 findings fixed since the last review", "after a rebase the lines changed are left out");
-        assert_eq!(stop_line(Some(&verdict(2)), false, 5, None), "review stopped after 5 rounds: 2 findings still open on this code", "a verdict on this code is not fixed yet");
+    fn a_stopped_review_says_what_is_left_and_the_ways_on() {
+        let verdict = |findings: usize| Verdict { ok: false, sha: "abc".to_string(), findings, first: Some("src/pay.rs:41 — books twice.".to_string()), ..Verdict::default() };
+        let ways = "v then l sends it to a last review".to_string();
+        assert_eq!(stop_line(Some(&verdict(4)), true, 3, Some(37), false), ("review stopped after 3 rounds: all 4 findings fixed, 37 lines changed since the last review".to_string(), ways.clone()));
+        assert_eq!(stop_line(Some(&verdict(1)), true, 3, Some(1), false).0, "review stopped after 3 rounds: all 1 finding fixed, 1 line changed since the last review");
+        assert_eq!(stop_line(Some(&verdict(2)), false, 5, None, false).0, "review stopped after 5 rounds: 2 findings still open on this code", "a verdict on this code is not fixed yet");
+        assert_eq!(stop_line(Some(&verdict(2)), false, 3, None, true), ("last review: 2 findings still open, first src/pay.rs:41 — books twice.".to_string(), String::new()), "a last review that found its findings standing says what is left, and offers no other review");
+        assert_eq!(stop_line(Some(&verdict(2)), true, 3, None, true), ("review stopped after 3 rounds: all 2 findings fixed since the last review".to_string(), ways), "fixed again after a last review, it offers another");
         assert_eq!(diff_lines(" 2 files changed, 30 insertions(+), 7 deletions(-)"), 37);
         assert_eq!(diff_lines(" 1 file changed, 1 deletion(-)"), 1);
     }
@@ -2429,14 +2504,14 @@ mod tests {
         run(&["commit", "--quiet", "--amend", "-am", "Book refunds once"]);
         let now = run(&["rev-parse", "HEAD"]);
         let saved = format!("verdict: changes\nreviewed: {before}\n\n- refund.rs:1 — books the refund again on retry.\n");
-        let previous = previous_brief(&dir, "main", &now, Some(&saved)).expect("an earlier verdict on another sha is a re-review");
+        let previous = previous_brief(&dir, "main", &now, Some(&saved), false).expect("an earlier verdict on another sha is a re-review");
         assert!(previous.contains(&format!("you reviewed this branch at {} before", &before[..7])) && previous.contains("step 0 checks each earlier finding"), "{previous}");
         assert!(previous.contains("- refund.rs:1 — books the refund again on retry."), "the earlier findings travel: {previous}");
         assert!(previous.contains("Book refunds once") && previous.contains("booked()"), "the amended commit's delta is in the range-diff: {previous}");
-        let again = previous_brief(&dir, "main", &now, Some(&saved.replace(&before, &now))).expect("read again on the same sha, after the tests it asked for, it is a re-review too");
+        let again = previous_brief(&dir, "main", &now, Some(&saved.replace(&before, &now)), false).expect("read again on the same sha, after the tests it asked for, it is a re-review too");
         assert!(again.contains("- refund.rs:1 — books the refund again on retry.") && again.contains("none: no commit changed since"), "{again}");
-        assert_eq!(previous_brief(&dir, "main", &now, None), None, "a first review has nothing before it");
-        assert_eq!(previous_brief(&dir, "main", &now, Some(&saved.replace(&before, &"f".repeat(40)))), None, "a sha git no longer has falls back to a full review");
+        assert_eq!(previous_brief(&dir, "main", &now, None, false), None, "a first review has nothing before it");
+        assert_eq!(previous_brief(&dir, "main", &now, Some(&saved.replace(&before, &"f".repeat(40))), false), None, "a sha git no longer has falls back to a full review");
         run(&["checkout", "--quiet", "main"]);
         fs::write(dir.join("other.rs"), "fn landed_on_main() {}\n").unwrap();
         run(&["add", "other.rs"]);
@@ -2446,13 +2521,15 @@ mod tests {
         fs::write(dir.join("refund.rs"), "fn refund() { if !booked() { book_once(); } }\n").unwrap();
         run(&["commit", "--quiet", "--amend", "-am", "Book refunds once"]);
         let rebased = run(&["rev-parse", "HEAD"]);
-        let over = previous_brief(&dir, "main", &rebased, Some(&saved.replace(&before, &now))).unwrap();
+        let last = previous_brief(&dir, "main", &now, Some(&saved), true).unwrap();
+        assert!(last.contains("This is a last review") && last.contains("Run only step 0") && last.contains("give no new findings") && last.contains("- refund.rs:1 — books the refund again on retry.") && !last.contains("then you review the delta"), "a last review checks the earlier findings and nothing else: {last}");
+        let over = previous_brief(&dir, "main", &rebased, Some(&saved.replace(&before, &now)), false).unwrap();
         assert!(over.contains("book_once") && !over.contains("landed_on_main") && over.contains("rebased onto a newer main since"), "across a rebase the delta is the task's own: {over}");
         let said = vec!["Add refunds.".to_string()];
         let shape = Brief { address: "billing@app", worktree: &dir, upstream: "main", sha: &now, commits: "abc123 Book refunds once", rules: "kebbie:work-rules", rules_file: None, quoted: None, said: &said, tests: "", also_noticed: config::AlsoNoticed::Backlog, docs: None, card: None, focus: None, settled: None, previous: Some(&previous) };
         assert!(brief(&shape).contains(&format!("abc123 Book refunds once\n\n{previous}\n\n")), "the re-review part follows the commits");
         assert!(!brief(&Brief { previous: None, ..shape }).contains("re-review"), "a first review is told nothing of one");
-        assert!(rereview_brief(&saved, &before, &now, &"x".repeat(RANGE_DIFF_BUDGET + 1)).contains("The delta is clipped here"));
+        assert!(rereview_brief(&saved, &before, &now, &"x".repeat(RANGE_DIFF_BUDGET + 1), false).contains("The delta is clipped here"));
         fs::remove_dir_all(dir).unwrap();
     }
 }
