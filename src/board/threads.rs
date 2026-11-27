@@ -24,7 +24,6 @@ pub(super) struct Snapshot {
     pub(super) offers: Vec<super::bug_report::Offer>,
     pub(super) comments: Vec<crate::comments::Comment>,
     pub(super) fixed: Option<crate::issue_recheck::Fixed>,
-    pub(super) faults: Vec<crate::faults::Shown>,
     pub(super) usage: Option<Usage>,
     pub(super) ongoing: Option<Vec<Ongoing>>,
     pub(super) lead_chat: Option<bool>,
@@ -103,7 +102,7 @@ pub(super) fn spawn_refresher(board_pane: Option<String>) -> (Receiver<std::resu
             }
             let snapshot = status::gather_with_checkouts().map(|(items, checkouts)| {
                 let questions = questions::open_now(&messages::load()).into_iter().cloned().chain(lead::state_dir().map(|state| crate::kebbie_questions::as_messages(&state)).unwrap_or_default()).collect();
-                Snapshot { checkouts, items, messages: messages::recent(200), questions, offers: super::bug_report::load_offers(), comments: crate::comments::board(), fixed: super::bug_report::load_fixed(), faults: super::bug_report::load_faults(), usage: usage::load(), ongoing: load_ongoing(), lead_chat: board_pane.as_deref().and_then(lead::chat_hidden), restart_auto: config::restart_settings().map_or(true, |(auto, _)| auto), lead_context: usage::lead_context(), lead_context_limit: config::lead_context_limit().unwrap_or(config::DEFAULT_LEAD_CONTEXT), devices: lead::state_dir().map(|state| crate::hub::devices::requests(&state, messages::now())).unwrap_or_default(), backlog: crate::backlog::load(), machine: lead::state_dir().map(|state| machine_lines_in(&state, messages::now())).unwrap_or_default(), overdue_promises: lead::state_dir().map(|state| crate::tasks::promises_overdue(&state, messages::now())).unwrap_or_default() }
+                Snapshot { checkouts, items, messages: messages::recent(200), questions, offers: super::bug_report::load_offers(), comments: crate::comments::board(), fixed: super::bug_report::load_fixed(), usage: usage::load(), ongoing: load_ongoing(), lead_chat: board_pane.as_deref().and_then(lead::chat_hidden), restart_auto: config::restart_settings().map_or(true, |(auto, _)| auto), lead_context: usage::lead_context(), lead_context_limit: config::lead_context_limit().unwrap_or(config::DEFAULT_LEAD_CONTEXT), devices: lead::state_dir().map(|state| crate::hub::devices::requests(&state, messages::now())).unwrap_or_default(), backlog: crate::backlog::load(), machine: lead::state_dir().map(|state| machine_lines_in(&state, messages::now())).unwrap_or_default(), overdue_promises: lead::state_dir().map(|state| crate::tasks::promises_overdue(&state, messages::now())).unwrap_or_default() }
             });
             if crate::keeper::current_owner() == crate::keeper::Owner::Board && carded.is_none_or(|at: Instant| at.elapsed() >= Duration::from_secs(crate::vault_card::EVERY)) && let (Ok(snapshot), Ok(state)) = (&snapshot, crate::lead::state_dir()) {
                 carded = Some(Instant::now());
@@ -346,6 +345,27 @@ mod tests {
         std::fs::write(dir.join("src/search/filters.txt"), "two").unwrap();
         assert_eq!(gather_detail(&dir, None).changed, ["src/search/filters.txt"]);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_board_never_reads_the_fault_watchers_faults_which_belong_to_kebbie_faults_alone() {
+        let mut dirs = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/board")];
+        let mut reads = Vec::new();
+        while let Some(dir) = dirs.pop() {
+            for path in std::fs::read_dir(&dir).unwrap().map(|entry| entry.unwrap().path()) {
+                if path.is_dir() {
+                    dirs.push(path);
+                    continue;
+                }
+                for (number, line) in std::fs::read_to_string(&path).unwrap().lines().enumerate() {
+                    let rest = line.replace("faults::BY", "").replace("faults::capture::", "");
+                    if rest.contains(concat!("faults", "::")) || rest.contains(concat!("use crate::", "faults")) {
+                        reads.push(format!("{}:{}: {}", path.display(), number + 1, line.trim()));
+                    }
+                }
+            }
+        }
+        assert!(reads.is_empty(), "the user keeps fault states and titles in `kebbie faults` only, off the board:\n{}", reads.join("\n"));
     }
 
     #[test]

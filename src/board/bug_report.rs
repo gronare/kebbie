@@ -20,7 +20,6 @@ use super::widgets::{Choice, FAINT, GREEN, MAUVE, MUTED, PEACH, SURFACE, TEXT, Y
 const PAGE: u16 = 10;
 const FRAME_ROWS: u16 = 14;
 const FIXED_TITLES: usize = 3;
-const FAULT_ROWS: usize = 6;
 const SHOWN: &str = "shown";
 const HIDDEN: &str = "hidden";
 
@@ -149,32 +148,6 @@ pub(super) fn offer_lines(app: &App, width: usize, first: usize) -> (Vec<Line<'s
         lines.push(if selected { line.style(Style::new().bg(SURFACE)) } else { line });
     }
     (lines, rows, selected_line)
-}
-
-pub(super) fn load_faults() -> Vec<crate::faults::Shown> {
-    if !crate::config::maintainers_machine() {
-        return Vec::new();
-    }
-    crate::lead::state_dir().map(|state| crate::faults::board(&state)).unwrap_or_default()
-}
-
-// Information only, after the tasks and outside Needs you: on the maintainers' machine a fault in kebbie is fixed here.
-pub(super) fn fault_lines(faults: &[crate::faults::Shown], width: usize) -> Vec<Line<'static>> {
-    if faults.is_empty() {
-        return Vec::new();
-    }
-    let mut lines = vec![Line::default(), group_line("kebbie faults on this machine", faults.len(), MAUVE)];
-    let word_width = faults.iter().take(FAULT_ROWS).map(|fault| fault.word.chars().count()).max().unwrap_or(0);
-    for fault in faults.iter().take(FAULT_ROWS) {
-        let room = width.saturating_sub(fault.id.chars().count() + word_width + 6);
-        let title = wrap(&fault.title, room.max(1), 1).into_iter().next().unwrap_or_default();
-        lines.push(Line::from(vec![Span::styled(format!("  {}  ", fault.id), style(FAINT)), Span::styled(format!("{:<word_width$}  ", fault.word), style(MUTED)), Span::styled(title, style(TEXT))]));
-    }
-    let more = faults.len().saturating_sub(FAULT_ROWS);
-    if more > 0 {
-        lines.push(Line::from(Span::styled(format!("  … and {more} more"), style(MUTED))));
-    }
-    lines
 }
 
 pub(super) fn load_fixed() -> Option<Fixed> {
