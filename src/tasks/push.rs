@@ -1154,7 +1154,9 @@ fn pushable_through(path: &Path, upstream: &str, rev: &str, keep_open: bool) -> 
 
 // The branch of its own the repo's push.branch names for this task; none pushes to the default branch, and a config kebbie cannot read pushes nowhere.
 pub(crate) fn own_branch(repo: &Path, task: &str) -> Result<Option<String>> {
-    Ok(config::resolve(Some(repo))?.settings.push_branch.value.map(|template| config::branch_for(&template, task)))
+    let Some(rule) = crate::push_target::rule(repo)? else { return Ok(None) };
+    let upstream = default_branch(repo)?;
+    crate::push_target::resolve(repo, &upstream, &rule, &rule.branch, task).map(|target| Some(target.branch)).map_err(|error| format!("Not pushed: push.branch {:?}: {error}", rule.branch))
 }
 
 fn remote_branch(branch: &str) -> String {

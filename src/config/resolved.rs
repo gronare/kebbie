@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::{group_order, load_machine, load_repo, path, repo_file, short_hostname, AgentUpdates, AlsoNoticed, ApproveFrom, AutoApprove, BeforePush, Channel, HubCommands, HubTrust, LinkNetwork, Machine, OngoingAt, ReportText, ReviewAuto, Second, Source, read_sources, Worktree, DEFAULT_BUILD_COMMANDS, DEFAULT_BUILD_SLOTS, DEFAULT_HUB_URL, DEFAULT_IDLE_MINUTES, DEFAULT_KEEPER, DEFAULT_LEAD_CONTEXT, DEFAULT_PROPOSE_ISSUES, DEFAULT_RECOVER, NONE};
+use super::{group_order, load_machine, load_repo, path, repo_file, short_hostname, AgentUpdates, AlsoNoticed, ApproveFrom, AutoApprove, BeforePush, Bump, Channel, HubCommands, HubTrust, LinkNetwork, Machine, OngoingAt, ReportText, ReviewAuto, Second, Source, read_sources, Worktree, DEFAULT_BUILD_COMMANDS, DEFAULT_BUILD_SLOTS, DEFAULT_HUB_URL, DEFAULT_IDLE_MINUTES, DEFAULT_KEEPER, DEFAULT_LEAD_CONTEXT, DEFAULT_PROPOSE_ISSUES, DEFAULT_RECOVER, NONE};
 use crate::sh::Result;
 use crate::status::Group;
 
@@ -80,6 +80,12 @@ pub struct Settings {
     pub ci_deploy: Setting<Option<String>>,
     pub ci_deploy_window: Setting<Option<String>>,
     pub push_branch: Setting<Option<String>>,
+    pub push_choices: Setting<Vec<String>>,
+    pub push_prepare: Setting<Option<String>>,
+    pub push_version_file: Setting<Option<String>>,
+    pub push_version_key: Setting<Option<String>>,
+    pub push_version_command: Setting<Option<String>>,
+    pub push_version_bump: Setting<Bump>,
     pub tests_per_commit: Setting<bool>,
     pub tests_before_push: Setting<BeforePush>,
     pub tests_full_command: Setting<Option<String>>,
@@ -175,6 +181,12 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         ci_deploy: unset(pick(repo.ci_deploy.as_ref(), machine.worktree.ci_deploy.as_ref())),
         ci_deploy_window: optional(pick(repo.ci_deploy_window.as_ref(), None)),
         push_branch: optional(pick(repo.push_branch.as_ref(), None)),
+        push_choices: or_default(pick(repo.push_choices.as_ref(), None), Vec::new()),
+        push_prepare: optional(pick(repo.push_prepare.as_ref(), None)),
+        push_version_file: optional(pick(repo.push_version_file.as_ref(), None)),
+        push_version_key: optional(pick(repo.push_version_key.as_ref(), None)),
+        push_version_command: optional(pick(repo.push_version_command.as_ref(), None)),
+        push_version_bump: or_default(pick(repo.push_version_bump.as_ref(), None), Bump::default()),
         tests_per_commit: or_default(pick(repo.tests_per_commit.as_ref(), machine.worktree.tests_per_commit.as_ref()), true),
         tests_before_push: or_default(pick(repo.tests_before_push.as_ref(), machine.worktree.tests_before_push.as_ref()), BeforePush::default()),
         tests_full_command: optional(pick(repo.tests_full_command.as_ref(), None)),

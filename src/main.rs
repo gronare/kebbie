@@ -73,6 +73,7 @@ mod profile_wizard;
 mod profiles;
 mod push_block;
 mod push_guard;
+mod push_target;
 mod kube_guard;
 mod questions;
 mod recipe;

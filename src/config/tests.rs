@@ -135,11 +135,26 @@ fn a_repo_names_a_branch_of_its_own_per_task_and_config_toml_cannot() {
     assert_eq!(settings(&Worktree::default(), &Machine::default()).push_branch, Setting { value: None, layer: Layer::Default });
     let set = settings(&repo("[push]\nbranch = \"feature/{task}\"\n"), &Machine::default());
     assert_eq!(set.push_branch, Setting { value: Some("feature/{task}".to_string()), layer: Layer::Repo });
-    assert_eq!(branch_for("feature/{task}", "login-sheet"), "feature/login-sheet");
+    assert_eq!(fill("feature/{task}", "login-sheet", None), "feature/login-sheet");
     assert!(parse_repo("[push]\nbranch = \"release\"\n", "app.toml").unwrap_err().contains("push.branch: \"release\" must name {task}"), "one branch shared by every task is refused");
     assert!(parse_repo("[push]\nbranch = \"feature/{task}..x\"\n", "app.toml").unwrap_err().contains("is no branch name git takes"));
     assert!(parse_machine("[push]\nbranch = \"feature/{task}\"\n", "config.toml").unwrap_err().contains("push.branch: each repo opts in on its own"));
-    assert!(unknown_repo("[push]\nto = \"x\"\n").contains("push.to: unknown key; known keys here: branch"));
+    assert!(unknown_repo("[push]\nto = \"x\"\n").contains("push.to: unknown key; known keys here: branch, choices, prepare, version"));
+    let shaped = settings(&repo("[push]\nbranch = \"release/{next}/{task}\"\nchoices = [\"feature/{task}\"]\nprepare = \"bin/bump\"\n[push.version]\nfile = \"App.xcodeproj/project.pbxproj\"\nkey = \"MARKETING_VERSION\"\nbump = \"patch\"\n"), &Machine::default());
+    assert_eq!((shaped.push_choices.value, shaped.push_prepare.value.as_deref(), shaped.push_version_key.value.as_deref(), shaped.push_version_bump.value), (vec!["feature/{task}".to_string()], Some("bin/bump"), Some("MARKETING_VERSION"), Bump::Patch));
+    assert_eq!(fill("release/{next}/{task}", "login", Some("3.5")), "release/3.5/login");
+    for (text, error) in [
+        ("[push]\nchoices = [\"feature/{task}\"]\n", "they need push.branch"),
+        ("[push]\nbranch = \"r/{next}/{current}/{task}\"\n", "names a version more than once"),
+        ("[push]\nbranch = \"r/{nxt}/{task}\"\n", "names {nxt}, which kebbie does not fill in"),
+        ("[push]\nbranch = \"f/{task}\"\n[push.version]\nfile = \"a\"\ncommand = \"b\"\n", "set file or command, not both"),
+        ("[push]\nbranch = \"f/{task}\"\n[push.version]\nkey = \"V\"\n", "needs the file"),
+        ("[push]\nbranch = \"f/{task}\"\n[push.version]\nbump = \"tiny\"\n", "push.version.bump: \"tiny\" must be one of \"major\", \"minor\", \"patch\""),
+        ("[push]\nbranch = \"f/{task}\"\nchoices = [\"main\"]\n", "push.choices: \"main\" must name {task}"),
+    ] {
+        assert!(parse_repo(text, "app.toml").unwrap_err().contains(error), "{text}");
+    }
+    assert!(parse_machine("[push]\nbranch = \"f/{task}\"\nprepare = \"x\"\n", "config.toml").unwrap_err().contains("push.branch: each repo opts in on its own"));
     for (name, valid) in [("feature/a", true), ("a b", false), ("/a", false), ("a/", false), ("a.lock", false), ("a//b", false), ("a/.b", false), ("a@{b", false), ("a~b", false)] {
         assert_eq!(valid_branch(name), valid, "{name}");
     }
@@ -750,12 +765,18 @@ fn describe_names_each_value_and_its_layer() {
 }
 
 fn sample(entry: &Entry) -> String {
-    if format!("x = {}", entry.value).parse::<Table>().is_ok() {
+    if format!("x = {}", entry.value).parse::<Table>().is_ok() && !entry.key.starts_with("push.") {
         return entry.value.clone();
     }
     match &entry.kind {
         _ if entry.key == "ci.deploy_window" => "\"08:00-17:00\"".to_string(),
         _ if entry.key == "push.branch" => "\"feature/{task}\"".to_string(),
+        _ if entry.key.starts_with("push.") => {
+            let value = match &entry.kind { Kind::Choice(options) => format!("{:?}", options[1]), Kind::List => "[\"x/{task}\"]".to_string(), _ => "\"x\"".to_string() };
+            let file = if entry.key == "push.version.key" { "\nfile = \"x\"" } else { "" };
+            let header = if entry.key.starts_with("push.version.") { "\n[push]" } else { "" };
+            format!("{value}{file}{header}\nbranch = \"feature/{{task}}\"")
+        }
         Kind::Choice(options) => format!("{:?}", options[1]),
         Kind::Secret => "\"kha_token\"".to_string(),
         _ => "\"x\"".to_string(),
@@ -766,7 +787,7 @@ fn sample(entry: &Entry) -> String {
 fn each_keys_scope_is_the_files_that_take_it_and_what_its_text_says() {
     let loaded = Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
     let all = entries(&loaded);
-    assert_eq!(all.len(), 69);
+    assert_eq!(all.len(), 75);
     for entry in all {
         let (section, field) = entry.key.rsplit_once('.').unwrap();
         let text = format!("[{section}]\n{field} = {}\n", sample(&entry));

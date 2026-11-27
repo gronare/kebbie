@@ -388,3 +388,32 @@ impl ReportText {
         }
     }
 }
+
+// Which part of a version {next} counts up; the parts after it are dropped, so 3.4.3 goes to 3.5 by minor.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Bump {
+    Major,
+    #[default]
+    Minor,
+    Patch,
+}
+
+impl Bump {
+    pub const ALL: [Bump; 3] = [Bump::Major, Bump::Minor, Bump::Patch];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Bump::Major => "major",
+            Bump::Minor => "minor",
+            Bump::Patch => "patch",
+        }
+    }
+
+    pub fn place(self) -> usize {
+        match self {
+            Bump::Major => 0,
+            Bump::Minor => 1,
+            Bump::Patch => 2,
+        }
+    }
+}

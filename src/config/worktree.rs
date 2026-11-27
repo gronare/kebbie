@@ -2,7 +2,7 @@ use std::path::{Component, Path};
 
 use toml::{Table, Value};
 
-use super::{flag, path, permission_mode, skill, strings, subtable, table, template, text, unsettable, AlsoNoticed, BeforePush, ReviewAuto, Second, NONE};
+use super::{flag, path, permission_mode, skill, strings, subtable, table, template, text, unsettable, AlsoNoticed, BeforePush, Bump, ReviewAuto, Second, NONE};
 use crate::sh::Result;
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -44,6 +44,12 @@ pub struct Worktree {
     pub release_command: Option<String>,
     pub docs_required: Option<bool>,
     pub push_branch: Option<String>,
+    pub push_choices: Option<Vec<String>>,
+    pub push_prepare: Option<String>,
+    pub push_version_file: Option<String>,
+    pub push_version_key: Option<String>,
+    pub push_version_command: Option<String>,
+    pub push_version_bump: Option<Bump>,
 }
 
 fn worktree(table: &Table) -> Result<Worktree> {
@@ -86,6 +92,12 @@ fn worktree(table: &Table) -> Result<Worktree> {
         release_command: unsettable(worktree, "release_command", "worktree.release_command")?,
         docs_required: None,
         push_branch: None,
+        push_choices: None,
+        push_prepare: None,
+        push_version_file: None,
+        push_version_key: None,
+        push_version_command: None,
+        push_version_bump: None,
     })
 }
 
@@ -204,28 +216,66 @@ fn with_comments(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
 }
 
 fn with_push(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
-    if let Some(push) = subtable(table, "push", "push")? {
-        worktree.push_branch = text(push, "branch", "push.branch")?.map(|template| branch_template(&template).map(|_| template)).transpose().map_err(|error| format!("push.branch: {error}"))?;
+    let Some(push) = subtable(table, "push", "push")? else { return Ok(worktree) };
+    worktree.push_branch = text(push, "branch", "push.branch")?.map(|template| branch_template(&template).map(|_| template)).transpose().map_err(|error| format!("push.branch: {error}"))?;
+    worktree.push_choices = push.get("choices").map(|value| strings(value, "push.choices")).transpose()?;
+    for choice in worktree.push_choices.iter().flatten() {
+        branch_template(choice).map_err(|error| format!("push.choices: {error}"))?;
+    }
+    worktree.push_prepare = text(push, "prepare", "push.prepare")?;
+    if let Some(version) = subtable(push, "version", "push.version")? {
+        worktree.push_version_file = text(version, "file", "push.version.file")?;
+        worktree.push_version_key = text(version, "key", "push.version.key")?;
+        worktree.push_version_command = text(version, "command", "push.version.command")?;
+        worktree.push_version_bump = text(version, "bump", "push.version.bump")?
+            .map(|name| Bump::ALL.into_iter().find(|bump| bump.key() == name).ok_or(format!("push.version.bump: \"{name}\" must be one of {}", Bump::ALL.map(|bump| format!("\"{}\"", bump.key())).join(", ")))).transpose()?;
+        if worktree.push_version_file.is_some() && worktree.push_version_command.is_some() {
+            return Err("push.version: set file or command, not both".to_string());
+        }
+        if worktree.push_version_key.is_some() && worktree.push_version_file.is_none() {
+            return Err("push.version.key: names the key in push.version.file, so it needs the file".to_string());
+        }
+    }
+    if (worktree.push_choices.is_some() || worktree.push_prepare.is_some() || worktree.push_version_file.is_some() || worktree.push_version_command.is_some() || worktree.push_version_bump.is_some()) && worktree.push_branch.is_none() {
+        return Err("push: choices, prepare and version shape the branch push.branch names, so they need push.branch".to_string());
     }
     Ok(worktree)
 }
 
 pub const TASK_PLACE: &str = "{task}";
+pub const NEXT_PLACE: &str = "{next}";
+pub const CURRENT_PLACE: &str = "{current}";
 
 // Each task gets a branch of its own, so a template without {task} would send every task to one shared branch.
 fn branch_template(template: &str) -> Result<()> {
     if !template.contains(TASK_PLACE) {
         return Err(format!("\"{template}\" must name {TASK_PLACE}, such as \"feature/{TASK_PLACE}\", so each task pushes to a branch of its own"));
     }
-    let sample = branch_for(template, "task");
-    if !valid_branch(&sample) {
+    let mut rest = template.replace(TASK_PLACE, "");
+    let versions = [NEXT_PLACE, CURRENT_PLACE].iter().map(|place| rest.matches(place).count()).sum::<usize>();
+    if versions > 1 {
+        return Err(format!("\"{template}\" names a version more than once; use one of {NEXT_PLACE} and {CURRENT_PLACE}"));
+    }
+    for place in [NEXT_PLACE, CURRENT_PLACE] {
+        rest = rest.replace(place, "");
+    }
+    if let Some(start) = rest.find('{').filter(|at| rest[*at..].contains('}')) {
+        let end = start + rest[start..].find('}').unwrap_or(0);
+        return Err(format!("\"{template}\" names {}, which kebbie does not fill in; it takes {TASK_PLACE}, {NEXT_PLACE} and {CURRENT_PLACE}", &rest[start..=end]));
+    }
+    if !valid_branch(&fill(template, "task", Some("1.2"))) {
         return Err(format!("\"{template}\" is no branch name git takes"));
     }
     Ok(())
 }
 
-pub fn branch_for(template: &str, task: &str) -> String {
-    template.replace(TASK_PLACE, task)
+// The template with the task's name and the version in their places; a template that names no version ignores it.
+pub fn fill(template: &str, task: &str, version: Option<&str>) -> String {
+    let named = template.replace(TASK_PLACE, task);
+    match version {
+        Some(version) => named.replace(NEXT_PLACE, version).replace(CURRENT_PLACE, version),
+        None => named,
+    }
 }
 
 // git check-ref-format's rules for a branch name.
