@@ -102,6 +102,7 @@ fn a_fix_task_is_told_to_build_a_code_barrier_once_a_text_fix_did_not_hold() {
     let issue = Issue { id: "3f9a2c".to_string(), title: "The lead hands the user a command".to_string(), body: "What happened: x\nWhat I expected: y".to_string(), cause: Some("roles/lead.md".to_string()), barrier: Some("code".to_string()), history: vec!["files: src/lead.rs".to_string()], ..Issue::default() };
     let prompt = watch::fix_prompt(&issue, true, &["type sudo apt install mold (lead)".to_string()]);
     assert!(prompt.starts_with("The lead hands the user a command\n") && prompt.contains("kebbie issue 3f9a2c") && prompt.contains("- type sudo apt install mold (lead)") && prompt.contains("Files it names: src/lead.rs"), "{prompt}");
+    assert!(prompt.contains("reproduce the fault as it was met and see it happen") && prompt.contains("--after-push naming the check that reproduces it on the pushed build"), "{prompt}");
     assert!(prompt.contains("a text fix did not hold") && prompt.contains(watch::barrier_line("code")), "{prompt}");
     assert!(!watch::fix_prompt(&Issue { barrier: Some("role".to_string()), ..issue }, false, &[]).contains("did not hold"));
 }
@@ -268,7 +269,7 @@ fn a_case_settled_without_a_verdict_goes_back_to_the_lead_with_the_users_words()
     assert!(told.starts_with("The fault watcher could not weigh case c1 (the user's answer on the board, from billing@app): the watcher gave no verdict on it."), "{told}");
     assert!(told.contains("\"this plan builds the instance, not the cause\"") && told.contains("kebbie:propose-change"), "{told}");
     let heard = std::cell::RefCell::new(Vec::new());
-    let tell = |text: &str| heard.borrow_mut().push(text.to_string());
+    let tell = |text: &str, _: bool| heard.borrow_mut().push(text.to_string());
     let cases = [said.clone(), case(&state, Source::Chat, "lead", "the push line stands still again", 20), case(&state, Source::Chat, "lead", "thanks, that looks right now", 30)];
     let answer = "case: c1\nverdict: new\nreason: r\n\ncase: c3\nverdict: ignore\nreason: thanks\n";
     let act = |case: &Case, _: &Verdict| if case.id == "c1" { Err("a new fault names no title".to_string()) } else { Ok(("no fault in kebbie: thanks".to_string(), None)) };
@@ -298,10 +299,10 @@ fn the_running_mark_stays_until_every_verdict_is_carried_out() {
         assert!(watch::is_running(&state), "a tick while the verdicts are carried out sees the watcher running");
         Ok(("no fault in kebbie: r".to_string(), None))
     };
-    watch::run_with(&state, &ids, |_| Ok("case: c1\nverdict: ignore\nreason: r\n".to_string()), act, |_| {}).unwrap();
+    watch::run_with(&state, &ids, |_| Ok("case: c1\nverdict: ignore\nreason: r\n".to_string()), act, |_, _| {}).unwrap();
     assert!(!watch::is_running(&state) && pending(&state).is_empty());
     let again = case(&state, Source::Chat, "lead", "and the board is wrong too", 20);
-    assert!(watch::run_with(&state, &[again.id], |_| Err("claude timed out".to_string()), |_: &Case, _: &Verdict| unreachable!(), |_| {}).is_err());
+    assert!(watch::run_with(&state, &[again.id], |_| Err("claude timed out".to_string()), |_: &Case, _: &Verdict| unreachable!(), |_, _| {}).is_err());
     assert!(!watch::is_running(&state), "a run that failed leaves no mark behind");
     fs::remove_dir_all(state).unwrap();
 }
@@ -385,5 +386,86 @@ fn only_the_lead_or_the_user_reports_a_fault_and_the_lead_may_only_where_the_wat
     assert!(!off.contains("kebbie fault:") && on.contains("Bash(/opt/kebbie/kebbie fault:*)"), "{off}");
     let said = report_as(&state, &crate::permit::Caller::Lead, "the board is wrong", 10).unwrap();
     assert!(said.starts_with("Case c1 goes to the fault watcher now") && said.contains("Its verdict comes to you as a message"), "{said}");
+    fs::remove_dir_all(state).unwrap();
+}
+
+#[test]
+fn a_pointed_out_fault_starts_its_fix_at_once_past_the_daily_cap_and_two_build_at_a_time() {
+    let none: [String; 0] = [];
+    assert_eq!(watch::start_of(true, 100 + DAY, &none, 500), watch::Start { at: 500, after: Vec::new(), counted: false }, "the daily cap holds no fault the user pointed out, and it uses up none of the day's three");
+    assert_eq!(watch::start_of(false, 100 + DAY, &none, 500), watch::Start { at: 100 + DAY, after: Vec::new(), counted: true }, "the watcher's own finds keep the cap");
+    let one = ["fault-aa0001".to_string()];
+    assert!(watch::start_of(true, 500, &one, 500).after.is_empty(), "a second fix builds beside the first");
+    let two = ["fault-aa0001".to_string(), "fault-aa0002".to_string()];
+    assert_eq!(watch::start_of(true, 500, &two, 500).after, ["fault-aa0002"], "a third waits behind the newest, so the waiting ones form one line");
+    let state = state("in-flight");
+    for task in ["fault-aa0001", "fault-aa0002", "fault-aa0003"] {
+        started_fix(&state, task).unwrap();
+    }
+    assert_eq!(in_flight(&state, |_| true).unwrap(), ["fault-aa0001", "fault-aa0002", "fault-aa0003"], "queued ones count, in the order they were started");
+    assert_eq!(watch::start_of(true, 500, &in_flight(&state, |_| true).unwrap(), 500).after, ["fault-aa0003"], "a fourth waits behind the third, never beside it");
+    assert_eq!(in_flight(&state, |task| task != "fault-aa0001").unwrap(), ["fault-aa0002", "fault-aa0003"], "an ended one is let go");
+    assert_eq!(in_flight(&state, |_| true).unwrap(), ["fault-aa0002", "fault-aa0003"]);
+    fs::remove_dir_all(state).unwrap();
+}
+
+#[test]
+fn the_lead_hears_every_verdict_on_a_pointed_fault_as_a_message_and_confirms_once_the_fix_is_in_use() {
+    let state = state("pointed-verdict");
+    let ignored = add_pointed(&state, "the board is slow today", 10).unwrap();
+    let filed = add_pointed(&state, "the lead asked me in the chat again", 11).unwrap();
+    let lost = add_pointed(&state, "kebbie lost my answer", 12).unwrap();
+    let plain = case(&state, Source::Chat, "billing@app", "the push line stands still", 13);
+    let cases: Vec<Case> = pending(&state);
+    let heard = std::cell::RefCell::new(Vec::new());
+    let tell = |text: &str, asks: bool| heard.borrow_mut().push((text.to_string(), asks));
+    let answer = format!("case: {ignored}\nverdict: ignore\nreason: the host was busy\n\ncase: {filed}\nverdict: new\nreason: r\n\ncase: {}\nverdict: ignore\nreason: thanks\n", plain.id);
+    let act = |case: &Case, verdict: &Verdict| match verdict.kind {
+        Some(Kind::New) => Ok((format!("filed kebbie issue aa0009: queued fault-aa0009 ({})", case.id), Some("aa0009".to_string()))),
+        _ => Ok((format!("no fault in kebbie: {}", verdict.reason), None)),
+    };
+    watch::settle_all(&state, &cases, &answer, act, tell).unwrap();
+    let heard = heard.into_inner();
+    assert_eq!(heard.len(), 3, "each pointed case, and no word on the plain one: {heard:?}");
+    assert!(heard.iter().all(|(_, asks)| *asks), "every word on a pointed case is one the lead acts on: {heard:?}");
+    assert!(heard[0].0.contains(&format!("(case {ignored}, their words: \"the board is slow today\"): no fault in kebbie: the host was busy")) && heard[0].0.contains("Tell the user in one line what it found"), "{}", heard[0].0);
+    assert!(heard[1].0.contains("queued fault-aa0009") && heard[1].0.contains("kebbie recipe <task>"), "{}", heard[1].0);
+    assert!(heard[2].0.starts_with(&format!("The fault watcher could not weigh case {lost} (the user's words, which the lead reported as a fault in kebbie")), "{}", heard[2].0);
+    assert_eq!(awaiting_confirm(&state), ["aa0009"]);
+    let dir = issues::dir(&state);
+    let issue = Issue { id: "aa0009".to_string(), title: "The lead asks in its chat".to_string(), kind: "bug".to_string(), status: "open".to_string(), by: BY.to_string(), fix: Some("fault-aa0009".to_string()), ..Issue::default() };
+    issues::save(&dir, &issue).unwrap();
+    record_occurrence(&state, "aa0009", &Occurrence { at: 11, case: filed.clone(), source: Source::Chat, from: "lead".to_string(), quote: "the lead asked me in the chat again".to_string(), came_back: false }).unwrap();
+    let asked = std::cell::RefCell::new(Vec::new());
+    let ask = |text: &str, asks: bool| asked.borrow_mut().push((text.to_string(), asks));
+    assert!(watch::ask_confirm(&state, ask).is_empty(), "the fix is not in use yet");
+    issues::save(&dir, &Issue { status: "fixed".to_string(), history: vec!["fixed: checked automatically".to_string()], ..issue }).unwrap();
+    assert_eq!(watch::ask_confirm(&state, ask).len(), 1);
+    assert!(watch::ask_confirm(&state, ask).is_empty(), "asked once");
+    let asked = asked.into_inner();
+    assert!(asked.len() == 1 && asked[0].1 && asked[0].0.contains("is in use in the installed kebbie: reproduce the fault as the user met it (their words: \"the lead asked me in the chat again\")"), "{asked:?}");
+    assert!(awaiting_confirm(&state).is_empty());
+    fs::remove_dir_all(state).unwrap();
+}
+
+#[test]
+fn a_watcher_that_cannot_start_counts_a_try_and_a_pointed_case_reaches_the_lead_instead_of_retrying_unheard() {
+    let state = state("start-fails");
+    let id = add_pointed(&state, "the board froze again", 10).unwrap();
+    let fails = |_: &str| Err("kebbie found no claude on the keeper's PATH".to_string());
+    for (at, tries) in [(20, 1), (50, 2)] {
+        let said = watch::start_due(&state, &pending(&state), at, fails).unwrap();
+        assert!(said.contains("could not start"), "{said}");
+        assert_eq!(pending(&state)[0].tries, tries, "each failed start counts");
+    }
+    assert_eq!(watch::start_due(&state, &pending(&state), 80, fails), None, "a case two starts failed on is not started again");
+    let heard = std::cell::RefCell::new(Vec::new());
+    assert_eq!(watch::drop_spent(&state, &pending(&state), |text: &str, asks: bool| heard.borrow_mut().push((text.to_string(), asks))).len(), 1);
+    assert!(pending(&state).is_empty());
+    let heard = heard.into_inner();
+    assert!(heard.len() == 1 && heard[0].1 && heard[0].0.contains(&format!("could not weigh case {id}")) && heard[0].0.contains("the board froze again"), "{heard:?}");
+    let started = add_pointed(&state, "and the push line too", 90).unwrap();
+    assert_eq!(watch::start_due(&state, &pending(&state), 100, |payload: &str| { assert_eq!(payload, started); Ok(()) }).as_deref(), Some("faults: the fault watcher weighs 1 case"));
+    assert_eq!(pending(&state)[0].tries, 0, "a start that worked leaves the try to the run");
     fs::remove_dir_all(state).unwrap();
 }

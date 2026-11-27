@@ -84,6 +84,10 @@ struct Store {
     cases: Vec<Case>,
     #[serde(default)]
     fixes: Vec<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    confirm: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    started: Vec<String>,
 }
 
 fn store_file(state: &Path) -> PathBuf {
@@ -215,6 +219,30 @@ pub fn settle(state: &Path, id: &str, outcome: &str, issue: Option<&str>) -> Res
             case.issue = issue.map(str::to_string);
         }
     })
+}
+
+// The watcher's fix tasks still running or queued, oldest first; the ones that ended are let go.
+pub fn in_flight(state: &Path, open: impl Fn(&str) -> bool) -> Result<Vec<String>> {
+    change(state, |store| {
+        store.started.retain(|task| open(task));
+        store.started.clone()
+    })
+}
+
+pub fn started_fix(state: &Path, task: &str) -> Result<()> {
+    change(state, |store| if !store.started.iter().any(|known| known == task) { store.started.push(task.to_string()) })
+}
+
+pub fn await_confirm(state: &Path, issue: &str) -> Result<()> {
+    change(state, |store| if !store.confirm.iter().any(|id| id == issue) { store.confirm.push(issue.to_string()) })
+}
+
+pub fn awaiting_confirm(state: &Path) -> Vec<String> {
+    load(state).confirm
+}
+
+pub fn confirmed(state: &Path, issue: &str) -> Result<()> {
+    change(state, |store| store.confirm.retain(|id| id != issue))
 }
 
 pub fn next_start(state: &Path, now: u64) -> u64 {

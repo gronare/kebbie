@@ -68,7 +68,7 @@ pub fn fingerprint(kind: &str, key: &str) -> String {
 pub fn seen(state: &Path, kind: &str, key: &str, summary: &str, checkout: Option<&Path>, now: u64) -> Result<Option<String>> {
     let print = fingerprint(kind, key);
     if let Some(issue) = issue_with(state, &print) {
-        return super::watch::again(state, &issue, Source::Incident, kind, summary, checkout, now).map(|_| Some(issue.id));
+        return super::watch::again(state, &issue, Source::Incident, kind, summary, false, checkout, now).map(|_| Some(issue.id));
     }
     let raised = {
         let _lock = super::locked(state)?;

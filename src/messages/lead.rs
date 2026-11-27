@@ -52,15 +52,16 @@ pub enum ToLead {
     QuestionCopy,
     BacklogItem,
     Promise,
+    FaultVerdict,
 }
 
 impl ToLead {
     #[cfg_attr(not(test), allow(dead_code))]
-    pub const ALL: [ToLead; 34] = [
+    pub const ALL: [ToLead; 35] = [
         ToLead::TaskStarted, ToLead::TaskRestarted, ToLead::TaskEnded, ToLead::Pushed, ToLead::PushCancelled, ToLead::PushRebasing, ToLead::Staged, ToLead::Landed,
         ToLead::CiGreen, ToLead::CiHanded, ToLead::CiDismissed, ToLead::RebaseHanded, ToLead::RebaseStuck, ToLead::ReviewPassed, ToLead::ReviewAgain, ToLead::ReviewWithdrawn,
         ToLead::RulesBreak, ToLead::Notice, ToLead::Findings, ToLead::RulesCheck, ToLead::Prompt, ToLead::PushFailed, ToLead::PushToLog, ToLead::RedCi,
-        ToLead::CiOutside, ToLead::ChainBlocked, ToLead::NoteUnsettled, ToLead::TaskStopped, ToLead::Permission, ToLead::Away, ToLead::TaskMessage, ToLead::QuestionCopy, ToLead::BacklogItem, ToLead::Promise,
+        ToLead::CiOutside, ToLead::ChainBlocked, ToLead::NoteUnsettled, ToLead::TaskStopped, ToLead::Permission, ToLead::Away, ToLead::TaskMessage, ToLead::QuestionCopy, ToLead::BacklogItem, ToLead::Promise, ToLead::FaultVerdict,
     ];
 
     // The one table: whether the lead has something to do, and the kind its log record carries (the away summary reads "push" and "after").
@@ -101,6 +102,7 @@ impl ToLead {
             ToLead::QuestionCopy => (Asks, Some("copy")),
             ToLead::BacklogItem => (Asks, Some("backlog")),
             ToLead::Promise => (Asks, Some("promise")),
+            ToLead::FaultVerdict => (Asks, None),
         }
     }
 
