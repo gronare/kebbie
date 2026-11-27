@@ -204,7 +204,7 @@ A listed test command inside a loop, a condition or `xargs` is not recorded eith
 | Ready to push | Reported ready with its commits, for you to push. A review is optional: `v` sends it to one, and it waits under In review while the reviewer reads. |
 | Going out | On its way out without you: in its repo's push line, or ready with the lead holding [push permission](../how-to/let-the-lead-push.md) for it. |
 | CI running | Pushed, with its worktree kept until every workflow run for the pushed commit is green and the task's check after the push holds; then it closes as done. A run cancelled for a newer run on the default branch follows that run, and one cancelled while the repo's [`ci.deploy_window`](configuration.md#ci-updates-and-the-keeper) was shut is re-run once it opens. |
-| On branch, waiting for main | Pushed to its own branch in a repo with [`push.branch`](configuration.md#push), kept open until its commits are on the default branch; then kebbie closes it as done. See [On branch, waiting for main](#on-branch-waiting-for-main). |
+| On branch, waiting for main | Pushed to a branch in a repo with [`push.branch`](configuration.md#push), its own or one tasks share, kept open until its commits are on the default branch; then kebbie closes it as done. See [On branch, waiting for main](#on-branch-waiting-for-main). |
 | Waiting for work | Started without work, blocked on something outside you, or kept open with nothing left on top. |
 | Waiting on | Running, and waiting for other tasks to land. See [Waiting on](#waiting-on). |
 | Queued | Waiting to start after other tasks or at a time, with no worktree, Space or Claude. |
@@ -282,9 +282,9 @@ A push whose CI failed on a job the branch was already red on stays here, marked
 
 ### On branch, waiting for main
 
-A task of a repo whose [`push.branch`](configuration.md#push) names a branch per task, such as `feature/{task}`, lands here once it is pushed: `2 commits on feature/billing · kebbie closes it once they reach main`. Nothing merges the branch for you. The keeper looks each round, and once the task's commits are on the default branch, by a merge or a rebase, it closes the task as done and tells the lead. A closed Space or a stopped Claude does not hold it.
+A task of a repo whose [`push.branch`](configuration.md#push) names a branch, its own such as `feature/{task}` or a shared one such as `release/{next}`, lands here once it is pushed: `2 commits on feature/billing · kebbie closes it once they reach main`. Nothing merges the branch for you. The keeper looks each round, and once the task's commits are on the default branch, by a merge or a rebase, it closes the task as done and tells the lead. A closed Space or a stopped Claude does not hold it.
 
-- A new commit and a ready report move it back to Ready to push; the next push adds to the same branch by fast-forward.
+- A new commit and a ready report move it back to Ready to push; the next push adds to the same branch by fast-forward, on a shared branch rebased onto it first.
 - A prompt of yours moves it under Working.
 - Its worktree stays taken until it closes. `d` closes it only once its commits are on the default branch; to take it off the board before that, drop it, and its commits stay on its branch on origin.
 
@@ -691,6 +691,8 @@ Opened by `p`. The window is in four parts, each under a header on a rule:
 | `COMMITS` | The commits that will land, with their count. A commit you accepted is marked `✓`, green. With subtasks, the commits stand in push order, oldest first, and where a subtask's commits start they carry its mark, number and `· title`; the subtasks without commits follow, muted: `in progress, stays` or `planned`. |
 | `MESSAGE` | The selected commit's full message, set off by a bar so it does not read as part of the card. |
 
+In a repo with [`push.branch`](configuration.md#push), the task's row under Ready to push reads `ready to push to release/3.5`, and a `TO` part above the commits names where the push goes: the branch the repo's rule gives now, marked `new: kebbie creates it from main` when it is not on origin yet, then each of `push.choices`, then the default branch, `only because you pick it`. `▸` marks the one `y` and `p` push to.
+
 With accepted commits, the window opens on the last of the accepted ones from the first commit on, marked `◂ through here`, and `p` reads `p push N accepted, the task keeps working` while it is selected. With subtasks, `◂ through here` ends the pushable run, the commits from the top that you accepted, never splitting a group, and `p` reads `p push the accepted run, N commits and keep it open`. Without any, it opens on the first commit. While the task's agent is working, `p` opens the window only once it has accepted commits from the first one on, and the window then pushes only those: `↑` `↓` stop at the last of them, and `y`, `e` and `s` wait until the task reports.
 
 A group's commits carry a bracket down their left, `┌` `│` `└`, and go out together. After a commit's subject, `tests ✓`, `tests ✗`, `testing…` or `not tested` is its own test run once the task reported ready, and `↑ moved from N` marks a commit kebbie moved with `kebbie order move`.
@@ -705,6 +707,7 @@ The keys sit under a rule at the bottom and stay there. A window taller than the
 | `s` | Squash all commits into one. Claude drafts the message in the background, ready to edit. Needs two or more commits. |
 | `y` | Push every commit shown and close the task. |
 | `p` | Push the commits up to the selected one and keep the task open. With subtasks and a pushable run, the run, whichever commit is selected. |
+| `t` | Pick the next branch under `TO`. Only in a repo with `push.branch` and more than one branch to offer. |
 | `esc`, `q` | Close without pushing. |
 
 In the message editor: `ctrl-s` saves, `ctrl-o` opens your `$EDITOR`, `esc` goes back.

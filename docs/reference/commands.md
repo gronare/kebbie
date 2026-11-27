@@ -251,6 +251,7 @@ Put the task in its repo's push line. When its turn comes, kebbie fetches, rebas
 | `--through <sha>` | Push the commits up to and including `<sha>` and keep the task open, also when `<sha>` is its last commit. |
 | `--cancel` | Take the task out of the push line before it goes out. Nothing of it is pushed, and it waits under Ready to push. |
 | `--anyway` | Push a task that [waits for another](#kebbie-wait-name---on-task), ahead of it. |
+| `--to <template>` | In a repo with [`push.branch`](configuration.md#push), push to one of `push.choices` instead, such as `--to "feature/{task}"`, or to the default branch with `--to {default}`, which only you may pick. |
 
 With `--through`, kebbie leaves the task's worktree alone: uncommitted changes do not stop it, and its HEAD stays where its Claude left it. When the default branch moved, kebbie rebases the commits up to `<sha>` onto it in a worktree of its own and pushes them from there, then tells the task's Claude to rebase onto the default branch once its work in progress is committed. When those commits changed the same files as the default branch, or conflict with it, its Claude rebases, runs their tests (or resolves the conflict) and reports ready first. A commit the task makes after `<sha>` meanwhile does not stop the push; a change to the commits up to `<sha>` does. A task kept open stays open until you close it (`done`, or Done in its options).
 

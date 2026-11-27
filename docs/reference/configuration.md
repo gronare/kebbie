@@ -140,15 +140,39 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 
 | Key | Default | Where | What it does |
 | --- | --- | --- | --- |
-| `push.branch` | none | repo | The branch on origin each task pushes to instead of the default branch, such as `"feature/{task}"`. |
+| `push.branch` | none | repo | The branch on origin the repo's tasks push to instead of the default branch: one per task, such as `"feature/{task}"`, or one they share, such as `"release/{next}"`. |
+| `push.choices` | `[]` | repo | Other branches the push window offers, as templates like `push.branch`, such as `["feature/{task}", "release/{current}"]`. |
+| `push.prepare` | none | repo | A command kebbie runs once when a push creates a shared branch, such as a version bump; its commit goes first on the new branch. |
+| `push.version.file` | none | repo | A file on the default branch that holds the released version, such as `"App.xcodeproj/project.pbxproj"` or `"package.json"`. |
+| `push.version.key` | `"version"` | repo | The key in `push.version.file` whose value is the version, such as `"MARKETING_VERSION"`. |
+| `push.version.command` | none | repo | A command whose output is what `{next}` becomes. |
+| `push.version.bump` | `"minor"` | repo | Which part of the version `{next}` counts up: `"major"`, `"minor"` or `"patch"`. |
 
-`push.branch`: `{task}` is filled in with the task's name, so `"feature/{task}"` pushes the task `login-sheet` to `feature/login-sheet`. The template must name `{task}`, so every task gets a branch of its own, and kebbie refuses one that makes no branch name git takes. See [Push to a branch per task](../how-to/push-to-a-branch-per-task.md).
+`push.branch` is a template. kebbie fills in:
+
+- `{task}`: the task's name, so `"feature/{task}"` pushes the task `login-sheet` to `feature/login-sheet`.
+- `{current}`: the version of the highest branch on origin the template matches, so `"release/{current}"` is `release/3.5` when `release/3.4` and `release/3.5` are there.
+- `{next}`: the release branch that is open, one on origin that is not yet merged into the default branch. With none open, the highest plus one. With `push.version.file` set, the version in that file on the default branch plus one instead, and with `push.version.command`, its output.
+
+kebbie refuses a template that makes no branch name git takes, names a version twice, or names a placeholder it does not fill in. A template that resolves to the default branch is refused at the push. See [Push where main is for releases only](../how-to/push-to-a-branch-per-task.md).
+
+A template with `{task}` gives each task a branch of its own:
 
 - A push goes out as the task's branch holds it, not rebased onto the default branch, and adds to the branch on origin only by fast-forward. kebbie never force-pushes it: a branch whose pushed commits were rewritten is refused until its Claude puts the new commits on top.
+
+A template without `{task}` gives the tasks one branch they share:
+
+- Each push fetches, resolves the branch, rebases the task's commits onto it in a worktree of kebbie's own and fast-forwards it. Tasks go out in their repo's push line order. The task's own branch, and its review, its commits and its test runs, stay as they were against the default branch.
+- A branch that is not on origin yet is created from the default branch. `push.prepare` runs first, once, in a worktree of kebbie's on the default branch, with `KEBBIE_BRANCH` and `KEBBIE_VERSION` set. kebbie commits what it leaves as `Prepare <branch>`, and that commit goes first on the new branch. A preparation that fails creates no branch and pushes nothing.
+- A task whose commits conflict with what is on the branch is refused, with the files. Nothing is handed to its Claude.
+
+For both:
+
 - The push line, the rules check, the review and the test runs a ready report needs hold as without it, counted from where the task left the default branch.
 - kebbie watches no CI for it and closes nothing after it: the task waits under [On branch, waiting for main](board.md#on-branch-waiting-for-main) until its commits are on the default branch, and the keeper closes it then.
+- The push window names the branch under `TO` before you push, and `t` picks one of `push.choices` or the default branch instead. `kebbie push --to <template>` does the same. Only your own pick sends a push to the default branch: the lead's and kebbie's pushes follow `push.branch`.
 - Unset, tasks rebase onto the default branch and push to it.
-- Repo config only: config.toml refuses it.
+- Repo config only: config.toml refuses every `push` key.
 
 ### Review and docs
 
