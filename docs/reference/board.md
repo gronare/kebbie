@@ -715,7 +715,7 @@ Opened by `i` at the first question, or by `s` on a task at that task's question
 - The title reads `question 2/3 · plan · <task>`, with `plan` for a plan to approve and `ask` for a plain question.
 - In a window 120 columns wide or more, the questions also list on the left under `QUESTIONS`, set off by a bar, with the open one highlighted. A click on one opens it.
 - The question's text comes first, in bold.
-- A plan question then shows its plan under a `PLAN` header, which gives how far down the plan you have scrolled, as a percentage, and `changed since asked` when the vault note changed after the question was asked. The plan fills the height that is left.
+- A plan question then shows its plan under a `PLAN` header, which gives how far down the plan you have scrolled, as a percentage, and `changed since asked` when the vault note changed after the question was asked. The plan fills the height that is left, with the question's brief above it. A plan kebbie cannot read yet shows its brief and its links, then `not readable yet: <where it is>`.
 
 The answers sit on one row at the bottom under an `ANSWER` header, each as its key and a short name, the selected one highlighted. The line under the row says what the selected answer means, with `recommended` on the one the task recommends. A click on an answer selects it.
 

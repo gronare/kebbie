@@ -557,21 +557,16 @@ pub(super) fn draw_questions(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit
     if planned && plan_area.height > 0 {
         let [header, text] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(plan_area);
         let changed = question.is_some_and(questions::plan_changed);
-        match plan {
-            Some(plan) => {
-                super::link::note_lines(&plan.lines);
-                let paragraph = Paragraph::new(plan).wrap(Wrap { trim: false });
-                let last = (paragraph.line_count(text.width) as u16).saturating_sub(text.height);
-                window.scroll = window.scroll.min(last);
-                frame.render_widget(Paragraph::new(plan_header(window.scroll, last, changed, width)), header);
-                frame.render_widget(paragraph.scroll((window.scroll, 0)), text);
-            }
-            None => {
-                frame.render_widget(Paragraph::new(plan_header(0, 0, changed, width)), header);
-                let source = question.and_then(|question| question.plan.clone()).unwrap_or_default();
-                frame.render_widget(Paragraph::new(fit(vec![Span::styled(format!("not readable yet: {source}"), style(MUTED))], width)), text);
-            }
-        }
+        let plan = plan.unwrap_or_else(|| {
+            let source = question.and_then(|question| question.plan.clone()).unwrap_or_default();
+            markdown(&brief_and_plan(&message.text, &format!("not readable yet: {source}")))
+        });
+        super::link::note_lines(&plan.lines);
+        let paragraph = Paragraph::new(plan).wrap(Wrap { trim: false });
+        let last = (paragraph.line_count(text.width) as u16).saturating_sub(text.height);
+        window.scroll = window.scroll.min(last);
+        frame.render_widget(Paragraph::new(plan_header(window.scroll, last, changed, width)), header);
+        frame.render_widget(paragraph.scroll((window.scroll, 0)), text);
     }
     let [answer_header, choices, rest] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1)]).areas(answer_area);
     frame.render_widget(Paragraph::new(section_header("ANSWER", Vec::new(), width)), answer_header);
@@ -1155,6 +1150,24 @@ mod tests {
         app.open_questions(None);
         render(&mut app, 170, 40);
         assert!(app.plans.is_empty(), "nothing is cached for a plan that is not there");
+    }
+
+    #[test]
+    fn a_plan_not_readable_yet_still_shows_its_brief_and_links_the_mock_in_it() {
+        let brief = (1..=30).map(|line| format!("- what you get, part {line}")).collect::<Vec<_>>().join("\n");
+        let asked = questions::parse(&[], None, true, &format!("Approve this mockup of a clearer invoice page.\n\n**What you get**\n{brief}\n\nMockup: https://claude.ai/artifact/abc123")).unwrap();
+        let mut app = test_app(Vec::new());
+        app.questions = messages::fold(&questions::record("q8", 20, "pay@web", &asked, Some("/nowhere/kebbie-plan.md"), None).to_string());
+        app.open_questions(Some(0));
+        let (rows, _) = render(&mut app, 80, 30);
+        assert!(rows.join("\n").contains("part 1"), "the brief shows: {}", rows.join("\n"));
+        for _ in 0..4 {
+            press(&mut app, KeyCode::PageDown);
+        }
+        let (rows, buffer) = render(&mut app, 80, 30);
+        let screen = rows.join("\n");
+        assert!(screen.contains("Mockup: https://claude.ai/artifact/abc123") && screen.contains("not readable yet: /nowhere/kebbie-plan.md"), "a long brief scrolls to its link: {screen}");
+        assert_whole_link(&buffer, "https://claude.ai/artifact/abc123", 1, "the mock where the user answers");
     }
 
     #[test]
