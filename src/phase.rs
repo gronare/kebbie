@@ -152,6 +152,7 @@ pub enum Event<'a> {
     PushQueued { ahead: usize },
     PushHanded,
     PushOut { sha: &'a str },
+    BranchOut { sha: &'a str, branch: &'a str },
     PushFailed,
     Staged { head: Option<&'a str> },
     Unstaged { head: Option<&'a str> },
@@ -242,6 +243,7 @@ pub fn next(current: Option<&Phase>, event: &Event) -> Option<Phase> {
         Event::PushQueued { ahead } => Phase::Pushing { ahead: *ahead },
         Event::PushHanded => Phase::Pushing { ahead: 0 },
         Event::PushOut { sha } => Phase::CiRunning { sha: sha.to_string() },
+        Event::BranchOut { sha, branch } => Phase::OnBranch { sha: sha.to_string(), branch: branch.to_string() },
         Event::PushFailed => Phase::NeedsYou(Why::Failed),
         Event::Staged { head } => Phase::Staged { head: head.map(str::to_string) },
         Event::StageGaveUp => Phase::NeedsYou(Why::NotStaged),
@@ -554,8 +556,9 @@ mod tests {
     }
 
     #[test]
-    fn a_task_on_its_branch_waits_there_until_new_work_or_new_commits_move_it() {
+    fn a_task_pushed_to_its_branch_waits_there_until_new_work_or_new_commits_move_it() {
         let on = Phase::OnBranch { sha: "abc".to_string(), branch: "feature/billing".to_string() };
+        assert_eq!(next(Some(&Phase::Ready { head: Some("abc".to_string()) }), &Event::BranchOut { sha: "abc", branch: "feature/billing" }), Some(on.clone()));
         let reported = |state: &str, head: &str| next(Some(&on), &Event::Reported { state, head: Some(head), committed: true, pushing: false });
         assert_eq!(reported("ready", "abc"), None, "the ready report about what it pushed keeps it on its branch");
         assert_eq!(reported("ready", "def"), Some(Phase::Ready { head: Some("def".to_string()) }), "new commits are ready to push again");

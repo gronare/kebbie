@@ -387,7 +387,9 @@ pub(super) fn pass(state: &Path, world: &World, close: Close, tell: &mut dyn FnM
         for slot in pool.iter().filter(|slot| slot.task.is_some()) {
             let task = task_of(slot);
             let address = peers::address(task, &name_of(repo));
-            let seen = Seen { status: status_of(&slot.path, world.workspaces, world.agents), question: questions.iter().any(|question| question.from == address) || asks(&address, &slot.path, &upstream) };
+            let on_branch = on_branch(state, &address);
+            let status = |status: Option<String>| status.or_else(|| on_branch.is_some().then(|| "idle".to_string()));
+            let seen = Seen { status: status(status_of(&slot.path, world.workspaces, world.agents)), question: questions.iter().any(|question| question.from == address) || asks(&address, &slot.path, &upstream) };
             let verdict = verdict(state, slot, &address, &upstream, &seen, &mut |watch| superseded(watch, world.gh));
             match verdict {
                 Ok(Verdict::Unsure(why)) => {
@@ -399,7 +401,7 @@ pub(super) fn pass(state: &Path, world: &World, close: Close, tell: &mut dyn FnM
                     }
                 }
                 Ok(Verdict::Close) => {
-                    let now = world.fresh.map_or_else(|| status_of(&slot.path, world.workspaces, world.agents), |fresh| fresh(&slot.path));
+                    let now = status(world.fresh.map_or_else(|| status_of(&slot.path, world.workspaces, world.agents), |fresh| fresh(&slot.path)));
                     if !matches!(now.as_deref(), Some("idle" | "done")) || crate::report::turn_started(&address).is_some_and(|at| at >= world.began) {
                         continue;
                     }
@@ -425,7 +427,11 @@ pub(super) fn pass(state: &Path, world: &World, close: Close, tell: &mut dyn FnM
                             if intent::pending(state, &address).is_some_and(|pending| pending.work == Work::Ci) {
                                 intent::forget(state, &address);
                             }
-                            let text = if kebbie_pushed { format!("kebbie closed {address} as done, after its push to {main}.") } else { format!("{address} landed on {main} outside kebbie's push, so kebbie closed it as done.") };
+                            let text = match (&on_branch, kebbie_pushed) {
+                                (Some(branch), _) => format!("kebbie closed {address} as done: its commits on {branch} reached {main}."),
+                                (None, true) => format!("kebbie closed {address} as done, after its push to {main}."),
+                                (None, false) => format!("{address} landed on {main} outside kebbie's push, so kebbie closed it as done."),
+                            };
                             tell(&text);
                             notes.push(format!("landed: {text}"));
                         }
@@ -477,6 +483,14 @@ fn red_over_on_main(state: &Path, red: &crate::ci::Watch, tell: &mut dyn FnMut(&
     }
     let waiting = super::red_ci::over(state, red);
     format!("landed: CI is green after {} on a later commit; {} waiting again", red.address, if waiting.is_empty() { "nothing".to_string() } else { waiting.join(", ") })
+}
+
+// A task pushed to its own branch may wait weeks for a release, its Space long closed, so no agent there counts as idle.
+fn on_branch(state: &Path, address: &str) -> Option<String> {
+    match crate::phase::load(state, address)?.phase {
+        crate::phase::Phase::OnBranch { branch, .. } => Some(branch),
+        _ => None,
+    }
 }
 
 fn close_for_real(repo: &Path, task: &str) -> Result<Notice> {
@@ -577,6 +591,27 @@ mod tests {
         assert!(!branch_exists(&dir, "billing"), "closed as done: {notes:?}");
         let address = peers::address("billing", &name_of(&dir));
         assert_eq!(told.borrow().as_slice(), [format!("{address} landed on {} outside kebbie's push, so kebbie closed it as done.", upstream.trim_start_matches("origin/"))], "the lead hears one line");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_task_on_its_own_branch_closes_once_its_commits_reach_main_even_with_its_space_gone() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let address = peers::address("billing", &name_of(&dir));
+        let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        git(&slot.path, &["push", "--quiet", "origin", "HEAD:refs/heads/feature/billing"]).unwrap();
+        git(&dir, &["fetch", "--quiet", "origin"]).unwrap();
+        crate::phase::record(&state, &address, "push", &crate::phase::Event::BranchOut { sha: &head, branch: "feature/billing" });
+        let told = RefCell::new(Vec::new());
+        let repos = [dir.clone()];
+        let gone = Seen2 { workspaces: Vec::new(), agents: Vec::new() };
+        pass(&state, &world(&repos, &gone, &[], "false"), &mut closing_by_finish(&state, &upstream), &mut |text| told.borrow_mut().push(text.to_string()));
+        assert!(branch_exists(&dir, "billing") && told.borrow().is_empty(), "on its branch only, it stays open");
+        on_main(&dir, &slot, &upstream);
+        let notes = pass(&state, &world(&repos, &gone, &[], "false"), &mut closing_by_finish(&state, &upstream), &mut |text| told.borrow_mut().push(text.to_string()));
+        assert!(!branch_exists(&dir, "billing"), "closed as done with no agent left to ask: {notes:?}");
+        assert_eq!(told.borrow().as_slice(), [format!("kebbie closed {address} as done: its commits on feature/billing reached {}.", upstream.trim_start_matches("origin/"))]);
         cleanup(dir, origin, &slot);
     }
 

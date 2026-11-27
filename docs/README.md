@@ -19,6 +19,7 @@ Tasks
 - [Roll a change out in stages](how-to/roll-out-in-stages.md): a deploy, a check or your verification between each push.
 - [Act on comments on pushed commits](how-to/act-on-comments-on-pushed-commits.md): each one read on its own merits, fixed in a task or answered.
 - [Work in subtasks](how-to/work-in-steps.md): a task lists its subtasks, you accept them and push the accepted run while it builds on.
+- [Push to a branch per task](how-to/push-to-a-branch-per-task.md): for a repo whose default branch is for releases only.
 - [Try a task before pushing](how-to/try-a-task-before-pushing.md): put its commits on local main, push main when it is right.
 - [Finish or throw away a task](how-to/finish-a-task.md): done, drop and reset.
 - [Park a task until later](how-to/park-a-task.md): out of its group, the lead's summaries and your notifications until it comes back.

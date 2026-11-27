@@ -517,6 +517,14 @@ pub fn push_block(repo: &Path) -> Check {
     }
 }
 
+pub fn push_target(branch: Option<&str>, upstream: &str) -> Check {
+    let main = upstream.trim_start_matches("origin/");
+    match branch {
+        Some(template) => ok("push target", format!("each task pushes to its own branch, push.branch = {template:?}, unrebased; kebbie closes it once its commits reach {main}")).brief(format!("pushes to {template}")),
+        None => ok("push target", format!("tasks rebase onto {main} and push to it")).brief(format!("pushes to {main}")),
+    }
+}
+
 // Task sessions whose hooks run a kebbie binary that is gone, so their test runs and edits go unrecorded.
 pub fn task_hooks(sessions: &[String]) -> Check {
     if sessions.is_empty() {
@@ -1057,6 +1065,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
         checks.extend(deploy_window(&settings.ci_deploy_window, &cancelled_deploys(&env.kebbie_state, repo), file));
     }
     if let Some(repo) = env.repo.as_deref() {
+        checks.push(push_target(settings.push_branch.value.as_deref(), &crate::repo::default_branch(repo).unwrap_or_else(|_| "origin/main".to_string())));
         checks.push(comments(&settings.comments_watch, settings.comments_days.value, || crate::ci::target(repo, &crate::ci::gh())));
     }
     checks.push(notify(&settings.notify_command));
@@ -1420,6 +1429,13 @@ mod tests {
         assert!(unset.fix[0].contains("kebbie statusline") && unset.fix[0].contains("~/.claude/settings.json"), "{:?}", unset.fix);
         let other = status_line(&serde_json::json!({ "statusLine": { "command": "~/bin/line" } }));
         assert!(other.level == Level::Warn && other.fact.contains("~/bin/line"), "{}", other.fact);
+    }
+
+    #[test]
+    fn doctor_names_where_a_repos_tasks_push() {
+        assert_eq!(push_target(None, "origin/master").fact, "tasks rebase onto master and push to it");
+        let own = push_target(Some("feature/{task}"), "origin/master");
+        assert_eq!((own.level, own.fact.as_str()), (Level::Ok, "each task pushes to its own branch, push.branch = \"feature/{task}\", unrebased; kebbie closes it once its commits reach master"));
     }
 
     #[test]

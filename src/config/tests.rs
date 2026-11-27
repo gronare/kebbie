@@ -755,6 +755,7 @@ fn sample(entry: &Entry) -> String {
     }
     match &entry.kind {
         _ if entry.key == "ci.deploy_window" => "\"08:00-17:00\"".to_string(),
+        _ if entry.key == "push.branch" => "\"feature/{task}\"".to_string(),
         Kind::Choice(options) => format!("{:?}", options[1]),
         Kind::Secret => "\"kha_token\"".to_string(),
         _ => "\"x\"".to_string(),
@@ -765,7 +766,7 @@ fn sample(entry: &Entry) -> String {
 fn each_keys_scope_is_the_files_that_take_it_and_what_its_text_says() {
     let loaded = Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
     let all = entries(&loaded);
-    assert_eq!(all.len(), 68);
+    assert_eq!(all.len(), 69);
     for entry in all {
         let (section, field) = entry.key.rsplit_once('.').unwrap();
         let text = format!("[{section}]\n{field} = {}\n", sample(&entry));

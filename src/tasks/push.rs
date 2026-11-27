@@ -536,8 +536,15 @@ pub(super) fn device_push(state: &Path, caller: &Caller, repo: &Path, slot: &Slo
         Some(Work::Conflict) => DevicePush::Conflict { files: files(), main },
         Some(Work::Tests) => DevicePush::Tests { files: files(), main },
         Some(Work::Turn | Work::Ci) => DevicePush::Queued(said),
-        None => match git(repo, &["rev-parse", "--short=7", &crate::repo::tracking(&upstream)]) {
-            Ok(short) => DevicePush::Pushed { short, main },
+        None => match own_branch(repo, task) {
+            Ok(Some(branch)) => match git(repo, &["rev-parse", "--short=7", &remote_branch(&branch)]) {
+                Ok(short) => DevicePush::Pushed { short, main: branch },
+                Err(_) => DevicePush::Failed(said),
+            },
+            Ok(None) => match git(repo, &["rev-parse", "--short=7", &crate::repo::tracking(&upstream)]) {
+                Ok(short) => DevicePush::Pushed { short, main },
+                Err(_) => DevicePush::Failed(said),
+            },
             Err(_) => DevicePush::Failed(said),
         },
     }
@@ -616,6 +623,9 @@ pub(super) fn join_on(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, t
     super::stage::refuse_push(state, repo, &address, &task)?;
     if rebase_in_progress(&slot.path) {
         return Notice::new(Tone::NotNow, "Not pushed: a rebase is under way in its worktree").next("Push it once the rebase is finished.").detail("task", &task).err();
+    }
+    if let Some(branch) = own_branch(repo, &task)? {
+        fast_forwards(&slot.path, &branch, &through_sha(&slot.path, &upstream, through)?, &task)?;
     }
     authorize(caller, repo, slot, &upstream, through)?;
     let by = By::of(caller).ok_or_else(|| Notice::new(Tone::Failed, format!("Not pushed: {} may not push it", crate::permit::describe(caller))).detail("task", &task).to_string())?;
@@ -739,15 +749,21 @@ fn prepare(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Thr
     super::stage::refuse_push(state, repo, &address, &task)?;
     let pusher = authorize(caller, repo, slot, &upstream, through)?;
     let by = By::of(caller).ok_or_else(|| Notice::new(Tone::Failed, format!("Not pushed: {} may not push it", crate::permit::describe(caller))).detail("task", &task).to_string())?;
-    super::push_steps::step(&task, &format!("rebasing onto {}", main_of(&upstream)));
+    let branch = own_branch(repo, &task)?;
+    super::push_steps::step(&task, &branch.as_ref().map_or_else(|| format!("rebasing onto {}", main_of(&upstream)), |branch| format!("checking {branch}")));
     fetch(repo)?;
     let recorded = pushed_fingerprint(&slot.path, &upstream, through)?;
     let seen = messages::latest_reports(&messages::load()).get(&address).map(|report| report.id.clone());
     let record = |work: Work, fingerprint: String| intent::save(state, &Intent { by: by.clone(), work, address: address.clone(), repo: repo.to_path_buf(), task: task.clone(), fingerprint, through, at: messages::now(), seen: seen.clone(), hand: None, queued, waited: None });
     let before = git(&slot.path, &["rev-parse", "HEAD"])?;
-    let (updated, out) = match through {
-        Through::All => (update(&slot.path, &upstream)?, None),
-        Through::First { .. } => {
+    let (updated, out) = match (&branch, through) {
+        (Some(branch), _) => {
+            let sha = through_sha(&slot.path, &upstream, through)?;
+            fast_forwards(&slot.path, branch, &sha, &task)?;
+            (Updated::Clean, Some(Out { sha, rebased: false }))
+        }
+        (None, Through::All) => (update(&slot.path, &upstream)?, None),
+        (None, Through::First { .. }) => {
             let sha = through_sha(&slot.path, &upstream, through)?;
             if crate::sh::succeeds("git", &["merge-base", "--is-ancestor", &crate::repo::tracking(&upstream), &sha], Some(&slot.path)) {
                 (Updated::Clean, Some(Out { sha, rebased: false }))
@@ -839,6 +855,9 @@ fn went_out(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Ou
 pub(super) fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out, pusher: &str, state: &Path, watch: Watch) -> Result<String> {
     let task = task_of(slot).to_string();
     let address = peers::address(&task, &name_of(repo));
+    if let Some(branch) = own_branch(repo, &task)? {
+        return deliver_to_branch(repo, slot, upstream, out, pusher, state, &branch);
+    }
     let mut went = went_out(repo, slot, upstream, through, out)?;
     went.keep_open &= !(went.rest == 0 && crate::verify_after::load(state, &address).is_some());
     super::push_steps::step(&task, &format!("pushing to {}", main_of(upstream)));
@@ -1172,6 +1191,84 @@ fn pushable_through(path: &Path, upstream: &str, rev: &str, keep_open: bool) -> 
         return Notice::new(Tone::You, "Not pushed: the branch has commits you were not shown").you("Open push again to see them.").detail("after", &sha[..7.min(sha.len())]).err();
     }
     Ok(sha)
+}
+
+// The branch of its own the repo's push.branch names for this task; none pushes to the default branch, and a config kebbie cannot read pushes nowhere.
+pub(crate) fn own_branch(repo: &Path, task: &str) -> Result<Option<String>> {
+    Ok(config::resolve(Some(repo))?.settings.push_branch.value.map(|template| config::branch_for(&template, task)))
+}
+
+fn remote_branch(branch: &str) -> String {
+    format!("refs/remotes/origin/{branch}")
+}
+
+// The task's branch on origin, once pushed, else the default branch: what a push to its own branch adds on top of.
+fn branch_base(path: &Path, upstream: &str, branch: &str) -> String {
+    let remote = remote_branch(branch);
+    if crate::sh::succeeds("git", &["rev-parse", "--verify", "--quiet", &remote], Some(path)) { remote } else { crate::repo::tracking(upstream) }
+}
+
+// kebbie never force-pushes a task's branch, so a push must add commits on top of what origin holds there.
+fn fast_forwards(path: &Path, branch: &str, sha: &str, task: &str) -> Result<()> {
+    let remote = remote_branch(branch);
+    if !crate::sh::succeeds("git", &["rev-parse", "--verify", "--quiet", &remote], Some(path)) {
+        return Ok(());
+    }
+    let ancestor = |of: &str, sha: &str| crate::sh::succeeds("git", &["merge-base", "--is-ancestor", of, sha], Some(path));
+    if ancestor(sha, &remote) {
+        return Notice::new(Tone::NotNow, format!("Nothing new to push: {branch} on origin already holds it")).next("It waits under On branch until its commits reach the default branch.").detail("task", task).err();
+    }
+    if !ancestor(&remote, sha) {
+        return Notice::new(Tone::You, format!("Not pushed: {branch} on origin has commits this task's branch does not hold"))
+            .you(format!("Its pushed commits were rewritten, or someone pushed to {branch}: have its Claude put the new commits on top of origin/{branch}; kebbie never force-pushes it."))
+            .detail("task", task).err();
+    }
+    Ok(())
+}
+
+// A push to the task's own branch: nothing is rebased or watched, and the task stays open until its commits reach the default branch, where the keeper's landed round closes it.
+fn deliver_to_branch(repo: &Path, slot: &Slot, upstream: &str, out: &Out, pusher: &str, state: &Path, branch: &str) -> Result<String> {
+    let task = task_of(slot).to_string();
+    let address = peers::address(&task, &name_of(repo));
+    let sha = out.sha.clone();
+    let base = branch_base(&slot.path, upstream, branch);
+    let pushed = git(&slot.path, &["log", "--reverse", "--format=%h %s", &format!("{base}..{sha}")])?;
+    let shas: Vec<String> = git(&slot.path, &["rev-list", "--reverse", &format!("{base}..{sha}")])?.lines().map(str::to_string).collect();
+    let rest = git(&slot.path, &["rev-list", "--count", &format!("{sha}..HEAD")])?.parse::<usize>().unwrap_or(0);
+    super::push_steps::step(&task, &format!("pushing to {branch}"));
+    crate::repo::push_from(&slot.path, &[&format!("{sha}:refs/heads/{branch}")], state)
+        .map_err(|error| Notice::new(Tone::Failed, "Not pushed: git refused the push").detail("task", &task).detail("error", error).to_string())?;
+    let note = started_file(&task, repo).ok().and_then(|file| std::fs::read_to_string(file).ok()).and_then(|text| crate::task_note::items(&text).into_iter().next());
+    let went = Went { sha: sha.clone(), keep_open: false, rest, pushed: pushed.clone(), shas, note, target: branch.to_string() };
+    let (_, log) = after_push(state, repo, slot, &address, &task, &went, &crate::vault_cli::detect);
+    let head = git(&slot.path, &["rev-parse", "HEAD"]).ok();
+    let steps_left = super::plan::left_at(state, &slot.path, &address, &sha);
+    let event = if rest == 0 && !steps_left { crate::phase::Event::BranchOut { sha: &sha, branch } } else { crate::phase::Event::KeptOpen { rest, steps_left, clean: true, head: head.as_deref() } };
+    crate::phase::record(state, &address, "push", &event);
+    crate::report::forget_card_in(state, &address);
+    let (count, short, main) = (pushed.lines().count(), &sha[..7.min(sha.len())], main_of(upstream));
+    let logged = log.as_ref().map(|log| matches!(log, Ok(Some(_))));
+    let named = crate::status::with_titles_in(state, &address);
+    let mut lead = format!("{}: {} to {branch} ({}). The task stays open under On branch, waiting for {main}; kebbie closes it once they reach {main}.", who_pushed(pusher, &named), plural(count, "commit"), pushed.lines().collect::<Vec<_>>().join("; "));
+    lead.push_str(match logged {
+        Some(true) => " kebbie wrote the repo's log line in the vault from these commits.",
+        Some(false) => " kebbie could not write the repo's log line: write it in the vault with what landed on the branch and these shas.",
+        None => " Write the repo's log line in the vault with what went to the branch and these shas.",
+    });
+    if let Err(error) = messages::to_lead(if logged == Some(true) { messages::ToLead::Landed } else { messages::ToLead::PushToLog }, &lead) {
+        eprintln!("Could not tell the lead about the push: {error}");
+    }
+    let told = format!(
+        "{} pushed {} of this task, through {short}, to {branch} on origin; nothing was rebased. They reach {main} only when someone merges {branch}, and kebbie closes this task once they are on {main}. \
+         Never rebase, amend or reorder the pushed commits: the next push of this task must add to {branch}, never rewrite it. Put new work in commits on top.",
+        pushed_by(pusher), plural(count, "commit")
+    );
+    if let Err(error) = messages::notify(&address, &told) {
+        eprintln!("Could not tell {address} about the push: {error}");
+    }
+    let next = if rest == 0 { format!("It waits under On branch, waiting for {main}; kebbie closes it once its commits reach {main}.") } else { format!("It stays open with {} on top.", plural(rest, "commit")) };
+    let logged_text = log.as_ref().map(crate::task_note::logged_text).unwrap_or_default();
+    Notice::new(Tone::Done, format!("Pushed {} to {branch}", plural(count, "commit"))).next(next).detail("task", &task).detail("commit", short).detail("log", &logged_text).ok()
 }
 
 // Fast-forwards the default branch on origin to sha; the remote-tracking branch follows.
@@ -2565,6 +2662,44 @@ mod tests {
     fn accept_commit(state: &std::path::Path, address: &str, slot: &Slot, upstream: &str, sha: &str) {
         let key = crate::tasks::open_commits(&slot.path, upstream).unwrap().into_iter().find(|open| open.sha == sha).unwrap().key;
         crate::tasks::accept::set_in(state, address, &key, true).unwrap();
+    }
+
+    #[test]
+    fn a_repo_with_a_branch_per_task_pushes_it_there_unrebased_leaves_main_alone_and_adds_to_it_only_by_fast_forward() {
+        use crate::permit::Caller;
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let main = upstream.trim_start_matches("origin/").to_string();
+        require_accept(&dir, "[push]\nbranch = \"feature/{task}\"\n");
+        let pushing = Pushing::new(&dir);
+        upstream_commit(&dir, "elsewhere", "x", "someone else's work");
+        let main_before = git(&origin, &["rev-parse", &main]).unwrap();
+        let first = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        tested(&pushing, &slot);
+        let (texts, hand) = handed();
+        let unwatched = |_: &Path, _: &Path, _: &str, _: &str, _: bool, _: crate::ci::Pushed| crate::ci::Begin::Off;
+        assert_eq!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap(), Prepared::Push("the user".to_string(), Out { sha: first.clone(), rebased: false }), "main moved, yet nothing is rebased");
+        let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: first.clone(), rebased: false }, "the user", &pushing.state, &unwatched).unwrap();
+        assert!(said.contains("to feature/billing") && said.contains("On branch, waiting for"), "{said}");
+        assert_eq!(git(&origin, &["rev-parse", "feature/billing"]).unwrap(), first, "the task's commits are on its branch");
+        assert_eq!(git(&origin, &["rev-parse", &main]).unwrap(), main_before, "main is untouched");
+        assert_eq!(crate::phase::load(&pushing.state, &pushing.address).map(|record| record.phase), Some(crate::phase::Phase::OnBranch { sha: first.clone(), branch: "feature/billing".to_string() }));
+        assert!(find_task(&dir, Some("billing"), &dir).is_ok(), "the task stays open");
+        assert!(texts.borrow().is_empty());
+        let again = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap_err();
+        assert!(again.contains("Nothing new to push: feature/billing on origin already holds it"), "{again}");
+        let second = commit(&slot.path, "e", "more work");
+        tested(&pushing, &slot);
+        assert_eq!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap(), Prepared::Push("the user".to_string(), Out { sha: second.clone(), rebased: false }));
+        let said = deliver(&dir, &slot, &upstream, Through::All, &Out { sha: second.clone(), rebased: false }, "the user", &pushing.state, &unwatched).unwrap();
+        assert!(said.starts_with("Pushed 1 commit to feature/billing") || said.contains("Pushed 1 commit to feature/billing"), "only the new commit goes: {said}");
+        assert_eq!(git(&origin, &["rev-parse", "feature/billing"]).unwrap(), second, "a fast-forward of the branch");
+        git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend", "-m", "more work, reworded"]).unwrap();
+        tested(&pushing, &slot);
+        let rewritten = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap_err();
+        assert!(rewritten.contains("feature/billing on origin has commits this task's branch does not hold"), "never a force push: {rewritten}");
+        assert_eq!(git(&origin, &["rev-parse", "feature/billing"]).unwrap(), second);
+        crate::phase::forget(&pushing.state, &pushing.address);
+        cleanup(dir, origin, &slot);
     }
 
     #[test]

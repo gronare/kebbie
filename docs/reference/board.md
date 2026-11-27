@@ -204,6 +204,7 @@ A listed test command inside a loop, a condition or `xargs` is not recorded eith
 | Ready to push | Reported ready with its commits, for you to push. A review is optional: `v` sends it to one, and it waits under In review while the reviewer reads. |
 | Going out | On its way out without you: in its repo's push line, or ready with the lead holding [push permission](../how-to/let-the-lead-push.md) for it. |
 | CI running | Pushed, with its worktree kept until every workflow run for the pushed commit is green and the task's check after the push holds; then it closes as done. A run cancelled for a newer run on the default branch follows that run, and one cancelled while the repo's [`ci.deploy_window`](configuration.md#ci-updates-and-the-keeper) was shut is re-run once it opens. |
+| On branch, waiting for main | Pushed to its own branch in a repo with [`push.branch`](configuration.md#push), kept open until its commits are on the default branch; then kebbie closes it as done. See [On branch, waiting for main](#on-branch-waiting-for-main). |
 | Waiting for work | Started without work, blocked on something outside you, or kept open with nothing left on top. |
 | Waiting on | Running, and waiting for other tasks to land. See [Waiting on](#waiting-on). |
 | Queued | Waiting to start after other tasks or at a time, with no worktree, Space or Claude. |
@@ -277,6 +278,14 @@ A report its Claude writes meanwhile keeps it here unless it says needs-you or b
 A task that named a check for after its push (`kebbie report --after-push`) adds `then checks: <check>`, muted, while CI runs. Once CI is green its Claude runs the check, marked `checking after push: <check>`; the task closes as done when it reports the check held, and moves to Needs you with what failed when it did not. A task that named a check for you (`kebbie report --verify-after-push`) then waits under Needs you, marked `check: <check> · answer Verified to close it`, until you answer kebbie's question. See [`kebbie ci`](commands.md#kebbie-ci---json).
 
 A push whose CI failed on a job the branch was already red on stays here, marked `CI red since <sha> (<task>): <workflow> · <job>; waits for the fix there`. The task that first made the job red fixes it; this one closes as done once a later push that holds its commits is green. `C` dismisses it.
+
+### On branch, waiting for main
+
+A task of a repo whose [`push.branch`](configuration.md#push) names a branch per task, such as `feature/{task}`, lands here once it is pushed: `2 commits on feature/billing · kebbie closes it once they reach main`. Nothing merges the branch for you. The keeper looks each round, and once the task's commits are on the default branch, by a merge or a rebase, it closes the task as done and tells the lead. A closed Space or a stopped Claude does not hold it.
+
+- A new commit and a ready report move it back to Ready to push; the next push adds to the same branch by fast-forward.
+- A prompt of yours moves it under Working.
+- Its worktree stays taken until it closes. `d` closes it only once its commits are on the default branch; to take it off the board before that, drop it, and its commits stay on its branch on origin.
 
 ### Waiting for work
 

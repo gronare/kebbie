@@ -136,6 +136,20 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 - Any other value is refused when the config loads.
 - `"bypassPermissions"` runs every tool without asking; Claude Code recommends it only for an isolated container or VM. A task still never pushes nor approves its own commits in it, since kebbie's deny rules and the worktree's push block hold in every mode.
 
+### Push
+
+| Key | Default | Where | What it does |
+| --- | --- | --- | --- |
+| `push.branch` | none | repo | The branch on origin each task pushes to instead of the default branch, such as `"feature/{task}"`. |
+
+`push.branch`: `{task}` is filled in with the task's name, so `"feature/{task}"` pushes the task `login-sheet` to `feature/login-sheet`. The template must name `{task}`, so every task gets a branch of its own, and kebbie refuses one that makes no branch name git takes. See [Push to a branch per task](../how-to/push-to-a-branch-per-task.md).
+
+- A push goes out as the task's branch holds it, not rebased onto the default branch, and adds to the branch on origin only by fast-forward. kebbie never force-pushes it: a branch whose pushed commits were rewritten is refused until its Claude puts the new commits on top.
+- The push line, the rules check, the review and the test runs a push needs hold as without it, counted from where the task left the default branch.
+- kebbie watches no CI for it and closes nothing after it: the task waits under [On branch, waiting for main](board.md#on-branch-waiting-for-main) until its commits are on the default branch, and the keeper closes it then.
+- Unset, tasks rebase onto the default branch and push to it.
+- Repo config only: config.toml refuses it.
+
 ### Review and docs
 
 | Key | Default | Where | What it does |
