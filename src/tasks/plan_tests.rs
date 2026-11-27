@@ -478,3 +478,26 @@ fn a_rewritten_commit_is_known_by_its_subject_and_a_folded_commit_counts_as_lost
     let both_rewritten = [Unpushed { subject: "subject of a1".to_string(), ..rewritten_code("x1", "a1'") }, Unpushed { subject: "subject of b1".to_string(), ..rewritten_code("x2", "b1'") }, Unpushed { subject: "subject of a2".to_string(), ..rewritten_code("x3", "a2'") }, Unpushed { subject: "subject of b2".to_string(), ..rewritten_code("x4", "b2'") }];
     assert_eq!(shas(&derive(Some(&unlisted), &[], &both_rewritten, false).0), [("model".to_string(), vec!["x1", "x3"]), ("command".to_string(), vec!["x2", "x4"])], "each rewritten commit finds its own subtask by its subject, wherever it now sits");
 }
+
+#[test]
+fn move_puts_an_open_commit_under_another_subtask_which_keeps_it_through_a_rebase() {
+    let (dir, origin, slot, upstream, state, address) = hooked_task();
+    let task = Task { path: &slot.path, upstream: &upstream, address: &address };
+    let own = Caller::Task(address.clone());
+    done_at(&state, &slot.path, &upstream, &address).unwrap();
+    let fifth = commit(&slot.path, "e", "fifth");
+    commit(&slot.path, "f", "sixth");
+    let held = |subtasks: &Subtasks| subtasks.items.iter().map(|item| (item.id.clone(), item.commits.iter().map(|commit| commit.subject.clone()).collect::<Vec<_>>())).collect::<Vec<_>>();
+    let said = move_as(&own, &state, &task, &fifth[..8], "model").unwrap();
+    assert!(said.contains("fifth moved from Command to Model [model]"), "{said}");
+    let moved = held(&read_now(&state, &slot.path, &upstream, &address));
+    assert!(move_as(&own, &state, &task, &fifth, "docs").unwrap_err().contains("no subtask docs"));
+    assert!(move_as(&own, &state, &task, "nonsense", "model").unwrap_err().contains("is not a commit"));
+    assert!(move_as(&Caller::Task("search@app".to_string()), &state, &task, &fifth, "command").is_err(), "another task moves none of this task's commits");
+    upstream_commit(&dir, "g", "main moved on", "main moves on");
+    git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "rebase", "--quiet", &upstream]).unwrap();
+    let rebased = held(&read_now(&state, &slot.path, &upstream, &address));
+    cleanup(dir, origin, &slot);
+    let expected = vec![("model".to_string(), vec!["fourth".to_string(), "fifth".to_string()]), ("command".to_string(), vec!["sixth".to_string()])];
+    assert_eq!((moved, rebased), (expected.clone(), expected), "the moved commit stays where it was put, through a rebase");
+}

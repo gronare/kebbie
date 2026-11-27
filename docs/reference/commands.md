@@ -609,6 +609,10 @@ Adds a subtask to the plan after the first listing, with the reason the plan cha
 
 Sends the task's next commits to that subtask, which is in progress again.
 
+### `kebbie subtasks [name] move <commit> <id>`
+
+Puts an open commit under that subtask, which keeps it from then on as it keeps any commit. For a commit that landed under the wrong subtask: one made before `on`, or one a rewrite placed wrong. It is refused for a pushed commit and a pushed subtask.
+
 ### `kebbie subtasks [name] done [<id>]`
 
 Marks a subtask ready: its slice of the work is finished and waits for you to review and accept it. A subtask with commits counts as ready without it once a later subtask holds commits, and the last one once the task reports ready. Without an id, it marks the one commits go to now. A task's agent runs it in its worktree; you or the lead name the task. It is refused while the subtask holds no commit, and, with `kebbie:work-rules` as the rules skill, while one of its commits lacks a subject, a blank line and a body.
@@ -811,6 +815,7 @@ It is yours, or the lead's on your explicit choice. The lead's settings do not a
 | `kebbie subtasks "<subtask>" …` | The task's subtasks before its first line of code, with `task.steps` on. See [`kebbie subtasks`](#kebbie-subtasks-name-subtask-). |
 | `kebbie subtasks add "<subtask>" --because "<why>"` | A subtask the plan turns out to need. See [`kebbie subtasks add`](#kebbie-subtasks-name-add-subtask---because-why). |
 | `kebbie subtasks on <id>` | The next commits go to that subtask. |
+| `kebbie subtasks move <commit> <id>` | An open commit goes to that subtask. |
 | `kebbie subtasks done [<id>]` | The subtask is finished and ready for you. See [`kebbie subtasks done`](#kebbie-subtasks-name-done-id). |
 | `kebbie routine ok <summary>` | A routine's task, when all is well: records the run as ok with the summary and closes the task as `drop` does. |
 | `kebbie ask --option "<label>: <meaning>" … --recommend <n> <question>` | Ask you what you want: scope, behaviour, a trade-off that is yours. |

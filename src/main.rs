@@ -211,7 +211,8 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   titled subtasks, each one or more small commits, reviewed and accepted on its own; a
                                   list again keeps each subtask's commits under the same title. kebbie subtasks add
                                   \"<subtask>\" --because \"<why>\" [--prepares <id>] adds one to the plan, kebbie
-                                  subtasks on <id> sends the next commits to it, and kebbie subtasks done [<id>] marks
+                                  subtasks on <id> sends the next commits to it, kebbie subtasks move <commit> <id>
+                                  moves a commit to it, and kebbie subtasks done [<id>] marks
                                   one ready (by default the one commits go to). kebbie subtasks <name> … does it from
                                   elsewhere, and kebbie subtasks [name] [--json] shows each subtask's state, the push
                                   order and the pushable run: the commits from the top that you accepted, never

@@ -5,6 +5,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- kebbie subtasks move <commit> <id> puts a commit that landed under the wrong subtask under the right one.
 - kebbie after <task> --note "<text>" adds to a queued task's prompt before it starts, and its Queued row shows the note.
 - The lead follows each push out to main, tells a blocked task the moment what blocked it clears through the lead, names what waits for you from the board's live state and hands you no commands to run; what it learns about how kebbie or a lead works goes into kebbie, not its own memory.
 - kebbie start queues a task behind a running task on the same files and names them; --now starts it anyway.

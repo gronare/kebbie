@@ -636,7 +636,7 @@ pub fn shown_at(path: &Path) -> Option<Value> {
     Some(to_json(&address, &subtasks, super::accept::last_accepted(&slot.path).as_deref()))
 }
 
-const USAGE: &str = "kebbie subtasks \"<subtask>\" \"<subtask>\" … lists them; kebbie subtasks add \"<subtask>\" --because \"<why>\" [--prepares <id>] adds one; kebbie subtasks on <id> sends the next commits to it; kebbie subtasks done [<id>] marks one ready; kebbie subtasks [--json] shows them. In the task's worktree, or with the task's name first elsewhere";
+const USAGE: &str = "kebbie subtasks \"<subtask>\" \"<subtask>\" … lists them; kebbie subtasks add \"<subtask>\" --because \"<why>\" [--prepares <id>] adds one; kebbie subtasks on <id> sends the next commits to it; kebbie subtasks move <commit> <id> moves a commit to it; kebbie subtasks done [<id>] marks one ready; kebbie subtasks [--json] shows them. In the task's worktree, or with the task's name first elsewhere";
 
 fn off_line(repo: &Path) -> String {
     format!("kebbie subtasks is off for {}: set task.steps = true in {} or {}, or on the board's Settings page.", name_of(repo), crate::config::path().display(), crate::config::repo_file(repo).display())
@@ -678,6 +678,7 @@ pub fn subtasks(cwd: &Path, words: &[String], asked: &Asked) -> Result<String> {
         said = match (word(0), words.len()) {
             (Some("done"), 1 | 2) => Some(done_as(&caller, &state, &task, word(1), true)?),
             (Some("on"), 2) => Some(on_as(&caller, &state, &task, word(1).unwrap_or_default())?),
+            (Some("move"), 3) => Some(move_as(&caller, &state, &task, word(1).unwrap_or_default(), word(2).unwrap_or_default())?),
             (Some("add"), 2) => Some(add_as(&caller, &state, &task, word(1).unwrap_or_default(), asked.because.ok_or_else(|| format!("kebbie subtasks add needs --because \"<why the plan changes>\": {USAGE}"))?, asked.prepares, asked.stage, crate::messages::now())?),
             _ => {
                 write_as(&caller, &state, &task, words, asked.because)?;
@@ -797,6 +798,24 @@ fn on_as(caller: &Caller, state: &Path, task: &Task, said: &str) -> Result<Strin
         }
         plan.on = Some(subtask.id.clone());
         Ok((Some(plan), format!("The next commits go to {} [{}].", subtask.title, subtask.id)))
+    })
+}
+
+// kebbie subtasks move <commit> <id>: an open commit goes to that subtask, and keeps it as its change does.
+fn move_as(caller: &Caller, state: &Path, task: &Task, sha: &str, said: &str) -> Result<String> {
+    writes(caller, task)?;
+    let full = git(task.path, &["rev-parse", "--verify", "--quiet", &format!("{sha}^{{commit}}")]).map_err(|_| format!("{sha} is not a commit"))?;
+    changed(state, task.address, |_| {
+        let (subtasks, mut plan) = noted_plan(state, task)?;
+        let to = subtasks.find(said).cloned().ok_or_else(|| format!("{} has no subtask {said}: kebbie subtasks lists them", task.address))?;
+        if to.state == State::Pushed {
+            return Err(format!("{} is pushed already: move the commit to a subtask still open", to.title));
+        }
+        let from = subtasks.holding(&full).cloned().ok_or_else(|| format!("{} is no open commit of {}: kebbie subtasks lists them", short(&full), task.address))?;
+        let seen = plan.commits.iter_mut().find(|seen| seen.sha == full).ok_or_else(|| format!("{} is not noted yet: run kebbie subtasks, then move it", short(&full)))?;
+        seen.subtask = to.id.clone();
+        let subject = seen.subject.clone();
+        Ok((Some(plan), format!("{} {subject} moved from {} to {} [{}].", short(&full), from.title, to.title, to.id)))
     })
 }
 
