@@ -479,7 +479,7 @@ fn nothing_of_the_fault_watcher_shows_or_runs_where_it_is_off() {
     assert!(crate::keeper::routines().iter().all(|routine| !ROUTINES.contains(&routine.name)), "a machine without the key, as the tests run, registers neither");
     let (off, on) = (crate::lead::settings_for("/opt/kebbie/kebbie", false), crate::lead::settings_for("/opt/kebbie/kebbie", true));
     assert!(!off.contains("kebbie fault") && on.contains("Bash(/opt/kebbie/kebbie fault:*)") && on.contains("Bash(/opt/kebbie/kebbie faults:*)"), "{off}");
-    let role = crate::lead::role_text_with(include_str!("../../roles/lead.md"), "/opt/kebbie/kebbie", &[], false, true, false, "English");
+    let role = crate::lead::role_text_with(include_str!("../../roles/lead.md"), "/opt/kebbie/kebbie", &[], false, crate::lead::FaultRoles { propose: true, ..Default::default() }, "English");
     assert!(!role.contains("kebbie fault") && !role.contains("fault watcher"), "the lead's role names no fault watcher where it is off");
 }
 
