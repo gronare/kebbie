@@ -10,10 +10,15 @@ pub enum Note {
     Vault(String),
     ByLead(String),
     Local(PathBuf),
+    Written,
 }
 
 pub fn local_file(state: &Path, address: &str) -> PathBuf {
     state.join("notes").join(format!("{address}.md"))
+}
+
+fn told_file(state: &Path, address: &str) -> PathBuf {
+    state.join("decisions-told").join(address)
 }
 
 pub fn of(state: &Path, address: &str) -> Note {
@@ -31,10 +36,22 @@ pub fn write(state: &Path, address: &str, line: &str, now: u64) -> Result<Note> 
 
 fn write_with(state: &Path, address: &str, line: &str, now: u64, tell_lead: impl FnOnce(&str) -> Result<()>) -> Result<Note> {
     let note = of(state, address);
+    let told = told_file(state, address);
+    let known = fs::read_to_string(match &note { Note::Local(file) => file, _ => &told }).unwrap_or_default();
+    if known.lines().any(|known| known == line || known.strip_prefix("- ").and_then(|dated| dated.split_once(": ")).is_some_and(|(_, said)| said == line)) {
+        return Ok(Note::Written);
+    }
     match &note {
         Note::Local(file) => append(file, address, &format!("- {}: {line}", crate::issues::today(now)))?,
         Note::ByLead(vault) => tell_lead(&format!("Write into {vault}, the note of the Codex task {address}, decision: {line}"))?,
-        Note::Vault(_) => {}
+        Note::Vault(_) | Note::Written => {}
+    }
+    if !matches!(note, Note::Local(_)) {
+        if !told.exists() {
+            crate::state::write(&told, String::new())?;
+        }
+        let mut opened = fs::OpenOptions::new().append(true).open(&told).map_err(|error| format!("{}: {error}", told.display()))?;
+        writeln!(opened, "{line}").map_err(|error| format!("{}: {error}", told.display()))?;
     }
     Ok(note)
 }
@@ -50,6 +67,7 @@ fn append(file: &Path, address: &str, line: &str) -> Result<()> {
 
 // A task that ends takes its note to notes/ended/, so a later task by the same name starts a note of its own.
 pub fn archive(state: &Path, address: &str, now: u64) {
+    let _ = fs::remove_file(told_file(state, address));
     let file = local_file(state, address);
     if file.exists() {
         let ended = state.join("notes/ended").join(format!("{address}.{now}.md"));
@@ -63,7 +81,7 @@ pub fn archive(state: &Path, address: &str, now: u64) {
 pub fn for_the_task(note: &Note, line: &str) -> Option<String> {
     match note {
         Note::Vault(note) => Some(format!("Write this in the decisions section of your note {note}, with the vault tools: {line}")),
-        Note::ByLead(_) | Note::Local(_) => None,
+        Note::ByLead(_) | Note::Local(_) | Note::Written => None,
     }
 }
 
@@ -79,6 +97,31 @@ mod tests {
         write(&state, "billing@app", "review suggested: changes how VAT is rounded", 1_792_670_400).unwrap();
         assert_eq!(fs::read_to_string(state.join("notes/billing@app.md")).unwrap(), "# billing@app\n\n## Decisions\n\n- 2026-10-22: recipe: small fix, because one function and its test (the lead)\n- 2026-10-22: review suggested: changes how VAT is rounded\n");
         assert_eq!(for_the_task(&note, "x"), None, "kebbie wrote it itself");
+        let _ = fs::remove_dir_all(state);
+    }
+
+    #[test]
+    fn a_line_the_note_holds_already_is_not_written_or_handed_on_again() {
+        let state = crate::sh::test_dir("decisions-once");
+        write(&state, "billing@app", "no review: wording", 1_792_670_400).unwrap();
+        assert_eq!(write(&state, "billing@app", "no review: wording", 1_792_756_800).unwrap(), Note::Written, "a second ready on the same commit");
+        write(&state, "billing@app", "review suggested: changes how VAT is rounded", 1_792_756_800).unwrap();
+        assert_eq!(fs::read_to_string(local_file(&state, "billing@app")).unwrap(), "# billing@app\n\n## Decisions\n\n- 2026-10-22: no review: wording\n- 2026-10-23: review suggested: changes how VAT is rounded\n");
+        fs::create_dir_all(state.join("started")).unwrap();
+        fs::write(state.join("started/search@app"), "Projects/app-search.md\n").unwrap();
+        let first = write(&state, "search@app", "no review: wording", 1_792_670_400).unwrap();
+        assert!(for_the_task(&first, "no review: wording").is_some());
+        let again = write(&state, "search@app", "no review: wording", 1_792_670_400).unwrap();
+        assert_eq!(for_the_task(&again, "no review: wording"), None, "the task is not told to write the line a second time");
+        archive(&state, "search@app", 1_792_670_400);
+        assert!(for_the_task(&write(&state, "search@app", "no review: wording", 1_792_670_400).unwrap(), "no review: wording").is_some(), "a later task by the name starts afresh");
+        let mut told = Vec::new();
+        crate::state::write(&state.join("sessions/codex@app"), r#"{"session":null,"mode":null,"profile":"codex-build","agent":"codex"}"#).unwrap();
+        fs::write(state.join("started/codex@app"), "Projects/app-codex.md\n").unwrap();
+        for _ in 0..2 {
+            write_with(&state, "codex@app", "no review: wording", 1_792_670_400, |text| { told.push(text.to_string()); Ok(()) }).unwrap();
+        }
+        assert_eq!(told.len(), 1, "the lead is told once: {told:?}");
         let _ = fs::remove_dir_all(state);
     }
 
