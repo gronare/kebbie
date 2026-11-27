@@ -598,7 +598,7 @@ mod tests {
 
     #[test]
     fn the_phone_hears_a_task_is_ready_only_once_nothing_holds_its_push_and_once_per_head() {
-        let shown = |ok: bool, stale: bool, running: bool, held: bool, looped: bool| crate::review::Shown { verdict: Some(crate::review::Verdict { ok, sha: "abc".to_string(), findings: usize::from(!ok), ..Default::default() }), stale, running, held, file: PathBuf::new(), looped, at: 0 };
+        let shown = |ok: bool, stale: bool, running: bool, held: bool, looped: bool| crate::review::Shown { verdict: Some(crate::review::Verdict { ok, sha: "abc".to_string(), findings: usize::from(!ok), ..Default::default() }), stale, running, held, file: PathBuf::new(), looped: looped.then(crate::review::Looped::default), at: 0 };
         assert!(pushable(None, false), "never sent to review");
         assert!(pushable(Some(&shown(true, false, false, true, false)), false), "passed");
         assert!(!pushable(Some(&shown(true, false, true, true, false)), false), "the reviewer reads it again");

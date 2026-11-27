@@ -184,7 +184,7 @@ fn a_review_that_finds_a_new_point_each_round_goes_back_twice_by_itself_and_then
     let reviews = lab.claude_roles().iter().filter(|role| *role == "review").count();
     assert_eq!(reviews, 3, "the one you sent and two it went back for: {:?}", lab.claude_roles());
     let item = lab.item("billing");
-    assert_eq!((item["group"].as_str(), item["next_for_you"].as_str(), item["verdict"]["stopped"].as_bool()), (Some("NEEDS YOU"), Some("the review keeps coming back with findings; read it yourself or push"), Some(true)), "{item}");
+    assert_eq!((item["group"].as_str(), item["next_for_you"].as_str(), item["verdict"]["stopped"].as_bool()), (Some("NEEDS YOU"), Some("review stopped after 3 rounds: all 2 findings fixed, 1 line changed since the last review"), Some(true)), "{item}");
     assert!(lab.to_lead().iter().any(|text| text.contains("billing@app's review was sent back 2 times by itself")), "{:?}", lab.to_lead());
     lab.ok(&["-C", worktree.to_str().unwrap(), "report", "--state", "ready", "--next", "push", "still ready"]);
     lab.keeper_round();

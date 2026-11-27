@@ -178,8 +178,16 @@ pub struct Shown {
     pub running: bool,
     pub held: bool,
     pub file: PathBuf,
-    pub looped: bool,
+    pub looped: Option<Looped>,
     pub at: u64,
+}
+
+// kebbie stopped sending it back: how many reviews it took, the lines changed since the last one (None after a rebase), and the row's line.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Looped {
+    pub rounds: usize,
+    pub changed: Option<usize>,
+    pub line: String,
 }
 
 impl Shown {
@@ -190,7 +198,7 @@ impl Shown {
 
     // kebbie stopped sending it back by itself, so it waits on you to read it or push it.
     pub fn stopped(&self) -> bool {
-        self.looped && !self.running
+        self.looped.is_some() && !self.running
     }
 
     pub fn to_json(&self) -> Value {
@@ -210,11 +218,26 @@ impl Shown {
 // A pass holds for HEAD while HEAD makes the change it read, through a clean rebase, a reworded message or a squash; findings hold only for the same commits, since a reworded message can be their fix.
 pub fn shown(address: &str, path: &Path, upstream: &str) -> Option<Shown> {
     let head = git(path, &["rev-parse", "HEAD"]).ok()?;
-    shown_by(&crate::lead::state_location().ok()?, address, |verdict| holds(verdict, path, upstream, &head))
+    shown_by(&crate::lead::state_location().ok()?, address, |verdict| holds(verdict, path, upstream, &head), |sha| changed_since(path, upstream, sha, &head))
 }
 
 pub fn shown_at(address: &str, path: &Path, tips: &tasks::SubtaskTips) -> Option<Shown> {
-    shown_by(&crate::lead::state_location().ok()?, address, |verdict| holds(verdict, path, &tips.upstream, &tips.head))
+    shown_by(&crate::lead::state_location().ok()?, address, |verdict| holds(verdict, path, &tips.upstream, &tips.head), |sha| changed_since(path, &tips.upstream, sha, &tips.head))
+}
+
+// Lines added and removed from the reviewed sha to HEAD; None once a rebase put them on different bases, where the diff would carry what landed upstream.
+fn changed_since(path: &Path, upstream: &str, sha: &str, head: &str) -> Option<usize> {
+    let base = crate::repo::tracking(upstream);
+    let bases = [sha, head].map(|tip| git(path, &["merge-base", &base, tip]).ok());
+    if bases[0].is_none() || bases[0] != bases[1] {
+        return None;
+    }
+    Some(diff_lines(&git(path, &["diff", "--shortstat", sha, head]).ok()?))
+}
+
+// " 2 files changed, 30 insertions(+), 7 deletions(-)" is 37 lines.
+fn diff_lines(shortstat: &str) -> usize {
+    shortstat.split(',').filter(|part| part.contains("insertion") || part.contains("deletion")).filter_map(|part| part.split_whitespace().next()?.parse::<usize>().ok()).sum()
 }
 
 fn holds(verdict: &Verdict, path: &Path, upstream: &str, head: &str) -> bool {
@@ -223,10 +246,10 @@ fn holds(verdict: &Verdict, path: &Path, upstream: &str, head: &str) -> bool {
 
 #[cfg(test)]
 pub fn shown_in(state: &Path, address: &str, current: impl Fn(&str) -> bool) -> Option<Shown> {
-    shown_by(state, address, |verdict| current(&verdict.sha))
+    shown_by(state, address, |verdict| current(&verdict.sha), |_| None)
 }
 
-fn shown_by(state: &Path, address: &str, current: impl Fn(&Verdict) -> bool) -> Option<Shown> {
+fn shown_by(state: &Path, address: &str, current: impl Fn(&Verdict) -> bool, changed: impl Fn(&str) -> Option<usize>) -> Option<Shown> {
     let file = verdict_file(state, address);
     let verdict = fs::read_to_string(&file).ok().and_then(|text| parse_verdict(&text));
     let running = running_in(state, address) || marked(state, address, "wanted").exists();
@@ -235,7 +258,12 @@ fn shown_by(state: &Path, address: &str, current: impl Fn(&Verdict) -> bool) -> 
     }
     let stale = verdict.as_ref().is_some_and(|verdict| !current(verdict));
     let at = fs::metadata(&file).and_then(|meta| meta.modified()).ok().and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |at| at.as_secs());
-    Some(Shown { verdict, stale, running, held: !marked(state, address, "advised").exists(), file, looped: looped_in(state, address), at })
+    let looped = looped_of(state, address).map(|looped| {
+        let changed = verdict.as_ref().filter(|_| stale).and_then(|verdict| changed(&verdict.sha));
+        let line = stop_line(verdict.as_ref(), stale, looped.rounds, changed);
+        Looped { changed, line, ..looped }
+    });
+    Some(Shown { verdict, stale, running, held: !marked(state, address, "advised").exists(), file, looped, at })
 }
 
 // A task never sent to review pushes freely; one sent pushes only code its reviewer passed, which `covered` says of the reviewed sha.
@@ -298,28 +326,45 @@ pub const RERUNS: usize = 2;
 pub const RERUNS_AT_MOST: usize = 4;
 const CEILING: &str = "ceiling";
 const NEW_EACH_TIME: &str = "new";
-pub const LOOPED: &str = "the review keeps coming back with findings; read it yourself or push";
+
+// A review kebbie stopped sending back: why it stopped and what is left.
+pub fn stop_line(verdict: Option<&Verdict>, stale: bool, rounds: usize, changed: Option<usize>) -> String {
+    let findings = |count: usize| if count == 1 { "1 finding".to_string() } else { format!("{count} findings") };
+    let stopped = format!("review stopped after {rounds} rounds");
+    match (verdict.filter(|verdict| !verdict.ok && verdict.findings > 0), stale) {
+        (Some(verdict), true) => {
+            let since = changed.map_or_else(String::new, |lines| format!(", {} changed", if lines == 1 { "1 line".to_string() } else { format!("{lines} lines") }));
+            format!("{stopped}: all {} fixed{since} since the last review", findings(verdict.findings))
+        }
+        (Some(verdict), false) => format!("{stopped}: {} still open on this code", findings(verdict.findings)),
+        (None, _) => stopped,
+    }
+}
 
 // kebbie sends a review back by itself RERUNS times in a row when its verdict found something at a file:line no verdict since the count started named, and RERUNS_AT_MOST times in all; past either the task waits under Needs you instead, until you or the lead send it to review or it passes.
 pub fn rerun_allowed(state: &Path, address: &str) -> Result<bool> {
     let rounds_file = marked(state, address, "rounds");
-    let rounds: usize = fs::read_to_string(&rounds_file).ok().and_then(|text| text.trim().parse().ok()).unwrap_or(0);
+    let rounds = rounds_in(state, address);
     if rounds >= RERUNS_AT_MOST {
         crate::state::write(&marked(state, address, "looped"), CEILING)?;
         return Ok(false);
     }
+    if new_findings(state, address)? {
+        let file = marked(state, address, "reruns");
+        let done: usize = fs::read_to_string(&file).ok().and_then(|text| text.trim().parse().ok()).unwrap_or(0);
+        if done >= RERUNS {
+            crate::state::write(&marked(state, address, "looped"), NEW_EACH_TIME)?;
+            return Ok(false);
+        }
+        crate::state::write(&file, (done + 1).to_string())?;
+    }
     crate::state::write(&rounds_file, (rounds + 1).to_string())?;
-    if !new_findings(state, address)? {
-        return Ok(true);
-    }
-    let file = marked(state, address, "reruns");
-    let done: usize = fs::read_to_string(&file).ok().and_then(|text| text.trim().parse().ok()).unwrap_or(0);
-    if done >= RERUNS {
-        crate::state::write(&marked(state, address, "looped"), NEW_EACH_TIME)?;
-        return Ok(false);
-    }
-    crate::state::write(&file, (done + 1).to_string())?;
     Ok(true)
+}
+
+// The reruns kebbie sent in this count, each one review after the first.
+fn rounds_in(state: &Path, address: &str) -> usize {
+    fs::read_to_string(marked(state, address, "rounds")).ok().and_then(|text| text.trim().parse().ok()).unwrap_or(0)
 }
 
 // Whether the saved verdict names a place no earlier verdict in this count did, remembering its places; a finding without a file:line, or a verdict without findings, counts as new.
@@ -352,6 +397,10 @@ pub fn looped_in(state: &Path, address: &str) -> bool {
     marked(state, address, "looped").exists()
 }
 
+fn looped_of(state: &Path, address: &str) -> Option<Looped> {
+    looped_in(state, address).then(|| Looped { rounds: rounds_in(state, address) + 1, ..Looped::default() })
+}
+
 fn forget_reruns(state: &Path, address: &str) {
     for kind in ["reruns", "looped", "seen", "rounds"] {
         let _ = fs::remove_file(marked(state, address, kind));
@@ -362,7 +411,7 @@ fn stop_rerunning(state: &Path, address: &str, worktree: &Path) {
     if let Err(error) = messages::to_lead(messages::ToLead::Findings, &format!("{address}'s review {}, so kebbie stops sending it back: it waits under Needs you for the user to read it or push it. Send it to review again only on their word.", stopped_because(state, address))) {
         eprintln!("Could not tell the lead: {error}");
     }
-    crate::notify::send(worktree, &crate::notify::Notice::from(crate::notify::Event::NeedsYou, address, format!("{address}: {LOOPED}")));
+    crate::notify::send(worktree, &crate::notify::Notice::from(crate::notify::Event::NeedsYou, address, format!("{address}: its review stopped after {} rounds; read it yourself or push it", rounds_in(state, address) + 1)));
 }
 
 fn stopped_because(state: &Path, address: &str) -> String {
@@ -1474,7 +1523,7 @@ mod tests {
     }
 
     fn shown_as(ok: Option<bool>, stale: bool, running: bool) -> Shown {
-        Shown { verdict: ok.map(|ok| Verdict { ok, sha: "abc".to_string(), findings: usize::from(!ok) * 2, ..Verdict::default() }), stale, running, held: true, file: PathBuf::new(), looped: false, at: 0 }
+        Shown { verdict: ok.map(|ok| Verdict { ok, sha: "abc".to_string(), findings: usize::from(!ok) * 2, ..Verdict::default() }), stale, running, held: true, file: PathBuf::new(), looped: None, at: 0 }
     }
 
     #[test]
@@ -1570,7 +1619,7 @@ mod tests {
         assert!(!holds(&changes, &dir, "main", &head), "the reword was the fix the findings asked for, so the task goes back to the reviewer");
         assert!(holds(&pass, &dir, "main", &head), "a pass belongs to the code, which a reword keeps");
         assert!(holds(&changes, &dir, "main", &reviewed));
-        let shown = Shown { verdict: Some(changes), stale: true, running: false, held: true, file: PathBuf::new(), looped: false, at: 0 };
+        let shown = Shown { verdict: Some(changes), stale: true, running: false, held: true, file: PathBuf::new(), looped: None, at: 0 };
         assert!(review_again(Some(&shown), false), "a ready report on it starts the reviewer again, in any phase");
         fs::remove_dir_all(dir).unwrap();
     }
@@ -2287,7 +2336,10 @@ mod tests {
         assert!(!looped_in(&state, address));
         assert!(!rerun_allowed(&state, address).unwrap(), "the third does not");
         assert!(looped_in(&state, address));
-        let stopped = Shown { verdict: Some(Verdict { ok: false, sha: "abc".to_string(), findings: 3, ..Verdict::default() }), stale: true, running: false, held: true, file: PathBuf::new(), looped: true, at: 0 };
+        fs::write(verdict_file(&state, address), "verdict: changes\nreviewed: abc\n\n- src/a.rs:1 — a bug.\n- src/b.rs:2 — another.\n").unwrap();
+        let shown = shown_in(&state, address, |_| false).unwrap();
+        assert_eq!(shown.looped.as_ref().map(|looped| (looped.rounds, looped.line.as_str())), Some((3, "review stopped after 3 rounds: all 2 findings fixed since the last review")), "the first review and the two kebbie sent back");
+        let stopped = Shown { verdict: Some(Verdict { ok: false, sha: "abc".to_string(), findings: 3, ..Verdict::default() }), stale: true, running: false, held: true, file: PathBuf::new(), looped: Some(Looped::default()), at: 0 };
         assert_eq!(gate(Some(&stopped), |_| false), Ok(()), "the user may push what kebbie stopped re-reviewing");
         assert!(gate(Some(&Shown { running: true, ..stopped.clone() }), |_| false).is_err(), "a review the user sent again holds it while it runs");
         forget_reruns(&state, address);
@@ -2336,6 +2388,17 @@ mod tests {
         assert_eq!(location("(src/a.rs:12-20), the guard"), Some("src/a.rs:12".to_string()));
         assert_eq!(location("rule 2: one change per commit"), None);
         let _ = fs::remove_dir_all(state);
+    }
+
+    #[test]
+    fn a_stopped_review_says_why_it_stopped_and_what_is_left() {
+        let verdict = |findings: usize| Verdict { ok: false, sha: "abc".to_string(), findings, ..Verdict::default() };
+        assert_eq!(stop_line(Some(&verdict(4)), true, 3, Some(37)), "review stopped after 3 rounds: all 4 findings fixed, 37 lines changed since the last review");
+        assert_eq!(stop_line(Some(&verdict(1)), true, 3, Some(1)), "review stopped after 3 rounds: all 1 finding fixed, 1 line changed since the last review");
+        assert_eq!(stop_line(Some(&verdict(2)), true, 3, None), "review stopped after 3 rounds: all 2 findings fixed since the last review", "after a rebase the lines changed are left out");
+        assert_eq!(stop_line(Some(&verdict(2)), false, 5, None), "review stopped after 5 rounds: 2 findings still open on this code", "a verdict on this code is not fixed yet");
+        assert_eq!(diff_lines(" 2 files changed, 30 insertions(+), 7 deletions(-)"), 37);
+        assert_eq!(diff_lines(" 1 file changed, 1 deletion(-)"), 1);
     }
 
     #[test]

@@ -340,6 +340,10 @@ impl Item {
         self.git.as_ref().is_some_and(|git| git.ahead > 0) && self.verdict.as_ref().is_some_and(crate::review::Shown::stopped)
     }
 
+    fn review_stop_line(&self) -> Option<&str> {
+        self.verdict.as_ref().filter(|_| self.review_stopped())?.looped.as_ref().map(|looped| looped.line.as_str())
+    }
+
     // In review means a reviewer reads it now; otherwise review is optional and a ready task waits under Ready to push.
     fn reviewer_reading(&self) -> bool {
         self.git.as_ref().is_some_and(|git| git.ahead > 0) && self.verdict.as_ref().is_some_and(|shown| shown.running)
@@ -638,8 +642,8 @@ impl Item {
             return Some(held);
         }
         // A looped review holds the push even with a stale verdict, so it goes before a step to accept, as on the board's row.
-        if self.review_stopped() {
-            return Some(crate::review::LOOPED);
+        if let Some(line) = self.review_stop_line() {
+            return Some(line);
         }
         if self.review_gave_none() {
             return Some(NO_VERDICT);
@@ -686,8 +690,8 @@ impl Item {
             let asked = if question.plan.is_some() { "approve the plan".to_string() } else { format!("answer a question · {}", plural(question.options.len(), "option")) };
             return Some(if self.held_messages == 0 { asked } else { format!("{asked} · held: {}", plural(self.held_messages, "message")) });
         }
-        if self.review_stopped() {
-            return Some(crate::review::LOOPED.to_string());
+        if let Some(line) = self.review_stop_line() {
+            return Some(line.to_string());
         }
         if self.review_gave_none() {
             return Some(NO_VERDICT.to_string());
@@ -1644,22 +1648,23 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn in_review(ok: bool, findings: usize, stale: bool, running: bool) -> crate::review::Shown {
-        crate::review::Shown { verdict: Some(crate::review::Verdict { ok, sha: "abc".to_string(), findings, ..Default::default() }), stale, running, held: true, file: PathBuf::from("/state/verdicts/billing@web.md"), looped: false, at: 0 }
+        crate::review::Shown { verdict: Some(crate::review::Verdict { ok, sha: "abc".to_string(), findings, ..Default::default() }), stale, running, held: true, file: PathBuf::from("/state/verdicts/billing@web.md"), looped: None, at: 0 }
     }
 
     #[test]
     fn a_review_kebbie_stopped_sending_back_waits_under_needs_you_with_one_line() {
         let mut item = task(Some("idle"), Some("ready"), 2);
-        item.verdict = Some(crate::review::Shown { looped: true, ..in_review(false, 3, true, false) });
-        assert_eq!((item.group(), item.wanted("enter").as_deref(), item.next_for_you()), (Group::NeedsYou, Some(crate::review::LOOPED), Some(crate::review::LOOPED)));
-        item.verdict = Some(crate::review::Shown { looped: true, ..in_review(false, 3, false, true) });
+        let looped = crate::review::Looped { rounds: 3, line: "review stopped after 3 rounds".to_string(), ..Default::default() };
+        item.verdict = Some(crate::review::Shown { looped: Some(looped.clone()), ..in_review(false, 3, true, false) });
+        assert_eq!((item.group(), item.wanted("enter").as_deref(), item.next_for_you()), (Group::NeedsYou, Some("review stopped after 3 rounds"), Some("review stopped after 3 rounds")));
+        item.verdict = Some(crate::review::Shown { looped: Some(looped), ..in_review(false, 3, false, true) });
         assert!(item.group() == Group::InReview, "a review the user sent again waits on the reviewer");
     }
 
     #[test]
     fn in_review_holds_a_task_only_while_its_reviewer_reads_and_review_is_optional_for_ready_to_push() {
         let reviewed = |shown: crate::review::Shown| { let mut item = task(Some("idle"), Some("ready"), 2); item.verdict = Some(shown); item };
-        let running = reviewed(crate::review::Shown { verdict: None, stale: false, running: true, held: true, file: PathBuf::new(), looped: false, at: 0 });
+        let running = reviewed(crate::review::Shown { verdict: None, stale: false, running: true, held: true, file: PathBuf::new(), looped: None, at: 0 });
         assert!(running.group() == Group::InReview);
         assert_eq!(running.summary(), "2 commits · review running · waits on the reviewer");
         assert_eq!(Group::InReview.title(), "IN REVIEW");
@@ -1736,7 +1741,7 @@ pub(crate) mod tests {
     #[test]
     fn a_held_review_that_gave_no_verdict_waits_on_you() {
         let mut item = task(Some("idle"), Some("ready"), 2);
-        item.verdict = Some(crate::review::Shown { verdict: None, stale: false, running: false, held: true, file: PathBuf::new(), looped: false, at: 0 });
+        item.verdict = Some(crate::review::Shown { verdict: None, stale: false, running: false, held: true, file: PathBuf::new(), looped: None, at: 0 });
         assert_eq!((item.group(), item.wanted("enter").as_deref(), item.next_for_you()), (Group::NeedsYou, Some(NO_VERDICT), Some(NO_VERDICT)));
         item.verdict.as_mut().unwrap().held = false;
         assert!(item.group() == Group::ReadyToPush, "an advised review holds nothing");
@@ -1758,7 +1763,7 @@ pub(crate) mod tests {
     #[test]
     fn a_review_under_way_or_of_this_code_covers_the_rules_and_a_stale_one_does_not() {
         let reviewed = |shown: crate::review::Shown| { let mut item = task(Some("idle"), Some("ready"), 2); item.git.as_mut().unwrap().approved = false; item.verdict = Some(shown); item };
-        let running = reviewed(crate::review::Shown { verdict: None, stale: false, running: true, held: true, file: PathBuf::new(), looped: false, at: 0 });
+        let running = reviewed(crate::review::Shown { verdict: None, stale: false, running: true, held: true, file: PathBuf::new(), looped: None, at: 0 });
         assert_eq!(running.summary(), "2 commits · review running · waits on the reviewer", "the reviewer is the rules check");
         assert!(!reviewed(in_review(false, 2, false, false)).summary().contains(UNCHECKED));
         assert!(reviewed(in_review(true, 0, true, false)).summary().contains(UNCHECKED), "a review of older code checked none of this");
