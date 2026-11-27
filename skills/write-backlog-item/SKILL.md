@@ -18,13 +18,17 @@ What kebbie's code reads is fixed, whatever the style says:
 - **title**, **priority** (`urgent`, `high`, `medium` or `low`), **repo** (the folder name of the repo the work happens in) and **status**, in the vault note's frontmatter or the local item's header;
 - the open questions, as bullets under the `Open questions` heading (or the questions heading `kebbie backlog template` names): `- [ ] ` before one that blocks the start, `- ` before one the work settles.
 
+**One item per problem.** Findings that turn up together (a night's review, one research pass, a subagent's report) are filed as one item each, each with its own title, priority and repo: an item that bundles unrelated findings cannot be started, answered or dropped one problem at a time.
+
+**Open questions hold intent only.** A question of intent (scope, behaviour, a trade-off only the user can weigh) goes under Open questions. A question of method (how to build it, structure, order, which file, which test) is never one of them: settle it with the obvious answer and write the call with its reason into the item, or, when only the work can settle it, leave it to the task that starts from the item. The user reads each question cold on the board, so an item asks only what only the user can answer.
+
 Working detail (research, paths, commits, history, reasoning) goes in your own vault notes, linked from the item. An item already filed keeps the shape it was written in: change what is wrong in it, never convert it to another shape.
 
 ## Steps
 
-1. **Search first**, with the vault's `search` on the item's words and, as the lead, `kebbie backlog`. Found: add what it lacks, save it, and stop, one item per problem. When kebbie's message names a kept row (`kept:<id>`), run `kebbie backlog filed kept:<id> <note path>`.
+1. **Search first**, with the vault's `search` on the item's words and, as the lead, `kebbie backlog`. Found: add what it lacks, save it, and stop. When kebbie's message names a kept row (`kept:<id>`), run `kebbie backlog filed kept:<id> <note path>`.
 2. **Mark it drafting** before you research: a local item gets `status = "drafting"` in its header; a vault item is a note in `Projects/` with its title, `priority`, `area` and status `draft` (then `kebbie backlog filed kept:<id> <path>` when a kept row is named). Done when `kebbie backlog` marks it `drafting`.
-3. **Research** the code, the notes on its area, the history and your conversation with the user. What you cannot establish becomes an open question, never a guess written as fact.
+3. **Research** the code, the notes on its area, the history and your conversation with the user. What you cannot establish is never a guess written as fact: a question of intent becomes an open question, and a question of method you settle and write as your call, or leave to the work, by **Open questions hold intent only** above.
    - **No repo given**: choose it from the user's words, the repos kebbie's message lists and `kebbie areas`, by where the code the work touches lives. When none fits, or two fit equally, ask which as a `- [ ] ` question.
    - **Started once written**: when kebbie's message says the user asked to start it once written, kebbie starts it as a task itself once it is saved with its repo and no `- [ ] ` question is left. Keep `- [ ] ` for what the start truly needs, and never start it yourself.
 4. **Write** it by the style, and save:
@@ -38,7 +42,7 @@ Working detail (research, paths, commits, history, reasoning) goes in your own v
 
 When kebbie runs you as its writer, the lead was asked to write the item out and you do it in its place: search, research and write as above, but save nothing and mark nothing, and answer with the written item alone, `# <title>` first and its body after it. The lead never saw your research, so put what you found in the item or under its open questions.
 
-When kebbie hands the lead a writer's draft, the lead reviews it instead of researching again: it adds what it knows from its conversation with the user, takes out an open question the code or the notes settle, keeps each one only the user can answer, then saves it and says so as steps 4 and 5 say.
+When kebbie hands the lead a writer's draft, the lead reviews it instead of researching again: it adds what it knows from its conversation with the user, takes out an open question the code or the notes settle, settles each question of method itself and writes the call into the item, keeps each one only the user can answer, splits a draft that holds several problems into one item each, then saves it and says so as steps 4 and 5 say.
 
 ## Answers to open questions
 

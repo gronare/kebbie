@@ -35,6 +35,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task reports ready with its lint red when the error came from main and main has fixed it since.
 
 ### Fixed
+- The lead files each finding it turns up as its own backlog item and asks you on it only what you want; a question of how to build it, it settles and writes into the item.
 - A commit a fixup was squashed into stays under its own subtask after an autosquash rebase, instead of moving to the subtask the fixup was made under.
 - The board shows a task's dev server and worker as running while they run when herdr is attached from another machine: the keeper runs the sidebar sync itself.
 - A link in a task's question, such as a mock, stays among its links after you answer.

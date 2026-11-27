@@ -46,8 +46,10 @@ A written-out item follows kebbie's [backlog style](#change-how-an-item-reads), 
 | Title | What changes, in at most 12 words. |
 | Purpose | One line on what you can do once it is done. |
 | Plan | 3 to 5 bullets, each with a short bold lead. |
-| Open questions | What you must decide before work starts (`- [ ] `), and what the work settles (`- `). |
+| Open questions | Only what you must decide: scope, behaviour, a trade-off of yours. One that blocks the start is `- [ ] `, one the work settles `- `. A question of how to build it is the lead's: it settles it and writes its call into the item. |
 | Left out | One line on what the item leaves alone. |
+
+Each item holds one problem: findings the lead turns up together, such as a night's review, become one item each.
 
 The research behind it stays in the lead's own vault notes, linked from the item. kebbie itself reads only the title, priority, repo and status, and the questions under `Open questions`. While a `- [ ] ` question waits on you, the item is drafting, and its row says how many questions wait on you.
 

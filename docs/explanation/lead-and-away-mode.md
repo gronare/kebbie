@@ -22,7 +22,7 @@ The lead:
 - **relays** interface and contract changes between tasks, and puts what needs your decision on the board,
 - **follows each push out**: what stands under Going out leaves within minutes, a push that stalls comes before new work, and a blocked task hears from it the moment what blocked it clears through the lead,
 - **does small cross-cutting fixes** itself when you ask for them, such as a script or a rename across repos,
-- **files what its own reviews and research turn up** as backlog items, with what needs your decision under Open questions, and starts a task from one only on your word.
+- **files what its own reviews and research turn up** as backlog items, one per finding, with only questions of what you want under Open questions: a question of how to build it the lead settles and writes into the item. It starts a task from one only on your word.
 
 It does not push, except tasks you gave it permission for.
 

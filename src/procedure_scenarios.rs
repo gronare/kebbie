@@ -94,7 +94,7 @@ fn something_on_the_tasks_own_path_is_an_obstacle_and_not_an_also_noticed_line()
 fn a_finding_seen_in_another_task_is_added_to_its_item_and_the_lead_raises_it_once_as_its_own_problem() {
     let role = task_role();
     says(section(&role, "## What you notice outside your task"), &["search the backlog for it first", "add this task to its Source"], "the same failing suite was filed four ways");
-    says(&file("skills/write-backlog-item/SKILL.md"), &["Search first", "one item per problem"], "the backlog skill searches before it files");
+    says(&file("skills/write-backlog-item/SKILL.md"), &["Search first", "One item per problem"], "the backlog skill searches before it files");
     says(&lead_role(), &["seen in a second task", "its own problem", "once", "found twice"], "the lead heard about it once and two tasks skipped it");
     says(section(&role, "## What you notice outside your task"), &["Found by tasks", "/bin/kebbie found", "(found:<id>)", "counts as found again"], "a repeat counts on its item instead of filing a second one");
     says(&playbook("CARD.md"), &["(found:<id>)", "kebbie found"], "the card's Also noticed lines link to their item");
@@ -223,4 +223,20 @@ fn a_task_cuts_its_work_into_increments_that_each_go_out_alone_and_checks_its_br
     says(section(&cut, "## Check the branch"), &["(rule 5)", "(rule 2)", "(rules 1 and 8)", "(rule 6)", "(rule 7)", "Done when each commit has a verdict on each question", "kebbie order move"], "the branch is judged commit by commit");
     says(section(&cut, "## Worked example: anonymous tracking"), &["six increments", "1. **Move the tracking code**", "6. **Record anonymous page views**", "What a re-cut like this costs"], "the example shows a re-cut");
     says(section(&cut, "## Sources"), &["KentBeck/status/250733358307500032", "preparatory-refactoring-example", "ParallelChange", "DarkLaunching", "feature-toggles"], "the method is grounded");
+}
+
+#[test]
+fn the_lead_files_one_item_per_finding_and_asks_the_user_only_questions_of_intent() {
+    let skill = file("skills/write-backlog-item/SKILL.md");
+    says(&skill, &["**One item per problem.**", "one item each", "**Open questions hold intent only.**", "A question of method", "is never one of them", "write the call with its reason into the item", "only what only the user can answer"], "the lead bundled a night's findings on one card with ten questions, half of them method");
+    says(section(&skill, "## Steps"), &["a question of intent becomes an open question", "a question of method you settle"], "research turned every unknown into a question for the user");
+    says(section(&skill, "## As kebbie's writer, and the lead's review"), &["settles each question of method itself", "splits a draft that holds several problems"], "the lead's review of a draft keeps method questions");
+    let lead = lead_role();
+    let own = lead.split("- **What your own work turns up**").nth(1).and_then(|rest| rest.split("\n- **").next()).unwrap_or_default();
+    says(own, &["one item per finding", "never several findings on one card", "only questions of intent", "a question of method in it is yours", "write your call with its reason into the item"], "the lead's own findings reached the user as method questions on one card");
+    assert!(!own.contains("what needs their decision"), "the lead's own findings put whatever needs a decision under Open questions: {own}");
+    let noticed = lead.split("- **Also noticed**").nth(1).and_then(|rest| rest.split("\n- **").next()).unwrap_or_default();
+    says(noticed, &["one item per line", "only its questions of intent"], "a not-filed line was filed with method questions");
+    says(&lead, &["files one item per problem", "only questions of intent", "settle a question of method yourself"], "taking in an idea put what the lead could not settle under Open questions");
+    assert!(!lead.contains("what you could not settle under its Open questions"), "the intake still sends everything unsettled to the user");
 }

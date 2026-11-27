@@ -604,9 +604,9 @@ fn intake_role(sources: &[Source], vault: bool) -> String {
         format!("file it the same way, then start it with a prompt written as under Starting a task: `kebbie start <name> \"<prompt>\" --repo <repo> --backlog {reference}`")
     };
     let steps = format!(
-        "Every item in the backlog is written out by the skill `{skill}`, whoever files it, at the moment it is filed: it reads what bears on the work first, keeps the item the user's intent, and puts what you could not find out under Open questions.\n\n\
+        "Every item in the backlog is written out by the skill `{skill}`, whoever files it, at the moment it is filed: it reads what bears on the work first, keeps the item the user's intent, files one item per problem, and puts under Open questions only questions of intent, the ones only the user can answer; a question of method it settles and writes into the item as its call.\n\n\
          When the user brings an idea rather than a task to start, take it in:\n\n\
-         1. Write it out with the skill `{skill}`, with what you could not settle under its Open questions, which the user answers on its card on the board.\n\
+         1. Write it out with the skill `{skill}`, one item per problem, with only what the user must decide (scope, behaviour, a trade-off of theirs) under its Open questions, which the user answers on its card on the board; settle a question of method yourself and write your call into the item.\n\
          2. When the user asked to start it: {start}. Otherwise: {save}.\n\
          3. Tell the user in one line, by its title, that it is filed or started.\n\n\
          The idea is taken in when the item exists, filed or started.\n\n\
