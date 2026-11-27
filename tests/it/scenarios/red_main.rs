@@ -60,10 +60,5 @@ fn red_ci_on_main_holds_the_repos_other_pushes_until_the_task_that_made_it_pushe
     let green = lab.run(&["ci", "tick"]);
     assert!(stdout(&green).contains("CI is green for"), "{}\n{}", stdout(&green), stderr(&green));
     lab.keeper_round();
-    assert!(lab.keeper_log().contains("push: search@app: ↻ Not pushed yet: main moved under it, so its tests run first"), "the hold ended and the push waits only on its tests on the new main: {}", lab.keeper_log());
-    green_test_run(&lab, &search, "search@app");
-    let ready = lab.run_as("search@app", &["-C", search.to_str().unwrap(), "report", "--state", "ready", "--next", "push", "search done"]);
-    assert!(ready.status.success(), "{}\n{}", stdout(&ready), stderr(&ready));
-    lab.keeper_round();
     assert_eq!(git(&origin, &["log", "-1", "--format=%s", "main"]), "Search the invoices", "search goes out once main is green: {}\n{}", lab.keeper_log(), fs::read_to_string(lab.state.join("push-intents/search@app")).unwrap_or_default());
 }

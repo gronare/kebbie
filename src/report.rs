@@ -70,18 +70,19 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
             return Ok(said);
         }
     }
-    let (red, excused, from_main) = if report.state == "ready" {
+    let (red, from_main) = if report.state == "ready" {
         crate::rules_check::refuse_unformed(cwd)?;
         let runs = crate::evidence::settled_runs_in(&state_dir()?, &me, cwd);
         let red = red_gate(&runs, red_cause)?;
         let excused = red.as_ref().and_then(|_| crate::evidence::latest(&runs)).map(|run| run.code.clone());
-        let owing = if to_push(cwd) { crate::required_runs::owed(cwd, &me, excused.as_deref()).map_err(|error| format!("Not reported ready: {error}."))? } else { crate::required_runs::Owing::default() };
+        let resolves_conflict = crate::tasks::pending_push(&state_dir()?, &me).is_some_and(|pending| pending.work == crate::tasks::PushWork::Conflict);
+        let owing = if to_push(cwd) && !resolves_conflict { crate::required_runs::owed(cwd, &me, excused.as_deref()).map_err(|error| format!("Not reported ready: {error}."))? } else { crate::required_runs::Owing::default() };
         if let Some(gap) = &owing.gap {
             return Err(crate::required_runs::report_refusal(gap));
         }
-        (red, excused, owing.from_main)
+        (red, owing.from_main)
     } else {
-        (None, None, None)
+        (None, None)
     };
     let card = card.map(|file| cwd.join(file));
     let text = card.as_deref().map(read_card).transpose()?;
@@ -102,9 +103,6 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
         let line = format!("the latest test run stays red: {cause} (task)");
         let note = crate::decisions::write(&state, &me, &line, messages::now())?;
         kept.push_str(&crate::decisions::for_the_task(&note, &line).map(|write| format!(" {write}")).unwrap_or_default());
-    }
-    if let Some(code) = &excused {
-        crate::required_runs::excuse(&state, &me, code)?;
     }
     if let Some(from_main) = &from_main {
         kept.push_str(&from_main.taken());

@@ -26,7 +26,7 @@ kebbie now pushes any ready task in that repo itself, reviewed or not: a review 
 ## What still holds
 
 - The reviewer's passed rules check, or the lead's `kebbie approve`, must match the commits kebbie pushes; the lead may still push such a task itself, and reads the diff before it does.
-- kebbie pushes a task under a permission itself as soon as it reports ready and a passed rules check matches its commits: it joins its repo's push line, which rebases it, runs its tests where main changed the same files, holds it behind the other half its ready report names, and watches CI. The lead hears what went out and need not be awake.
+- kebbie pushes a task under a permission itself as soon as it reports ready and a passed rules check matches its commits: it joins its repo's push line, which rebases and pushes it with no test run, holds it behind the other half its ready report names, and watches CI. The lead hears what went out and need not be awake.
 - A ready task without a permission waits for you under Ready to push. One under a permission stands under Going out, marked `kebbie pushes it under your permission`, with no read count, subtask to accept or yellow under its row: accepting is the lead's and pushing kebbie's there, unless [`task.require_accept`](../reference/configuration.md) is on, which leaves accepting to you.
 - After every push the lead is told which commits landed.
 - The same permission lets the lead [stage](try-a-task-before-pushing.md) a task on local main in a repo that turns on `worktree.stage_on_main`.

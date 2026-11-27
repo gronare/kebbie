@@ -2260,35 +2260,72 @@ fn a_ready_report_with_a_lint_red_from_main_that_main_has_fixed_is_taken_and_say
 }
 
 #[test]
-fn a_red_run_left_red_with_its_cause_on_the_rebased_code_lets_the_push_go_once_the_report_is_taken() {
-    let lab = Lab::new("red-cause-push");
+fn a_ready_task_pushed_after_main_moved_goes_out_at_once_with_no_test_run_on_the_rebased_code() {
+    let lab = Lab::new("ready-push-goes-out");
     let (app, slot) = lab.task_fixture();
     let slot_str = slot.to_str().unwrap();
+    git(&app, &["config", "user.name", "Ada"]);
+    git(&app, &["config", "user.email", "ada@example.com"]);
+    let lint = "cargo clippy --locked --all-targets -- -D warnings";
+    let repos = lab.home.join(".config/kebbie/repos");
+    fs::create_dir_all(&repos).unwrap();
+    fs::write(repos.join("app.toml"), format!("[tests]\nlint_command = \"{lint}\"\n")).unwrap();
     git(&slot, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend", "-m", "Add refunds\n\nThe billing page lists refunds now."]);
-    commit(&app, "c", "Someone else's work");
-    git(&app, &["push", "--quiet", "origin", "main"]);
-    git(&app, &["fetch", "--quiet", "origin"]);
-    git(&slot, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "rebase", "--quiet", "origin/main"]);
     let head = git(&slot, &["rev-parse", "HEAD"]);
+    fs::create_dir_all(lab.state.join("evidence")).unwrap();
+    let ran = |command: &str, lint: bool| format!("{{\"command\":\"{command}\",\"runner\":\"{command}\",\"result\":\"passed\",\"sha\":\"{head}\",\"code\":\"{head}\",\"at\":1,\"lint\":{lint}}}\n");
+    fs::write(lab.state.join("evidence/billing@app.jsonl"), ran("cargo test", false) + &ran(lint, true)).unwrap();
     let task_bin = lab.root.join("task-bin");
     fs::create_dir_all(&task_bin).unwrap();
     crate::executable::write(task_bin.join("claude"), "#!/bin/sh\ncat > /dev/null\n").unwrap();
-    let report = |card: &str| {
-        fs::write(slot.join("card.md"), card).unwrap();
-        lab.command().env("PATH", format!("{}:{}", task_bin.display(), lab.path())).args(["-C", slot_str, "report", "--state", "ready", "--next", "push", "--card", "card.md", "--red-cause", "the VAT test fails on main too, at tests/vat.rs:12", "refunds done"]).output().unwrap()
-    };
-    fs::create_dir_all(lab.state.join("evidence")).unwrap();
-    fs::write(lab.state.join("evidence/billing@app.jsonl"), format!("{{\"command\":\"cargo test\",\"runner\":\"cargo test\",\"result\":\"failed\",\"sha\":\"{head}\",\"code\":\"{head}\",\"at\":1}}\n")).unwrap();
-    let excuse = lab.state.join("evidence/billing@app.red-cause");
-    let refused = report("**Refunds show.**\n\nBuilt:\n- Each invoice lists its refunds.\n\nConfirm:\n- Old refunds are not backfilled.\n");
-    assert!(!refused.status.success() && !excuse.exists(), "a refused report excuses nothing: {}", stderr(&refused));
-    let unexcused = run_as_user(&lab, &["-C", app.to_str().unwrap(), "push", "billing"]);
-    assert!(!unexcused.status.success() && stderr(&unexcused).contains("its tests have no green run on HEAD"), "{}\n{}", stdout(&unexcused), stderr(&unexcused));
-    let taken = report("**Refunds show under each invoice.**\n\nBuilt:\n- Each invoice lists its refunds at /billing.\n");
-    assert!(taken.status.success(), "{}", stderr(&taken));
-    assert_eq!(fs::read_to_string(&excuse).unwrap(), head, "the taken report keeps which red run it left red");
+    fs::write(slot.join("card.md"), "**Refunds show under each invoice.**\n\nBuilt:\n- Each invoice lists its refunds at /billing.\n").unwrap();
+    let taken = lab.command().env("PATH", format!("{}:{}", task_bin.display(), lab.path())).args(["-C", slot_str, "report", "--state", "ready", "--next", "push", "--card", "card.md", "refunds done"]).output().unwrap();
+    assert!(taken.status.success(), "green tests and lint on HEAD take the ready report: {}", stderr(&taken));
+    commit(&app, "c", "Someone else's work");
+    git(&app, &["push", "--quiet", "origin", "main"]);
+    let prompts_before = prompts_to(&lab, "p_task").len();
     let pushed = run_as_user(&lab, &["-C", app.to_str().unwrap(), "push", "billing"]);
-    assert!(!stderr(&pushed).contains("no green run"), "the push gate answers to the same red run the report did: {}\n{}", stdout(&pushed), stderr(&pushed));
+    assert!(pushed.status.success(), "a ready task goes out when the user pushes it, though main moved since its tests ran: {}\n{}", stdout(&pushed), stderr(&pushed));
+    let landed = git(&lab.root.join("origin.git"), &["log", "--format=%s", "main"]);
+    assert!(landed.starts_with("Add refunds\nSomeone else's work\n"), "rebased onto main and pushed in the same go: {landed}");
+    assert_eq!(prompts_to(&lab, "p_task").len(), prompts_before, "nothing goes back to its Claude to run tests: {:?}", prompts_to(&lab, "p_task"));
+}
+
+#[test]
+fn a_push_that_conflicts_goes_out_once_its_claude_resolves_it_with_no_lint_run_on_the_resolved_code() {
+    let lab = Lab::new("conflict-push-goes-out");
+    let (app, slot) = lab.task_fixture();
+    let slot_str = slot.to_str().unwrap();
+    for dir in [&app, &slot] {
+        git(dir, &["config", "user.name", "Ada"]);
+        git(dir, &["config", "user.email", "ada@example.com"]);
+    }
+    let lint = "cargo clippy --locked --all-targets -- -D warnings";
+    let repos = lab.home.join(".config/kebbie/repos");
+    fs::create_dir_all(&repos).unwrap();
+    fs::write(repos.join("app.toml"), format!("[tests]\nlint_command = \"{lint}\"\n")).unwrap();
+    git(&slot, &["commit", "--quiet", "--amend", "-m", "Add refunds\n\nThe billing page lists refunds now."]);
+    let head = git(&slot, &["rev-parse", "HEAD"]);
+    fs::create_dir_all(lab.state.join("evidence")).unwrap();
+    fs::write(lab.state.join("evidence/billing@app.jsonl"), format!("{{\"command\":\"{lint}\",\"runner\":\"{lint}\",\"result\":\"passed\",\"sha\":\"{head}\",\"code\":\"{head}\",\"at\":1,\"lint\":true}}\n")).unwrap();
+    commit(&app, "b", "Main's own b");
+    git(&app, &["push", "--quiet", "origin", "main"]);
+    let handed = run_as_user(&lab, &["-C", app.to_str().unwrap(), "push", "billing"]);
+    assert!(stdout(&handed).contains("conflicts with main") || stderr(&handed).contains("conflicts with main"), "{}\n{}", stdout(&handed), stderr(&handed));
+    assert!(prompts_to(&lab, "p_task").iter().any(|text| text.contains("with no test run first")), "its Claude resolves the conflict: {:?}", prompts_to(&lab, "p_task"));
+    let _ = Command::new("git").args(["rebase", "--quiet", "origin/main"]).current_dir(&slot).env("GIT_CONFIG_NOSYSTEM", "1").output().unwrap();
+    fs::write(slot.join("b"), "Main's own b\nAdd refunds\n").unwrap();
+    git(&slot, &["add", "b"]);
+    git(&slot, &["-c", "core.editor=true", "rebase", "--continue"]);
+    let task_bin = lab.root.join("task-bin");
+    fs::create_dir_all(&task_bin).unwrap();
+    crate::executable::write(task_bin.join("claude"), "#!/bin/sh\ncat > /dev/null\n").unwrap();
+    fs::write(slot.join("card.md"), "**Refunds show under each invoice.**\n\nBuilt:\n- Each invoice lists its refunds at /billing.\n").unwrap();
+    let taken = lab.command().env("PATH", format!("{}:{}", task_bin.display(), lab.path())).args(["-C", slot_str, "report", "--state", "ready", "--next", "push", "--card", "card.md", "conflict on b resolved, both lines kept"]).output().unwrap();
+    assert!(taken.status.success(), "the ready report that ends a conflict needs no lint run on the resolved code: {}", stderr(&taken));
+    let pushed = run_as_user(&lab, &["-C", app.to_str().unwrap(), "push", "billing"]);
+    assert!(pushed.status.success(), "{}\n{}", stdout(&pushed), stderr(&pushed));
+    assert!(git(&lab.root.join("origin.git"), &["log", "--format=%s", "main"]).starts_with("Add refunds\nMain's own b\n"), "the resolved commit went out");
 }
 
 #[test]

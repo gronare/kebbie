@@ -594,13 +594,6 @@ mod tests {
         git(&slot.path, &["rev-parse", "HEAD"]).unwrap()
     }
 
-    // The task rebased onto main itself and its tests passed there, as its Claude does when kebbie hands it the rebased code.
-    fn tested_on_main(state: &Path, address: &str, slot: &Slot, upstream: &str) {
-        git(&slot.path, &["rebase", "--quiet", upstream]).unwrap();
-        let code = head(slot);
-        crate::evidence::save(state, address, &crate::evidence::Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result: crate::evidence::Outcome::Passed, sha: code.clone(), code, ..Default::default() }).unwrap();
-    }
-
     fn landed(origin: &Path, upstream: &str) -> String {
         git(origin, &["log", "--format=%s", upstream.trim_start_matches("origin/")]).unwrap()
     }
@@ -628,7 +621,6 @@ mod tests {
         assert_eq!(phase_of(&state, &second), Some(Phase::Pushing { ahead: 1 }));
         upstream_commit(&dir, "elsewhere", "x", "someone else's work");
         let before = head(&beta);
-        tested_on_main(&state, &first, &alpha, &upstream);
         let (typed, mut push) = real_push(&state);
         let driven = drive(&state, &dir, Some(&second), &[], 1000, &|_, _| None, &|_| false, &mut push);
         assert!(driven.mine.is_none() && !landed(&origin, &upstream).contains("fourth"), "kebbie push of beta leaves alpha's turn to the keeper and says where beta stands: {driven:?}");

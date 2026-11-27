@@ -17,7 +17,7 @@ pub(crate) fn ran(lab: &Lab, worktree: &Path, command: &str, exit: Option<i64>) 
 }
 
 #[test]
-fn a_repo_on_the_full_suite_takes_a_ready_report_and_a_push_only_after_a_green_full_run_on_head() {
+fn a_repo_on_the_full_suite_takes_a_ready_report_only_after_a_green_full_run_on_head_and_its_push_goes_out_without_one() {
     let lab = Lab::new("full-suite");
     lab.config("[tests]\nbefore_push = \"full\"\n");
     let repos = lab.home.join(".config/kebbie/repos");
@@ -32,10 +32,6 @@ fn a_repo_on_the_full_suite_takes_a_ready_report_and_a_push_only_after_a_green_f
     ran(&lab, &billing, "scripts/check.sh billing", None);
     let refused = lab.run_as("billing@app", &["-C", slot, "report", "--state", "ready", "--next", "push", "refunds done"]);
     assert!(!refused.status.success() && stderr(&refused).contains("Run `scripts/check.sh` in your worktree") && stderr(&refused).contains("kebbie recorded no run of it"), "a filtered run is not the full suite: {}", stderr(&refused));
-    let pushed = lab.run_as_user(&["-C", lab.app(), "push", "billing"]);
-    assert!(!pushed.status.success() && stderr(&pushed).contains("its full suite has no green run on HEAD") && stderr(&pushed).contains("`scripts/check.sh`"), "{}\n{}", stdout(&pushed), stderr(&pushed));
-    let lead = lab.run_as("lead", &["-C", lab.app(), "push", "billing"]);
-    assert!(!lead.status.success(), "the lead's push waits on it too: {}", stdout(&lead));
 
     ran(&lab, &billing, "./scripts/check.sh", Some(1));
     let red = lab.run_as("billing@app", &["-C", slot, "report", "--state", "ready", "--next", "push", "refunds done", "--red-cause", "test_refund_rounding fails on main too"]);
@@ -46,11 +42,8 @@ fn a_repo_on_the_full_suite_takes_a_ready_report_and_a_push_only_after_a_green_f
     assert!(ready.status.success(), "{}", stderr(&ready));
 
     lab.work(&billing, "refunds.md", "Document refunds");
-    let stale = lab.run_as_user(&["-C", lab.app(), "push", "billing"]);
-    assert!(!stale.status.success() && stderr(&stale).contains("HEAD holds other code since"), "a commit after the run makes it stale: {}", stderr(&stale));
-    ran(&lab, &billing, "scripts/check.sh", None);
     let went = lab.run_as_user(&["-C", lab.app(), "push", "billing"]);
-    assert!(went.status.success(), "{}\n{}", stdout(&went), stderr(&went));
+    assert!(went.status.success(), "the push runs nothing and checks no run, as CI tests what lands: {}\n{}", stdout(&went), stderr(&went));
     assert_eq!(git(&lab.root.join("origin.git"), &["log", "-1", "--format=%s", "main"]), "Document refunds");
 }
 
@@ -67,7 +60,7 @@ fn a_repo_on_related_tests_pushes_as_before_whatever_its_full_command() {
 }
 
 #[test]
-fn a_repo_with_a_lint_command_takes_a_ready_report_and_a_push_only_after_a_green_lint_on_head() {
+fn a_repo_with_a_lint_command_takes_a_ready_report_only_after_a_green_lint_on_head() {
     let lab = Lab::new("lint");
     let repos = lab.home.join(".config/kebbie/repos");
     fs::create_dir_all(&repos).unwrap();
@@ -78,8 +71,6 @@ fn a_repo_with_a_lint_command_takes_a_ready_report_and_a_push_only_after_a_green
 
     let refused = lab.run_as("billing@app", &["-C", slot, "report", "--state", "ready", "--next", "push", "refunds done"]);
     assert!(!refused.status.success() && stderr(&refused).contains("Run `scripts/lint.sh --strict` in your worktree") && stderr(&refused).contains("tests.lint_command"), "{}", stderr(&refused));
-    let pushed = lab.run_as_user(&["-C", lab.app(), "push", "billing"]);
-    assert!(!pushed.status.success() && stderr(&pushed).contains("its lint has no green run on HEAD"), "{}\n{}", stdout(&pushed), stderr(&pushed));
 
     ran(&lab, &billing, "scripts/lint.sh --strict", Some(1));
     let red = lab.run_as("billing@app", &["-C", slot, "report", "--state", "ready", "--next", "push", "refunds done", "--red-cause", "lint fails on main too"]);

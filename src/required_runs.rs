@@ -11,11 +11,10 @@ pub enum Kind {
     Tests(After),
 }
 
-// Why any green test run on HEAD is owed: the review had findings, or the default branch moved under the task's tests.
+// Why any green test run on HEAD is owed: the review had findings.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum After {
     Findings,
-    Rebase,
 }
 
 impl Kind {
@@ -32,7 +31,6 @@ impl Kind {
             Kind::Full => "tests.before_push = \"full\"",
             Kind::Lint => "tests.lint_command",
             Kind::Tests(After::Findings) => "its review had findings",
-            Kind::Tests(After::Rebase) => "the default branch moved under its tests",
         }
     }
 }
@@ -86,7 +84,6 @@ pub struct Owed {
 #[derive(Debug)]
 pub struct Gap {
     pub owed: Vec<Owed>,
-    pub end: Option<String>,
     pub from_main: Option<FromMain>,
 }
 
@@ -115,18 +112,6 @@ impl Gap {
 
     pub fn commands(&self) -> String {
         self.joined(|owed| if owed.required.command.is_empty() { "the tests that cover your change".to_string() } else { format!("`{}`", owed.required.command) })
-    }
-
-    pub fn has(&self) -> &'static str {
-        if self.plural() { "have" } else { "has" }
-    }
-
-    pub fn runs(&self) -> &'static str {
-        if self.plural() { "run" } else { "runs" }
-    }
-
-    fn plural(&self) -> bool {
-        self.distinct(|owed| owed.required.kind.name()).len() > 1 || self.owed.iter().any(|owed| matches!(owed.required.kind, Kind::Tests(_)))
     }
 
     fn settings(&self) -> String {
@@ -158,23 +143,11 @@ impl Gap {
 // The required runs a ready report still owes on HEAD; a run counts on the code it ran on, so one run before committing counts for the commit that holds the same tree. What kebbie cannot read is an error, so the gate stays shut.
 pub fn owed(worktree: &Path, address: &str, excused: Option<&str>) -> crate::sh::Result<Owing> {
     let state = crate::lead::state_dir().map_err(unreadable("its state folder"))?;
-    owed_in(&state, worktree, address, None, had_findings(&state, address)?, excused.map(str::to_string))
-}
-
-// The same for a push, which may end at an earlier commit than HEAD and goes out only on green runs of that commit's own code; findings never hold the user's push.
-pub fn owed_at(worktree: &Path, address: &str, end: Option<&str>) -> crate::sh::Result<Option<Gap>> {
-    let state = crate::lead::state_dir().map_err(unreadable("its state folder"))?;
-    let excused = std::fs::read_to_string(crate::evidence::excuse_file(&state, address)).ok().map(|code| code.trim().to_string());
-    Ok(owed_in(&state, worktree, address, end, false, excused)?.gap)
+    owed_in(&state, worktree, address, had_findings(&state, address)?, excused.map(str::to_string))
 }
 
 fn unreadable(what: &str) -> impl Fn(String) -> String + '_ {
     move |error| format!("kebbie cannot tell which test and lint runs this task owes, as it could not read {what} ({error}); fix that and try again")
-}
-
-// Kept once a ready report with --red-cause is taken, so the push answers to the same red run the report did.
-pub fn excuse(state: &Path, address: &str, code: &str) -> crate::sh::Result<()> {
-    crate::state::write(&crate::evidence::excuse_file(state, address), code)
 }
 
 // The review's latest verdict asked for changes the task makes in code, not only for the user's confirmation; no verdict file is no review, one kebbie cannot read or parse is an error.
@@ -189,41 +162,21 @@ fn had_findings(state: &Path, address: &str) -> crate::sh::Result<bool> {
     Ok(!verdict.ok && !verdict.asks_only_confirmation())
 }
 
-// The default branch moved under the task's tests: no green test run holds the base HEAD now sits on, as after a rebase onto a newer default branch; a task with no green test run needs one once HEAD left the base its branch started on, unless it changes only files that run no test.
-fn rebased(worktree: &Path, head: &str, tests: &[Run]) -> crate::sh::Result<bool> {
-    let upstream = crate::repo::main_checkout(worktree).and_then(|repo| crate::repo::default_branch(&repo)).map(|upstream| crate::repo::tracking(&upstream)).map_err(unreadable("the default branch"))?;
-    let base = git(worktree, &["merge-base", head, &upstream]).map_err(unreadable("where the branch left the default branch"))?;
-    let passed: Vec<&Run> = tests.iter().filter(|run| run.result == Outcome::Passed).collect();
-    if passed.is_empty() {
-        let code = git(worktree, &["diff", "--name-only", "--no-renames", &base, head]).map(|files| files.lines().any(|file| !file.is_empty() && !crate::tasks::text_only(file)));
-        return Ok(code.unwrap_or(true) && started_on(worktree, &upstream).is_none_or(|start| start != base));
-    }
-    Ok(!passed.iter().any(|run| crate::sh::succeeds("git", &["merge-base", "--is-ancestor", &base, &run.code], Some(worktree))))
-}
-
-// Where the task's branch left the default branch when it was made, from the oldest entry of its reflog.
-fn started_on(worktree: &Path, upstream: &str) -> Option<String> {
-    let branch = git(worktree, &["symbolic-ref", "--short", "HEAD"]).ok()?;
-    let created = git(worktree, &["reflog", "show", "--format=%H", &format!("refs/heads/{branch}")]).ok()?.lines().last()?.to_string();
-    git(worktree, &["merge-base", &created, upstream]).ok()
-}
-
 // The test command a task is pointed to when any green test run will do: the one it ran last, else the repo's first named one.
 fn suggested(settings: &Settings, tests: &[Run]) -> String {
     tests.last().map(|run| run.runner.clone()).or_else(|| settings.test_commands.value.first().cloned()).unwrap_or_default()
 }
 
-fn owed_in(state: &Path, worktree: &Path, address: &str, end: Option<&str>, findings: bool, excused: Option<String>) -> crate::sh::Result<Owing> {
+fn owed_in(state: &Path, worktree: &Path, address: &str, findings: bool, excused: Option<String>) -> crate::sh::Result<Owing> {
     let settings = crate::config::resolve(Some(worktree)).map(|loaded| loaded.settings).map_err(unreadable("the repo's config"))?;
     crate::evidence::settle(state, address, &crate::evidence::listed_for(&settings), crate::messages::now());
-    let head = git(worktree, &["rev-parse", end.unwrap_or("HEAD")]).map_err(unreadable("the commit the runs must hold"))?;
+    let head = git(worktree, &["rev-parse", "HEAD"]).map_err(unreadable("the commit the runs must hold"))?;
     let head_tree = crate::evidence::tree_of(worktree, &head);
     let on_head = |run: &Run| run.code == head || (head_tree.is_some() && crate::evidence::tree_of(worktree, &run.code) == head_tree);
     let (tests, lints) = (crate::evidence::runs_in(state, address), crate::evidence::lint_runs_in(state, address));
     let mut required = required(&settings);
-    let after = if findings { Some(After::Findings) } else if rebased(worktree, &head, &tests)? { Some(After::Rebase) } else { None };
-    if let Some(after) = after.filter(|_| !required.iter().any(|required| required.kind == Kind::Full)) {
-        required.push(Required { kind: Kind::Tests(after), command: suggested(&settings, &tests) });
+    if findings && !required.iter().any(|required| required.kind == Kind::Full) {
+        required.push(Required { kind: Kind::Tests(After::Findings), command: suggested(&settings, &tests) });
     }
     if required.is_empty() {
         return Ok(Owing::default());
@@ -234,13 +187,12 @@ fn owed_in(state: &Path, worktree: &Path, address: &str, end: Option<&str>, find
         let runs = match required.kind { Kind::Full | Kind::Tests(_) => &tests, Kind::Lint => &lints };
         missing(runs, &required, on_head).map(|why| Owed { required, why })
     }).collect();
-    // Only the whole task, on its own HEAD: once the push rebases it, its base is the tip and the lint is owed on the rebased code again.
-    let from_main = end.is_none().then(|| owed.iter().find(|owed| owed.required.kind == Kind::Lint).and_then(|owed| from_main(worktree, &head, &lints, &owed.required))).flatten();
+    let from_main = owed.iter().find(|owed| owed.required.kind == Kind::Lint).and_then(|owed| from_main(worktree, &head, &lints, &owed.required));
     let shown = from_main.clone().filter(|from_main| from_main.shown);
     if let Some(shown) = &shown {
         owed.retain(|owed| !(owed.required.kind == Kind::Lint && owed.required.command == shown.lint));
     }
-    let gap = (!owed.is_empty()).then(|| Gap { owed, end: end.map(|end| end[..7.min(end.len())].to_string()), from_main: from_main.filter(|from_main| !from_main.shown) });
+    let gap = (!owed.is_empty()).then(|| Gap { owed, from_main: from_main.filter(|from_main| !from_main.shown) });
     Ok(Owing { gap, from_main: shown })
 }
 
@@ -284,7 +236,7 @@ impl FromMain {
     // What the ready report says when kebbie took it with the lint red.
     pub fn taken(&self) -> String {
         format!(
-            " kebbie took it with your lint red: `{lint}` fails too where your branch left {upstream} ({base}) and passes on {upstream} at {fixed}, so the error comes from {upstream} and is fixed there. The push rebases your branch onto {upstream} and lints the rebased code before it goes out; when that run is red, kebbie hands it to you.",
+            " kebbie took it with your lint red: `{lint}` fails too where your branch left {upstream} ({base}) and passes on {upstream} at {fixed}, so the error comes from {upstream} and is fixed there. The push rebases your branch onto {upstream} and sends it out as it stands.",
             lint = self.lint, upstream = self.upstream, base = short(&self.base), fixed = short(self.fixed.as_deref().unwrap_or_default())
         )
     }
@@ -299,24 +251,6 @@ pub fn report_refusal(gap: &Gap) -> String {
         "Not reported ready: this repo takes a ready report only on a green run of {} on HEAD ({}), and {}. Run {} in your worktree, each as a command of its own with no pipe after it, then report ready again; when one stays red on something your change did not cause, raise it with kebbie obstacle.",
         gap.names(), gap.settings(), gap.whys(), gap.commands()
     ) + &gap.from_main.as_ref().map(FromMain::how_to_show).unwrap_or_default()
-}
-
-pub fn push_refusal(gap: &Gap, refused: &str, task: &str) -> String {
-    let notice = match &gap.end {
-        None => crate::notice::Notice::new(crate::notice::Tone::NotNow, format!("{refused}: {} {} no green run on HEAD", gap.names(), gap.has()))
-            .next(format!("Its Claude runs {} in its worktree and reports ready; push it again then ({}).", gap.commands(), gap.settings())),
-        Some(end) => crate::notice::Notice::new(crate::notice::Tone::NotNow, format!("{refused}: {} {} no green run on {end}, where this push ends", gap.names(), gap.has()))
-            .next(format!("Push the whole task once its HEAD has a green run of {}, or have its Claude run it with {end} checked out ({}).", gap.commands(), gap.settings())),
-    };
-    notice.detail("task", task).detail("tests", gap.whys()).to_string()
-}
-
-// What the task's Claude is asked when a push rebased it onto a moved default branch and its required runs are owed again.
-pub fn rebased_prompt(gap: &Gap) -> String {
-    format!(
-        "this repo pushes only on a green run of {} on HEAD ({}). Run {} in this worktree, each as a command of its own, and fix what broke with a new commit. Do not push.",
-        gap.names(), gap.settings(), gap.commands()
-    )
 }
 
 #[cfg(test)]
@@ -381,20 +315,19 @@ mod tests {
         let line = "cargo fmt --check && cargo clippy -- -D warnings";
         let on = |run: &Run| run.code == "head";
         assert!(both.iter().all(|required| missing(&[run(line, "cargo fmt --check", Outcome::Passed, "head"), run(line, "cargo clippy -- -D warnings", Outcome::Passed, "head")], required, on).is_none()), "the line run word for word answers both");
-        let gap = Gap { owed: both.into_iter().map(|required| Owed { required, why: "no run".to_string() }).collect(), end: None, from_main: None };
+        let gap = Gap { owed: both.into_iter().map(|required| Owed { required, why: "no run".to_string() }).collect(), from_main: None };
         assert!(report_refusal(&gap).contains("green run of its lint on HEAD (tests.lint_command)"), "{}", report_refusal(&gap));
     }
 
     #[test]
     fn the_gate_stays_shut_when_kebbie_cannot_read_the_repos_config() {
-        let (dir, origin, slot, upstream) = crate::tasks::test_support::task_with_a_commit("billing");
+        let (dir, origin, slot, _) = crate::tasks::test_support::task_with_a_commit("billing");
         let address = crate::peers::address("billing", &crate::repo::name_of(&dir));
         let file = crate::config::repo_file(&dir);
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, "[tests\nlint_command = ").unwrap();
         let refused = owed(&slot.path, &address, None).map(|_| ()).unwrap_err();
         assert!(refused.contains("could not read the repo's config"), "{refused}");
-        assert!(owed_at(&slot.path, &address, None).is_err(), "a push is held the same way");
         let _ = std::fs::remove_file(file);
         let state = crate::lead::state_dir().unwrap();
         let verdict = crate::review::verdict_file(&state, &address);
@@ -403,15 +336,6 @@ mod tests {
         assert!(owed(&slot.path, &address, None).map(|_| ()).unwrap_err().contains("could not read the review's verdict"), "a verdict kebbie cannot parse never reads as no findings");
         let _ = std::fs::remove_file(&verdict);
         assert!(owed(&slot.path, &address, None).unwrap().gap.is_none(), "no verdict at all is no review");
-        let empty = git(&dir, &["hash-object", "-t", "tree", "/dev/null"]).unwrap();
-        let unrelated = git(&dir, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit-tree", &empty, "-m", "unrelated root"]).unwrap();
-        let tip = git(&dir, &["rev-parse", &format!("refs/remotes/{upstream}")]).unwrap();
-        git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), &unrelated]).unwrap();
-        assert!(owed(&slot.path, &address, None).map(|_| ()).unwrap_err().contains("could not read where the branch left the default branch"), "a default branch with no history in common never reads as not rebased");
-        git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), &tip]).unwrap();
-        git(&dir, &["update-ref", "-d", "--no-deref", "refs/remotes/origin/HEAD"]).unwrap();
-        git(&dir, &["update-ref", "-d", &format!("refs/remotes/{upstream}")]).unwrap();
-        assert!(owed(&slot.path, &address, None).map(|_| ()).unwrap_err().contains("could not read the default branch"), "a default branch kebbie cannot find never reads as not rebased");
         crate::tasks::test_support::cleanup(dir, origin, &slot);
     }
 
@@ -463,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lint_red_on_head_from_main_that_main_has_fixed_holds_no_ready_report_but_a_push_of_part_of_the_task() {
+    fn a_lint_red_on_head_from_main_that_main_has_fixed_holds_no_ready_report() {
         use crate::tasks::test_support::{cleanup, task_with_a_commit, upstream_commit};
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         let state = crate::lead::state_dir().unwrap();
@@ -490,11 +414,9 @@ mod tests {
         let owing = owed(&slot.path, &address, None).unwrap();
         assert!(owing.gap.is_none(), "red on HEAD and on the base, green on the tip: the error came from main");
         let taken = owing.from_main.unwrap().taken();
-        assert!(taken.contains(&format!("passes on {upstream} at {}", &tip[..7])) && taken.contains(&format!("the error comes from {upstream} and is fixed there")) && taken.contains("lints the rebased code"), "{taken}");
-        assert!(owed_at(&slot.path, &address, None).unwrap().is_none(), "the push of the whole task joins the line on the same proof");
+        assert!(taken.contains(&format!("passes on {upstream} at {}", &tip[..7])) && taken.contains(&format!("the error comes from {upstream} and is fixed there")) && taken.contains("sends it out as it stands"), "{taken}");
         upstream_commit(&dir, "later", "y", "another task's push");
         assert!(owed(&slot.path, &address, None).unwrap().gap.is_none(), "the green run on main's commit still shows it once main moved on");
-        assert!(owed_at(&slot.path, &address, Some(&head)).unwrap().is_some_and(|gap| gap.owed.iter().any(|owed| owed.required.kind == Kind::Lint)), "a push that ends at a named commit gets no let-off");
         ran(&tip, Outcome::Failed);
         assert!(owed(&slot.path, &address, None).unwrap().gap.is_some_and(|gap| gap.from_main.is_none()), "red on the tip too: main has not fixed it");
         ran(&tip, Outcome::Passed);
@@ -522,19 +444,12 @@ mod tests {
     #[test]
     fn the_refusals_name_each_command_to_run() {
         let no_run = |required: Required| Owed { required, why: "kebbie recorded no run of it in this task".to_string() };
-        let gap = Gap { owed: vec![no_run(full("uv run pytest -q"))], end: None, from_main: None };
+        let gap = Gap { owed: vec![no_run(full("uv run pytest -q"))], from_main: None };
         let report = report_refusal(&gap);
         assert!(report.starts_with("Not reported ready:") && report.contains("Run `uv run pytest -q` in your worktree") && report.contains("kebbie obstacle"), "{report}");
         assert!(report.contains("each as a command of its own with no pipe after it") && !report.contains("nothing after it"), "an echo of its exit after the run is what the role recommends: {report}");
-        let push = push_refusal(&gap, "Not pushed", "billing");
-        assert!(push.contains("Not pushed: its full suite has no green run on HEAD") && push.contains("`uv run pytest -q`"), "{push}");
-        let part = push_refusal(&Gap { end: Some("abc1234".to_string()), ..gap }, "Not pushed", "billing");
-        assert!(part.contains("Not pushed: its full suite has no green run on abc1234, where this push ends"), "{part}");
-        let both = Gap { owed: vec![no_run(full("uv run pytest -q")), no_run(lint("ruff check"))], end: None, from_main: None };
+        let both = Gap { owed: vec![no_run(full("uv run pytest -q")), no_run(lint("ruff check"))], from_main: None };
         let report = report_refusal(&both);
         assert!(report.contains("green run of its full suite and its lint on HEAD (tests.before_push = \"full\", tests.lint_command)") && report.contains("Run `uv run pytest -q` and `ruff check` in your worktree") && report.contains("for `ruff check`, kebbie recorded no run"), "{report}");
-        let push = push_refusal(&both, "Not pushed", "billing");
-        assert!(push.contains("Not pushed: its full suite and its lint have no green run on HEAD"), "{push}");
-        assert!(rebased_prompt(&both).contains("Run `uv run pytest -q` and `ruff check` in this worktree"));
     }
 }

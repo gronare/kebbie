@@ -61,7 +61,6 @@ Find what is wrong with kebbie, and the fix for each message it shows.
 | --- | --- |
 | The lead cannot push a task | You have not given it push permission for that task (`a`), or under a repo-wide permission the reviewer has not passed the current code and the assessor has not said it needs no review. The task waits for you under Ready to push. |
 | `kebbie push` or `kebbie land` reports a conflict | Nothing to do. kebbie aborted its rebase and handed it to the task's Claude, which resolves it and reports back. The reviewer checks the resolved commits against the rules before the next push. |
-| A push says the task's Claude runs tests first | The default branch moved under the task's tests, or changed files the task changes too. kebbie pushes once the task reports ready with a green test run on the rebased code. |
 | A push says `held while CI is red on main` | CI failed on the default branch. The repo's pushes wait until the fix lands and passes CI; the fix itself goes out. |
 | A rebase is refused and names files hidden from `git status` | The files are marked skip-worktree or assume-unchanged and have local changes git will not overwrite. Unhide them with `git update-index --no-skip-worktree <file>` or `--no-assume-unchanged`, then commit or stash them. |
 

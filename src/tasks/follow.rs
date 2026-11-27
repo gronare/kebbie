@@ -140,7 +140,7 @@ pub(super) fn step(state: &Path, slot: &Slot, address: &str, waiting: Option<boo
         return Ok(Step::Waits("it has uncommitted files"));
     }
     if super::intent::load(state, address).is_some() {
-        return Ok(Step::Waits("a push waits for its tests"));
+        return Ok(Step::Waits("a push waits on its Claude"));
     }
     if crate::review::running_in(state, address) {
         return Ok(Step::Waits("its reviewer is reading it"));

@@ -250,8 +250,8 @@ Two lines about the machine itself close the group, after these backlog rows, ea
 
 - Started with a prompt, or at work since its last report or since you answered it.
 - A ready task whose review asks for changes, marked `fixing what its review asks`, until new commits answer it; under `review.auto = "run"`, whose review holds no push, until it reports ready again.
-- For half an hour after kebbie moves a ready task back here, its row says why in lavender, and the phone's row says the same: `back in Working: its review asked for changes`, `back in Working: its rebase onto main conflicted` or `back in Working: main changed its files, so it runs the tests again`. Nothing waits on you there.
-- A push that waits on its Claude to run the tests for files the default branch changed under it, or to resolve a conflict, marked `pushing for you · its Claude runs the tests` or `… resolves the conflict`.
+- For half an hour after kebbie moves a ready task back here, its row says why in lavender, and the phone's row says the same: `back in Working: its review asked for changes`, or `back in Working: its rebase onto main conflicted`. Nothing waits on you there.
+- A push that waits on its Claude to resolve a conflict, marked `pushing for you · its Claude resolves the conflict`.
 - A pushed task whose CI is green and that kebbie closes once its note is written, marked `pushed · kebbie closes it`.
 - A task kebbie resumes after an API error, marked `retrying after overload (2/4, next 21:14)`, `out of allowance until 17:00`, then `resumed after …` until Claude answers. See [When the API stops a task](../explanation/lead-and-away-mode.md#when-the-api-stops-a-task).
 
