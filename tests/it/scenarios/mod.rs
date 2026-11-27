@@ -12,3 +12,4 @@ mod next;
 mod agents;
 mod promises;
 mod disk;
+mod red_main;
