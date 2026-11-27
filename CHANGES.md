@@ -7,6 +7,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### What's new
 
 ### Fixed
+- A push kebbie handed back for tests goes out when its task reports ready within the same second.
 
 ## 0.42.0
 

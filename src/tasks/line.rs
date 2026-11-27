@@ -108,7 +108,7 @@ fn fixes(state: &Path, log: &[Message], now: u64, read: Read) -> Vec<String> {
         let current = slot.as_ref().and_then(|slot| default_branch(&waiting.repo).and_then(|upstream| fingerprint(&slot.path, &upstream)).ok());
         let approved = current.as_deref().is_some_and(|current| approval_holds(state, &waiting.address, current));
         let report = reports.get(&waiting.address).filter(|report| slot.as_ref().is_none_or(|slot| intent::answers_hand_over(&waiting, report, log, read(&waiting, slot).as_deref())));
-        match intent::next(&waiting, report, slot.as_ref(), current.as_deref(), approved) {
+        match intent::next(&waiting, report, log, slot.as_ref(), current.as_deref(), approved) {
             Next::Wait => {}
             Next::Drop(why) => {
                 intent::forget(state, &waiting.address);
@@ -266,14 +266,14 @@ fn turn(state: &Path, head: &Intent, log: &[Message], now: u64, read: Read, work
     } else {
         let reports = messages::latest_reports(log);
         let report = reports.get(&head.address).filter(|report| intent::answers_hand_over(head, report, log, read(head, &slot).as_deref()));
-        let since = |state: &str| report.is_some_and(|report| report.at > head.at && head.seen.as_deref() != Some(report.id.as_str()) && report.report.as_ref().is_some_and(|report| report.state == state));
+        let since = |state: &str| report.is_some_and(|report| intent::reported_since(head, report, log) && head.seen.as_deref() != Some(report.id.as_str()) && report.report.as_ref().is_some_and(|report| report.state == state));
         if since("needs-you") {
             return leave(state, head, "its Claude reported needs-you instead of ready");
         }
         if let Some(report) = report.filter(|_| since("ready")) {
             super::permitted::used_up(state, &head.address, &report.id);
         }
-        match intent::next(head, report, Some(&slot), current.as_deref(), approved) {
+        match intent::next(head, report, log, Some(&slot), current.as_deref(), approved) {
             Next::Push => {}
             Next::Wait if outlasted(head, now, behind, working || since("ready")) => {
                 let why = if since("ready") { "the lead did not approve its new commits" } else { "its Claude did not report ready" };
@@ -415,6 +415,28 @@ mod tests {
         assert!(pushes(vec![hand(false), ready(200)], None), "no transcript to tell: a report after the hand-over went out answers it");
         assert!(!pushes(vec![hand(false), ready(140)], None), "and one before it does not");
         assert!(pushes(vec![ready(200)], None), "a hand-over the log no longer has holds nothing up");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_ready_report_in_the_same_second_as_the_hand_over_answers_it_only_when_the_log_has_it_after() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let current = fingerprint(&slot.path, &upstream).unwrap();
+        let address = format!("billing@{}", crate::repo::name_of(&dir));
+        let mut hand = report("h1", 150, "ready");
+        (hand.from, hand.to, hand.text, hand.report, hand.kind) = ("kebbie".to_string(), address.clone(), "run the tests".to_string(), None, Some(messages::HAND_KIND.to_string()));
+        let mut ready = report("r1", 150, "ready");
+        ready.from = address.clone();
+        let pushes = |log: Vec<Message>| {
+            save(&state, &Intent { at: 150, hand: Some("h1".to_string()), ..intent(By::User, &dir, &current) }).unwrap();
+            let mut pushed = false;
+            complete_in(&state, &log, 300, &|_, _| None, &|_| false, &mut |_, _| { pushed = true; Ok(Sent::Pushed(String::new())) });
+            forget(&state, &address);
+            pushed
+        };
+        assert!(pushes(vec![hand.clone(), ready.clone()]), "the task's Claude answered within the second kebbie handed the push over");
+        assert!(!pushes(vec![ready, hand]), "written before the hand-over in that second, it answers an earlier turn");
         cleanup(dir, origin, &slot);
     }
 

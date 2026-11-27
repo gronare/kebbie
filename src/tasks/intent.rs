@@ -288,8 +288,18 @@ pub(super) fn answers_hand_over(intent: &Intent, report: &Message, log: &[Messag
     }
     match transcript {
         Some(transcript) => crate::typing::read_at(transcript, &messages::typed_form(hand), hand.at * 1000).is_some_and(|read| report.at * 1000 > read),
-        None => report.at > hand.at,
+        None => later(report, hand.at, Some(&hand.id), log),
     }
+}
+
+// A report after the push was handed over: seconds order the log, and within one second the log's own order does, as it is appended under its lock.
+pub(super) fn reported_since(intent: &Intent, report: &Message, log: &[Message]) -> bool {
+    later(report, intent.at, intent.hand.as_deref(), log)
+}
+
+fn later(report: &Message, at: u64, mark: Option<&str>, log: &[Message]) -> bool {
+    let place = |id: &str| log.iter().position(|message| message.id == id);
+    report.at > at || (report.at == at && mark.and_then(place).zip(place(&report.id)).is_some_and(|(mark, said)| said > mark))
 }
 
 pub(super) fn forget(state: &Path, address: &str) {
@@ -322,11 +332,11 @@ pub(super) enum Next {
 }
 
 // The push completes only on a ready report written after the intent, with the commits the intent was recorded for or ones the lead approved since; changed commits wait for that approval.
-pub(super) fn next(intent: &Intent, report: Option<&Message>, slot: Option<&Slot>, current: Option<&str>, approved: bool) -> Next {
+pub(super) fn next(intent: &Intent, report: Option<&Message>, log: &[Message], slot: Option<&Slot>, current: Option<&str>, approved: bool) -> Next {
     if slot.is_none() {
         return Next::Drop(format!("{} is gone, so kebbie dropped the push {} asked for", intent.address, intent.by.word()));
     }
-    let ready = report.is_some_and(|report| report.at > intent.at && intent.seen.as_deref() != Some(report.id.as_str()) && report.report.as_ref().is_some_and(|report| report.state == "ready"));
+    let ready = report.is_some_and(|report| reported_since(intent, report, log) && intent.seen.as_deref() != Some(report.id.as_str()) && report.report.as_ref().is_some_and(|report| report.state == "ready"));
     if !ready {
         return Next::Wait;
     }
@@ -423,14 +433,14 @@ pub(super) mod tests {
     fn the_push_completes_only_on_a_new_ready_report_with_the_same_commits_or_approved_ones() {
         let (dir, origin, slot, _) = task_with_a_commit("billing");
         let waiting = intent(By::User, &dir, "abc");
-        assert_eq!(next(&waiting, None, Some(&slot), Some("abc"), false), Next::Wait);
-        assert_eq!(next(&waiting, Some(&report("before", 200, "ready")), Some(&slot), Some("abc"), false), Next::Wait, "the report it was pushed on is not the check");
-        assert_eq!(next(&waiting, Some(&report("r1", 90, "ready")), Some(&slot), Some("abc"), false), Next::Wait);
-        assert_eq!(next(&waiting, Some(&report("r1", 200, "needs-you")), Some(&slot), Some("abc"), true), Next::Wait, "a question or a red test keeps the push waiting");
-        assert_eq!(next(&waiting, Some(&report("r1", 200, "ready")), Some(&slot), Some("abc"), false), Next::Push);
-        assert_eq!(next(&waiting, Some(&report("r1", 200, "ready")), Some(&slot), Some("abd"), false), Next::Wait, "changed commits wait for the lead's rules check");
-        assert_eq!(next(&waiting, Some(&report("r1", 200, "ready")), Some(&slot), Some("abd"), true), Next::Push, "the lead approved the changed commits");
-        assert!(matches!(next(&waiting, Some(&report("r1", 200, "ready")), None, Some("abc"), true), Next::Drop(why) if why.contains("is gone")));
+        assert_eq!(next(&waiting, None, &[], Some(&slot), Some("abc"), false), Next::Wait);
+        assert_eq!(next(&waiting, Some(&report("before", 200, "ready")), &[], Some(&slot), Some("abc"), false), Next::Wait, "the report it was pushed on is not the check");
+        assert_eq!(next(&waiting, Some(&report("r1", 90, "ready")), &[], Some(&slot), Some("abc"), false), Next::Wait);
+        assert_eq!(next(&waiting, Some(&report("r1", 200, "needs-you")), &[], Some(&slot), Some("abc"), true), Next::Wait, "a question or a red test keeps the push waiting");
+        assert_eq!(next(&waiting, Some(&report("r1", 200, "ready")), &[], Some(&slot), Some("abc"), false), Next::Push);
+        assert_eq!(next(&waiting, Some(&report("r1", 200, "ready")), &[], Some(&slot), Some("abd"), false), Next::Wait, "changed commits wait for the lead's rules check");
+        assert_eq!(next(&waiting, Some(&report("r1", 200, "ready")), &[], Some(&slot), Some("abd"), true), Next::Push, "the lead approved the changed commits");
+        assert!(matches!(next(&waiting, Some(&report("r1", 200, "ready")), &[], None, Some("abc"), true), Next::Drop(why) if why.contains("is gone")));
         cleanup(dir, origin, &slot);
     }
 
@@ -447,10 +457,10 @@ pub(super) mod tests {
         crate::state::write(&file(&state, &address), forged.to_string()).unwrap();
         assert_eq!(load(&state, &address), None, "only a red CI's push waits without commits");
         let ready = report("r1", red.at + 1, "ready");
-        assert_eq!(next(&red, Some(&ready), Some(&slot), Some(""), false), Next::Wait, "ready without a fix: nothing to push");
-        assert_eq!(next(&red, Some(&ready), Some(&slot), Some("fix"), false), Next::Wait, "the fix waits for the lead's rules check");
-        assert_eq!(next(&red, Some(&ready), Some(&slot), Some("fix"), true), Next::Push);
-        assert_eq!(next(&red, Some(&report("r1", red.at + 1, "needs-you")), Some(&slot), Some("fix"), true), Next::Wait, "a fix that needs the user waits for them");
+        assert_eq!(next(&red, Some(&ready), &[], Some(&slot), Some(""), false), Next::Wait, "ready without a fix: nothing to push");
+        assert_eq!(next(&red, Some(&ready), &[], Some(&slot), Some("fix"), false), Next::Wait, "the fix waits for the lead's rules check");
+        assert_eq!(next(&red, Some(&ready), &[], Some(&slot), Some("fix"), true), Next::Push);
+        assert_eq!(next(&red, Some(&report("r1", red.at + 1, "needs-you")), &[], Some(&slot), Some("fix"), true), Next::Wait, "a fix that needs the user waits for them");
         cleanup(dir, origin, &slot);
     }
 
