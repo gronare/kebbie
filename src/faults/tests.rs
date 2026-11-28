@@ -11,7 +11,7 @@ fn case(state: &Path, source: Source, from: &str, words: &str, now: u64) -> Case
 }
 
 fn new_fault(title: &str) -> Verdict {
-    Verdict { case: String::new(), kind: Some(Kind::New), issue_kind: Some("bug".to_string()), title: Some(title.to_string()), happened: Some("the lead asked the user in its chat".to_string()), expected: Some("questions go on the board".to_string()), cause: Some("roles/lead.md lets the lead ask in its reply".to_string()), barrier: Some("role".to_string()), files: Some("roles/lead.md".to_string()), question: None, task: None, reason: "a rule about how a lead works".to_string() }
+    Verdict { case: String::new(), kind: Some(Kind::New), issue_kind: Some("bug".to_string()), title: Some(title.to_string()), happened: Some("the lead asked the user in its chat".to_string()), expected: Some("questions go on the board".to_string()), cause: Some("roles/lead.md lets the lead ask in its reply".to_string()), barrier: Some("role".to_string()), files: Some("roles/lead.md".to_string()), question: None, options: Vec::new(), recommend: None, task: None, reason: "a rule about how a lead works".to_string() }
 }
 
 #[test]
@@ -88,7 +88,7 @@ fn the_watchers_answer_reads_one_block_per_case() {
 
 #[test]
 fn a_case_waits_for_the_agents_turn_and_runs_come_apart() {
-    let waiting = |at| Case { id: format!("c{at}"), at, source: Source::Chat, from: "lead".to_string(), words: "w".to_string(), context: String::new(), fingerprint: None, settled: None, issue: None, tries: 0, pointed: false, about: None };
+    let waiting = |at| Case { id: format!("c{at}"), at, source: Source::Chat, from: "lead".to_string(), words: "w".to_string(), context: String::new(), fingerprint: None, settled: None, issue: None, tries: 0, pointed: false, about: None, answered: None };
     let cases = vec![waiting(1_000), waiting(1_100)];
     assert_eq!(watch::due(&cases, 0, 1_110), Vec::<String>::new(), "neither has waited two minutes");
     assert_eq!(watch::due(&cases, 0, 1_150), ["c1000"]);
@@ -242,23 +242,32 @@ fn a_task_the_watcher_names_is_kept_by_its_bare_name() {
 }
 
 #[test]
-fn the_watchers_question_reaches_a_vault_backlog_and_a_local_one() {
-    use crate::backlog_file::{Shelf, file_item_on};
-    use crate::config::Source as Backlog;
-    for source in [Backlog::Vault, Backlog::Local] {
-        let (state, dir) = (state("ask-state"), state("ask-dir"));
-        let told = std::cell::RefCell::new(Vec::new());
-        let tell = |text: &str| -> Result<()> { told.borrow_mut().push(text.to_string()); Ok(()) };
-        let shelf = Shelf { dir: &dir, state: &state, tell: &tell, write: &tell };
-        let said = case(&state, Source::Chat, "lead", "the board should not do that, or should it?", 10);
-        let verdict = Verdict { kind: Some(Kind::Ask), title: Some("The board hides a parked task".to_string()), reason: "two readings".to_string(), ..Verdict::default() };
-        let question = "Do you want parked tasks shown on the board?";
-        let filed = watch::ask_with(&said, &verdict, question, |filing, from_lead| file_item_on(&shelf, &[source], filing, from_lead));
-        assert!(filed.is_ok(), "{source:?}: {filed:?}");
-        let held = told.borrow().join("\n") + &fs::read_dir(&dir).map(|entries| entries.filter_map(|entry| fs::read_to_string(entry.ok()?.path()).ok()).collect::<String>()).unwrap_or_default();
-        assert!(held.contains(&format!("- [ ] {question}")), "{source:?}: the question waits as the item's open question: {held}");
-        let _ = (fs::remove_dir_all(state), fs::remove_dir_all(dir));
-    }
+fn the_watchers_question_goes_on_the_board_and_the_users_answer_back_to_the_watcher() {
+    let state = crate::lead::state_dir().unwrap();
+    let said = case(&state, Source::Chat, "billing@app", "the board should not hide that parked task, or should it? q-5e1f", 10);
+    let mut verdict = Verdict { kind: Some(Kind::Ask), title: Some("The board hides a parked task".to_string()), reason: "two readings".to_string(), question: Some("Do you want parked tasks shown on the board?".to_string()), ..Verdict::default() };
+    assert!(watch::act(&state, &said, &verdict, None, 10).unwrap_err().contains("cannot go on the board"), "a question without options goes back to the lead, never to a backlog");
+    verdict.options = vec!["Show them: a parked task keeps its row".to_string(), "Hide them: the board shows only work that moves".to_string()];
+    verdict.recommend = Some("1".to_string());
+    let (outcome, _) = watch::act(&state, &said, &verdict, None, 10).unwrap();
+    assert!(outcome.starts_with("asked the user: Do you want parked tasks shown on the board?") && outcome.contains("on the board"), "{outcome}");
+    let asked = crate::messages::load().into_iter().rev().find(|message| message.kind.as_deref() == Some(question::QUESTION_KIND)).expect("kebbie asked on the board");
+    assert_eq!((asked.from.as_str(), question::case_of(asked.about.as_deref())), ("kebbie", Some(said.id.as_str())));
+    assert_eq!(asked.question.as_ref().unwrap().options.len(), 2);
+    settle(&state, &said.id, &outcome, None).unwrap();
+    let answered = crate::questions::answer_as(&crate::permit::Caller::User, &asked.id, Some(0), "").unwrap();
+    assert!(answered.contains("Answered"), "{answered}");
+    let again = pending(&state).into_iter().find(|case| case.words == said.words).expect("the case comes back with the answer");
+    assert!(again.urgent() && again.answered.as_deref().is_some_and(|answer| answer.contains("Do you want parked tasks shown on the board?") && answer.contains("Show them")), "{again:?}");
+    assert!(watch::brief(&state, std::slice::from_ref(&again), Path::new("/k"), "English").contains("The fault watcher asked the user:"));
+    assert!(crate::questions::open_now(&crate::messages::load()).iter().all(|open| open.id != asked.id), "the question is answered");
+    settle(&state, &again.id, "done", None).unwrap();
+}
+
+#[test]
+fn the_watchers_answer_carries_a_questions_options() {
+    let [asks] = watch::parse("case: c7\nverdict: ask\nreason: two readings\nquestion: Shown or hidden?\noption: Shown: it keeps its row\noption: Hidden: it leaves the board\nrecommend: 2\n").try_into().unwrap();
+    assert_eq!((asks.options.len(), asks.recommend.as_deref()), (2, Some("2")));
 }
 
 #[test]

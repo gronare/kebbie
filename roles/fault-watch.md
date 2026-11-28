@@ -39,9 +39,11 @@ cause: the file and what in it let the fault happen
 barrier: code | role | skill
 files: the files a fix changes
 question: the one question for the user, for ask only
+option: <label>: what the user gets with it, two to four lines, for ask only
+recommend: the number of the option you recommend, for ask only
 task: the task the brief lists that already fixes it, for known only
 ```
 
-`ignore` and `known` need only `case`, `verdict` and `reason`; give `known` its `task` when a task in your brief already fixes that issue, so kebbie starts no second one. `new` and `linked` need every field but `question`. `ask` needs `question` and `title`, and `happened` and `expected` as far as you know them.
+`ignore` and `known` need only `case`, `verdict` and `reason`; give `known` its `task` when a task in your brief already fixes that issue, so kebbie starts no second one. `new` and `linked` need every field but `question`. `ask` needs `question`, two to four `option` lines, `recommend` and `title`, and `happened` and `expected` as far as you know them. kebbie puts the question on the board, and the user's answer comes back to you as the same case with the question and the answer beside it.
 
 The issue's title, `happened` and `expected` go into kebbie's public repo: write them about kebbie alone, with "a repo", "a task", "the user" in place of project names, paths, people and quotes. Keep the user's words out of them; kebbie keeps those on this machine.

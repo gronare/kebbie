@@ -277,7 +277,7 @@ pub fn task_name(named: &str) -> String {
 }
 
 pub fn brief(state: &Path, cases: &[Case], root: &Path, language: &str) -> String {
-    let cases: Vec<String> = cases.iter().map(|case| format!("<case id=\"{}\">\nfrom: {} ({})\nat: {}\n{}words: {}\n{}\n{}</case>", case.id, case.from, case.said(), crate::keeper::stamp(case.at), case.about.as_ref().map(|issue| format!("issue: {issue}, filed already\n")).unwrap_or_default(), case.words, case.context, case.fingerprint.as_ref().map(|print| format!("fingerprint: {print}\n")).unwrap_or_default())).collect();
+    let cases: Vec<String> = cases.iter().map(|case| format!("<case id=\"{}\">\nfrom: {} ({})\nat: {}\n{}words: {}\n{}\n{}</case>", case.id, case.from, case.said(), crate::keeper::stamp(case.at), case.about.as_ref().map(|issue| format!("issue: {issue}, filed already\n")).unwrap_or_default(), case.words, case.context, case.answered.as_ref().map(|answer| format!("{answer}\n")).unwrap_or_default() + &case.fingerprint.as_ref().map(|print| format!("fingerprint: {print}\n")).unwrap_or_default())).collect();
     let mut issues: Vec<Issue> = issues::load(&issues::dir(state)).into_iter().filter(|issue| issue.source.is_none()).collect();
     issues.reverse();
     let issues: Vec<String> = issues.iter().take(120).map(|issue| format!("- {} [{}{}] {}{}", issue.id, issue.status, if super::in_use(issue) { ", in use" } else { "" }, issue.title, issue.cause.as_ref().map(|cause| format!(" · cause: {cause}")).unwrap_or_default())).collect();
@@ -318,6 +318,8 @@ pub struct Verdict {
     pub files: Option<String>,
     pub task: Option<String>,
     pub question: Option<String>,
+    pub options: Vec<String>,
+    pub recommend: Option<String>,
     pub reason: String,
 }
 
@@ -362,6 +364,8 @@ pub fn parse(answer: &str) -> Vec<Verdict> {
             "files" => verdict.files = given(value),
             "task" => verdict.task = given(value).map(|task| task_name(&task)).filter(|task| !task.is_empty()),
             "question" => verdict.question = given(value),
+            "option" => verdict.options.extend(given(value)),
+            "recommend" => verdict.recommend = given(value),
             "reason" => verdict.reason = value.trim().to_string(),
             _ => {}
         }
@@ -674,16 +678,12 @@ pub fn queue_fix(state: &Path, issue: &Issue, came_back: bool, pointed: bool, ch
     Ok(format!("queued {name}.{when}").trim_end_matches('.').to_string())
 }
 
+// The watcher's question goes on the board as kebbie's own, and the user's answer comes back to it as the same case.
 fn ask_user(case: &Case, verdict: &Verdict, question: &str) -> Result<String> {
-    let sources = crate::config::sources()?;
-    ask_with(case, verdict, question, |filing, from_lead| crate::backlog_file::file_item(&sources, filing, from_lead))
-}
-
-// The watcher files its question as any agent but the lead does, so a vault backlog takes it through the lead.
-pub fn ask_with(case: &Case, verdict: &Verdict, question: &str, file: impl FnOnce(&crate::backlog_file::Filing, bool) -> Result<String>) -> Result<String> {
-    let title = verdict.title.clone().unwrap_or_else(|| super::clipped(question, 80));
-    let body = format!("## Background\n{}\n\n## Goal\n{}\n\n## Open questions\n- [ ] {question}\n\n## Source\nkebbie's fault watcher, case {} from {}.\n", verdict.happened.clone().unwrap_or_else(|| verdict.reason.clone()), verdict.expected.clone().unwrap_or_else(|| title.clone()), case.id, case.from);
-    file(&crate::backlog_file::Filing { priority: "medium", repo: "kebbie", line: &title, words: None, body: Some(&body), by: "kebbie's fault watcher", start: false, repos: &[] }, false)
+    let asked = super::question::asked(question, &verdict.options, verdict.recommend.as_deref())?;
+    let id = super::question::put(case, &asked)?;
+    tell_lead(&format!("The fault watcher asks the user on the board about case {} ({}): {} Their answer goes back to the watcher.", case.id, case.said(), asked.text));
+    Ok(format!("question {id} on the board"))
 }
 
 #[cfg(test)]

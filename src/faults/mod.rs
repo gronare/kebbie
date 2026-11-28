@@ -8,6 +8,7 @@ use crate::sh::Result;
 
 pub mod capture;
 pub mod incidents;
+pub mod question;
 pub mod watch;
 
 pub const BY: &str = "fault watcher";
@@ -69,6 +70,8 @@ pub struct Case {
     pub pointed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub about: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answered: Option<String>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -82,7 +85,7 @@ impl Case {
 
     // Weighed at once and alone, and its verdict goes back to the lead.
     pub fn urgent(&self) -> bool {
-        self.pointed || self.source == Source::Issue
+        self.pointed || self.source == Source::Issue || self.answered.is_some()
     }
 }
 
@@ -145,7 +148,7 @@ pub fn add_case(state: &Path, new: &NewCase, now: u64) -> Result<Option<String>>
         if store.cases.iter().any(|case| case.settled.is_none() && case.from == new.from && case.words == words) {
             return None;
         }
-        Some(push(store, Case { id: String::new(), at: now, source: new.source, from: new.from.to_string(), words, context: clipped(new.context, CONTEXT_CHARS), fingerprint: new.fingerprint.map(str::to_string), settled: None, issue: None, tries: 0, pointed: false, about: None }))
+        Some(push(store, Case { id: String::new(), at: now, source: new.source, from: new.from.to_string(), words, context: clipped(new.context, CONTEXT_CHARS), fingerprint: new.fingerprint.map(str::to_string), settled: None, issue: None, tries: 0, pointed: false, about: None, answered: None }))
     })
 }
 
@@ -178,7 +181,7 @@ pub fn add_pointed(state: &Path, words: &str, now: u64) -> Result<String> {
         if let Some(case) = store.cases.iter().find(|case| case.settled.is_none() && case.pointed && flat(&case.words) == flat(&words)) {
             return case.id.clone();
         }
-        push(store, Case { id: String::new(), at: now, source: Source::Chat, from: lead.to_string(), words, context: POINTED_CONTEXT.to_string(), fingerprint: None, settled: None, issue: None, tries: 0, pointed: true, about: None })
+        push(store, Case { id: String::new(), at: now, source: Source::Chat, from: lead.to_string(), words, context: POINTED_CONTEXT.to_string(), fingerprint: None, settled: None, issue: None, tries: 0, pointed: true, about: None, answered: None })
     })
 }
 
@@ -195,8 +198,16 @@ pub fn add_about(state: &Path, issue: &Issue, source: Source, now: u64) -> Resul
         if store.cases.iter().any(|case| case.settled.is_none() && case.about.as_deref() == Some(issue.id.as_str())) {
             return None;
         }
-        Some(push(store, Case { id: String::new(), at: now, source, from, words, context, fingerprint: None, settled: None, issue: None, tries: 0, pointed: false, about: Some(issue.id.clone()) }))
+        Some(push(store, Case { id: String::new(), at: now, source, from, words, context, fingerprint: None, settled: None, issue: None, tries: 0, pointed: false, about: Some(issue.id.clone()), answered: None }))
     })
+}
+
+// A case the watcher asked the user about comes back with their answer, as a new case weighed at once.
+pub fn add_answered(state: &Path, id: &str, answer: &str, now: u64) -> Result<String> {
+    change(state, |store| {
+        let asked = store.cases.iter().find(|case| case.id == id).cloned().ok_or_else(|| format!("the fault watcher keeps no case {id} any more"))?;
+        Ok(push(store, Case { id: String::new(), at: now, tries: 0, settled: None, issue: None, answered: Some(clipped(answer, CONTEXT_CHARS)), ..asked }))
+    })?
 }
 
 pub fn report(words: &str) -> Result<String> {

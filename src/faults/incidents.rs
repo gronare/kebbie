@@ -157,7 +157,7 @@ mod tests {
     }
 
     fn new_fault(title: &str) -> Verdict {
-        Verdict { case: String::new(), kind: Some(Kind::New), issue_kind: Some("bug".to_string()), title: Some(title.to_string()), happened: Some("CI went red on lint".to_string()), expected: Some("the lint runs before the push".to_string()), cause: Some("the push line runs no lint".to_string()), barrier: Some("role".to_string()), files: None, question: None, task: None, reason: String::new() }
+        Verdict { case: String::new(), kind: Some(Kind::New), issue_kind: Some("bug".to_string()), title: Some(title.to_string()), happened: Some("CI went red on lint".to_string()), expected: Some("the lint runs before the push".to_string()), cause: Some("the push line runs no lint".to_string()), barrier: Some("role".to_string()), files: None, question: None, options: Vec::new(), recommend: None, task: None, reason: String::new() }
     }
 
     #[test]
@@ -184,7 +184,7 @@ mod tests {
     #[test]
     fn an_incident_an_issue_holds_goes_to_that_issue_and_reopens_it_once_its_fix_was_in_use() {
         let state = state("incident-known");
-        let raised = Case { id: "c1".to_string(), at: 10, source: Source::Incident, from: "red CI".to_string(), words: "CI went red: clippy".to_string(), context: String::new(), fingerprint: None, settled: None, issue: None, tries: 0, pointed: false, about: None };
+        let raised = Case { id: "c1".to_string(), at: 10, source: Source::Incident, from: "red CI".to_string(), words: "CI went red: clippy".to_string(), context: String::new(), fingerprint: None, settled: None, issue: None, tries: 0, pointed: false, about: None, answered: None };
         let raised = Case { fingerprint: Some(fingerprint("red CI", "app lint clippy unused variable")), ..raised };
         let issue = crate::faults::watch::filed_fault(&state, &raised, &new_fault("Pushes reach CI without the lint run"), 10).unwrap();
         let dir = issues::dir(&state);
