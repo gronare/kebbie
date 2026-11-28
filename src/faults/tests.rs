@@ -46,7 +46,7 @@ fn the_users_words_stay_on_this_machine_and_out_of_the_issues_text() {
     assert!(!issue.body.contains("I said") && !issue.title.contains("I said"), "{issue:?}");
     assert_eq!((issue.by.as_str(), issue.cause.as_deref(), issue.barrier.as_deref()), (BY, Some("roles/lead.md lets the lead ask in its reply"), Some("role")));
     assert!(occurrences(&state, &issue.id)[0].quote.contains("I said put it on the board"));
-    assert!(show_in(&state, &issue.id).unwrap().contains("I said put it on the board"));
+    assert!(issues::show_seen_in(&state, &issue.id).unwrap().contains("I said put it on the board"));
     let report = crate::hub::report::payload(&issue, &crate::hub::report::Scrub::default());
     assert!(!report.text.contains("I said") && !report.text.contains("roles/lead.md lets"), "the report carries the issue's text alone: {}", report.text);
     fs::remove_dir_all(state).unwrap();
@@ -60,7 +60,7 @@ fn a_fault_without_a_kebbie_checkout_is_filed_and_waits_for_the_maintainers() {
     assert!(outcome.contains("waits for kebbie's maintainers"), "{outcome}");
     let issue = issues::find(&issues::dir(&state), &issue.unwrap()).unwrap();
     assert_eq!(issue.fix, None);
-    assert_eq!(list_in(&state, false, true).lines().next().unwrap().split_whitespace().nth(1), Some("open"));
+    assert_eq!(issues::list_watched(&issues::dir(&state), false, false, true).lines().next().unwrap().split_whitespace().nth(2), Some("open"));
     fs::remove_dir_all(state).unwrap();
 }
 
@@ -334,13 +334,11 @@ fn a_fix_task_that_lands_fixes_its_issue_and_one_reset_before_it_landed_lets_go(
 }
 
 #[test]
-fn the_fault_watcher_is_off_without_its_key_and_kebbie_faults_says_so() {
+fn the_fault_watcher_is_off_without_its_key() {
     assert!(!crate::dev::on(), "a machine whose config sets no kebbie_dev.fault_watcher runs no watcher");
     let state = state("off");
     assert!(capture::tick(&state).is_empty() && watch::tick(&state).is_empty() && pending(&state).is_empty());
     assert!(!dir(&state).join("read.json").exists(), "the watcher reads no chat while off");
-    assert_eq!(list_in(&state, false, false), OFF);
-    assert_eq!(serde_json::from_str::<serde_json::Value>(&list_in(&state, true, false)).unwrap()["on"], false);
     let _ = fs::remove_dir_all(state);
 }
 
@@ -553,5 +551,25 @@ fn an_issue_reopened_after_its_fix_landed_goes_back_to_the_watcher_and_stays_ope
     assert!(watch::settle_ended(&state, |task| watch::ended_how(&log, task)).is_empty(), "the old task's landing does not close it again");
     assert_eq!(issues::find(&dir, "aa0007").unwrap().status, "open");
     assert!(pending(&state).iter().any(|case| case.about.as_deref() == Some("aa0007") && case.urgent()), "the watcher weighs it at once");
+    fs::remove_dir_all(state).unwrap();
+}
+
+#[test]
+fn kebbie_issues_shows_each_issues_state_and_fix_task_in_one_list() {
+    let state = state("one-list");
+    let dir = issues::dir(&state);
+    let issue = |id: &str, status: &str, fix: Option<&str>, history: &[&str]| Issue { id: id.to_string(), title: format!("issue {id}"), kind: "bug".to_string(), status: status.to_string(), by: "lead".to_string(), fix: fix.map(str::to_string), history: history.iter().map(|line| line.to_string()).collect(), ..Issue::default() };
+    issues::save(&dir, &issue("aa0001", "open", Some("fault-aa0001"), &[])).unwrap();
+    issues::save(&dir, &issue("aa0002", "fixed", Some("fault-aa0002"), &["fixed in 1234567 by fault-aa0002, landed with green CI"])).unwrap();
+    issues::save(&dir, &issue("aa0003", "retry", None, &[])).unwrap();
+    record_occurrence(&state, "aa0001", &Occurrence { at: 1, case: "c1".to_string(), source: Source::Chat, from: "lead".to_string(), quote: "the board froze".to_string(), came_back: false }).unwrap();
+    let listed = issues::list_watched(&dir, true, false, true);
+    let line = |id: &str| listed.lines().find(|line| line.starts_with(id)).unwrap().to_string();
+    assert!(line("aa0001").contains("fixing in fault-aa0001") && line("aa0001").contains("· seen 1") && !listed.contains("the board froze"), "{listed}");
+    assert!(line("aa0002").contains("in use") && line("aa0003").contains("retry"), "{listed}");
+    let elsewhere = issues::list_in(&dir, true, false);
+    assert!(elsewhere.lines().any(|line| line.starts_with("aa0002  bug   fixed")) && !elsewhere.contains("seen 1") && !elsewhere.contains("fixing in"), "another install keeps its list as it was: {elsewhere}");
+    let rows: serde_json::Value = serde_json::from_str(&issues::list_watched(&dir, true, true, true)).unwrap();
+    assert!(rows.as_array().unwrap().iter().any(|row| row["id"] == "aa0001" && row["state"] == "fixing in fault-aa0001" && row["seen"] == 1 && row["fix"] == "fault-aa0001"));
     fs::remove_dir_all(state).unwrap();
 }

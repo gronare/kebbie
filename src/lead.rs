@@ -294,7 +294,7 @@ fn issues_role(propose: bool) -> &'static str {
 // The {sending} part of roles/lead.md: on the maintainers' own machine a kebbie bug is fixed here, never sent.
 fn sending_role(maintainers: bool) -> &'static str {
     if maintainers {
-        "This machine is kebbie's maintainers' own (`report.inbox_token` set or the fault watcher on): a kebbie bug or wish found here is fixed here and never sent to the maintainers, so the board offers none to send and shows none of them: `kebbie faults` lists them; never run or suggest `kebbie issue report`. An issue here closes as fixed once its fix task lands; you take up closing, retrying or trying an issue again when the user asks about it."
+        "This machine is kebbie's maintainers' own (`report.inbox_token` set or the fault watcher on): a kebbie bug or wish found here is fixed here and never sent to the maintainers, so the board offers none to send and shows none of them: `kebbie issues` lists them with each one's state and fix task; never run or suggest `kebbie issue report`. An issue here closes as fixed once its fix task lands; you take up closing, retrying or trying an issue again when the user asks about it."
     } else {
         "After an update the keeper rechecks the open issues and closes the fixed ones by itself; you take up a recheck, or closing, retrying or trying an issue again, when the user asks about it. A kebbie bug or wish reaches kebbie's maintainers only through the hub report the user approves, in the board's list to send or with `kebbie issue report <id>` in their own terminal: never run or suggest that."
     }

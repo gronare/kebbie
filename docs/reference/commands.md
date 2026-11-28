@@ -1218,7 +1218,7 @@ Problems and wishes about kebbie itself, saved on this machine, one file each un
 | `kebbie issue report --always` / `--ask` | Arm or disarm sending each bug without asking. Yours alone, in your own terminal. |
 | `kebbie issue send <id>` | Open a prefilled new issue on GitHub. Optional, and yours alone. See [below](#kebbie-issue-send). |
 
-`kebbie issues` shows each issue's id, kind, status, the version and commit it was filed on, the GitHub issue when linked, and the last line of its history, such as `fixed in 0.26.3 (a1b2c3d), checked automatically`.
+`kebbie issues` shows each issue's id, kind, status, the version and commit it was filed on, the GitHub issue when linked, and the last line of its history, such as `fixed in 0.26.3 (a1b2c3d), checked automatically`. On kebbie's development machine, with its fault watcher on, the status is the issue's state instead (`fixing in <task>` while a task fixes it, `in use` once it is fixed, `came back` when the fault met it again), a line also says how often the fault was seen, `kebbie issue show <id>` lists each time with the words that were said, and `kebbie faults` is the same list.
 
 `kebbie issue hold`:
 

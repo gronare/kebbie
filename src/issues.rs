@@ -330,10 +330,24 @@ pub fn file_signal_in(dir: &Path, signal: &Signal, now: u64) -> Result<Filed> {
     Ok(if fresh { Filed::New { id, title } } else { Filed::Updated { id, title } })
 }
 
+#[cfg(test)]
 pub fn list_in(dir: &Path, all: bool, as_json: bool) -> String {
+    list_watched(dir, all, as_json, false)
+}
+
+// One list of every kebbie issue; on the development machine (watched) each shows its state (open, retry, fixing in its fix task, in use, came back) and how often its fault was seen.
+pub fn list_watched(dir: &Path, all: bool, as_json: bool, watched: bool) -> String {
+    let state = dir.parent().unwrap_or(dir);
     let issues: Vec<Issue> = load(dir).into_iter().filter(|issue| all || issue.is_open()).collect();
     if as_json {
-        return serde_json::to_string_pretty(&issues.iter().map(Issue::to_json).collect::<Vec<_>>()).unwrap_or_default();
+        return serde_json::to_string_pretty(&issues.iter().map(|issue| {
+            let mut row = issue.to_json();
+            if watched {
+                row["state"] = json!(crate::faults::state_word(state, issue));
+                row["seen"] = json!(crate::faults::occurrences(state, &issue.id).len());
+            }
+            row
+        }).collect::<Vec<_>>()).unwrap_or_default();
     }
     if issues.is_empty() {
         return if all { "No bugs or wishes about kebbie on this machine.".to_string() } else { "No open bugs or wishes about kebbie; --all lists the closed ones too.".to_string() };
@@ -342,7 +356,12 @@ pub fn list_in(dir: &Path, all: bool, as_json: bool) -> String {
         let link = issue.link_label().map(|label| format!("  {label}")).unwrap_or_default();
         let marked = issue.untrusted().map(|label| format!("{label} ")).unwrap_or_default();
         let last = issue.history.last().map(|line| format!("  · {line}")).unwrap_or_default();
-        format!("{}  {:<4}  {:<9}  {}  {marked}{}{link}{last}", issue.id, issue.kind, issue.status, issue.built(), issue.title)
+        if !watched {
+            return format!("{}  {:<4}  {:<9}  {}  {marked}{}{link}{last}", issue.id, issue.kind, issue.status, issue.built(), issue.title);
+        }
+        let seen = crate::faults::occurrences(state, &issue.id).len();
+        let seen = if seen > 0 { format!("  · seen {seen}") } else { String::new() };
+        format!("{}  {:<4}  {:<24}  {}  {marked}{}{link}{seen}{last}", issue.id, issue.kind, crate::faults::state_word(state, issue), issue.built(), issue.title)
     }).collect::<Vec<_>>().join("\n")
 }
 
@@ -370,6 +389,18 @@ pub fn show_in(state: &Path, id: &str) -> Result<String> {
     } else if !issue.body.is_empty() {
         lines.push(String::new());
         lines.push(issue.body.clone());
+    }
+    Ok(lines.join("\n"))
+}
+
+// show_in with each time the fault was seen, the user's words among them: for the terminal only, never a brief or a report.
+pub fn show_seen_in(state: &Path, id: &str) -> Result<String> {
+    let mut lines = vec![show_in(state, id)?];
+    let seen = crate::faults::occurrences(state, id);
+    if !seen.is_empty() {
+        lines.push(String::new());
+        lines.push("Each time, kept on this machine only:".to_string());
+        lines.extend(seen.iter().map(|occurrence| format!("- {} {}{}: {}", crate::keeper::stamp(occurrence.at), occurrence.from, if occurrence.came_back { " (after its fix was in use)" } else { "" }, occurrence.quote)));
     }
     Ok(lines.join("\n"))
 }

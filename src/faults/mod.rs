@@ -2,7 +2,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use crate::issues::{self, Issue};
 use crate::sh::Result;
@@ -307,7 +306,7 @@ pub fn occurrences_line(state: &Path, id: &str) -> Option<String> {
     }
     let back = all.iter().filter(|occurrence| occurrence.came_back).count();
     let after = if back > 0 { format!(", {back} after its fix was in use") } else { String::new() };
-    Some(format!("seen {} {}{after} · kebbie faults show {id}", all.len(), if all.len() == 1 { "time" } else { "times" }))
+    Some(format!("seen {} {}{after} · kebbie issue show {id}", all.len(), if all.len() == 1 { "time" } else { "times" }))
 }
 
 pub const LANDED: &str = "landed with green CI";
@@ -326,55 +325,16 @@ pub fn tracked(state: &Path) -> Vec<Issue> {
     issues::load(&issues::dir(state)).into_iter().filter(|issue| issue.by == BY || issue.fix.is_some() || occurrences_file(state, &issue.id).exists()).collect()
 }
 
-fn state_word(state: &Path, issue: &Issue) -> String {
+pub fn state_word(state: &Path, issue: &Issue) -> String {
     if in_use(issue) {
         return "in use".to_string();
     }
     if !issue.is_open() {
         return issue.status.clone();
     }
-    let word = issue.fix.as_ref().map_or_else(|| "open".to_string(), |task| format!("fixing in {task}"));
+    let word = issue.fix.as_ref().map_or_else(|| issue.status.clone(), |task| format!("fixing in {task}"));
     let back = occurrences(state, &issue.id).iter().any(|occurrence| occurrence.came_back);
     format!("{word}{}", if back { ", came back" } else { "" })
-}
-
-pub const OFF: &str = "The fault watcher is off on this machine: it weighs nothing and files no faults.";
-
-pub fn list_in(state: &Path, as_json: bool, on: bool) -> String {
-    let tracked = tracked(state);
-    if as_json {
-        let rows: Vec<_> = tracked.iter().map(|issue| {
-            let seen = occurrences(state, &issue.id);
-            json!({ "id": issue.id, "title": issue.title, "status": issue.status, "in_use": in_use(issue), "fix": issue.fix, "cause": issue.cause, "barrier": issue.barrier, "seen": seen.len(), "came_back": seen.iter().filter(|occurrence| occurrence.came_back).count() })
-        }).collect();
-        return serde_json::to_string_pretty(&json!({ "on": on, "faults": rows, "pending": pending(state).len() })).unwrap_or_default();
-    }
-    if !on {
-        let lines: Vec<String> = tracked.iter().map(|issue| format!("{}  {:<24}  {}", issue.id, state_word(state, issue), issue.title)).collect();
-        return std::iter::once(OFF.to_string()).chain(lines).collect::<Vec<_>>().join("\n");
-    }
-    let waiting = pending(state).len();
-    let waiting = if waiting > 0 { format!("\n{waiting} {} for the fault watcher to weigh.", if waiting == 1 { "case waits" } else { "cases wait" }) } else { String::new() };
-    if tracked.is_empty() {
-        return format!("The fault watcher follows no faults yet.{waiting}");
-    }
-    let lines: Vec<String> = tracked.iter().map(|issue| {
-        let seen = occurrences(state, &issue.id);
-        let back = seen.iter().filter(|occurrence| occurrence.came_back).count();
-        format!("{}  {:<24}  seen {}{}  {}", issue.id, state_word(state, issue), seen.len(), if back > 0 { format!(" ({back} after)") } else { String::new() }, issue.title)
-    }).collect();
-    format!("{}{waiting}", lines.join("\n"))
-}
-
-pub fn show_in(state: &Path, id: &str) -> Result<String> {
-    let mut lines = vec![issues::show_in(state, id)?];
-    let seen = occurrences(state, id);
-    if !seen.is_empty() {
-        lines.push(String::new());
-        lines.push("Each time, kept on this machine only:".to_string());
-        lines.extend(seen.iter().map(|occurrence| format!("- {} {}{}: {}", crate::keeper::stamp(occurrence.at), occurrence.from, if occurrence.came_back { " (after its fix was in use)" } else { "" }, occurrence.quote)));
-    }
-    Ok(lines.join("\n"))
 }
 
 #[cfg(test)]

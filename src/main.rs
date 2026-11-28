@@ -955,14 +955,13 @@ fn run(arguments: &Arguments) -> Result<String> {
             Some(key) => config::get(key),
             None => config::show(&cwd, arguments.value("--repo")),
         },
-        Some("issues") => Ok(issues::list_in(&issues::dir(&lead::state_dir()?), arguments.flag("--all"), arguments.flag("--json"))),
+        Some("issues") => Ok(issues::list_watched(&issues::dir(&lead::state_dir()?), arguments.flag("--all"), arguments.flag("--json"), dev::on())),
         Some("fault") => {
             let words: Vec<String> = std::env::args().skip_while(|argument| argument != "fault").skip(1).collect();
             faults::report(&messages::tell_text(&words, &mut std::io::stdin())?)
         }
         Some("faults") if arguments.flag("--watch") => faults::watch::run(),
-        Some("faults") if name == Some("show") => faults::show_in(&lead::state_dir()?, arguments.positional(2).ok_or("kebbie faults show needs the issue's id; kebbie faults lists them")?),
-        Some("faults") => Ok(faults::list_in(&lead::state_dir()?, arguments.flag("--json"), dev::on())),
+        Some("faults") => Ok(issues::list_watched(&issues::dir(&lead::state_dir()?), arguments.flag("--all"), arguments.flag("--json"), true)),
         Some("issue") => issue(arguments, name),
         Some("setup") if matches!(name, Some("mindin" | "vault")) => setup::vault(),
         Some("setup") if name == Some("codex") => setup::codex(arguments.flag("--uninstall"), arguments.flag("--yes")),
@@ -1023,12 +1022,12 @@ fn issue(arguments: &Arguments, action: Option<&str>) -> Result<String> {
         }
         Some("hold") if arguments.flag("--take") => issues::take_held_in(&dir, &caller()),
         Some("hold") => issues::hold_in(&dir, &caller(), &arguments.rest(2).join(" "), config::propose_issues_enabled()?),
-        Some("show") => issues::show_in(&lead::state_dir()?, id()?),
+        Some("show") => issues::show_seen_in(&lead::state_dir()?, id()?),
         Some("close") => issues::close_in(&dir, &caller(), id()?, arguments.positional(3)),
         Some("retry") => issues::retry_in(&dir, &caller(), id()?),
         Some("reopen") => issues::reopen_watched(&lead::state_dir()?, &caller(), id()?, env!("KEBBIE_BUILT_FROM"), dev::on()),
         Some("recheck") if arguments.flag("--run") => issue_recheck::run(id()?),
-        Some("list") => Ok(issues::list_in(&dir, arguments.flag("--all"), arguments.flag("--json"))),
+        Some("list") => Ok(issues::list_watched(&dir, arguments.flag("--all"), arguments.flag("--json"), dev::on())),
         Some("link") => issues::link_in(&dir, &caller(), id()?, arguments.positional(3)),
         Some("send") => {
             let opener = board::images::image_viewer(std::env::consts::OS, &|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()));

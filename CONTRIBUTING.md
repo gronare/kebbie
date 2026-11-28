@@ -13,7 +13,7 @@ fault_watcher = true
 
 When the user tells the lead something in kebbie is wrong, the lead hands their words to the watcher with `kebbie fault "<their words>"`: that case is weighed at once and alone.
 
-Its code is in `src/faults`, its role in `roles/fault-watch.md`, and `kebbie faults` lists the faults it follows.
+Its code is in `src/faults`, its role in `roles/fault-watch.md`, and `kebbie issues` lists every issue with its state and fix task (`kebbie faults` is the same list).
 
 Without `[kebbie_dev]` nothing of it shows: `kebbie fault` and `kebbie faults` answer "Unknown command", the keeper registers neither of its routines and the lead is given neither command. Every developer-only feature asks the one gate in `src/dev.rs`: a command goes in `dev::COMMANDS`, a keeper routine is built with `Routine::dev`, and a module of kebbie's own development goes in `MODULES` in `src/dev/tests.rs`, whose tests fail when a command or routine runs such a module without the gate, or when anything else reads the flag.
 

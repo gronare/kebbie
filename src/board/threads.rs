@@ -365,7 +365,7 @@ mod tests {
                 }
             }
         }
-        assert!(reads.is_empty(), "the user keeps fault states and titles in `kebbie faults` only, off the board:\n{}", reads.join("\n"));
+        assert!(reads.is_empty(), "the user keeps fault states and titles in `kebbie issues` only, off the board:\n{}", reads.join("\n"));
     }
 
     #[test]
