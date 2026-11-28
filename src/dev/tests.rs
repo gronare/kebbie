@@ -28,7 +28,7 @@ fn src() -> PathBuf {
 
 #[test]
 fn nothing_but_the_dev_gate_reads_the_developer_flag() {
-    let flags = [["fault_watcher", "_enabled"].concat(), ["fault_watcher", "_in("].concat()];
+    let flags = [["dev_machine", "("].concat(), ["dev_machine", "_in("].concat(), ["maintainers", "_machine"].concat()];
     let readers: Vec<PathBuf> = sources(&src()).into_iter().filter(|file| !file.starts_with(src().join("config")) && !file.starts_with(src().join("dev")) && file != &src().join("dev.rs")).filter(|file| flags.iter().any(|flag| fs::read_to_string(file).unwrap().contains(flag))).collect();
     assert!(readers.is_empty(), "a developer feature asks crate::dev::on(), never the flag itself: {readers:?}");
 }

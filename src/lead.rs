@@ -265,12 +265,11 @@ fn kebbie_command<'a>(argv: &[&'a str]) -> Option<&'a str> {
 pub struct FaultRoles {
     pub propose: bool,
     pub watcher: bool,
-    pub maintainers: bool,
 }
 
 pub fn role_text_with(template: &str, kebbie: &str, sources: &[Source], vault: bool, faults: FaultRoles, language: &str) -> String {
     let backlog::Role { finding, backlog, intake, vault_work, after_push } = backlog::role_texts(sources, vault);
-    template.replace("{kebbie}", kebbie).replace("{language}", language).replace("{finding}", &finding).replace("{backlog}", &backlog).replace("{intake}", &intake).replace("{vault_work}", &vault_work).replace("{after_push}", &after_push).replace("{issues}", issues_role(faults.propose)).replace("{faults}", faults_role(faults.watcher)).replace("{sending}", sending_role(faults.maintainers)).replace("{task_commands}", &crate::sandbox::TASK_COMMANDS.join("`, `kebbie "))
+    template.replace("{kebbie}", kebbie).replace("{language}", language).replace("{finding}", &finding).replace("{backlog}", &backlog).replace("{intake}", &intake).replace("{vault_work}", &vault_work).replace("{after_push}", &after_push).replace("{issues}", issues_role(faults.propose)).replace("{faults}", faults_role(faults.watcher)).replace("{sending}", sending_role(faults.watcher)).replace("{task_commands}", &crate::sandbox::TASK_COMMANDS.join("`, `kebbie "))
 }
 
 // The {faults} part of roles/lead.md: with the fault watcher off the lead starts the fix task itself.
@@ -291,7 +290,7 @@ fn issues_role(propose: bool) -> &'static str {
     }
 }
 
-// The {sending} part of roles/lead.md: on the maintainers' own machine a kebbie bug is fixed here, never sent.
+// The {sending} part of roles/lead.md: on the maintainers' own machine, the development machine, a kebbie bug is fixed here, never sent.
 fn sending_role(maintainers: bool) -> &'static str {
     if maintainers {
         "This machine is kebbie's maintainers' own (`report.inbox_token` set or the fault watcher on): a kebbie bug or wish found here is fixed here and never sent to the maintainers, so the board offers none to send and shows none of them: `kebbie issues` lists them with each one's state and fix task; never run or suggest `kebbie issue report`. An issue here closes as fixed once its fix task lands; you take up closing, retrying or trying an issue again when the user asks about it."
@@ -303,7 +302,7 @@ fn sending_role(maintainers: bool) -> &'static str {
 // roles/lead.md filled in for the configured backlog sources, written to the state dir for --append-system-prompt-file; returns the file and its text.
 pub fn role_file() -> Result<(PathBuf, String)> {
     let template = fs::read_to_string(install_root()?.join("roles/lead.md")).map_err(|error| format!("roles/lead.md: {error}"))?;
-    let role = role_text_with(&template, &peers::kebbie_command()?, &config::sources()?, crate::vault_cli::detect().is_some(), FaultRoles { propose: config::propose_issues_enabled()?, watcher: crate::dev::on(), maintainers: config::maintainers_machine() }, &crate::item_template::content_language());
+    let role = role_text_with(&template, &peers::kebbie_command()?, &config::sources()?, crate::vault_cli::detect().is_some(), FaultRoles { propose: config::propose_issues_enabled()?, watcher: crate::dev::on() }, &crate::item_template::content_language());
     let file = roles_dir()?.join("lead.md");
     crate::state::write(&file, &role)?;
     Ok((file, role))
@@ -1133,9 +1132,9 @@ mod tests {
     }
 
     #[test]
-    fn on_the_maintainers_machine_the_lead_fixes_kebbie_bugs_here_and_never_sends_them() {
+    fn on_the_development_machine_the_lead_fixes_kebbie_bugs_here_and_never_sends_them() {
         let template = include_str!("../roles/lead.md");
-        let role = role_text_with(template, "/opt/kebbie/kebbie", &[Source::Local], false, FaultRoles { propose: true, watcher: false, maintainers: true }, "English");
+        let role = role_text_with(template, "/opt/kebbie/kebbie", &[Source::Local], false, FaultRoles { propose: true, watcher: true }, "English");
         assert!(role.contains("a kebbie bug or wish found here is fixed here and never sent to the maintainers") && role.contains("never run or suggest `kebbie issue report`"), "{role}");
         assert!(!role.contains("reaches kebbie's maintainers only through the hub report") && !role.contains("the board's list to send") && !role.contains("{sending}"), "{role}");
         let elsewhere = role_text(template, "/opt/kebbie/kebbie", &[Source::Local], false, true, "English");
@@ -1155,7 +1154,7 @@ mod tests {
     fn the_lead_asks_only_on_the_board_answers_short_and_fixes_the_faults_the_user_points_out() {
         let skill = include_str!("../skills/propose-change/SKILL.md");
         for (sources, vault, propose, watcher) in [(vec![], false, true, false), (vec![Source::Local], false, true, true), (vec![Source::Vault], true, false, true), (vec![Source::Linear, Source::Local], true, true, false)] {
-            let role = role_text_with(include_str!("../roles/lead.md"), "/opt/kebbie/kebbie", &sources, vault, FaultRoles { propose, watcher, maintainers: watcher }, "English");
+            let role = role_text_with(include_str!("../roles/lead.md"), "/opt/kebbie/kebbie", &sources, vault, FaultRoles { propose, watcher }, "English");
             for needed in ["**Ask on the board**: every question to the user goes on the board, as a task's question (the task asks with `kebbie ask`) or under Open questions on a backlog item", "The one exception is a task's own prompt, under Claude's own prompts in a task", "**Answer first**: a turn the user's question started is the answer. Start, queue, drop or change nothing in it", "**Answer short**: the answer to what the user asked, in 1 to 3 lines", "leave out queue lists, recaps, file lines and internal ids (backlog refs, task names) unless the user asks for them", "## Leftover work", "keeping no archive tag or branch of it", "- **Faults the user points out**: when the user says something is wrong in", "A lesson about how kebbie or a lead works never goes into your own memory, which kebbie refuses you", "ask nothing first, so they never have to ask twice", "- **Closing your own work**: work you carry outside a kebbie task (a machine, keys, config, triage) has its vault note closed by you in the same turn it is done, and what is left of it becomes a new backlog item", "- **Messages for you**: what is for you reaches you as messages", "run `kebbie next` and answer from it in 1 to 3 lines", "never as text on the board", "Pass each finding on as the reviewer wrote it, adding no design of your own, and only to the repo half it is about (`kebbie tell <task>@<repo>`)", "How the fix is committed is the rules skill's call: ask for no commit shape it does not"] {
                 assert!(role.contains(needed), "{sources:?} vault {vault} propose {propose}: {needed}");
             }

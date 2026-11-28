@@ -758,7 +758,7 @@ pub fn sends_unasked(settings: &crate::config::Report, maintainers: bool) -> boo
 
 pub fn send_unasked_tick(state: &Path) -> Result<Vec<String>> {
     let settings = crate::config::report_settings()?;
-    if !sends_unasked(&settings, crate::config::maintainers_machine()) {
+    if !sends_unasked(&settings, crate::dev::on()) {
         return Ok(Vec::new());
     }
     crate::signals::one_sender(state, || send_unasked_in(state, settings.text(), settings.url(), &Scrub::current, crate::messages::now()))

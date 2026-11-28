@@ -15,7 +15,7 @@ When the user tells the lead something in kebbie is wrong, the lead hands their 
 
 Its code is in `src/faults`, its role in `roles/fault-watch.md`, and `kebbie issues` lists every issue with its state and fix task (`kebbie faults` is the same list).
 
-Without `[kebbie_dev]` nothing of it shows: `kebbie fault` and `kebbie faults` answer "Unknown command", the keeper registers neither of its routines and the lead is given neither command. Every developer-only feature asks the one gate in `src/dev.rs`: a command goes in `dev::COMMANDS`, a keeper routine is built with `Routine::dev`, and a module of kebbie's own development goes in `MODULES` in `src/dev/tests.rs`, whose tests fail when a command or routine runs such a module without the gate, or when anything else reads the flag.
+A `report.inbox_token`, which only the maintainers' machine holds, turns it on too: kebbie has one gate for its own development, and that machine fixes kebbie's bugs where they are found and sends none. Without either nothing of it shows: `kebbie fault` and `kebbie faults` answer "Unknown command", the keeper registers neither of its routines and the lead is given neither command. Every developer-only feature asks the one gate in `src/dev.rs`: a command goes in `dev::COMMANDS`, a keeper routine is built with `Routine::dev`, and a module of kebbie's own development goes in `MODULES` in `src/dev/tests.rs`, whose tests fail when a command or routine runs such a module without the gate, or when anything else reads the flag.
 
 ## Sign off your commits
 

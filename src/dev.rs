@@ -1,6 +1,6 @@
-// The one gate on kebbie's own development, [kebbie_dev] in config.toml: every developer-only command, keeper routine, lead allow rule and role text asks here, and nothing else reads the flag.
+// The one gate on kebbie's own development, kebbie_dev.fault_watcher or report.inbox_token in config.toml: every developer-only command, keeper routine, lead allow rule, role text and the maintainers' no-send asks here, and nothing else reads either key.
 pub fn on() -> bool {
-    crate::config::fault_watcher_enabled().unwrap_or(false)
+    crate::config::dev_machine().unwrap_or(false)
 }
 
 pub const COMMANDS: [&str; 2] = ["fault", "faults"];

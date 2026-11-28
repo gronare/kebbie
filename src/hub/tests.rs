@@ -831,7 +831,7 @@ fn the_board_offers_a_bug_with_text_ask_and_with_always_until_it_is_armed() {
 }
 
 #[test]
-fn the_maintainers_machine_offers_nothing_to_send_and_sends_nothing_unasked() {
+fn the_development_machine_offers_nothing_to_send_and_sends_nothing_unasked() {
     use crate::config::{Report, ReportText};
     let state = crate::sh::test_dir("report-maintainers-machine");
     crate::hub::report::arm_in(&state, &crate::permit::Caller::User, true, ReportText::Always, now()).unwrap();

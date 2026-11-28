@@ -1104,16 +1104,20 @@ fn ideas_machine_names_a_machine_and_writer_profile_a_profile_or_none() {
 }
 
 #[test]
-fn the_maintainers_machine_is_the_one_with_the_inbox_token_or_the_fault_watcher() {
-    let dir = crate::sh::test_dir("maintainers-machine");
+fn the_development_machine_is_the_one_with_the_fault_watcher_or_the_inbox_token() {
+    let dir = crate::sh::test_dir("dev-machine");
     let file = dir.join("config.toml");
-    assert!(!maintainers_machine_in(&file).unwrap(), "no config file, an ordinary install");
+    assert!(!dev_machine_in(&file).unwrap(), "no config file, an ordinary install");
     std::fs::write(&file, "[report]\ntext = \"always\"\n[issues]\npropose = true\n").unwrap();
-    assert!(!maintainers_machine_in(&file).unwrap(), "reporting and proposing make no maintainer");
-    std::fs::write(&file, "[report]\ninbox_token = \"kha_secret-token-1234\"\n").unwrap();
-    assert!(maintainers_machine_in(&file).unwrap(), "the machine that fetches the reports");
-    std::fs::write(&file, "[kebbie_dev]\nfault_watcher = true\n").unwrap();
-    assert!(maintainers_machine_in(&file).unwrap(), "the machine kebbie's faults are fixed on");
+    assert!(!dev_machine_in(&file).unwrap(), "reporting and proposing make no development machine");
+    for (config, why) in [("[report]\ninbox_token = \"kha_secret-token-1234\"\n", "the machine that fetches the reports"), ("[kebbie_dev]\nfault_watcher = true\n", "the machine kebbie's faults are fixed on"), ("[kebbie_dev]\nfault_watcher = true\n[report]\ninbox_token = \"kha_secret-token-1234\"\n", "both")] {
+        std::fs::write(&file, config).unwrap();
+        assert!(dev_machine_in(&file).unwrap(), "{why}");
+    }
+    std::fs::write(&file, "[kebbie_dev]\nfault_watcher = false\n").unwrap();
+    assert!(!dev_machine_in(&file).unwrap(), "the watcher turned off by name");
+    std::fs::write(&file, "[kebbie_dev]\nfault_watcher = false\n[report]\ninbox_token = \"kha_secret-token-1234\"\n").unwrap();
+    assert!(dev_machine_in(&file).unwrap(), "the machine that fetches the reports stays the development machine with the watcher key off");
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -1121,11 +1125,11 @@ fn the_maintainers_machine_is_the_one_with_the_inbox_token_or_the_fault_watcher(
 fn the_fault_watcher_is_on_only_where_kebbie_dev_turns_it_on() {
     let dir = crate::sh::test_dir("fault-watcher-key");
     let file = dir.join("config.toml");
-    assert!(!fault_watcher_in(&file).unwrap(), "no config file, no watcher");
+    assert!(!dev_machine_in(&file).unwrap(), "no config file, no watcher");
     std::fs::write(&file, "[issues]\npropose = true\n").unwrap();
-    assert!(!fault_watcher_in(&file).unwrap(), "proposing kebbie issues does not turn the watcher on");
+    assert!(!dev_machine_in(&file).unwrap(), "proposing kebbie issues does not turn the watcher on");
     std::fs::write(&file, "[kebbie_dev]\nfault_watcher = true\n").unwrap();
-    assert!(fault_watcher_in(&file).unwrap());
+    assert!(dev_machine_in(&file).unwrap());
     assert!(parse_machine("[kebbie_dev]\nfault_watcher = \"yes\"\n", "config.toml").unwrap_err().contains("kebbie_dev.fault_watcher: must be true or false"));
     assert!(unknown_in_machine_file("[kebbie_dev]\nfault_watcher = true\n", "config.toml").is_empty(), "the key is read without a warning");
     assert!(unknown_in_machine_file("colour = 1\n", "config.toml").iter().all(|line| !line.contains("kebbie_dev")), "a typo's known keys never name it");

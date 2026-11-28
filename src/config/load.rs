@@ -31,22 +31,14 @@ pub fn propose_issues_enabled() -> Result<bool> {
     Ok(load_machine(&path())?.propose_issues.unwrap_or(DEFAULT_PROPOSE_ISSUES))
 }
 
-pub fn fault_watcher_enabled() -> Result<bool> {
-    fault_watcher_in(&path())
+pub fn dev_machine() -> Result<bool> {
+    dev_machine_in(&path())
 }
 
-pub fn fault_watcher_in(file: &Path) -> Result<bool> {
-    Ok(load_machine(file)?.fault_watcher.unwrap_or(false))
-}
-
-// The machine kebbie is developed on: it fetches the reports itself or runs the fault watcher, so its own bugs are fixed here and never sent to kebbie's maintainers.
-pub fn maintainers_machine() -> bool {
-    maintainers_machine_in(&path()).unwrap_or(false)
-}
-
-pub fn maintainers_machine_in(file: &Path) -> Result<bool> {
+// The machine kebbie is developed on: it runs the fault watcher or fetches the reports itself, so its own bugs are fixed here and never sent to kebbie's maintainers.
+pub fn dev_machine_in(file: &Path) -> Result<bool> {
     let machine = load_machine(file)?;
-    Ok(machine.report.inbox_token.is_some() || machine.fault_watcher.unwrap_or(false))
+    Ok(machine.fault_watcher.unwrap_or(false) || machine.report.inbox_token.is_some())
 }
 
 pub fn lead_profile() -> Result<Option<String>> {

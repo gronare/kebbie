@@ -31,7 +31,7 @@ pub(super) struct Offer {
 
 pub(super) fn load_offers() -> Vec<Offer> {
     let Ok(state) = crate::lead::state_dir() else { return Vec::new() };
-    let enabled = crate::config::report_settings().is_ok_and(|settings| report::board_offers(&settings, &state, crate::config::maintainers_machine()));
+    let enabled = crate::config::report_settings().is_ok_and(|settings| report::board_offers(&settings, &state, crate::dev::on()));
     offers_in(&state, enabled, &Scrub::current)
 }
 
