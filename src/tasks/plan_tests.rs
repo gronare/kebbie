@@ -98,8 +98,8 @@ fn unmarked_subtasks_with_commits_are_ready_once_a_later_one_holds_commits_and_t
     let listed = plan(parts, noted);
     let expected: Vec<State> = std::iter::repeat_n(State::Ready, 14).chain([State::InProgress]).collect();
     assert_eq!(states(&derive(Some(&listed), &[], &commits, true).0), expected, "work moved past each of the first fourteen, so only the last is in progress");
-    assert_eq!(states(&derive_reported(Some(&listed), &[], &commits, false, true).0), vec![State::Ready; 15], "the task reported ready, so the last is ready too");
-    assert_eq!(states(&derive_reported(Some(&listed), &[], &commits, true, true).0)[14], State::InProgress, "a task at work again has its last subtask in progress");
+    assert_eq!(states(&derive_reported(Some(&listed), &[], &commits, &PastHead::default(), false, true).0), vec![State::Ready; 15], "the task reported ready, so the last is ready too");
+    assert_eq!(states(&derive_reported(Some(&listed), &[], &commits, &PastHead::default(), true, true).0)[14], State::InProgress, "a task at work again has its last subtask in progress");
     let on = Plan { on: Some("s3".to_string()), ..listed.clone() };
     assert_eq!(states(&derive(Some(&on), &[], &commits, true).0)[2], State::InProgress, "the subtask kebbie subtasks on named stays in progress");
 }
@@ -487,6 +487,7 @@ fn move_puts_an_open_commit_under_another_subtask_which_keeps_it_through_a_rebas
     done_at(&state, &slot.path, &upstream, &address).unwrap();
     let fifth = commit(&slot.path, "e", "fifth");
     commit(&slot.path, "f", "sixth");
+    assert!(noted_after(&state, &address, &bash_in(&slot.path, "git commit -m sixth")));
     let held = |subtasks: &Subtasks| subtasks.items.iter().map(|item| (item.id.clone(), item.commits.iter().map(|commit| commit.subject.clone()).collect::<Vec<_>>())).collect::<Vec<_>>();
     let said = move_as(&own, &state, &task, &fifth[..8], "model").unwrap();
     assert!(said.contains("fifth moved from Command to Model [model]"), "{said}");
@@ -500,4 +501,48 @@ fn move_puts_an_open_commit_under_another_subtask_which_keeps_it_through_a_rebas
     cleanup(dir, origin, &slot);
     let expected = vec![("model".to_string(), vec!["fourth".to_string(), "fifth".to_string()]), ("command".to_string(), vec!["sixth".to_string()])];
     assert_eq!((moved, rebased), (expected.clone(), expected), "the moved commit stays where it was put, through a rebase");
+}
+
+#[test]
+fn a_commit_past_head_keeps_its_noted_subtask_and_an_amend_there_takes_the_subtask_of_the_commit_it_replaced() {
+    let noted = plan(vec![part("model", "Model", true), part("command", "Command", true), part("docs", "Docs", false)], [seen("model", &["a"]), seen("command", &["b"]), seen("docs", &["c"])].concat());
+    let past = |codes: &[&str], diverged: bool| PastHead { codes: titles(codes), diverged };
+    let open = |pairs: &[(&str, &str)]| pairs.iter().map(|(code, subject)| Unpushed { code: code.to_string(), ..commit_of(&format!("{code}1"), subject, false) }).collect::<Vec<_>>();
+    let (_, behind) = derive_reported(Some(&noted), &[], &open(&[("a", "subject of a")]), &past(&["b", "c"], false), false, false);
+    assert_eq!(behind.commits.iter().map(|seen| (seen.code.as_str(), seen.subtask.as_str())).collect::<Vec<_>>(), [("a", "model"), ("b", "command"), ("c", "docs")], "a HEAD behind the tip keeps the records of the commits past it");
+    assert!(behind.parts.iter().all(|part| part.id == "docs" || part.done), "and the subtasks holding them stay done");
+    let (made, _) = derive_reported(Some(&noted), &[], &open(&[("a", "subject of a"), ("n", "new")]), &past(&["b", "c"], false), false, false);
+    assert_eq!(shas(&made)[2], ("docs".to_string(), vec!["n1"]), "a commit made on an earlier HEAD takes no subtask whose commit is only past HEAD, but the one commits go to now");
+    let amended = derive_reported(Some(&noted), &[], &open(&[("a2", "subject of a")]), &past(&["a", "b", "c"], true), false, false).0;
+    let reworded = derive_reported(Some(&noted), &[], &open(&[("a3", "a new subject")]), &past(&["a", "b", "c"], true), false, false).0;
+    assert_eq!((shas(&amended)[0].clone(), shas(&reworded)[0].clone()), (("model".to_string(), vec!["a21"]), ("model".to_string(), vec!["a31"])), "an amend there, with its subject or a new one, takes the subtask of the commit it replaced");
+    let at_tip = open(&[("a", "subject of a"), ("b", "subject of b"), ("c", "subject of c")]);
+    assert_eq!(shas(&derive_reported(Some(&behind), &[], &at_tip, &PastHead::default(), false, false).0), [("model".to_string(), vec!["a1"]), ("command".to_string(), vec!["b1"]), ("docs".to_string(), vec!["c1"])]);
+}
+
+#[test]
+fn a_detached_checkout_of_an_earlier_commit_and_an_amend_there_keep_each_later_commit_in_its_subtask() {
+    let (dir, origin, slot, upstream, state, address) = hooked_task();
+    list_at(&state, &slot.path, &upstream, &address, &["Model", "Command", "Docs"]).unwrap();
+    done_at(&state, &slot.path, &upstream, &address).unwrap();
+    commit(&slot.path, "e", "fifth");
+    done_at(&state, &slot.path, &upstream, &address).unwrap();
+    commit(&slot.path, "f", "sixth");
+    assert!(noted_after(&state, &address, &bash_in(&slot.path, "git commit -m sixth")));
+    let held = |state: &Path| listed_at(state, &slot.path, &upstream, &address).items.iter().map(|item| (item.id.clone(), item.commits.iter().map(|commit| commit.subject.clone()).collect::<Vec<_>>())).collect::<Vec<_>>();
+    let expected = |first: &str| vec![("model".to_string(), vec![first.to_string()]), ("command".to_string(), vec!["fifth".to_string()]), ("docs".to_string(), vec!["sixth".to_string()])];
+    assert_eq!(held(&state), expected("fourth"));
+    let fourth = git(&slot.path, &["rev-parse", "HEAD~2"]).unwrap();
+    git(&slot.path, &["checkout", "--quiet", "--detach", &fourth]).unwrap();
+    assert!(noted_after(&state, &address, &bash_in(&slot.path, "git checkout --detach HEAD~2")), "the hook notes the detached HEAD");
+    git(&slot.path, &["checkout", "--quiet", "billing"]).unwrap();
+    assert_eq!(held(&state), expected("fourth"), "back on the tip, each later commit is in its own subtask");
+    git(&slot.path, &["checkout", "--quiet", "--detach", &fourth]).unwrap();
+    std::fs::write(slot.path.join("d"), "fourth, amended").unwrap();
+    git(&slot.path, &["add", "d"]).unwrap();
+    git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend", "-m", "fourth, amended"]).unwrap();
+    assert!(noted_after(&state, &address, &bash_in(&slot.path, "git commit --amend -m 'fourth, amended'")));
+    git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "rebase", "--quiet", "--onto", "HEAD", &fourth, "billing"]).unwrap();
+    assert_eq!(held(&state), expected("fourth, amended"), "an amend with a new subject on the detached commit, replayed under the rest, keeps every commit in its subtask");
+    cleanup(dir, origin, &slot);
 }

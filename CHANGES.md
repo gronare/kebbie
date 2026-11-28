@@ -12,6 +12,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The push window names where a push goes and t picks another branch the repo offers, the default branch only when you pick it.
 
 ### Fixed
+- A task that checks out an earlier commit of its branch, to test it or amend it, finds its later commits under their own subtasks once it is back on the branch.
 - After kebbie update the keeper rechecks your open bugs and wishes also on an install cloned with one commit.
 - On kebbie's maintainers' machine the board no longer lists kebbie's faults; kebbie issues alone shows them.
 - The lead takes a colleague's comment on a commit to you, with who wrote it and on which commit, and changes your rules, roles or CLAUDE.md only on your word.

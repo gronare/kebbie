@@ -326,8 +326,8 @@ fn folded(subject: &str, subjects: &[&str]) -> bool {
     subject.split_once("! ").is_some_and(|(word, into)| !word.contains(' ') && subjects.contains(&into))
 }
 
-// Each open commit's subtask: the one that held its change, else the one that held a commit of its subject, as an amend or a fold leaves it; another rewritten change goes to the subtask beside it that lost one; any other to the subtask commits go to now, or to a new one titled by it once every subtask is done.
-fn placed(plan: &mut Plan, kept: &[bool], open: &[&Unpushed]) -> Vec<String> {
+// Each open commit's subtask: the one that held its change, else the one that held a commit of its subject, as an amend or a fold leaves it; another rewritten change goes to the subtask beside it that lost one, and a commit still on the branch past a HEAD that is its ancestor is lost by none; any other to the subtask commits go to now, or to a new one titled by it once every subtask is done. Also the noted commits no open commit took.
+fn placed(plan: &mut Plan, kept: &[bool], open: &[&Unpushed], past: &PastHead) -> (Vec<String>, Vec<usize>) {
     let subjects: Vec<String> = plan.commits.iter().map(|seen| seen.subject.clone()).collect();
     let subjects: Vec<&str> = subjects.iter().map(String::as_str).collect();
     let mut wanted: Vec<Option<(String, String, String)>> = plan.commits.iter().zip(kept).map(|(seen, pushed)| (!pushed).then(|| (seen.code.clone(), seen.subject.clone(), seen.subtask.clone()))).collect();
@@ -340,8 +340,10 @@ fn placed(plan: &mut Plan, kept: &[bool], open: &[&Unpushed]) -> Vec<String> {
             *found = wanted[at].take().map(|(_, _, subtask)| subtask);
         }
     }
+    let untaken: Vec<usize> = wanted.iter().enumerate().filter(|(_, want)| want.is_some()).map(|(at, _)| at).collect();
+    let mut past_head: Vec<&str> = if past.diverged { Vec::new() } else { past.codes.iter().map(String::as_str).collect() };
     let mut lost: Vec<(String, usize)> = Vec::new();
-    for (_, _, subtask) in wanted.into_iter().flatten().filter(|(_, subject, _)| !folded(subject, &subjects)) {
+    for (_, _, subtask) in wanted.into_iter().flatten().filter(|(code, subject, _)| !taken(&mut past_head, code) && !folded(subject, &subjects)) {
         match lost.iter_mut().find(|(id, _)| *id == subtask) {
             Some((_, count)) => *count += 1,
             None => lost.push((subtask, 1)),
@@ -378,26 +380,28 @@ fn placed(plan: &mut Plan, kept: &[bool], open: &[&Unpushed]) -> Vec<String> {
         };
         placed.push(id);
     }
-    placed
+    (placed, untaken)
 }
 
 // The subtasks as the branch has them: a commit whose change the default branch gained since base is pushed, however it got there, and a subtask with commits and none left open is pushed; the plan comes back with what each subtask holds now, to be noted.
 #[cfg(test)]
 pub fn derive(plan: Option<&Plan>, landed: &[String], commits: &[Unpushed], working: bool) -> (Subtasks, Plan) {
-    derive_reported(plan, landed, commits, working, false)
+    derive_reported(plan, landed, commits, &PastHead::default(), working, false)
 }
 
-// A subtask with commits is done once a later subtask holds commits too, marked or not, so only the last with commits is in progress, and that one is done too once the task reported ready; the subtask `kebbie subtasks on` named stays open.
-pub fn derive_reported(plan: Option<&Plan>, landed: &[String], commits: &[Unpushed], working: bool, reported: bool) -> (Subtasks, Plan) {
+// A subtask with commits is done once a later subtask holds commits too, marked or not, so only the last with commits is in progress, and that one is done too once the task reported ready; the subtask `kebbie subtasks on` named stays open. The branch's commits past HEAD keep their noted subtasks while HEAD stands behind the branch's tip.
+pub fn derive_reported(plan: Option<&Plan>, landed: &[String], commits: &[Unpushed], past: &PastHead, working: bool, reported: bool) -> (Subtasks, Plan) {
     let Some(plan) = plan.filter(|plan| !plan.parts.is_empty()) else { return (Subtasks::default(), Plan::default()) };
     let mut plan = plan.clone();
     let mut landed: Vec<&str> = landed.iter().map(String::as_str).collect();
     let kept: Vec<bool> = plan.commits.iter().map(|seen| !seen.code.is_empty() && taken(&mut landed, &seen.code)).collect();
     let mut gone: Vec<&str> = plan.commits.iter().zip(&kept).filter(|(_, pushed)| **pushed).map(|(seen, _)| seen.code.as_str()).collect();
     let open: Vec<&Unpushed> = commits.iter().filter(|commit| !taken(&mut gone, &commit.code)).collect();
-    let owners = placed(&mut plan, &kept, &open);
+    let (owners, untaken) = placed(&mut plan, &kept, &open, past);
     let pushed_seen: Vec<Seen> = plan.commits.iter().zip(&kept).filter(|(_, pushed)| **pushed).map(|(seen, _)| seen.clone()).collect();
-    plan.commits = pushed_seen.iter().cloned().chain(open.iter().zip(&owners).map(|(commit, subtask)| Seen { sha: commit.sha.clone(), code: commit.code.clone(), subject: commit.subject.clone(), subtask: subtask.clone() })).collect();
+    let mut past_head: Vec<&str> = past.codes.iter().map(String::as_str).collect();
+    let ahead: Vec<Seen> = untaken.iter().map(|at| &plan.commits[*at]).filter(|seen| taken(&mut past_head, &seen.code)).cloned().collect();
+    plan.commits = pushed_seen.iter().cloned().chain(open.iter().zip(&owners).map(|(commit, subtask)| Seen { sha: commit.sha.clone(), code: commit.code.clone(), subject: commit.subject.clone(), subtask: subtask.clone() })).chain(ahead.iter().cloned()).collect();
     let holds = |id: &str| plan.commits.iter().any(|seen| seen.subtask == id);
     let empty: Vec<String> = plan.parts.iter().filter(|part| !holds(&part.id)).map(|part| part.id.clone()).collect();
     plan.parts.retain(|part| !(part.extra && empty.contains(&part.id)));
@@ -409,11 +413,12 @@ pub fn derive_reported(plan: Option<&Plan>, landed: &[String], commits: &[Unpush
     }
     let now = current(&plan);
     let open_codes: Vec<&str> = open.iter().map(|commit| commit.code.as_str()).collect();
+    let noted_codes: Vec<&str> = open_codes.iter().copied().chain(ahead.iter().map(|seen| seen.code.as_str())).collect();
     for group in plan.groups.iter_mut() {
-        group.codes.retain(|code| open_codes.contains(&code.as_str()));
+        group.codes.retain(|code| noted_codes.contains(&code.as_str()));
     }
     plan.groups.retain(|group| group.codes.len() >= 2);
-    plan.moved.retain(|moved| open_codes.contains(&moved.code.as_str()));
+    plan.moved.retain(|moved| noted_codes.contains(&moved.code.as_str()));
     let mut order: Vec<Placed> = open.iter().zip(&owners).map(|(commit, subtask)| Placed {
         sha: commit.sha.clone(), subject: commit.subject.clone(), subtask: subtask.clone(), accepted: commit.accepted,
         group: plan.groups.iter().find(|group| group.codes.contains(&commit.code)).map(|group| group.id.clone()),
@@ -509,26 +514,44 @@ fn landed(path: &Path, base: &str, tips: &Tips) -> Vec<String> {
     super::accept::landed_between(path, base, &tips.upstream)
 }
 
-fn current_at(state: &Path, path: &Path, address: &str, plan: &Plan, tips: &Tips, working: bool) -> Result<(Subtasks, Plan)> {
-    let (mut subtasks, plan) = derive_reported(Some(plan), &landed(path, &plan.base, tips), &unpushed(state, path, address, tips)?, working, reported_ready(state, address));
+fn current_at(state: &Path, path: &Path, address: &str, plan: &Plan, tips: &Tips, past: &PastHead, working: bool) -> Result<(Subtasks, Plan)> {
+    let (mut subtasks, plan) = derive_reported(Some(plan), &landed(path, &plan.base, tips), &unpushed(state, path, address, tips)?, past, working, reported_ready(state, address));
     crate::commit_tests::mark(state, address, &mut subtasks.order);
     Ok((subtasks, plan))
 }
 
+// The changes of the task branch's commits that HEAD lacks, as a detached checkout of an earlier commit or an amend there leaves them, and whether HEAD left the branch's line, as an amend does; none while HEAD is the branch's tip.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PastHead {
+    pub codes: Vec<String>,
+    pub diverged: bool,
+}
+
+fn past_head(path: &Path, address: &str, tips: &Tips) -> Result<PastHead> {
+    let Ok(tip) = git(path, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{}", peers::task_part(address))]) else { return Ok(PastHead::default()) };
+    if tip == tips.head {
+        return Ok(PastHead::default());
+    }
+    let codes = super::accept::commit_codes(path, &[&format!("{}..{tip}", tips.upstream), &format!("^{}", tips.head)])?;
+    let diverged = git(path, &["merge-base", "--is-ancestor", &tips.head, &tip]).is_err();
+    Ok(PastHead { codes: codes.into_iter().map(|(_, code)| code).collect(), diverged })
+}
+
 fn read_in(state: &Path, task: &Task, plan: &Plan, working: bool) -> Result<(Subtasks, Plan)> {
-    current_at(state, task.path, task.address, plan, &tips_of(task)?, working)
+    let tips = tips_of(task)?;
+    current_at(state, task.path, task.address, plan, &tips, &past_head(task.path, task.address, &tips)?, working)
 }
 
 // Whether the task's subtasks hold work beyond `pushed`, the tip just pushed to the default branch: a commit not on it, or a subtask not done; false for a task without subtasks.
 pub fn left_at(state: &Path, path: &Path, address: &str, pushed: &str) -> bool {
     let Some(plan) = load(state, address) else { return false };
-    tips_of(&Task { path, upstream: pushed, address }).and_then(|tips| current_at(state, path, address, &plan, &tips, false)).is_ok_and(|(subtasks, _)| !subtasks.items.is_empty())
+    tips_of(&Task { path, upstream: pushed, address }).and_then(|tips| current_at(state, path, address, &plan, &tips, &PastHead::default(), false)).is_ok_and(|(subtasks, _)| !subtasks.items.is_empty())
 }
 
 // What the board reads for a task on what it already holds, task.steps on; it notes nothing, which the hook, a report, a push and kebbie subtasks do.
 pub fn read_at(state: &Path, path: &Path, address: &str, tips: &Tips, working: bool) -> Subtasks {
     let Some(plan) = load(state, address) else { return Subtasks::default() };
-    current_at(state, path, address, &plan, tips, working).map(|(subtasks, _)| subtasks).unwrap_or_default()
+    current_at(state, path, address, &plan, tips, &PastHead::default(), working).map(|(subtasks, _)| subtasks).unwrap_or_default()
 }
 
 // The subtasks of the task in path as they stand, noting nothing; empty without a plan.
@@ -540,7 +563,7 @@ pub(super) fn read_now(state: &Path, path: &Path, upstream: &str, address: &str)
 pub(super) fn read_now_or_err(state: &Path, path: &Path, upstream: &str, address: &str) -> Result<Subtasks> {
     let Some(plan) = load(state, address) else { return Ok(Subtasks::default()) };
     let tips = tips_of(&Task { path, upstream, address })?;
-    current_at(state, path, address, &plan, &tips, false).map(|(subtasks, _)| subtasks)
+    current_at(state, path, address, &plan, &tips, &PastHead::default(), false).map(|(subtasks, _)| subtasks)
 }
 
 // Read, change and write the plan under the task's own lock, so the hook, the task, the hub and the investigator never write over each other.
