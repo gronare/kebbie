@@ -13,6 +13,7 @@ pub const EVERY: u64 = 600;
 const PAGE: usize = 100;
 const FILE: &str = "inbox.json";
 pub const FILED_KIND: &str = "report-filed";
+pub const OWN: &str = "own:";
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct SignalInbox {
@@ -74,6 +75,7 @@ pub fn pull(state: &Path, url: &str, token: &str, watched: bool, now: u64) -> Re
 fn pull_into(state: &Path, ledger: &mut Ledger, url: &str, token: &str, watched: bool, now: u64) -> Result<Vec<String>> {
     let client = Client::new(&super::hub_url(url)?, Some(token), CALL);
     let dir = issues::dir(state);
+    let own = super::report::own_public_key(state);
     let mut notes = Vec::new();
     let mut after = 0;
     loop {
@@ -81,6 +83,14 @@ fn pull_into(state: &Path, ledger: &mut Ledger, url: &str, token: &str, watched:
         ledger.quarantined = page.quarantined;
         for received in &page.reports {
             if let std::collections::btree_map::Entry::Vacant(slot) = ledger.filed.entry(received.id) {
+                if own.as_ref().is_some_and(|own| *own == received.key.0) {
+                    let issue = super::report::sent_as(state, received.id).unwrap_or_default();
+                    notes.push(format!("reports: report {} is this install's own{}, so it is not filed again", received.id, if issue.is_empty() { String::new() } else { format!(" kebbie issue {issue}") }));
+                    slot.insert(format!("{OWN}{issue}"));
+                    save(state, ledger)?;
+                    client.post::<_, ()>(&format!("/v1/admin/reports/{}/ack", received.id), &()).map_err(|error| error.to_string())?;
+                    continue;
+                }
                 let issue = issues::file_report_in(&dir, received.id, &received.report, now)?;
                 notes.push(format!("reports: filed kebbie issue {issue} from report {}", received.id));
                 let filed = issues::find(&dir, &issue)?;
@@ -154,12 +164,13 @@ pub fn doctor(state: &Path, settings: &crate::config::Report, now: u64) -> Optio
     let ledger = load(state);
     let name = "reports".to_string();
     let checked = ledger.checked_at.map_or("not fetched yet".to_string(), |at| format!("fetched {} ago", crate::keeper::span(now.saturating_sub(at))));
-    let fact = format!("{} · {} filed · {} from signals · {checked}", settings.url(), ledger.filed.len(), ledger.signals.len());
+    let filed = ledger.filed.values().filter(|issue| !issue.starts_with(OWN)).count();
+    let fact = format!("{} · {filed} filed · {} from signals · {checked}", settings.url(), ledger.signals.len());
     Some(if let Some(error) = &ledger.error {
         Check::new(Level::Warn, name, format!("{fact}; last fetch failed: {error}"), vec!["check [report] inbox_token against the token the issues endpoint issued; the keeper retries every 10 minutes".to_string()])
     } else if ledger.quarantined > 0 {
         Check::new(Level::Warn, name, format!("{fact}; {} reports wait in quarantine", ledger.quarantined), vec!["allow or block their senders on the issues endpoint".to_string()])
     } else {
-        Check::new(Level::Ok, name, fact, Vec::new()).brief(format!("{} reports filed", ledger.filed.len()))
+        Check::new(Level::Ok, name, fact, Vec::new()).brief(format!("{filed} reports filed"))
     })
 }

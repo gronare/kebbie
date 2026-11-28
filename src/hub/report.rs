@@ -353,6 +353,17 @@ fn key_file(state: &Path) -> PathBuf {
     dir(state).join(KEY_FILE)
 }
 
+// This install's public report key when it has made one, read without making one.
+pub fn own_public_key(state: &Path) -> Option<[u8; 32]> {
+    let kept: KeyFile = serde_json::from_str(&std::fs::read_to_string(key_file(state)).ok()?).ok()?;
+    Some(kept.public.0)
+}
+
+// The issue this install sent as that report, from the send ledger.
+pub fn sent_as(state: &Path, report: u64) -> Option<String> {
+    sent_ledger(state).into_iter().find(|(_, sent)| sent == &report.to_string()).map(|(issue, _)| issue)
+}
+
 pub fn install_key(state: &Path) -> Result<InstallKey> {
     let file = key_file(state);
     match std::fs::read_to_string(&file) {

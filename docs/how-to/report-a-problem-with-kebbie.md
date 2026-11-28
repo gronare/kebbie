@@ -105,7 +105,7 @@ With `gh` installed and logged in, the update also finds the issues you sent on 
 
 When you or the lead saves a bug or a wish about kebbie, the board's header counts it, such as `! 2 bugs and 1 wish to send`, and the list waits under Work, below the tasks, folded into one row: `! 2 bugs and 1 wish to send · ⏎ shows them`. A wish goes the same way as a bug, marked as a wish.
 
-On the maintainers' own machine, the one with `report.inbox_token` set or kebbie's fault watcher on, kebbie's bugs are fixed where they are found: the board offers none to send, and `report.text = "always"` sends none. There nothing is rechecked after an update: an issue closes as fixed once the task that fixes it lands with green CI, and it opens again when the fault comes back. `kebbie issue report <id>` in your own terminal still sends one.
+On the maintainers' own machine, the one with `report.inbox_token` set or kebbie's fault watcher on, kebbie's bugs are fixed where they are found: the board offers none to send, and `report.text = "always"` sends none. There nothing is rechecked after an update: an issue closes as fixed once the task that fixes it lands with green CI, and it opens again when the fault comes back. `kebbie issue report <id>` in your own terminal still sends one. A report this machine sent itself, with its own install key, is acked and never filed back as an `r<N>` issue.
 
 1. Select the row with `↓` from the last task, or a click, and press `⏎`. The list opens under **Send to kebbie's maintainers?**, with the first one selected.
 2. Pick one with `↑` `↓` or a click.

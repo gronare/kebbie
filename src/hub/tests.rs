@@ -465,6 +465,14 @@ fn a_bug_the_user_sends_reaches_the_maintainers_kebbie_as_one_issue_once_its_key
     std::fs::remove_file(maintainer.join("report/inbox.json")).unwrap();
     inbox::pull(&maintainer, &hub.url, &token, false, now()).unwrap();
     assert_eq!(crate::issues::load(&crate::issues::dir(&maintainer)).len(), 1, "a crash before the ledger was written files the report no second time");
+
+    hub.lose_acks();
+    let own = inbox::pull(&user, &hub.url, &token, true, now()).unwrap();
+    assert_eq!(own, [format!("reports: report {number} is this install's own kebbie issue {id}, so it is not filed again")]);
+    assert_eq!(crate::issues::load(&crate::issues::dir(&user)).iter().map(|issue| issue.id.as_str()).collect::<Vec<_>>(), [id.as_str()], "no r-issue echoes the one this install sent");
+    assert!(crate::faults::pending(&user).is_empty(), "nor does it reach the fault watcher");
+    assert!(hub.unacked_allowed().is_empty(), "it is acked all the same");
+    assert!(inbox::pull(&user, &hub.url, &token, true, now()).unwrap().is_empty(), "and settled once");
 }
 
 fn json_answer(status: &str, body: &str) -> String {
