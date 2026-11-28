@@ -133,19 +133,29 @@ pub struct Check {
     pub what: String,
     pub asked: Option<u64>,
     pub passed: bool,
+    pub build: Option<Build>,
+}
+
+// A check of a push to kebbie's own repo on its development machine, held until the installed kebbie holds the pushed commit: since is when kebbie started the update.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Build {
+    pub landed: String,
+    pub since: u64,
+    pub again: bool,
 }
 
 impl Check {
     pub fn new(what: &str) -> Check {
-        Check { what: what.to_string(), asked: None, passed: false }
+        Check { what: what.to_string(), asked: None, passed: false, build: None }
     }
 
     fn to_json(&self) -> Value {
-        json!({ "what": self.what, "asked": self.asked, "passed": self.passed })
+        json!({ "what": self.what, "asked": self.asked, "passed": self.passed, "build": self.build.as_ref().map(|build| json!({ "landed": build.landed, "since": build.since, "again": build.again })) })
     }
 
     fn from_json(value: &Value) -> Option<Check> {
-        Some(Check { what: value["what"].as_str()?.to_string(), asked: value["asked"].as_u64(), passed: value["passed"].as_bool().unwrap_or(false) })
+        let build = value["build"]["landed"].as_str().map(|landed| Build { landed: landed.to_string(), since: value["build"]["since"].as_u64().unwrap_or(0), again: value["build"]["again"].as_bool().unwrap_or(false) });
+        Some(Check { what: value["what"].as_str()?.to_string(), asked: value["asked"].as_u64(), passed: value["passed"].as_bool().unwrap_or(false), build })
     }
 }
 
@@ -199,7 +209,12 @@ impl Watch {
 
     // CI is green and the task runs the check it named for after the push; the rounds ask gh nothing more.
     pub fn checking(&self) -> Option<&Check> {
-        self.pushed.check.as_ref().filter(|check| check.asked.is_some() && self.running())
+        self.pushed.check.as_ref().filter(|check| check.asked.is_some() && check.build.is_none() && self.running())
+    }
+
+    // A check held for the installed kebbie to hold the push: no report counts as it holding yet.
+    pub fn building(&self) -> Option<&Build> {
+        self.pushed.check.as_ref().and_then(|check| check.build.as_ref()).filter(|_| self.running())
     }
 
     // The round that found the check unreported past its time notes when, so the note says so without a clock.
@@ -231,6 +246,7 @@ impl Watch {
             State::Unknown { error, refused: true, .. } => format!("CI unknown: GitHub refused to re-run the deploy of {} for {} min ({}); G re-runs it, C dismisses it", self.short(), UNREADABLE_AFTER / 60, error.split_whitespace().collect::<Vec<_>>().join(" ")),
             State::Unknown { error, .. } => format!("CI unknown: gh could not read the runs of {} for {} min ({}); C dismisses it", self.short(), UNREADABLE_AFTER / 60, error.split_whitespace().collect::<Vec<_>>().join(" ")),
             State::Running if self.pushed.inherited.is_some() => self.pushed.inherited.as_ref().map(Inherited::note).unwrap_or_default(),
+            State::Running if self.building().is_some() => format!("CI green: kebbie updates the installed kebbie to {} before the check after the push: {}", self.short(), self.pushed.check.as_ref().map_or("", |check| check.what.as_str())),
             State::Running if self.checking().is_some_and(|check| check.passed) => "the check after the push held · kebbie closes it".to_string(),
             State::Running if self.check_unreported() => format!("its check after the push was never reported in {} min: {}; ask it again, or kebbie done", CHECK_UNREPORTED_AFTER / 60, self.checking().map_or("", |check| check.what.as_str())),
             State::Running if self.checking().is_some() => format!("checking after push: {}", self.checking().map_or("", |check| check.what.as_str())),
@@ -773,6 +789,10 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
         if !watch.running() && !re_run(state, gh, &mut watch, now) {
             continue;
         }
+        if watch.building().is_some() {
+            events.extend(crate::dev::build::live(|builds| hand_after_build(state, &watch, builds, now)));
+            continue;
+        }
         if let Some(check) = watch.checking() {
             if !watch.close && watch.pushed.stages.is_empty() {
                 forget(state, &watch.address);
@@ -1069,9 +1089,43 @@ pub fn check_message(landed: &str, what: &str) -> String {
 
 // The check message goes to the task before the watch says so, so a round that dies between them asks again rather than never.
 pub fn ask_check(state: &Path, watch: &Watch, landed: &str, now: u64) -> Result<String> {
+    crate::dev::build::live(|builds| ask_check_with(state, watch, landed, builds, now))
+}
+
+// On kebbie's development machine a check of a push to kebbie itself waits for kebbie update, which kebbie starts once, so the check runs on the pushed build; an update that cannot start hands it over at once, as elsewhere.
+pub fn ask_check_with(state: &Path, watch: &Watch, landed: &str, builds: &crate::dev::build::Builds, now: u64) -> Result<String> {
     let check = watch.pushed.check.clone().ok_or("the task named no check")?;
+    if (builds.needed)(&watch.repo) && !(builds.holds)(&watch.repo, &watch.sha) && (builds.update)().is_ok() {
+        save(state, &Watch { pushed: Pushed { check: Some(Check { asked: None, build: Some(Build { landed: landed.to_string(), since: now, again: false }), ..check.clone() }), ..watch.pushed.clone() }, ..watch.clone() })?;
+        let text = format!("{landed}. kebbie updates the installed kebbie to {} first; {} runs the check it named for after the push once it holds it: {}", watch.short(), watch.address, check.what);
+        if let Err(error) = messages::to_lead(messages::ToLead::CiGreen, &text) {
+            eprintln!("Could not tell the lead: {error}");
+        }
+        return Ok(text);
+    }
+    hand_check(state, watch, &check, landed, now)
+}
+
+// The check waits for the update, at most WAIT_AT_MOST, then goes to the task as it would have at once.
+pub fn hand_after_build(state: &Path, watch: &Watch, builds: &crate::dev::build::Builds, now: u64) -> Option<Event> {
+    let check = watch.pushed.check.clone()?;
+    let build = check.build.clone()?;
+    let held = (builds.holds)(&watch.repo, &watch.sha);
+    if !held && now.saturating_sub(build.since) < crate::dev::build::WAIT_AT_MOST {
+        if !build.again && now.saturating_sub(build.since) >= crate::dev::build::RETRY_AFTER && !(builds.running)() {
+            let _ = (builds.update)();
+            let _ = save(state, &Watch { pushed: Pushed { check: Some(Check { build: Some(Build { again: true, ..build }), ..check }), ..watch.pushed.clone() }, ..watch.clone() });
+        }
+        return None;
+    }
+    let landed = if held { format!("{}; the installed kebbie holds it", build.landed) } else { format!("{}; the installed kebbie still lacks it after {} min, so run kebbie update first when your check needs it", build.landed, crate::dev::build::WAIT_AT_MOST / 60) };
+    let text = hand_check(state, watch, &Check { build: None, ..check }, &landed, now).unwrap_or_else(|error| format!("kebbie could not ask {} to run its check after the push, and tries again: {error}", watch.address));
+    Some(Event { address: watch.address.clone(), kind: Kind::Green, text })
+}
+
+fn hand_check(state: &Path, watch: &Watch, check: &Check, landed: &str, now: u64) -> Result<String> {
     messages::hand_to(&watch.address, &check_message(landed, &check.what))?;
-    save(state, &Watch { pushed: Pushed { check: Some(Check { asked: Some(now), ..check.clone() }), ..watch.pushed.clone() }, ..watch.clone() })?;
+    save(state, &Watch { pushed: Pushed { check: Some(Check { asked: Some(now), build: None, ..check.clone() }), ..watch.pushed.clone() }, ..watch.clone() })?;
     let text = format!("{landed}. {} runs the check it named for after the push: {}; kebbie closes it once that holds.", watch.address, check.what);
     if let Err(error) = messages::to_lead(messages::ToLead::CiGreen, &text) {
         eprintln!("Could not tell the lead: {error}");
@@ -1906,7 +1960,7 @@ mod tests {
         let mut watch = Watch {
             address: "billing@app".to_string(), repo: PathBuf::from("/src/app"), slug: "acme/app".to_string(), sha: "abcdef0123".to_string(),
             started_at: 100, checked_at: Some(130), close: true, runs: vec![run("in_progress", "")], state: State::Running, error: None, erring_since: None, following: None,
-            pushed: Pushed { pusher: "the user".to_string(), target: "main".to_string(), commits: "abc Add refunds".to_string(), note: Some("Projects/x.md".to_string()), logged: Some(true), check: Some(Check { what: "the old key gets 401".to_string(), asked: Some(120), passed: false }), stages: Vec::new(), deploy: None, window: None, held: None, refused: None, inherited: None, told: true },
+            pushed: Pushed { pusher: "the user".to_string(), target: "main".to_string(), commits: "abc Add refunds".to_string(), note: Some("Projects/x.md".to_string()), logged: Some(true), check: Some(Check { what: "the old key gets 401".to_string(), asked: Some(120), passed: false, build: None }), stages: Vec::new(), deploy: None, window: None, held: None, refused: None, inherited: None, told: true },
         };
         save(&state, &watch).unwrap();
         assert_eq!(load(&state, "billing@app").as_ref(), Some(&watch));
@@ -2275,7 +2329,7 @@ mod tests {
         let events = tick_with(&state, &gh.to_string_lossy(), 100);
         assert!(events.len() == 1 && events[0].text.starts_with(&format!("CI is green for abcdef0. {address} runs the check it named for after the push: the old key gets 401")), "{events:?}");
         let checking = load(&state, &address).unwrap();
-        assert_eq!(checking.checking(), Some(&Check { what: "the old key gets 401".to_string(), asked: Some(100), passed: false }));
+        assert_eq!(checking.checking(), Some(&Check { what: "the old key gets 401".to_string(), asked: Some(100), passed: false, build: None }));
         assert_eq!(checking.note(), "checking after push: the old key gets 401");
         assert!(crate::tasks::find_task(&dir, Some("billing"), &dir).is_ok(), "the task stays open, with its session, for the check");
         let asked: Vec<messages::Message> = messages::load().into_iter().filter(|message| message.to == address).collect();
@@ -2297,9 +2351,57 @@ mod tests {
     }
 
     #[test]
+    fn a_check_of_a_push_to_kebbie_waits_for_the_update_kebbie_starts_and_then_goes_to_the_task() {
+        let state = crate::sh::test_dir("ci-check-build");
+        let address = format!("fault-b{}@kebbie", std::process::id());
+        let pushed = Pushed { target: "main".to_string(), check: Some(Check::new("kebbie fault reaches the watcher")), ..Pushed::default() };
+        let watch = Watch { address: address.clone(), repo: state.clone(), slug: "gronare/kebbie".to_string(), sha: "abcdef0123".to_string(), started_at: 0, checked_at: Some(100), close: true, runs: Vec::new(), state: State::Running, error: None, erring_since: None, following: None, pushed };
+        save(&state, &watch).unwrap();
+        let (holds, updates) = (std::cell::Cell::new(false), std::cell::Cell::new(0));
+        let update = || { updates.set(updates.get() + 1); Ok(()) };
+        let builds = crate::dev::build::Builds { needed: &|_| true, holds: &|_, sha| { assert_eq!(sha, "abcdef0123"); holds.get() }, update: &update, running: &|| false };
+        let handed = || messages::load().into_iter().filter(|message| message.to == address && message.text.contains("Run the check you named for after the push now")).count();
+        let said = ask_check_with(&state, &watch, "CI is green for abcdef0", &builds, 100).unwrap();
+        assert!(said.contains("kebbie updates the installed kebbie to abcdef0 first") && updates.get() == 1 && handed() == 0, "{said}");
+        let waiting = load(&state, &address).unwrap();
+        assert!(waiting.building().is_some() && waiting.checking().is_none(), "no ready report counts as the check holding while the build runs");
+        assert!(waiting.note().starts_with("CI green: kebbie updates the installed kebbie to abcdef0"), "{}", waiting.note());
+        assert!(tick_with(&state, "false", 150).is_empty() && load(&state, &address).unwrap().building().is_some(), "the round asks gh nothing and closes nothing while it waits");
+        assert!(hand_after_build(&state, &waiting, &builds, 200).is_none() && updates.get() == 1, "it waits for the build");
+        assert!(hand_after_build(&state, &waiting, &builds, 100 + crate::dev::build::RETRY_AFTER).is_none() && updates.get() == 2, "an update that ended without the push, as for a push right after another, is started once more");
+        assert!(hand_after_build(&state, &load(&state, &address).unwrap(), &builds, 200 + crate::dev::build::RETRY_AFTER).is_none() && updates.get() == 2, "once");
+        holds.set(true);
+        let event = hand_after_build(&state, &waiting, &builds, 300).unwrap();
+        assert!(event.text.contains("CI is green for abcdef0; the installed kebbie holds it"), "{event:?}");
+        assert_eq!(handed(), 1);
+        let asked = load(&state, &address).unwrap().pushed.check.unwrap();
+        assert_eq!((asked.asked, asked.build), (Some(300), None), "the hour to report starts once the check is handed over");
+        holds.set(false);
+        save(&state, &waiting).unwrap();
+        let late = hand_after_build(&state, &waiting, &builds, 100 + crate::dev::build::WAIT_AT_MOST).unwrap();
+        assert!(late.text.contains("still lacks it after 45 min"), "{late:?}");
+        save(&state, &watch).unwrap();
+        let failing = crate::dev::build::Builds { update: &|| Err("no kebbie on PATH".to_string()), ..builds };
+        ask_check_with(&state, &watch, "CI is green for abcdef0", &failing, 400).unwrap();
+        assert_eq!(handed(), 3, "an update that cannot start hands the check over at once");
+        std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn the_installed_build_holds_a_push_only_when_kebbies_checkout_places_it_before_that_build() {
+        let repo = crate::sh::test_dir("ci-build-holds");
+        let git = |args: &[&str]| crate::sh::run("git", &[&["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"][..], args].concat(), Some(&repo)).unwrap();
+        git(&["init", "-q", "-b", "main"]);
+        let shas: Vec<String> = ["one", "two", "three"].iter().map(|subject| { git(&["commit", "-q", "--allow-empty", "-m", subject]); git(&["rev-parse", "HEAD"]) }).collect();
+        assert!(crate::dev::build::holds_in(&repo, &shas[2], &shas[1]) && crate::dev::build::holds_in(&repo, &shas[1], &shas[1]));
+        assert!(!crate::dev::build::holds_in(&repo, &shas[0], &shas[2]) && !crate::dev::build::holds_in(&repo, &shas[2], "0123456789"), "an older build, or a commit it cannot place, holds nothing");
+        std::fs::remove_dir_all(repo).unwrap();
+    }
+
+    #[test]
     fn a_check_after_the_push_nobody_reports_puts_the_task_under_needs_you_once_and_a_late_report_still_closes_it() {
         let dir = crate::sh::test_dir("ci-check-unreported");
-        let pushed = Pushed { target: "main".to_string(), check: Some(Check { what: "the old key gets 401".to_string(), asked: Some(100), passed: false }), ..Pushed::default() };
+        let pushed = Pushed { target: "main".to_string(), check: Some(Check { what: "the old key gets 401".to_string(), asked: Some(100), passed: false, build: None }), ..Pushed::default() };
         let watch = Watch { address: "billing@app".to_string(), repo: dir.clone(), slug: "acme/app".to_string(), sha: "abcdef0".to_string(), started_at: 0, checked_at: Some(100), close: true, runs: Vec::new(), state: State::Running, error: None, erring_since: None, following: None, pushed };
         save(&dir, &watch).unwrap();
         crate::phase::record(&dir, "billing@app", "push", &crate::phase::Event::PushOut { sha: "abcdef0" });

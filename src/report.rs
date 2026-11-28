@@ -757,7 +757,7 @@ mod tests {
         use crate::phase::Phase;
         let state = crate::sh::test_dir("report-checked");
         let me = format!("checked-{}@app", std::process::id());
-        let check = Check { what: "the old key gets 401".to_string(), asked: Some(10), passed: false };
+        let check = Check { what: "the old key gets 401".to_string(), asked: Some(10), passed: false, build: None };
         let watch = Watch { address: me.clone(), repo: PathBuf::from("/src/app"), slug: String::new(), sha: "abcdef0".to_string(), started_at: 0, checked_at: None, close: true, runs: Vec::new(), state: State::Running, error: None, erring_since: None, following: None, pushed: Pushed { check: Some(check.clone()), ..Pushed::default() } };
         let report = |state: &str, next: &str| Report { state: state.to_string(), next: next.to_string(), head: Some("abc".to_string()), after: Vec::new() };
         let begin = || {
@@ -805,7 +805,7 @@ mod tests {
         let state = crate::sh::test_dir("report-check-open");
         let me = format!("staged-{}@app", std::process::id());
         crate::tasks::rollout::checking_after_push(&state, &me).unwrap();
-        let check = Check { what: "no query reads users.mail".to_string(), asked: Some(10), passed: false };
+        let check = Check { what: "no query reads users.mail".to_string(), asked: Some(10), passed: false, build: None };
         let watch = Watch { address: me.clone(), repo: PathBuf::from("/src/app"), slug: String::new(), sha: "abcdef0".to_string(), started_at: 0, checked_at: None, close: true, runs: Vec::new(), state: State::Running, error: None, erring_since: None, following: None, pushed: Pushed { check: Some(check), stages: vec!["migrate".to_string()], ..Pushed::default() } };
         crate::ci::save(&state, &watch).unwrap();
         let report = Report { state: "needs-you".to_string(), next: "a report still reads users.mail".to_string(), head: None, after: Vec::new() };
